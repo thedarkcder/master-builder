@@ -1,0 +1,32 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: master-builder-api
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-change-me}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-sqlite:////app/data/orchestrator.db}
+    ports:
+      - "8000:8000"
+    volumes:
+      - orchestrator-data:/app/data
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: master-builder-worker
+    depends_on:
+      - api
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-change-me}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-sqlite:////app/data/orchestrator.db}
+    command: ["sh", "-c", "python -m orchestrator migrate && python -m orchestrator worker"]
+    volumes:
+      - orchestrator-data:/app/data
+
+volumes:
+  orchestrator-data:
