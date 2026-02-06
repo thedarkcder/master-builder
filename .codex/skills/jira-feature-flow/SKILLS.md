@@ -21,6 +21,10 @@ description: Use when the task is to implement or update a feature tied to a Jir
    - If outcome = Testing -> transition to Testing (or your team's equivalent)
    - If outcome = Blocked -> transition to Blocked AND add a comment explaining the blocker + what's needed
 7) Final Jira comment: summary + links (PR, commit, build) if available.
+8) When creating or editing PR descriptions, use proper Markdown formatting:
+   - Use real line breaks and headings/lists (not escaped `\n` text).
+   - Prefer `gh pr create --body-file <file>` / `gh pr edit --body-file <file>`.
+   - Verify rendering with `gh pr view <number> --json body`.
 
 ## Status mapping (edit to match our Jira)
 - Testing = "Testing"
