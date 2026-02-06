@@ -18,6 +18,8 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+        os.environ["secret/app-id"] = "12345"
+        os.environ["secret/private-key"] = "not-a-real-key-for-tests"
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -27,6 +29,8 @@ class AdminApiTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+        os.environ.pop("secret/app-id", None)
+        os.environ.pop("secret/private-key", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
@@ -120,3 +124,33 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(github_test.status_code, 200)
         self.assertTrue(github_test.json()["ok"])
+
+    def test_delete_tenant(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        delete_response = self.client.delete("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(delete_response.status_code, 204)
+
+        get_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(get_response.status_code, 404)
+
+        list_response = self.client.get("/api/admin/tenants", auth=("admin", "secret"))
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()), 0)
+
+    def test_create_tenant_validates_required_project_keys(self) -> None:
+        payload = self._tenant_payload()
+        payload["jira"]["project_keys"] = []
+
+        response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 422)
