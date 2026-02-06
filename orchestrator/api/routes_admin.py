@@ -16,6 +16,7 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import Run, Tenant
+from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.jira_mcp_adapter import JiraMcpAdapter, REQUIRED_CAPABILITIES
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -177,7 +178,15 @@ def test_github_connection(
     if github.get("mode") != "github_app":
         return IntegrationTestResult(ok=False, details="Only github_app mode is supported")
 
-    return IntegrationTestResult(ok=True, details="GitHub tenant configuration looks valid")
+    try:
+        github_client_from_tenant_config(github)
+    except ValueError as exc:
+        return IntegrationTestResult(ok=False, details=str(exc))
+
+    return IntegrationTestResult(
+        ok=True,
+        details="GitHub tenant configuration looks valid and secret refs resolve",
+    )
 
 
 @router.get("/runs", response_model=list[RunRead])
