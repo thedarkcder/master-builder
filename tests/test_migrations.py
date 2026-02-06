@@ -18,3 +18,5 @@ class MigrationTests(unittest.TestCase):
 
             self.assertIn("tenants", inspector.get_table_names())
             self.assertIn("runs", inspector.get_table_names())
+            self.assertIn("run_locks", inspector.get_table_names())
+            self.assertIn("webhook_deliveries", inspector.get_table_names())
