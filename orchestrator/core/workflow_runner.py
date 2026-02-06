@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 from dataclasses import asdict, dataclass, field
+from collections.abc import Callable
 from typing import Protocol
 
 
@@ -12,6 +14,7 @@ class WorkflowRequest:
     issue_summary: str
     issue_description: str
     max_dev_test_review_loops: int
+    max_runtime_minutes: int = 30
     suggested_test_commands: list[str] = field(default_factory=list)
 
 
@@ -110,12 +113,30 @@ class WorkflowAgents(Protocol):
 
 
 class WorkflowRunner:
-    def __init__(self, agents: WorkflowAgents):
+    def __init__(
+        self,
+        agents: WorkflowAgents,
+        *,
+        monotonic_fn: Callable[[], float] | None = None,
+    ):
         self._agents = agents
+        self._monotonic = monotonic_fn or time.monotonic
 
     def run(self, request: WorkflowRequest) -> WorkflowResult:
         history: list[dict[str, str]] = []
         max_attempts = max(1, request.max_dev_test_review_loops)
+        max_runtime_seconds = max(1, request.max_runtime_minutes) * 60
+        started_at = self._monotonic()
+
+        runtime_failure = self._runtime_failure(
+            request=request,
+            started_at=started_at,
+            max_runtime_seconds=max_runtime_seconds,
+            history=history,
+            attempts=0,
+        )
+        if runtime_failure is not None:
+            return runtime_failure
 
         try:
             plan = self._agents.pm(request)
@@ -128,9 +149,29 @@ class WorkflowRunner:
                 history=history,
             )
 
+        runtime_failure = self._runtime_failure(
+            request=request,
+            started_at=started_at,
+            max_runtime_seconds=max_runtime_seconds,
+            history=history,
+            attempts=0,
+        )
+        if runtime_failure is not None:
+            return runtime_failure
+
         feedback: str | None = None
 
         for attempt in range(1, max_attempts + 1):
+            runtime_failure = self._runtime_failure(
+                request=request,
+                started_at=started_at,
+                max_runtime_seconds=max_runtime_seconds,
+                history=history,
+                attempts=attempt,
+            )
+            if runtime_failure is not None:
+                return runtime_failure
+
             try:
                 dev_result = self._agents.dev(request, plan, attempt, feedback)
             except Exception as exc:  # pragma: no cover - exercised via tests
@@ -145,6 +186,16 @@ class WorkflowRunner:
                     history=history,
                 )
 
+            runtime_failure = self._runtime_failure(
+                request=request,
+                started_at=started_at,
+                max_runtime_seconds=max_runtime_seconds,
+                history=history,
+                attempts=attempt,
+            )
+            if runtime_failure is not None:
+                return runtime_failure
+
             try:
                 test_result = self._agents.test(request, plan, dev_result, attempt)
             except Exception as exc:  # pragma: no cover - exercised via tests
@@ -158,6 +209,16 @@ class WorkflowRunner:
                     attempts=attempt,
                     history=history,
                 )
+
+            runtime_failure = self._runtime_failure(
+                request=request,
+                started_at=started_at,
+                max_runtime_seconds=max_runtime_seconds,
+                history=history,
+                attempts=attempt,
+            )
+            if runtime_failure is not None:
+                return runtime_failure
 
             if not test_result.passed:
                 feedback = test_result.feedback or "Tests failed with no feedback"
@@ -191,6 +252,16 @@ class WorkflowRunner:
                     attempts=attempt,
                     history=history,
                 )
+
+            runtime_failure = self._runtime_failure(
+                request=request,
+                started_at=started_at,
+                max_runtime_seconds=max_runtime_seconds,
+                history=history,
+                attempts=attempt,
+            )
+            if runtime_failure is not None:
+                return runtime_failure
 
             if not review_result.approved:
                 feedback = review_result.feedback or "Review requested changes"
@@ -261,4 +332,32 @@ class WorkflowRunner:
                 attempts=attempts,
                 history=history,
             ),
+        )
+
+    def _runtime_failure(
+        self,
+        *,
+        request: WorkflowRequest,
+        started_at: float,
+        max_runtime_seconds: int,
+        history: list[dict[str, str]],
+        attempts: int,
+    ) -> WorkflowResult | None:
+        elapsed_seconds = self._monotonic() - started_at
+        if elapsed_seconds <= max_runtime_seconds:
+            return None
+
+        history.append(
+            {
+                "stage": "runtime",
+                "attempt": str(attempts),
+                "event": f"exceeded_{request.max_runtime_minutes}_minutes",
+            }
+        )
+        return self._failure(
+            plan=None,
+            stage="runtime",
+            message=f"Run exceeded max runtime of {request.max_runtime_minutes} minute(s)",
+            attempts=attempts,
+            history=history,
         )

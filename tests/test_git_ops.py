@@ -102,3 +102,53 @@ class GitOpsTests(unittest.TestCase):
                 (".github/workflows/ci.yml", ".github/workflows/security.yml"),
             )
             self.assertTrue(result.readme_updated)
+
+    def test_push_branch_blocks_repo_not_in_allowlist(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source_repo = root / "source-repo"
+            source_repo.mkdir(parents=True, exist_ok=True)
+
+            try:
+                _run(["git", "init", "-b", "main"], cwd=source_repo)
+            except subprocess.CalledProcessError:
+                _run(["git", "init"], cwd=source_repo)
+                _run(["git", "checkout", "-b", "main"], cwd=source_repo)
+            _run(["git", "config", "user.email", "dev@example.test"], cwd=source_repo)
+            _run(["git", "config", "user.name", "Dev Test"], cwd=source_repo)
+
+            (source_repo / "README.md").write_text("seed\n", encoding="utf-8")
+            _run(["git", "add", "README.md"], cwd=source_repo)
+            _run(["git", "commit", "-m", "seed"], cwd=source_repo)
+
+            manager = GitWorkspaceManager(base_dir=root / "workspaces")
+            workspace = manager.prepare_workspace(
+                tenant_id="tenant-a",
+                issue_key="MAB-11",
+                run_id="run-guardrail",
+            )
+            manager.clone_repo(
+                repo_url=str(source_repo),
+                allowlist=[str(source_repo)],
+                workspace=workspace,
+            )
+            _run(["git", "config", "user.email", "agent@example.test"], cwd=workspace.repo_dir)
+            _run(["git", "config", "user.name", "Agent Test"], cwd=workspace.repo_dir)
+            branch_name = manager.create_issue_branch(
+                repo_dir=workspace.repo_dir,
+                issue_key="MAB-11",
+                summary="Guardrail checks",
+            )
+            (workspace.repo_dir / "README.md").write_text("seed\nguardrails\n", encoding="utf-8")
+            manager.commit_all(
+                repo_dir=workspace.repo_dir,
+                issue_key="MAB-11",
+                summary="Guardrail checks",
+            )
+
+            with self.assertRaises(PermissionError):
+                manager.push_branch(
+                    repo_dir=workspace.repo_dir,
+                    branch_name=branch_name,
+                    allowlist=["https://github.com/example/other-repo"],
+                )

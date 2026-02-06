@@ -5,10 +5,11 @@ import logging
 import signal
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
 from orchestrator.storage.models import Run, Tenant
@@ -21,9 +22,41 @@ RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 
 
+def _coerce_positive_int(value: object, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def _running_run_count(session: Session, *, tenant_id: str) -> int:
+    return int(
+        session.execute(
+            select(func.count(Run.run_id)).where(
+                Run.tenant_id == tenant_id,
+                Run.status == RUN_STATUS_RUNNING,
+            )
+        ).scalar_one()
+    )
+
+
 def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
-    max_loops = int(tenant.policy_config.get("max_dev_test_review_loops", 1))
-    suggested_test_commands = tenant.policy_config.get("allowed_commands") or []
+    max_loops = _coerce_positive_int(
+        tenant.policy_config.get("max_dev_test_review_loops"),
+        default=1,
+    )
+    max_runtime_minutes = _coerce_positive_int(
+        tenant.policy_config.get("max_runtime_minutes"),
+        default=30,
+    )
+    suggested_test_commands_raw = tenant.policy_config.get("allowed_commands") or []
+    suggested_test_commands: list[str] = []
+    for command in suggested_test_commands_raw:
+        command_text = str(command).strip()
+        enforce_safe_command(command_text)
+        suggested_test_commands.append(command_text)
+
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
         run_id=run.run_id,
@@ -31,31 +64,68 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
         issue_summary=f"Execute {run.issue_key}",
         issue_description="",
         max_dev_test_review_loops=max_loops,
-        suggested_test_commands=[str(command) for command in suggested_test_commands],
+        max_runtime_minutes=max_runtime_minutes,
+        suggested_test_commands=suggested_test_commands,
     )
 
 
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
-    run = session.execute(
+    queued_runs = session.execute(
         select(Run).where(Run.status == RUN_STATUS_QUEUED).order_by(Run.created_at.asc())
-    ).scalar_one_or_none()
+    ).scalars().all()
+    run: Run | None = None
+    tenant: Tenant | None = None
+
+    for candidate in queued_runs:
+        candidate_tenant = session.get(Tenant, candidate.tenant_id)
+        if candidate_tenant is None:
+            candidate.status = RUN_STATUS_FAILED
+            candidate.last_error = "Tenant not found for queued run"
+            candidate.finished_at = datetime.now(timezone.utc)
+            session.commit()
+            session.refresh(candidate)
+            return candidate
+
+        max_concurrent_runs = _coerce_positive_int(
+            candidate_tenant.policy_config.get("max_concurrent_runs"),
+            default=1,
+        )
+        running_count = _running_run_count(session, tenant_id=candidate_tenant.tenant_id)
+        if running_count >= max_concurrent_runs:
+            logger.info(
+                "worker_skipping_run_due_to_concurrency_limit tenant_id=%s issue_key=%s running=%s max=%s",
+                candidate_tenant.tenant_id,
+                candidate.issue_key,
+                running_count,
+                max_concurrent_runs,
+            )
+            continue
+
+        run = candidate
+        tenant = candidate_tenant
+        break
+
     if run is None:
         return None
-
-    tenant = session.get(Tenant, run.tenant_id)
-    if tenant is None:
-        run.status = RUN_STATUS_FAILED
-        run.last_error = "Tenant not found for queued run"
-        run.finished_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(run)
-        return run
 
     run.status = RUN_STATUS_RUNNING
     run.started_at = datetime.now(timezone.utc)
     session.commit()
 
-    workflow_result = runner.run(_workflow_request_for_run(tenant, run))
+    if tenant is None:
+        raise RuntimeError("Tenant resolution failed for queued run")
+
+    try:
+        workflow_request = _workflow_request_for_run(tenant, run)
+    except (PermissionError, ValueError) as exc:
+        run.status = RUN_STATUS_FAILED
+        run.last_error = f"Guardrail policy violation: {exc}"
+        run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(run)
+        return run
+
+    workflow_result = runner.run(workflow_request)
     run.plan = workflow_result.to_plan_payload()
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)

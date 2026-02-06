@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from orchestrator.core.guardrails import enforce_safe_command
 
 
 class JiraConfig(BaseModel):
@@ -41,6 +43,16 @@ class PolicyConfig(BaseModel):
     max_concurrent_runs: int = 2
     allowed_commands: list[str] = Field(default_factory=list)
     require_agents_md: bool = False
+
+    @field_validator("allowed_commands")
+    @classmethod
+    def validate_allowed_commands(cls, commands: list[str]) -> list[str]:
+        for command in commands:
+            try:
+                enforce_safe_command(command)
+            except (PermissionError, ValueError) as exc:
+                raise ValueError(str(exc)) from exc
+        return commands
 
 
 class DiscordConfig(BaseModel):
