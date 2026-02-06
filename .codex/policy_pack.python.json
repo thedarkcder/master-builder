@@ -1,0 +1,39 @@
+{
+  "name": "python",
+  "primary_language": "python",
+  "stack_notes": [
+    "Python services/scripts",
+    "Prefer pure core logic + side effects at edges",
+    "Explicit state models for workflows"
+  ],
+  "test_commands": [
+    "pytest",
+    "python -m pytest"
+  ],
+  "lint_commands": [
+    "ruff check .",
+    "python -m ruff check ."
+  ],
+  "format_commands": [
+    "ruff format .",
+    "python -m ruff format ."
+  ],
+  "preferred_patterns": [
+    "Core logic in pure functions; IO in adapters",
+    "Workflow state represented with dataclasses/pydantic models",
+    "Use timeouts and condition checks for external dependencies"
+  ],
+  "banned_patterns": [
+    "time\\s*\\.\\s*sleep\\s*\\(",
+    "sleep\\s*\\(",
+    "while\\s+True\\s*:"
+  ],
+  "allowed_exceptions": [
+    "Time-based waits are only allowed for genuine scheduling (not synchronization) and must be documented."
+  ],
+  "reviewer_quality_gates": [
+    "No sleep-based synchronization",
+    "No infinite loops without clear bounds",
+    "Behavior changes must include tests"
+  ]
+}
