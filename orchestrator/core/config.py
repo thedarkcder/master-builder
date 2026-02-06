@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     admin_username: str = "admin"
     admin_password: str = "change-me"
+    cors_origins: str = "http://localhost:4100,http://127.0.0.1:4100"
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",

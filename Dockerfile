@@ -17,6 +17,6 @@ RUN python -m pip install --upgrade pip && \
 
 RUN mkdir -p /app/data
 
-EXPOSE 8000
+EXPOSE 8100
 
-CMD ["sh", "-c", "python -m orchestrator migrate && uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "python -m orchestrator migrate && uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 8100"]
