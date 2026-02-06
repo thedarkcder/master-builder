@@ -1,3 +1,8 @@
+---
+name: security_sanity
+description: Security and privacy sanity checks to prevent secrets, PII, auth, validation, and logging regressions.
+---
+
 # Skill: Security & Privacy Sanity Check
 
 ## Goal

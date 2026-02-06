@@ -11,15 +11,15 @@ description: Use when the task is to implement or update a feature tied to a Jir
 ## Workflow (follow strictly)
 1) Fetch the Jira issue details (title, description, acceptance criteria, current status).
 2) Confirm you are working on exactly this ISSUE_KEY for the entire task.
-3) Add a Jira comment: "Starting work" + a 1–2 line plan + any assumptions.
+3) Add a Jira comment: "Starting work" + a 1-2 line plan + any assumptions.
 4) Implement the work in the repo:
    - Keep changes minimal and aligned to acceptance criteria.
    - Run relevant tests/commands.
 5) Add a Jira comment: what changed + how to validate (commands, URLs, steps).
 6) Transition the issue:
-   - If outcome = Done → transition to Done
-   - If outcome = Testing → transition to Testing (or your team’s equivalent)
-   - If outcome = Blocked → transition to Blocked AND add a comment explaining the blocker + what’s needed
+   - If outcome = Done -> transition to Done
+   - If outcome = Testing -> transition to Testing (or your team's equivalent)
+   - If outcome = Blocked -> transition to Blocked AND add a comment explaining the blocker + what's needed
 7) Final Jira comment: summary + links (PR, commit, build) if available.
 
 ## Status mapping (edit to match our Jira)
