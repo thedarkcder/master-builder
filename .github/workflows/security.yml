@@ -42,6 +42,7 @@ jobs:
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: "" # not required for OSS usage
         with:
           # If you want a repo-specific config later:
