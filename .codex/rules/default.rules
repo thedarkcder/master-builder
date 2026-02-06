@@ -1,0 +1,30 @@
+# Allow common, non-destructive git operations without prompting.
+prefix_rule(pattern = ["git", "status"], decision = "allow")
+prefix_rule(pattern = ["git", "diff"], decision = "allow")
+prefix_rule(pattern = ["git", "add"], decision = "allow")
+prefix_rule(pattern = ["git", "commit"], decision = "allow")
+prefix_rule(pattern = ["git", "push"], decision = "allow")
+prefix_rule(pattern = ["git", "switch"], decision = "allow")
+prefix_rule(pattern = ["git", "branch"], decision = "allow")
+prefix_rule(pattern = ["git", "switch", "-c"], decision = "allow")
+prefix_rule(pattern = ["git", "log"], decision = "allow")
+prefix_rule(pattern = ["git", "pull"], decision = "allow")
+prefix_rule(pattern = ["git", "fetch"], decision = "allow")
+prefix_rule(pattern = ["git", "merge"], decision = "allow")
+
+# If you also use GitHub CLI:
+prefix_rule(pattern = ["gh", "pr", ["create", "view", "list"]], decision = "allow")
+
+# Require approval for force pushes / rewriting history.
+prefix_rule(pattern = ["git", "push", "--force"], decision = "prompt")
+prefix_rule(pattern = ["git", "push", "--force-with-lease"], decision = "prompt")
+
+# Require approval for dangerous resets / cleaning untracked files.
+prefix_rule(pattern = ["git", "reset", "--hard"], decision = "prompt")
+prefix_rule(pattern = ["git", "clean"], decision = "prompt")
+
+# Squash merges change history shape
+prefix_rule(pattern = ["git", "merge", "--squash"], decision = "prompt")
+
+# Aborting a merge is usually safe but disruptive
+prefix_rule(pattern = ["git", "merge", "--abort"], decision = "prompt")
