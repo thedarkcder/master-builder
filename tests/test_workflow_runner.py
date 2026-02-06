@@ -75,7 +75,7 @@ class _FakeAgents:
 
 
 class WorkflowRunnerTests(unittest.TestCase):
-    def _request(self, *, loops: int = 2) -> WorkflowRequest:
+    def _request(self, *, loops: int = 2, max_runtime_minutes: int = 30) -> WorkflowRequest:
         return WorkflowRequest(
             tenant_id="tenant-a",
             run_id="run-1",
@@ -83,6 +83,7 @@ class WorkflowRunnerTests(unittest.TestCase):
             issue_summary="Build workflow runner",
             issue_description="Implement PM->Dev->Test->Review",
             max_dev_test_review_loops=loops,
+            max_runtime_minutes=max_runtime_minutes,
             suggested_test_commands=["python3 -m unittest discover -s tests -p 'test_*.py'"],
         )
 
@@ -210,3 +211,15 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "review")
         self.assertEqual(result.diagnostics.message, "Workflow succeeded but no PR URL was produced")
+
+    def test_runtime_limit_returns_failure_diagnostics(self) -> None:
+        agents = _FakeAgents()
+        time_values = iter([0.0, 0.0, 61.0, 61.0, 61.0])
+        runner = WorkflowRunner(agents, monotonic_fn=lambda: next(time_values))
+
+        result = runner.run(self._request(loops=1, max_runtime_minutes=1))
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "runtime")
+        self.assertEqual(result.diagnostics.message, "Run exceeded max runtime of 1 minute(s)")

@@ -92,6 +92,7 @@ class GitHubAppClientTests(unittest.TestCase):
         ):
             result = client.create_pull_request(
                 repo_full_name="example/repo",
+                allowlist=["https://github.com/example/repo"],
                 title="MAB-8: add github client",
                 head_branch="jira/MAB-8-add-github-client",
                 base_branch="main",
@@ -111,6 +112,24 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(payload["base"], "main")
         self.assertEqual(payload["body"], "PR body")
         self.assertEqual(requests[1].get_header("Authorization"), "Bearer inst_token_2")
+
+    def test_create_pull_request_rejects_repo_outside_allowlist(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        with self.assertRaises(PermissionError):
+            client.create_pull_request(
+                repo_full_name="example/repo",
+                allowlist=["https://github.com/example/other-repo"],
+                title="MAB-11: enforce repo guardrails",
+                head_branch="jira/MAB-11-guardrails",
+                base_branch="main",
+                body="PR body",
+            )
 
     def test_github_client_from_tenant_config_requires_resolved_secrets(self) -> None:
         config = {

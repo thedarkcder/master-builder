@@ -116,6 +116,26 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(second.reason, "duplicate_delivery")
             self.assertEqual(second.run.run_id, first.run.run_id)
 
+    def test_enqueue_respects_tenant_concurrency_limit(self) -> None:
+        with self.session_factory() as session:
+            first = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                issue_key="TP-910",
+                max_concurrent_runs=1,
+            )
+            second = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                issue_key="TP-911",
+                max_concurrent_runs=1,
+            )
+
+            self.assertTrue(first.enqueued)
+            self.assertFalse(second.enqueued)
+            self.assertEqual(second.reason, "tenant_concurrency_limit_reached")
+            self.assertEqual(second.run.run_id, first.run.run_id)
+
     def test_running_to_success_releases_lock_and_persists_timestamps(self) -> None:
         with self.session_factory() as session:
             enqueue = enqueue_run(session, tenant_id="tenant-runs", issue_key="TP-903")

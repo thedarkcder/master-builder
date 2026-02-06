@@ -9,6 +9,8 @@ from urllib.request import Request, urlopen
 
 import jwt
 
+from orchestrator.tools.repo_allowlist import enforce_repo_allowlist
+
 
 class GitHubApiError(RuntimeError):
     pass
@@ -163,11 +165,13 @@ class GitHubAppClient:
         self,
         *,
         repo_full_name: str,
+        allowlist: list[str],
         title: str,
         head_branch: str,
         base_branch: str,
         body: str,
     ) -> PullRequestResult:
+        enforce_repo_allowlist(f"https://github.com/{repo_full_name}", allowlist)
         installation_token = self.get_installation_token()
         response = self._request_json(
             method="POST",
