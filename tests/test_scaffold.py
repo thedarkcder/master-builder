@@ -19,6 +19,7 @@ class ScaffoldFoundationTests(unittest.TestCase):
         self.assertIn("/health", paths)
         self.assertIn("/api/admin/tenants", paths)
         self.assertIn("/jira/webhook/{tenant_id}", paths)
+        self.assertIn("/runs/{run_id}", paths)
 
     def test_session_factory_works_after_initial_migration(self) -> None:
         with TemporaryDirectory() as tmp_dir:
