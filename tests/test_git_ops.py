@@ -86,3 +86,19 @@ class GitOpsTests(unittest.TestCase):
                 text=True,
             ).stdout.strip()
             self.assertEqual(message, "MAB-8: Add github app auth support")
+
+    def test_workspace_bootstrap_ci_copies_missing_workflows(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            target_repo = root / "target-repo"
+            target_repo.mkdir(parents=True, exist_ok=True)
+            (target_repo / "README.md").write_text("# Target\n", encoding="utf-8")
+
+            manager = GitWorkspaceManager(base_dir=root / "workspaces")
+            result = manager.bootstrap_ci_if_missing(repo_dir=target_repo)
+
+            self.assertEqual(
+                result.copied_workflows,
+                (".github/workflows/ci.yml", ".github/workflows/security.yml"),
+            )
+            self.assertTrue(result.readme_updated)

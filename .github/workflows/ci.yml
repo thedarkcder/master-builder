@@ -31,6 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s nullglob globstar
 
           is_java=false
           is_node=false
@@ -38,21 +39,27 @@ jobs:
           node_pm="npm"
           java_build_tool="maven"
 
+          has_any_file() {
+            local pattern="$1"
+            local matches=( $pattern )
+            [ ${#matches[@]} -gt 0 ]
+          }
+
           # Java detection
-          if ls pom.xml */pom.xml >/dev/null 2>&1 || ls mvnw */mvnw >/dev/null 2>&1; then
+          if has_any_file "pom.xml" || has_any_file "**/pom.xml" || has_any_file "mvnw" || has_any_file "**/mvnw"; then
             is_java=true
             java_build_tool="maven"
-          elif ls build.gradle build.gradle.kts */build.gradle */build.gradle.kts >/dev/null 2>&1 || ls gradlew */gradlew >/dev/null 2>&1; then
+          elif has_any_file "build.gradle" || has_any_file "build.gradle.kts" || has_any_file "**/build.gradle" || has_any_file "**/build.gradle.kts" || has_any_file "gradlew" || has_any_file "**/gradlew"; then
             is_java=true
             java_build_tool="gradle"
           fi
 
           # Node/React detection
-          if ls package.json */package.json >/dev/null 2>&1; then
+          if has_any_file "package.json" || has_any_file "**/package.json"; then
             is_node=true
-            if ls pnpm-lock.yaml */pnpm-lock.yaml >/dev/null 2>&1; then
+            if has_any_file "pnpm-lock.yaml" || has_any_file "**/pnpm-lock.yaml"; then
               node_pm="pnpm"
-            elif ls yarn.lock */yarn.lock >/dev/null 2>&1; then
+            elif has_any_file "yarn.lock" || has_any_file "**/yarn.lock"; then
               node_pm="yarn"
             else
               node_pm="npm"
@@ -60,7 +67,7 @@ jobs:
           fi
 
           # Python detection
-          if ls pyproject.toml */pyproject.toml requirements.txt */requirements.txt >/dev/null 2>&1; then
+          if has_any_file "pyproject.toml" || has_any_file "**/pyproject.toml" || has_any_file "requirements.txt" || has_any_file "**/requirements.txt"; then
             is_python=true
           fi
 
@@ -102,7 +109,7 @@ jobs:
           if [ -f "./gradlew" ]; then chmod +x ./gradlew && ./gradlew test; else gradle test; fi
 
   node:
-    name: Node/React (lint/test)
+    name: Node/React (lint/test/build)
     needs: detect
     if: needs.detect.outputs.is_node == 'true'
     runs-on: ubuntu-latest
@@ -160,6 +167,20 @@ jobs:
             npm)  npm test ;;
           esac
 
+      - name: Build (if script exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+            case "${{ needs.detect.outputs.node_pm }}" in
+              pnpm) pnpm build ;;
+              yarn) yarn build ;;
+              npm)  npm run build ;;
+            esac
+          else
+            echo "No build script found; skipping."
+          fi
+
   python:
     name: Python (ruff/pytest)
     needs: detect
@@ -203,6 +224,13 @@ jobs:
         run: |
           set -euo pipefail
           pytest -q
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install build
+          python -m build
 
   summary:
     name: CI summary

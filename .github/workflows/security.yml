@@ -14,8 +14,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  detect:
+    name: Detect SAST languages
+    runs-on: ubuntu-latest
+    outputs:
+      codeql_languages: ${{ steps.detect.outputs.codeql_languages }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+
+          languages=()
+          py_files=( **/*.py )
+          js_files=( **/*.js **/*.jsx **/*.ts **/*.tsx )
+          java_files=( **/*.java **/*.kt **/*.kts )
+
+          if [ ${#py_files[@]} -gt 0 ]; then
+            languages+=("python")
+          fi
+          if [ ${#js_files[@]} -gt 0 ]; then
+            languages+=("javascript-typescript")
+          fi
+          if [ ${#java_files[@]} -gt 0 ]; then
+            languages+=("java-kotlin")
+          fi
+
+          if [ ${#languages[@]} -eq 0 ]; then
+            echo "codeql_languages=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          codeql_languages=$(IFS=,; echo "${languages[*]}")
+          echo "codeql_languages=$codeql_languages" >> "$GITHUB_OUTPUT"
+
   dependency-review:
     name: Dependency review
+    needs: detect
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     permissions:
@@ -31,6 +69,7 @@ jobs:
 
   gitleaks:
     name: Secret scanning (gitleaks)
+    needs: detect
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,21 +88,25 @@ jobs:
           # config-path: .gitleaks.toml
           args: detect --redact --verbose --no-git
 
-  # Optional: CodeQL (enable when ready)
-  # codeql:
-  #   name: CodeQL
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     actions: read
-  #     contents: read
-  #     security-events: write
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       language: ["javascript-typescript", "python", "java-kotlin"]
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: github/codeql-action/init@v3
-  #       with:
-  #         languages: ${{ matrix.language }}
-  #     - uses: github/codeql-action/analyze@v3
+  codeql:
+    name: SAST (CodeQL)
+    needs: detect
+    if: needs.detect.outputs.codeql_languages != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ needs.detect.outputs.codeql_languages }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
