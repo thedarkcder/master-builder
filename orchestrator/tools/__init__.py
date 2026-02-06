@@ -7,6 +7,7 @@ from orchestrator.tools.git_ops import (
     build_branch_name,
     enforce_repo_allowlist,
 )
+from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 from orchestrator.tools.github_app import (
     GitHubApiError,
     GitHubAppClient,
@@ -24,6 +25,7 @@ __all__ = [
     "GitWorkspaceManager",
     "build_branch_name",
     "enforce_repo_allowlist",
+    "normalize_repo_identifier",
     "GitHubApiError",
     "GitHubAppClient",
     "GitHubAppConfig",

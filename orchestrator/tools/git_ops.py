@@ -5,9 +5,9 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
 
 from orchestrator.tools.bootstrap import WorkflowBootstrapResult, bootstrap_ci_workflows
+from orchestrator.tools.repo_allowlist import enforce_repo_allowlist as _enforce_repo_allowlist
 
 
 class GitOperationError(RuntimeError):
@@ -23,27 +23,8 @@ def _slugify(text: str, *, max_length: int = 48) -> str:
     return cleaned[:max_length].rstrip("-")
 
 
-def _normalize_repo_url(repo_url: str) -> str:
-    trimmed = repo_url.strip()
-    if trimmed.startswith("git@"):
-        host_and_path = trimmed.split("@", maxsplit=1)[1]
-        host, path = host_and_path.split(":", maxsplit=1)
-        clean_path = path.removesuffix(".git").strip("/")
-        return f"{host.lower()}/{clean_path.lower()}"
-
-    parsed = urlparse(trimmed)
-    host = parsed.netloc.lower()
-    path = parsed.path.removesuffix(".git").strip("/")
-    if host and path:
-        return f"{host}/{path.lower()}"
-    return trimmed.lower().removesuffix(".git").rstrip("/")
-
-
 def enforce_repo_allowlist(repo_url: str, allowlist: list[str]) -> None:
-    allowed = {_normalize_repo_url(item) for item in allowlist}
-    normalized_repo = _normalize_repo_url(repo_url)
-    if normalized_repo not in allowed:
-        raise PermissionError(f"Repo '{repo_url}' is not in tenant allowlist")
+    _enforce_repo_allowlist(repo_url, allowlist)
 
 
 def build_branch_name(issue_key: str, summary: str) -> str:
@@ -85,7 +66,11 @@ class GitWorkspaceManager:
         sha = self._run_git(["rev-parse", "HEAD"], cwd=repo_dir).strip()
         return sha
 
-    def push_branch(self, *, repo_dir: Path, branch_name: str) -> None:
+    def push_branch(self, *, repo_dir: Path, branch_name: str, allowlist: list[str]) -> None:
+        remote_url = self._run_git(["config", "--get", "remote.origin.url"], cwd=repo_dir).strip()
+        if not remote_url:
+            raise GitOperationError("Git remote.origin.url is missing for workspace")
+        _enforce_repo_allowlist(remote_url, allowlist)
         self._run_git(["push", "-u", "origin", branch_name], cwd=repo_dir)
 
     def bootstrap_ci_if_missing(self, *, repo_dir: Path, template_repo_root: Path | None = None) -> WorkflowBootstrapResult:

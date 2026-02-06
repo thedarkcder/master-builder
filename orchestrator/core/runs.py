@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -49,12 +49,45 @@ def _active_run_for_issue(session: Session, tenant_id: str, issue_key: str) -> R
     ).scalar_one_or_none()
 
 
+def _active_run_count_for_tenant(session: Session, tenant_id: str) -> int:
+    return int(
+        session.execute(
+            select(func.count(Run.run_id)).where(
+                Run.tenant_id == tenant_id,
+                Run.status.in_(ACTIVE_RUN_STATUSES),
+            )
+        ).scalar_one()
+    )
+
+
+def _first_active_run_for_tenant(session: Session, tenant_id: str) -> Run | None:
+    return session.execute(
+        select(Run)
+        .where(
+            Run.tenant_id == tenant_id,
+            Run.status.in_(ACTIVE_RUN_STATUSES),
+        )
+        .order_by(Run.created_at.asc())
+    ).scalar_one_or_none()
+
+
+def _coerce_positive_limit(value: int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RunStateTransitionError(f"Invalid max_concurrent_runs value: {value}") from exc
+    return max(1, parsed)
+
+
 def enqueue_run(
     session: Session,
     *,
     tenant_id: str,
     issue_key: str,
     delivery_id: str | None = None,
+    max_concurrent_runs: int | None = None,
 ) -> EnqueueRunResult:
     if delivery_id:
         existing_delivery = session.get(
@@ -72,6 +105,21 @@ def enqueue_run(
     active_run = _active_run_for_issue(session, tenant_id=tenant_id, issue_key=issue_key)
     if active_run is not None:
         return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
+
+    normalized_limit = _coerce_positive_limit(max_concurrent_runs)
+    if normalized_limit is not None:
+        active_count = _active_run_count_for_tenant(session, tenant_id=tenant_id)
+        if active_count >= normalized_limit:
+            active_run = _first_active_run_for_tenant(session, tenant_id=tenant_id)
+            if active_run is None:
+                raise RunStateTransitionError(
+                    "Concurrency limit reached but no active run was found"
+                )
+            return EnqueueRunResult(
+                enqueued=False,
+                reason="tenant_concurrency_limit_reached",
+                run=active_run,
+            )
 
     now = _now()
     run = Run(
@@ -124,10 +172,24 @@ def enqueue_run(
                 )
 
         active_run = _active_run_for_issue(session, tenant_id=tenant_id, issue_key=issue_key)
-        if active_run is None:
-            raise RunStateTransitionError("Failed to enqueue run due to unknown integrity conflict")
+        if active_run is not None:
+            return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
 
-        return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
+        if normalized_limit is not None:
+            active_count = _active_run_count_for_tenant(session, tenant_id=tenant_id)
+            if active_count >= normalized_limit:
+                limited_run = _first_active_run_for_tenant(session, tenant_id=tenant_id)
+                if limited_run is None:
+                    raise RunStateTransitionError(
+                        "Concurrency limit reached after retry but no active run was found"
+                    )
+                return EnqueueRunResult(
+                    enqueued=False,
+                    reason="tenant_concurrency_limit_reached",
+                    run=limited_run,
+                )
+
+        raise RunStateTransitionError("Failed to enqueue run due to unknown integrity conflict")
 
     return EnqueueRunResult(enqueued=True, reason=None, run=run)
 

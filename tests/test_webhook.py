@@ -40,6 +40,7 @@ class JiraWebhookTests(unittest.TestCase):
         tenant_id: str,
         webhook_secret_ref: str | None = None,
         is_enabled: bool = True,
+        max_concurrent_runs: int = 2,
     ) -> None:
         payload = {
             "tenant_id": tenant_id,
@@ -75,7 +76,7 @@ class JiraWebhookTests(unittest.TestCase):
                 "allow_label_mutations": True,
                 "max_runtime_minutes": 30,
                 "max_dev_test_review_loops": 2,
-                "max_concurrent_runs": 2,
+                "max_concurrent_runs": max_concurrent_runs,
                 "allowed_commands": [],
                 "require_agents_md": False,
             },
@@ -150,6 +151,30 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "duplicate_delivery")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
+
+    def test_webhook_respects_tenant_concurrency_limit(self) -> None:
+        self._create_tenant("tenant-single", max_concurrent_runs=1)
+        first_payload = {
+            "issue": {
+                "key": "TP-126",
+                "fields": {"labels": ["agent:ready"]},
+            }
+        }
+        second_payload = {
+            "issue": {
+                "key": "TP-127",
+                "fields": {"labels": ["agent:ready"]},
+            }
+        }
+
+        first = self.client.post("/jira/webhook/tenant-single", json=first_payload)
+        second = self.client.post("/jira/webhook/tenant-single", json=second_payload)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.json()["enqueued"])
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(second.json()["enqueued"])
+        self.assertEqual(second.json()["reason"], "tenant_concurrency_limit_reached")
 
     def test_webhook_unknown_tenant_returns_404(self) -> None:
         payload = {

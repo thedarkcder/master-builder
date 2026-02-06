@@ -161,6 +161,7 @@ async def ingest_jira_webhook(
         tenant_id=tenant_id,
         issue_key=issue_key,
         delivery_id=delivery_id,
+        max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
     )
     if not enqueue_result.enqueued:
         logger.info(
