@@ -59,3 +59,14 @@ python -m orchestrator worker
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
+
+## CI and security local checks
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 -m pip install ruff
+ruff check .
+```
+
+GitHub Actions workflows:
+- `.github/workflows/ci.yml`
+- `.github/workflows/security.yml`

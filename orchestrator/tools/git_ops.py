@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from orchestrator.tools.bootstrap import WorkflowBootstrapResult, bootstrap_ci_workflows
+
 
 class GitOperationError(RuntimeError):
     pass
@@ -85,6 +87,12 @@ class GitWorkspaceManager:
 
     def push_branch(self, *, repo_dir: Path, branch_name: str) -> None:
         self._run_git(["push", "-u", "origin", branch_name], cwd=repo_dir)
+
+    def bootstrap_ci_if_missing(self, *, repo_dir: Path, template_repo_root: Path | None = None) -> WorkflowBootstrapResult:
+        return bootstrap_ci_workflows(
+            target_repo_dir=repo_dir,
+            template_repo_root=template_repo_root,
+        )
 
     def _run_git(self, args: list[str], *, cwd: Path) -> str:
         process = subprocess.run(
