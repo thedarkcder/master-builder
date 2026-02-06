@@ -79,7 +79,7 @@ function statusBadge(status: string) {
 }
 
 export default function AdminPage() {
-  const [apiBaseUrl, setApiBaseUrl] = useState(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8100");
+  const [apiBaseUrl, setApiBaseUrl] = useState(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000");
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
 
