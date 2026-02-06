@@ -2,6 +2,10 @@
 
 Multi-tenant agent orchestrator service scaffold.
 
+## Add MCP Servers
+
+codex mcp login jira_master_builder
+
 ## Requirements
 - Python 3.11+
 
@@ -29,6 +33,7 @@ uvicorn orchestrator.api.main:app --reload
 - `POST /jira/webhook/{tenant_id}`
 - `GET /api/admin/tenants` (HTTP Basic auth)
 - `POST /api/admin/tenants`
+- `DELETE /api/admin/tenants/{tenant_id}`
 - `GET /api/admin/runs`
 
 ## Core module structure

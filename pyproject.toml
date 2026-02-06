@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
   "alembic>=1.13.0",
   "fastapi>=0.115.0",
+  "PyJWT>=2.8.0",
   "pydantic-settings>=2.5.0",
   "sqlalchemy>=2.0.34",
   "uvicorn>=0.30.0",

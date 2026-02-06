@@ -35,11 +35,16 @@ class JiraWebhookTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
 
-    def _create_tenant(self, tenant_id: str, webhook_secret_ref: str | None = None) -> None:
+    def _create_tenant(
+        self,
+        tenant_id: str,
+        webhook_secret_ref: str | None = None,
+        is_enabled: bool = True,
+    ) -> None:
         payload = {
             "tenant_id": tenant_id,
             "name": "Webhook Tenant",
-            "is_enabled": True,
+            "is_enabled": is_enabled,
             "jira": {
                 "mcp_endpoint": "https://mcp.example.test",
                 "auth_ref": "secret/jira",
@@ -78,6 +83,21 @@ class JiraWebhookTests(unittest.TestCase):
         }
         response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
         self.assertEqual(response.status_code, 201)
+
+    def test_webhook_ignores_disabled_tenant(self) -> None:
+        self._create_tenant("tenant-disabled", is_enabled=False)
+        payload = {
+            "issue": {
+                "key": "TP-126",
+                "fields": {"labels": ["agent:ready"]},
+            }
+        }
+
+        response = self.client.post("/jira/webhook/tenant-disabled", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "tenant_disabled")
 
     def test_webhook_requires_ready_label(self) -> None:
         payload = {
