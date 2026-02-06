@@ -31,7 +31,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob globstar
 
           is_java=false
           is_node=false
@@ -39,27 +38,26 @@ jobs:
           node_pm="npm"
           java_build_tool="maven"
 
-          has_any_file() {
-            local pattern="$1"
-            local matches=( $pattern )
-            [ ${#matches[@]} -gt 0 ]
+          has_file_named() {
+            local filename="$1"
+            find . -path './.git' -prune -o -type f -name "$filename" -print -quit | grep -q .
           }
 
           # Java detection
-          if has_any_file "pom.xml" || has_any_file "**/pom.xml" || has_any_file "mvnw" || has_any_file "**/mvnw"; then
+          if has_file_named "pom.xml" || has_file_named "mvnw"; then
             is_java=true
             java_build_tool="maven"
-          elif has_any_file "build.gradle" || has_any_file "build.gradle.kts" || has_any_file "**/build.gradle" || has_any_file "**/build.gradle.kts" || has_any_file "gradlew" || has_any_file "**/gradlew"; then
+          elif has_file_named "build.gradle" || has_file_named "build.gradle.kts" || has_file_named "gradlew"; then
             is_java=true
             java_build_tool="gradle"
           fi
 
           # Node/React detection
-          if has_any_file "package.json" || has_any_file "**/package.json"; then
+          if has_file_named "package.json"; then
             is_node=true
-            if has_any_file "pnpm-lock.yaml" || has_any_file "**/pnpm-lock.yaml"; then
+            if has_file_named "pnpm-lock.yaml"; then
               node_pm="pnpm"
-            elif has_any_file "yarn.lock" || has_any_file "**/yarn.lock"; then
+            elif has_file_named "yarn.lock"; then
               node_pm="yarn"
             else
               node_pm="npm"
@@ -67,7 +65,7 @@ jobs:
           fi
 
           # Python detection
-          if has_any_file "pyproject.toml" || has_any_file "**/pyproject.toml" || has_any_file "requirements.txt" || has_any_file "**/requirements.txt"; then
+          if has_file_named "pyproject.toml" || has_file_named "requirements.txt"; then
             is_python=true
           fi
 
@@ -118,11 +116,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node (npm/yarn cache)
+        if: needs.detect.outputs.node_pm != 'pnpm'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: ${{ needs.detect.outputs.node_pm }}
+
+      - name: Setup Node (pnpm no cache)
+        if: needs.detect.outputs.node_pm == 'pnpm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Setup pnpm
         if: needs.detect.outputs.node_pm == 'pnpm'
@@ -203,14 +208,13 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           if [ -f "pyproject.toml" ]; then
-            # Best-effort: if using poetry/uv it may differ; keep v1 simple.
-            python -m pip install -e . || true
-            python -m pip install ruff pytest
+            python -m pip install -e .[dev] || python -m pip install -e .
+            python -m pip install ruff pytest httpx
           elif [ -f "requirements.txt" ]; then
             python -m pip install -r requirements.txt
-            python -m pip install ruff pytest
+            python -m pip install ruff pytest httpx
           else
-            python -m pip install ruff pytest
+            python -m pip install ruff pytest httpx
           fi
 
       - name: Ruff
