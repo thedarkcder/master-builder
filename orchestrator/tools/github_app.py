@@ -28,6 +28,20 @@ class PullRequestResult:
     html_url: str
 
 
+@dataclass(frozen=True)
+class PullRequestDetails:
+    number: int
+    html_url: str
+    head_sha: str
+
+
+@dataclass(frozen=True)
+class WorkflowCheckSuite:
+    name: str
+    status: str
+    conclusion: str | None
+
+
 @dataclass
 class _InstallationToken:
     token: str
@@ -174,3 +188,60 @@ class GitHubAppClient:
             raise GitHubApiError("GitHub PR response did not include html_url")
 
         return PullRequestResult(number=number, html_url=html_url)
+
+    def get_pull_request_details(self, *, repo_full_name: str, pr_number: int) -> PullRequestDetails:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/pulls/{pr_number}",
+            bearer_token=installation_token,
+        )
+
+        number = response.get("number")
+        html_url = response.get("html_url")
+        head = response.get("head")
+        head_sha = head.get("sha") if isinstance(head, dict) else None
+
+        if not isinstance(number, int):
+            raise GitHubApiError("GitHub PR details response did not include numeric PR number")
+        if not isinstance(html_url, str) or not html_url:
+            raise GitHubApiError("GitHub PR details response did not include html_url")
+        if not isinstance(head_sha, str) or not head_sha:
+            raise GitHubApiError("GitHub PR details response did not include head SHA")
+
+        return PullRequestDetails(number=number, html_url=html_url, head_sha=head_sha)
+
+    def list_check_suites(self, *, repo_full_name: str, ref: str) -> list[WorkflowCheckSuite]:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/commits/{ref}/check-suites?per_page=100",
+            bearer_token=installation_token,
+        )
+
+        suites = response.get("check_suites")
+        if not isinstance(suites, list):
+            raise GitHubApiError("GitHub check suite response did not include check_suites")
+
+        parsed: list[WorkflowCheckSuite] = []
+        for suite in suites:
+            if not isinstance(suite, dict):
+                continue
+            app = suite.get("app") if isinstance(suite.get("app"), dict) else {}
+            app_slug = app.get("slug") if isinstance(app, dict) else None
+            if app_slug != "github-actions":
+                continue
+
+            name = suite.get("name")
+            status = suite.get("status")
+            conclusion = suite.get("conclusion")
+            if not isinstance(name, str) or not name:
+                continue
+            if not isinstance(status, str) or not status:
+                continue
+            if conclusion is not None and not isinstance(conclusion, str):
+                conclusion = None
+
+            parsed.append(WorkflowCheckSuite(name=name, status=status, conclusion=conclusion))
+
+        return parsed

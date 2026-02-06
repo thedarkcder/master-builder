@@ -8,7 +8,9 @@ from unittest.mock import patch
 from orchestrator.tools.github_app import (
     GitHubAppClient,
     GitHubAppConfig,
+    PullRequestDetails,
     PullRequestResult,
+    WorkflowCheckSuite,
     github_client_from_tenant_config,
 )
 
@@ -131,3 +133,95 @@ class GitHubAppClientTests(unittest.TestCase):
         finally:
             os.environ.pop("TEST_GH_APP_ID", None)
             os.environ.pop("TEST_GH_PRIVATE_KEY", None)
+
+    def test_get_pull_request_details_extracts_head_sha(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_3",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            {
+                "number": 12,
+                "html_url": "https://github.com/example/repo/pull/12",
+                "head": {"sha": "abc123sha"},
+            },
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            details = client.get_pull_request_details(repo_full_name="example/repo", pr_number=12)
+
+        self.assertEqual(
+            details,
+            PullRequestDetails(
+                number=12,
+                html_url="https://github.com/example/repo/pull/12",
+                head_sha="abc123sha",
+            ),
+        )
+
+    def test_list_check_suites_filters_to_github_actions_workflows(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_4",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            {
+                "check_suites": [
+                    {
+                        "name": "CI",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "app": {"slug": "github-actions"},
+                    },
+                    {
+                        "name": "Security",
+                        "status": "in_progress",
+                        "conclusion": None,
+                        "app": {"slug": "github-actions"},
+                    },
+                    {
+                        "name": "third-party",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "app": {"slug": "some-other-app"},
+                    },
+                ]
+            },
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            suites = client.list_check_suites(repo_full_name="example/repo", ref="abc123")
+
+        self.assertEqual(
+            suites,
+            [
+                WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                WorkflowCheckSuite(name="Security", status="in_progress", conclusion=None),
+            ],
+        )
