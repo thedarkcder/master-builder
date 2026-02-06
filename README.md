@@ -1,72 +1,139 @@
 # master-builder
 
-Multi-tenant agent orchestrator service scaffold.
-
-## Add MCP Servers
-
-codex mcp login jira_master_builder
+Multi-tenant Jira-driven agent orchestrator service.
 
 ## Requirements
 - Python 3.11+
+- Jira MCP access configured in your Codex environment
 
-## Quick start
+## Local setup
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 ```
 
-Set admin auth and database settings:
+Set required environment values:
 ```bash
 export ORCHESTRATOR_ADMIN_USERNAME=admin
 export ORCHESTRATOR_ADMIN_PASSWORD=change-me
 export ORCHESTRATOR_DATABASE_URL=sqlite:///./orchestrator.db
 ```
 
-## Run API
+## Public API
+- `GET /health`
+- `POST /jira/webhook/{tenant_id}`
+- `GET /runs/{run_id}` (admin-auth protected run lookup policy)
+
+## Admin API
+- `GET /api/admin/tenants`
+- `POST /api/admin/tenants`
+- `GET /api/admin/tenants/{tenant_id}`
+- `PUT /api/admin/tenants/{tenant_id}`
+- `DELETE /api/admin/tenants/{tenant_id}`
+- `POST /api/admin/tenants/{tenant_id}/test-jira`
+- `POST /api/admin/tenants/{tenant_id}/test-github`
+- `GET /api/admin/runs`
+- `GET /api/admin/runs/{run_id}`
+
+All admin and run lookup endpoints use HTTP Basic auth with:
+- username: `ORCHESTRATOR_ADMIN_USERNAME`
+- password: `ORCHESTRATOR_ADMIN_PASSWORD`
+
+## CLI entrypoints
+```bash
+python -m orchestrator migrate
+python -m orchestrator worker
+python -m orchestrator run --tenant TENANT_ID --issue MAB-123
+python -m orchestrator poll --tenant all
+python -m orchestrator poll --tenant TENANT_ID
+```
+
+Equivalent installed console script:
+```bash
+orchestrator migrate
+```
+
+## Run locally
+Start API:
 ```bash
 uvicorn orchestrator.api.main:app --reload
 ```
 
-## Key endpoints
-- `GET /health`
-- `POST /jira/webhook/{tenant_id}`
-- `GET /api/admin/tenants` (HTTP Basic auth)
-- `POST /api/admin/tenants`
-- `DELETE /api/admin/tenants/{tenant_id}`
-- `GET /api/admin/runs`
-
-## Core module structure
-- `orchestrator/api`: FastAPI app factory, admin routes, and webhook ingestion.
-- `orchestrator/core`: configuration loading, logging setup, and shared security helpers.
-- `orchestrator/storage`: SQLAlchemy models, DB session factory, and Alembic migrations.
-- `orchestrator/tools`: external integration adapters (Jira MCP, GitHub, Discord).
-- `orchestrator/worker.py`: background worker entrypoint and lifecycle wiring.
-
-SQLite is the default local backend (`ORCHESTRATOR_DATABASE_URL`), and schema evolution is managed by Alembic so the service can migrate cleanly to Postgres by switching the database URL and applying migrations.
-
-## Apply migrations
-```bash
-python -m orchestrator migrate
-```
-
-## Run worker
+Start worker:
 ```bash
 python -m orchestrator worker
 ```
+
+## Docker
+Build and run API + worker:
+```bash
+docker compose up --build
+```
+
+API is exposed on `http://localhost:8000`.
+
+## Tenant onboarding
+1. Create a tenant via `POST /api/admin/tenants`.
+2. Configure Jira fields:
+   - `mcp_endpoint`
+   - `auth_ref`
+   - `project_keys`
+   - `ready_label`
+   - `ready_jql`
+3. Configure GitHub App fields:
+   - `app_id_ref`
+   - `private_key_ref`
+   - `installation_id`
+4. Configure allowed repositories under `repos.allowlist`.
+5. Validate connections:
+   - `POST /api/admin/tenants/{tenant_id}/test-jira`
+   - `POST /api/admin/tenants/{tenant_id}/test-github`
+
+## GitHub App setup (tenant config)
+Each tenant uses GitHub App mode (`mode=github_app`) with secret references:
+- `app_id_ref` must resolve to your GitHub App ID
+- `private_key_ref` must resolve to your GitHub App private key PEM
+- `installation_id` must be the installation for the tenant repos
+
+The service enforces tenant repo allowlists before clone/push/PR actions.
+
+## Jira webhook setup
+Point Jira webhook to:
+```text
+POST /jira/webhook/{tenant_id}
+```
+
+If tenant webhook auth is configured:
+- set `jira.webhook_secret_ref` to an environment variable name
+- send token via `X-Webhook-Token` or `Authorization: Bearer <token>`
+
+Only issues containing the tenant `ready_label` are enqueued.
+
+## End-to-end local flow
+1. Apply migrations:
+   - `python -m orchestrator migrate`
+2. Create tenant via Admin API.
+3. Send Jira webhook payload with `ready_label`.
+4. Confirm run created:
+   - `GET /api/admin/runs?tenant_id=...`
+   - or `GET /runs/{run_id}`
+5. Use manual queue command when needed:
+   - `python -m orchestrator run --tenant TENANT_ID --issue MAB-123`
 
 ## Tests
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-## CI and security local checks
+## Lint
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
-python3 -m pip install ruff
 ruff check .
 ```
 
-GitHub Actions workflows:
-- `.github/workflows/ci.yml`
-- `.github/workflows/security.yml`
+## Project structure
+- `orchestrator/api`: FastAPI routes and schemas.
+- `orchestrator/core`: workflow logic, policy/guardrail utilities, security.
+- `orchestrator/storage`: SQLAlchemy models and migrations.
+- `orchestrator/tools`: Jira/GitHub/git/bootstrap integrations.
+- `orchestrator/worker.py`: worker process loop.
