@@ -9,7 +9,7 @@ services:
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-change-me}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-sqlite:////app/data/orchestrator.db}
     ports:
-      - "8000:8000"
+      - "8100:8100"
     volumes:
       - orchestrator-data:/app/data
 
@@ -27,6 +27,18 @@ services:
     command: ["sh", "-c", "python -m orchestrator migrate && python -m orchestrator worker"]
     volumes:
       - orchestrator-data:/app/data
+
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+    container_name: master-builder-admin-ui
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8100}
+    ports:
+      - "4100:4100"
 
 volumes:
   orchestrator-data:
