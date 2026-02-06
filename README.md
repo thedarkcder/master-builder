@@ -58,7 +58,7 @@ orchestrator migrate
 ## Run locally
 Start API:
 ```bash
-uvicorn orchestrator.api.main:app --reload --port 8100
+uvicorn orchestrator.api.main:app --reload --port 4000
 ```
 
 Start worker:
@@ -84,7 +84,7 @@ Build and run API + worker + admin UI:
 docker compose up --build
 ```
 
-API is exposed on `http://localhost:8100`.
+API is exposed on `http://localhost:4000`.
 Admin UI is exposed on `http://localhost:4100`.
 
 ## Tenant onboarding

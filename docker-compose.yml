@@ -9,7 +9,7 @@ services:
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-change-me}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-sqlite:////app/data/orchestrator.db}
     ports:
-      - "8100:8100"
+      - "4000:4000"
     volumes:
       - orchestrator-data:/app/data
 
@@ -36,7 +36,7 @@ services:
     depends_on:
       - api
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8100}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4000}
     ports:
       - "4100:4100"
 
