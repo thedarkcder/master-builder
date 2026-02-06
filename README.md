@@ -2,6 +2,10 @@
 
 Multi-tenant agent orchestrator service scaffold.
 
+## Add MCP Servers
+
+codex mcp login jira_master_builder
+
 ## Requirements
 - Python 3.11+
 
