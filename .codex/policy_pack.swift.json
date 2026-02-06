@@ -1,0 +1,50 @@
+{
+  "name": "swift-ios",
+  "primary_language": "swift",
+  "stack_notes": [
+    "iOS (Swift)",
+    "Prefer structured concurrency (async/await) and explicit state models",
+    "Avoid flakiness in UI tests by using expectations/conditions not sleeps"
+  ],
+  "test_commands": [
+    "xcodebuild test -scheme <SCHEME> -destination 'platform=iOS Simulator,name=iPhone 15'",
+    "xcodebuild test -workspace <WORKSPACE>.xcworkspace -scheme <SCHEME> -destination 'platform=iOS Simulator,name=iPhone 15'",
+    "swift test"
+  ],
+  "lint_commands": [
+    "swiftlint lint"
+  ],
+  "format_commands": [
+    "swiftformat ."
+  ],
+  "preferred_patterns": [
+    "Use Swift Concurrency (async/await, Task) instead of manual thread management",
+    "Model workflows as explicit states (enums) and transitions; keep side effects at edges",
+    "Use Combine or async sequences where appropriate for reactive flows",
+    "Prefer dependency injection (protocols) for testability",
+    "Use XCTest expectations for async rather than sleeps"
+  ],
+  "banned_patterns": [
+    "Thread\\s*\\.\\s*sleep\\s*\\(",
+    "usleep\\s*\\(",
+    "sleep\\s*\\(",
+    "RunLoop\\s*\\.\\s*current\\s*\\.\\s*run\\s*\\(",
+    "while\\s*true\\s*\\{"
+  ],
+  "testing_rules": [
+    "Unit tests for core logic with XCTest",
+    "Async tests must use XCTestExpectation/await, not sleeps",
+    "UI tests must use XCUIElement queries with waits/expectations",
+    "No network calls in unit tests; stub/mocks via protocol-based DI"
+  ],
+  "allowed_exceptions": [
+    "Time-based waits are only acceptable for genuine scheduling (not synchronization) and must be justified and bounded.",
+    "UI tests may use waitForExistence(timeout:) or XCTest expectations; do not use sleep."
+  ],
+  "reviewer_quality_gates": [
+    "No sleep-based synchronization",
+    "Explicit state models for multi-step workflows",
+    "Behavior changes require tests",
+    "No placeholder implementations in production paths"
+  ]
+}
