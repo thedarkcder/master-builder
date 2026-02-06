@@ -18,6 +18,8 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+        os.environ["secret/app-id"] = "12345"
+        os.environ["secret/private-key"] = "not-a-real-key-for-tests"
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -27,6 +29,8 @@ class AdminApiTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+        os.environ.pop("secret/app-id", None)
+        os.environ.pop("secret/private-key", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
