@@ -112,6 +112,25 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.json()["reason"], "run_already_active")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
 
+    def test_webhook_deduplicates_delivery_identifier(self) -> None:
+        payload = {
+            "issue": {
+                "key": "TP-126",
+                "fields": {"labels": ["agent:ready"]},
+            }
+        }
+        headers = {"X-Atlassian-Webhook-Identifier": "delivery-123"}
+
+        first = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
+        second = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.json()["enqueued"])
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(second.json()["enqueued"])
+        self.assertEqual(second.json()["reason"], "duplicate_delivery")
+        self.assertEqual(second.json()["run_id"], first.json()["run_id"])
+
     def test_webhook_unknown_tenant_returns_404(self) -> None:
         payload = {
             "issue": {
