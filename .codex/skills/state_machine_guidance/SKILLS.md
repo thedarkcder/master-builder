@@ -1,10 +1,15 @@
+---
+name: state_machine_guidance
+description: Guidance for modeling multi-step workflows with explicit states and events instead of time-based waits.
+---
+
 # Skill: Use State Machines (Avoid Racy Sleeps)
 
 ## When to use
 - Multi-step workflows
 - Async processes (waiting for external systems)
 - UI flows with multiple states
-- Any “wait then retry” logic
+- Any "wait then retry" logic
 
 ## Pattern
 1) Define explicit states:
@@ -18,7 +23,7 @@
 5) Persist state for long-running workflows.
 
 ## Anti-patterns
-- Thread.sleep / time.sleep / setTimeout to “let it settle”
+- Thread.sleep / time.sleep / setTimeout to "let it settle"
 - polling loops without clear bounds/backoff
 - hiding state in timers
 

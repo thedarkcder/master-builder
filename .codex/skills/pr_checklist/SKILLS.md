@@ -1,3 +1,8 @@
+---
+name: pr_checklist
+description: Checklist to validate scope, tests, documentation, and decision-gate readiness before opening a PR.
+---
+
 # Skill: PR Checklist
 
 Before opening PR, confirm:
