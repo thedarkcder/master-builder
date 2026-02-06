@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from orchestrator.api.dependencies import get_session
+from orchestrator.api.schemas import (
+    IntegrationTestResult,
+    RunRead,
+    TenantCreate,
+    TenantRead,
+    TenantUpdate,
+)
+from orchestrator.core.security import require_admin
+from orchestrator.storage.models import Run, Tenant
+from orchestrator.tools.jira_mcp_adapter import JiraMcpAdapter, REQUIRED_CAPABILITIES
+
+router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def _tenant_to_schema(tenant: Tenant) -> TenantRead:
+    return TenantRead(
+        tenant_id=tenant.tenant_id,
+        name=tenant.name,
+        is_enabled=tenant.is_enabled,
+        jira=tenant.jira_config,
+        github=tenant.github_config,
+        repos=tenant.repos_config,
+        policy=tenant.policy_config,
+        discord=tenant.discord_config,
+        created_at=tenant.created_at,
+        updated_at=tenant.updated_at,
+    )
+
+
+def _run_to_schema(run: Run) -> RunRead:
+    return RunRead(
+        run_id=run.run_id,
+        tenant_id=run.tenant_id,
+        issue_key=run.issue_key,
+        repo_url=run.repo_url,
+        branch=run.branch,
+        pr_url=run.pr_url,
+        status=run.status,
+        last_error=run.last_error,
+        plan=run.plan,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+    )
+
+
+@router.get("/tenants", response_model=list[TenantRead])
+def list_tenants(
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[TenantRead]:
+    tenants = session.execute(select(Tenant).order_by(Tenant.tenant_id)).scalars().all()
+    return [_tenant_to_schema(tenant) for tenant in tenants]
+
+
+@router.post("/tenants", response_model=TenantRead, status_code=status.HTTP_201_CREATED)
+def create_tenant(
+    payload: TenantCreate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    existing = session.get(Tenant, payload.tenant_id)
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant already exists")
+
+    now = datetime.now(timezone.utc)
+    tenant = Tenant(
+        tenant_id=payload.tenant_id,
+        name=payload.name,
+        is_enabled=payload.is_enabled,
+        jira_config=payload.jira.model_dump(),
+        github_config=payload.github.model_dump(),
+        repos_config=payload.repos.model_dump(),
+        policy_config=payload.policy.model_dump(),
+        discord_config=payload.discord.model_dump() if payload.discord else None,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(tenant)
+    session.commit()
+    session.refresh(tenant)
+    return _tenant_to_schema(tenant)
+
+
+@router.get("/tenants/{tenant_id}", response_model=TenantRead)
+def get_tenant(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    return _tenant_to_schema(tenant)
+
+
+@router.put("/tenants/{tenant_id}", response_model=TenantRead)
+def update_tenant(
+    tenant_id: str,
+    payload: TenantUpdate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    tenant.name = payload.name
+    tenant.is_enabled = payload.is_enabled
+    tenant.jira_config = payload.jira.model_dump()
+    tenant.github_config = payload.github.model_dump()
+    tenant.repos_config = payload.repos.model_dump()
+    tenant.policy_config = payload.policy.model_dump()
+    tenant.discord_config = payload.discord.model_dump() if payload.discord else None
+    tenant.updated_at = datetime.now(timezone.utc)
+
+    session.commit()
+    session.refresh(tenant)
+    return _tenant_to_schema(tenant)
+
+
+@router.post("/tenants/{tenant_id}/test-jira", response_model=IntegrationTestResult)
+def test_jira_connection(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> IntegrationTestResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    jira = tenant.jira_config
+    required = ["mcp_endpoint", "auth_ref", "project_keys", "ready_jql"]
+    missing = [field for field in required if not jira.get(field)]
+    if missing:
+        return IntegrationTestResult(ok=False, details=f"Missing Jira fields: {', '.join(missing)}")
+
+    declared_capabilities = jira.get("declared_capabilities") or sorted(REQUIRED_CAPABILITIES)
+    capability_report = JiraMcpAdapter(declared_capabilities).discover_capabilities()
+    if not capability_report.is_healthy:
+        missing_caps = ", ".join(sorted(capability_report.missing_required))
+        return IntegrationTestResult(ok=False, details=f"Missing Jira capabilities: {missing_caps}")
+
+    optional_caps = ", ".join(sorted(capability_report.optional_available)) or "none"
+    return IntegrationTestResult(
+        ok=True,
+        details=f"Jira tenant configuration looks valid; optional capabilities: {optional_caps}",
+    )
+
+
+@router.post("/tenants/{tenant_id}/test-github", response_model=IntegrationTestResult)
+def test_github_connection(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> IntegrationTestResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    github = tenant.github_config
+    required = ["mode", "app_id_ref", "private_key_ref", "installation_id"]
+    missing = [field for field in required if not github.get(field)]
+    if missing:
+        return IntegrationTestResult(ok=False, details=f"Missing GitHub fields: {', '.join(missing)}")
+
+    if github.get("mode") != "github_app":
+        return IntegrationTestResult(ok=False, details="Only github_app mode is supported")
+
+    return IntegrationTestResult(ok=True, details="GitHub tenant configuration looks valid")
+
+
+@router.get("/runs", response_model=list[RunRead])
+def list_runs(
+    tenant_id: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    from_time: datetime | None = Query(default=None, alias="from"),
+    to_time: datetime | None = Query(default=None, alias="to"),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[RunRead]:
+    query = select(Run).order_by(Run.created_at.desc())
+
+    if tenant_id:
+        query = query.where(Run.tenant_id == tenant_id)
+    if status_filter:
+        query = query.where(Run.status == status_filter)
+    if from_time:
+        query = query.where(Run.created_at >= from_time)
+    if to_time:
+        query = query.where(Run.created_at <= to_time)
+
+    runs = session.execute(query).scalars().all()
+    return [_run_to_schema(run) for run in runs]
+
+
+@router.get("/runs/{run_id}", response_model=RunRead)
+def get_run(
+    run_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> RunRead:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+    return _run_to_schema(run)
