@@ -3,19 +3,17 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.core.runs import enqueue_run
+from orchestrator.storage.models import Tenant
 
 router = APIRouter(tags=["jira-webhook"])
 
-ACTIVE_RUN_STATUSES = {"queued", "running"}
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +44,21 @@ def _extract_webhook_token(request: Request) -> str | None:
     if auth_header and auth_header.startswith("Bearer "):
         return auth_header[7:].strip()
 
+    return None
+
+
+def _extract_delivery_id(request: Request) -> str | None:
+    header_candidates = (
+        "X-Atlassian-Webhook-Identifier",
+        "X-Webhook-Delivery",
+        "X-GitHub-Delivery",
+    )
+    for header_name in header_candidates:
+        value = request.headers.get(header_name)
+        if value:
+            normalized = value.strip()
+            if normalized:
+                return normalized
     return None
 
 
@@ -118,11 +131,13 @@ async def ingest_jira_webhook(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
 
     issue_key, labels = _extract_issue_payload(payload)
+    delivery_id = _extract_delivery_id(request)
     logger.info(
-        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s",
+        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
         request_id,
         tenant_id,
         issue_key,
+        delivery_id,
     )
 
     ready_label = tenant.jira_config.get("ready_label", "agent:ready")
@@ -141,53 +156,35 @@ async def ingest_jira_webhook(
             "reason": "ready_label_missing",
         }
 
-    existing_active_run = session.execute(
-        select(Run).where(
-            Run.tenant_id == tenant_id,
-            Run.issue_key == issue_key,
-            Run.status.in_(ACTIVE_RUN_STATUSES),
-        )
-    ).scalar_one_or_none()
-
-    if existing_active_run is not None:
+    enqueue_result = enqueue_run(
+        session,
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        delivery_id=delivery_id,
+    )
+    if not enqueue_result.enqueued:
         logger.info(
-            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=run_already_active run_id=%s",
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=%s run_id=%s",
             request_id,
             tenant_id,
             issue_key,
-            existing_active_run.run_id,
+            enqueue_result.reason,
+            enqueue_result.run.run_id,
         )
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
             "issue_key": issue_key,
             "enqueued": False,
-            "reason": "run_already_active",
-            "run_id": existing_active_run.run_id,
+            "reason": enqueue_result.reason,
+            "run_id": enqueue_result.run.run_id,
         }
-
-    run = Run(
-        run_id=str(uuid4()),
-        tenant_id=tenant_id,
-        issue_key=issue_key,
-        repo_url=None,
-        branch=None,
-        pr_url=None,
-        status="queued",
-        last_error=None,
-        plan=None,
-        created_at=datetime.now(timezone.utc),
-        started_at=None,
-        finished_at=None,
-    )
-    session.add(run)
-    session.commit()
     logger.info(
         "jira_webhook_enqueued request_id=%s tenant_id=%s issue_key=%s run_id=%s",
         request_id,
         tenant_id,
         issue_key,
-        run.run_id,
+        enqueue_result.run.run_id,
     )
 
     return {
@@ -195,5 +192,5 @@ async def ingest_jira_webhook(
         "tenant_id": tenant_id,
         "issue_key": issue_key,
         "enqueued": True,
-        "run_id": run.run_id,
+        "run_id": enqueue_result.run.run_id,
     }
