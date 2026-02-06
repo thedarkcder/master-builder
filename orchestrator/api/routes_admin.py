@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -127,6 +127,22 @@ def update_tenant(
     session.commit()
     session.refresh(tenant)
     return _tenant_to_schema(tenant)
+
+
+@router.delete("/tenants/{tenant_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_tenant(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> Response:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    session.execute(delete(Run).where(Run.tenant_id == tenant_id))
+    session.delete(tenant)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/tenants/{tenant_id}/test-jira", response_model=IntegrationTestResult)
