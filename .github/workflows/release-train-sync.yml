@@ -46,6 +46,7 @@ jobs:
       - name: Assign Ready to Release issues to next release
         env:
           JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
           JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
@@ -76,6 +77,9 @@ jobs:
             "--ready-status" "READY TO RELEASE"
             "--comment"
           )
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=("--jira-cloud-id" "${JIRA_CLOUD_ID}")
+          fi
           if [ "${dry_run}" = "true" ]; then
             args+=("--dry-run")
           fi
