@@ -130,7 +130,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jira-email", required=True)
     parser.add_argument("--jira-api-token", required=True)
     parser.add_argument("--project-key", required=True)
-    parser.add_argument("--ready-status", default="Ready to Release")
+    parser.add_argument("--ready-status", default="READY TO RELEASE")
     parser.add_argument("--done-status", default="Done")
     parser.add_argument("--release-version", default="")
     parser.add_argument("--comment", action="store_true", help="Add Jira comments when assigning/closing.")

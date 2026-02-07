@@ -61,7 +61,7 @@ jobs:
             exit 1
           fi
 
-          ready_status="${READY_STATUS:-Ready to Release}"
+          ready_status="${READY_STATUS:-READY TO RELEASE}"
           dry_run="false"
           if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
             dry_run="true"
