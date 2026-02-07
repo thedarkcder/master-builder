@@ -115,7 +115,7 @@ jobs:
 
           if [ "${#prs_by_issue[@]}" -eq 0 ]; then
             echo "No open PRs found for release issues."
-            exit 1
+            exit 0
           fi
 
           merge_failures=()
