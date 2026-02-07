@@ -66,19 +66,15 @@ What happens automatically:
 
 Optional direct package-index publish (same workflow run):
 - Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
-- Set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to a Python index upload endpoint
-- Optional: set `CODEX_ASSETS_PUBLISH_USERNAME` (defaults to `__token__`)
-- Set secret `CODEX_ASSETS_PUBLISH_PASSWORD` (token/password for the target index)
+- Optional: set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to override the upload endpoint
+- Optional: set `CODEX_ASSETS_PUBLISH_USERNAME` (defaults to `${GITHUB_ACTOR}`)
+- Optional: set secret `CODEX_ASSETS_PUBLISH_PASSWORD` (defaults to `${GITHUB_TOKEN}`)
 
-Important:
-- GitHub Packages on `github.com` does not support Python package uploads.
-- Use PyPI/TestPyPI endpoints instead:
-  - `https://upload.pypi.org/legacy/`
-  - `https://test.pypi.org/legacy/`
-- When index publish is enabled, missing/invalid index config fails the workflow (no silent skip).
+Default upload target (if not set):
+- `https://pypi.pkg.github.com/<OWNER>/<REPO>/`
 
 Authentication:
-- Uses your configured index credentials (`CODEX_ASSETS_PUBLISH_USERNAME` / `CODEX_ASSETS_PUBLISH_PASSWORD`)
+- Uses configured credentials if provided; otherwise falls back to workflow `${GITHUB_ACTOR}` + `${GITHUB_TOKEN}`
 
 Same-repo quick setup:
 1. In GitHub repo settings, set Actions variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`.
