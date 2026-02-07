@@ -1,6 +1,15 @@
 """Tool adapters package."""
 
-from orchestrator.tools.bootstrap import WorkflowBootstrapResult, bootstrap_ci_workflows
+from orchestrator.tools.bootstrap import (
+    CodexBootstrapResult,
+    RepoBootstrapStateResult,
+    WorkflowBootstrapResult,
+    bootstrap_ci_workflows,
+    bootstrap_codex_assets,
+    ensure_codex_bootstrap_state,
+    list_repo_bootstrap_states,
+    load_codex_preflight_context,
+)
 from orchestrator.tools.git_ops import (
     GitOperationError,
     GitWorkspaceManager,
@@ -29,7 +38,13 @@ from orchestrator.tools.jira_oauth import (
 
 __all__ = [
     "WorkflowBootstrapResult",
+    "CodexBootstrapResult",
+    "RepoBootstrapStateResult",
     "bootstrap_ci_workflows",
+    "bootstrap_codex_assets",
+    "ensure_codex_bootstrap_state",
+    "list_repo_bootstrap_states",
+    "load_codex_preflight_context",
     "GitOperationError",
     "GitWorkspaceManager",
     "build_branch_name",

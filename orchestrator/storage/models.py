@@ -100,3 +100,20 @@ class WebhookDelivery(Base):
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RepoBootstrapState(Base):
+    __tablename__ = "repo_bootstrap_states"
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    repo_url: Mapped[str] = mapped_column(String(512), primary_key=True)
+    last_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_created_files: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    bootstrap_count: Mapped[int] = mapped_column(nullable=False, default=1)
+    bootstrapped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

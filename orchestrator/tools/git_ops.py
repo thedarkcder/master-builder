@@ -6,7 +6,15 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestrator.tools.bootstrap import WorkflowBootstrapResult, bootstrap_ci_workflows
+from sqlalchemy.orm import Session
+
+from orchestrator.tools.bootstrap import (
+    CodexBootstrapResult,
+    WorkflowBootstrapResult,
+    bootstrap_ci_workflows,
+    ensure_codex_bootstrap_state,
+    load_codex_preflight_context,
+)
 from orchestrator.tools.repo_allowlist import enforce_repo_allowlist as _enforce_repo_allowlist
 
 
@@ -78,6 +86,30 @@ class GitWorkspaceManager:
             target_repo_dir=repo_dir,
             template_repo_root=template_repo_root,
         )
+
+    def bootstrap_codex_if_missing(
+        self,
+        *,
+        session: Session,
+        tenant_id: str,
+        repo_url: str,
+        repo_dir: Path,
+        run_id: str | None = None,
+        branch_name: str | None = None,
+        template_repo_root: Path | None = None,
+    ) -> CodexBootstrapResult:
+        return ensure_codex_bootstrap_state(
+            session=session,
+            tenant_id=tenant_id,
+            repo_url=repo_url,
+            target_repo_dir=repo_dir,
+            run_id=run_id,
+            branch_name=branch_name,
+            template_repo_root=template_repo_root,
+        )
+
+    def load_preflight_codex_context(self, *, repo_dir: Path) -> dict[str, str]:
+        return load_codex_preflight_context(repo_dir)
 
     def _run_git(self, args: list[str], *, cwd: Path) -> str:
         process = subprocess.run(
