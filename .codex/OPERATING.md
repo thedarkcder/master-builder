@@ -14,6 +14,15 @@ This repo is worked on by automated agents and humans. Agents must follow this g
 - Validate the Jira ticket is “Good To Do”.
   - If not, trigger Decision Gate and stop.
 
+### Good To Do checklist
+- Problem clarity (objective, in/out scope, acceptance criteria)
+- Context (component/repo mapping, relevant links, business impact)
+- Testability (how-to-test definition)
+- NFR decision (MVP vs scale-ready)
+- Dependencies/risks explicitly called out
+
+If GTD is incomplete, stop early, request clarification, and mark blocked.
+
 ## 3) Running locally (fill in for this repo)
 > Update these commands to match this repo. If unsure, search existing package files and CI config.
 
