@@ -5,6 +5,7 @@ import json
 import logging
 from pathlib import Path
 
+CODEX_ASSETS_PACKAGE = "master_builder_codex_assets"
 REQUIRED_GUIDANCE_FILES = (
     ".codex/POLICY.md",
     ".codex/ENGINEERING_STANDARDS.md",
@@ -23,7 +24,7 @@ class EnforcementAssetsError(ValueError):
 
 def _read_packaged_asset_text(asset_name: str) -> str | None:
     try:
-        asset = importlib.resources.files("orchestrator.codex_assets").joinpath(asset_name)
+        asset = importlib.resources.files(CODEX_ASSETS_PACKAGE).joinpath(asset_name)
     except (ModuleNotFoundError, FileNotFoundError):
         return None
     if not asset.is_file():
@@ -53,7 +54,7 @@ def _load_required_text(*, repo_root: Path, relative_path: str) -> str:
         return packaged_content
     raise EnforcementAssetsError(
         f"Missing required enforcement file: {relative_path} "
-        "(not found locally or in packaged codex assets)"
+        f"(not found locally or in packaged codex assets package '{CODEX_ASSETS_PACKAGE}')"
     )
 
 
@@ -72,7 +73,7 @@ def _load_policy_pack_payload(*, repo_root: Path) -> dict[str, dict]:
         return payload
 
     try:
-        packaged_dir = importlib.resources.files("orchestrator.codex_assets")
+        packaged_dir = importlib.resources.files(CODEX_ASSETS_PACKAGE)
         packaged_policy_pack_assets = sorted(
             (
                 resource
@@ -95,7 +96,8 @@ def _load_policy_pack_payload(*, repo_root: Path) -> dict[str, dict]:
 
     if not payload:
         raise EnforcementAssetsError(
-            "Missing policy packs: expected .codex/policy_pack*.json locally or packaged codex assets"
+            "Missing policy packs: expected .codex/policy_pack*.json locally or packaged codex "
+            f"assets package '{CODEX_ASSETS_PACKAGE}'"
         )
     return payload
 

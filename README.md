@@ -35,10 +35,17 @@ export SECRET_JIRA_CLIENT_ID=your-atlassian-oauth-client-id
 export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
 export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
 export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
+
+# GitHub Packages index for pinned codex assets wheel
+# Replace OWNER and TOKEN with your GitHub org/user and packages:read PAT.
+export PIP_EXTRA_INDEX_URL=https://OWNER:TOKEN@pip.pkg.github.com/OWNER
 ```
 
 `ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex policy/docs package version used for tenant init.
 If required assets are missing or the version mismatches, tenant create/update returns `503`.
+
+The orchestrator runtime installs pinned codex assets from:
+- `master-builder-codex-assets==0.1.0` (extra: `codex_assets`)
 
 ## Public API
 - `GET /health`
