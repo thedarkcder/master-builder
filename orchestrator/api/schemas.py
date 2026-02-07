@@ -10,6 +10,8 @@ from orchestrator.core.guardrails import enforce_safe_command
 class JiraConfig(BaseModel):
     connection_id: str | None = None
     project_keys: list[str] = Field(default_factory=list, min_length=1)
+    executable_statuses: list[str] = Field(default_factory=lambda: ["To Do"], min_length=1)
+    non_executable_statuses: list[str] = Field(default_factory=lambda: ["Backlog"])
     ready_label: str = Field(default="agent:ready", min_length=1)
     in_progress_label: str = Field(default="agent:in-progress", min_length=1)
     blocked_label: str = Field(default="agent:blocked", min_length=1)
