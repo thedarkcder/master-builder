@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
+from orchestrator.storage.migrations import run_migrations
+from orchestrator.storage.models import Tenant
 from orchestrator.tools.git_ops import (
     GitWorkspaceManager,
     build_branch_name,
@@ -102,6 +106,90 @@ class GitOpsTests(unittest.TestCase):
                 (".github/workflows/ci.yml", ".github/workflows/security.yml"),
             )
             self.assertTrue(result.readme_updated)
+
+    def test_workspace_bootstrap_codex_uses_persisted_state(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            database_url = f"sqlite:///{root}/git_ops_bootstrap.db"
+            run_migrations(database_url=database_url)
+            reset_db_engine_cache()
+            session_factory = create_session_factory(database_url=database_url)
+
+            with session_factory() as session:
+                now = datetime.now(timezone.utc)
+                session.add(
+                    Tenant(
+                        tenant_id="tenant-a",
+                        name="Tenant A",
+                        is_enabled=True,
+                        jira_config={
+                            "mcp_endpoint": "https://mcp.example.test",
+                            "auth_ref": "secret/jira",
+                            "project_keys": ["TP"],
+                            "ready_label": "agent:ready",
+                            "in_progress_label": "agent:in-progress",
+                            "blocked_label": "agent:blocked",
+                            "done_label": "agent:done",
+                            "ready_jql": "project = TP",
+                            "webhook_secret_ref": None,
+                        },
+                        github_config={
+                            "mode": "github_app",
+                            "app_id_ref": "secret/app-id",
+                            "private_key_ref": "secret/private-key",
+                            "webhook_secret_ref": None,
+                            "installation_id": "12345",
+                        },
+                        repos_config={
+                            "allowlist": ["https://github.com/example/repo"],
+                            "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                            "mapping_rules_by_component": {},
+                            "fallback_repo": None,
+                        },
+                        policy_config={
+                            "allow_jira_transitions": False,
+                            "allow_pr_creation": True,
+                            "allow_label_mutations": True,
+                            "max_runtime_minutes": 30,
+                            "max_dev_test_review_loops": 2,
+                            "max_concurrent_runs": 2,
+                            "allowed_commands": [],
+                            "require_agents_md": False,
+                        },
+                        discord_config=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                session.commit()
+
+            target_repo = root / "target-repo"
+            target_repo.mkdir(parents=True, exist_ok=True)
+
+            manager = GitWorkspaceManager(base_dir=root / "workspaces")
+            with session_factory() as session:
+                first = manager.bootstrap_codex_if_missing(
+                    session=session,
+                    tenant_id="tenant-a",
+                    repo_url="https://github.com/example/repo",
+                    repo_dir=target_repo,
+                    run_id="run-001",
+                    branch_name="jira/MAB-14-bootstrap",
+                )
+                second = manager.bootstrap_codex_if_missing(
+                    session=session,
+                    tenant_id="tenant-a",
+                    repo_url="https://github.com/example/repo",
+                    repo_dir=target_repo,
+                    run_id="run-002",
+                    branch_name="jira/MAB-14-followup",
+                )
+
+            self.assertTrue(first.created_files)
+            self.assertFalse(second.created_files)
+
+            context = manager.load_preflight_codex_context(repo_dir=target_repo)
+            self.assertIn("Never add or expose secrets", context["policy"])
 
     def test_push_branch_blocks_repo_not_in_allowlist(self) -> None:
         with TemporaryDirectory() as tmp_dir:

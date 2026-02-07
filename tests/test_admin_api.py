@@ -125,6 +125,13 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(github_test.status_code, 200)
         self.assertTrue(github_test.json()["ok"])
 
+        repo_bootstrap = self.client.get(
+            "/api/admin/tenants/tenant-a/repo-bootstrap",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(repo_bootstrap.status_code, 200)
+        self.assertEqual(repo_bootstrap.json(), [])
+
     def test_delete_tenant(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
