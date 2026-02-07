@@ -63,12 +63,13 @@ What happens automatically:
 
 Optional direct package-index publish (same workflow run):
 - Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
-- Set repo variable `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to your upload endpoint
-- Set repo secret `CODEX_ASSETS_PUBLISH_USERNAME`
-- Set repo secret `CODEX_ASSETS_PUBLISH_TOKEN`
+- Optional: set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to override the upload endpoint
 
-Example for a GitHub-style Python registry endpoint:
-- `CODEX_ASSETS_PUBLISH_REPOSITORY_URL=https://upload.pypi.pkg.github.com/<OWNER>/`
+Default upload target (if not set):
+- `https://upload.pypi.pkg.github.com/<repo_owner>/`
+
+Authentication:
+- Uses workflow `GITHUB_TOKEN` (no PAT required for same-repo publish)
 
 ## Public API
 - `GET /health`
