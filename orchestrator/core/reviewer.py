@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from orchestrator.core.pr_ready import PrReadinessResult, evaluate_pr_readiness
+from orchestrator.core.signal_templates import format_discord_pr_ready_message
 from orchestrator.tools.github_app import GitHubAppClient
 
 
@@ -46,10 +47,20 @@ class ReviewAgentGate:
         )
 
         if readiness.ready:
+            ready_signal = format_discord_pr_ready_message(
+                pr_url=pr.html_url,
+                jira_url=None,
+                run_id=None,
+                what_changed=(f"Required checks passed: {', '.join(self._required_workflows)}",),
+                risk_impact=("No failing required checks detected.",),
+                how_to_test=("Open the PR checks tab and verify CI/Security are green.",),
+                questions=(),
+                next_action="Please review + merge",
+            )
             return ReviewerSignal(
                 ready=True,
                 state="ready",
-                message=f"✅ PR Ready: {pr.html_url}",
+                message=ready_signal,
                 readiness=readiness,
             )
 
