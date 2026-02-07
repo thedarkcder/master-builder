@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV ORCHESTRATOR_DATABASE_URL=sqlite:////app/data/orchestrator.db
+ENV ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator
 ENV ORCHESTRATOR_ADMIN_USERNAME=admin
 ENV ORCHESTRATOR_ADMIN_PASSWORD=change-me
 
@@ -16,6 +16,7 @@ COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
 RUN python -m pip install --upgrade pip && \
+    test -n "$PIP_EXTRA_INDEX_URL" && \
     pip install .[codex_assets]
 
 RUN mkdir -p /app/data
