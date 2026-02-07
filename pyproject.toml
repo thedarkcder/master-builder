@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "master-builder"
+version = "0.1.0"
+description = "Multi-tenant agent orchestrator service"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.13.0",
+  "cryptography>=43.0.0",
+  "fastapi>=0.115.0",
+  "PyJWT>=2.8.0",
+  "pydantic-settings>=2.5.0",
+  "sqlalchemy>=2.0.34",
+  "uvicorn>=0.30.0",
+]
+
+[project.scripts]
+orchestrator = "orchestrator.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27.0",
+  "pytest>=8.3.0",
+  "ruff>=0.6.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+include = ["orchestrator*"]
