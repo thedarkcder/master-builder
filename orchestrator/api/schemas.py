@@ -19,8 +19,6 @@ class JiraConfig(BaseModel):
 
 class GithubConfig(BaseModel):
     mode: str = Field(default="github_app", min_length=1)
-    app_id_ref: str = Field(min_length=1)
-    private_key_ref: str = Field(min_length=1)
     webhook_secret_ref: str | None = None
     installation_id: str | None = None
 

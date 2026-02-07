@@ -33,7 +33,6 @@ import {
 const STEPS = [
   "Tenant Basics",
   "Jira",
-  "GitHub",
   "Connect GitHub App",
   "Repositories + Policy",
   "Review + Save"
@@ -90,12 +89,9 @@ export default function NewTenantPage() {
       return Boolean(values.jira.mcp_endpoint.trim() && textFields.projectKeysText.trim());
     }
     if (step === 2) {
-      return Boolean(values.github.app_id_ref.trim() && values.github.private_key_ref.trim());
-    }
-    if (step === 3) {
       return Boolean(values.github.installation_id);
     }
-    if (step === 4) {
+    if (step === 3) {
       return Boolean(textFields.allowlistText.trim());
     }
     return true;
@@ -121,7 +117,7 @@ export default function NewTenantPage() {
         setTextFields(formValuesToTextFields(form));
         setCreatedTenantId(record.tenant_id);
         if (searchParams.get("github_install") === "success") {
-          setStep(3);
+          setStep(2);
           setStatusLine("GitHub App install completed. Load repositories to continue setup.");
         } else {
           setStatusLine(`Loaded tenant ${record.tenant_id}.`);
@@ -255,17 +251,17 @@ export default function NewTenantPage() {
   }
 
   async function nextStep() {
-    if (!canAdvance && step !== 2) {
+    if (!canAdvance && step !== 1) {
       setStatusLine("Please complete required fields before continuing.");
       return;
     }
 
-    if (step === 2) {
+    if (step === 1) {
       const tenantId = await ensureTenantCreated();
       if (!tenantId) {
         return;
       }
-      setStep(3);
+      setStep(2);
       return;
     }
     setStep((current) => Math.min(current + 1, STEPS.length - 1));
@@ -325,42 +321,6 @@ export default function NewTenantPage() {
         ) : null}
 
         {step === 2 ? (
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-2">
-              <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">GitHub Mode</label>
-              <Input
-                value={values.github.mode}
-                onChange={(event) => setValues((prev) => ({ ...prev, github: { ...prev.github, mode: event.target.value } }))}
-                placeholder="github_app"
-              />
-            </div>
-            <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              Proceeding creates the tenant and unlocks GitHub App install in the next step.
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">App ID Ref</label>
-              <Input
-                value={values.github.app_id_ref}
-                onChange={(event) =>
-                  setValues((prev) => ({ ...prev, github: { ...prev.github, app_id_ref: event.target.value } }))
-                }
-                placeholder="secret/app-id"
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Private Key Ref</label>
-              <Input
-                value={values.github.private_key_ref}
-                onChange={(event) =>
-                  setValues((prev) => ({ ...prev, github: { ...prev.github, private_key_ref: event.target.value } }))
-                }
-                placeholder="secret/private-key"
-              />
-            </div>
-          </div>
-        ) : null}
-
-        {step === 3 ? (
           <div className="space-y-3">
             <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               <CheckCircle2 className="mr-1 inline h-4 w-4" />
@@ -400,7 +360,7 @@ export default function NewTenantPage() {
           </div>
         ) : null}
 
-        {step === 4 ? (
+        {step === 3 ? (
           <div className="space-y-3">
             <div className="space-y-2">
               <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Allowlist (one URL per line)</label>
@@ -464,7 +424,7 @@ export default function NewTenantPage() {
           </div>
         ) : null}
 
-        {step === 5 ? (
+        {step === 4 ? (
           <div className="space-y-3 text-sm">
             <p className="rounded-md border bg-muted/30 p-3">
               <strong>Tenant:</strong> {createdTenantId || previewTenantId(values.name)} ({values.name || "-"})

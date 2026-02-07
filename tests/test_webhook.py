@@ -56,8 +56,6 @@ class JiraWebhookTests(unittest.TestCase):
             },
             "github": {
                 "mode": "github_app",
-                "app_id_ref": "secret/app-id",
-                "private_key_ref": "secret/private-key",
                 "webhook_secret_ref": None,
                 "installation_id": "12345",
             },

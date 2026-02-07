@@ -76,6 +76,14 @@ def _allocate_tenant_id(session: Session, *, name: str) -> str:
     return candidate
 
 
+def _with_managed_github_refs(raw_github_config: dict) -> dict:
+    settings = get_settings()
+    github_config = dict(raw_github_config)
+    github_config["app_id_ref"] = settings.github_app_id_ref
+    github_config["private_key_ref"] = settings.github_private_key_ref
+    return github_config
+
+
 @router.get("/tenants", response_model=list[TenantRead])
 def list_tenants(
     _: str = Depends(require_admin),
@@ -98,7 +106,7 @@ def create_tenant(
         name=payload.name,
         is_enabled=payload.is_enabled,
         jira_config=payload.jira.model_dump(),
-        github_config=payload.github.model_dump(),
+        github_config=_with_managed_github_refs(payload.github.model_dump()),
         repos_config=payload.repos.model_dump(),
         policy_config=payload.policy.model_dump(),
         discord_config=payload.discord.model_dump() if payload.discord else None,
@@ -138,7 +146,7 @@ def update_tenant(
     tenant.name = payload.name
     tenant.is_enabled = payload.is_enabled
     tenant.jira_config = payload.jira.model_dump()
-    tenant.github_config = payload.github.model_dump()
+    tenant.github_config = _with_managed_github_refs(payload.github.model_dump())
     tenant.repos_config = payload.repos.model_dump()
     tenant.policy_config = payload.policy.model_dump()
     tenant.discord_config = payload.discord.model_dump() if payload.discord else None
@@ -205,7 +213,7 @@ def test_github_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     github = tenant.github_config
-    required = ["mode", "app_id_ref", "private_key_ref"]
+    required = ["mode"]
     missing = [field for field in required if not github.get(field)]
     if missing:
         return IntegrationTestResult(ok=False, details=f"Missing GitHub fields: {', '.join(missing)}")
@@ -220,7 +228,7 @@ def test_github_connection(
         )
 
     try:
-        github_client_from_tenant_config(github)
+        github_client_from_tenant_config(_with_managed_github_refs(github))
     except ValueError as exc:
         return IntegrationTestResult(ok=False, details=str(exc))
 
@@ -332,7 +340,7 @@ def list_tenant_github_repositories(
         )
 
     try:
-        client = github_client_from_tenant_config(github)
+        client = github_client_from_tenant_config(_with_managed_github_refs(github))
         repositories = client.list_installation_repositories()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

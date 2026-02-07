@@ -10,8 +10,6 @@ export type JiraConfig = {
 
 export type GithubConfig = {
   mode: string;
-  app_id_ref: string;
-  private_key_ref: string;
   webhook_secret_ref: string | null;
   installation_id: string | null;
 };

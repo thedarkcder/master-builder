@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     admin_ui_base_url: str = "http://localhost:4100"
     github_app_slug: str = ""
     github_install_state_secret: str = "local-dev-change-me"
+    github_app_id_ref: str = "secret/app-id"
+    github_private_key_ref: str = "secret/private-key"
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",
