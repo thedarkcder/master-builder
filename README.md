@@ -24,6 +24,7 @@ export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
+export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.0
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
@@ -35,6 +36,9 @@ export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
 export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
 export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
 ```
+
+`ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex policy/docs package version used for tenant init.
+If required assets are missing or the version mismatches, tenant create/update returns `503`.
 
 ## Public API
 - `GET /health`

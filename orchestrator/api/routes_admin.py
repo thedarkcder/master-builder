@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -28,6 +29,7 @@ from orchestrator.api.schemas import (
     TenantUpdate,
 )
 from orchestrator.core.config import get_settings
+from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
 from orchestrator.core.secret_manager import (
     list_managed_secret_refs,
     normalize_secret_ref,
@@ -103,6 +105,21 @@ def _with_managed_github_refs(raw_github_config: dict) -> dict:
     github_config["app_id_ref"] = settings.github_app_id_ref
     github_config["private_key_ref"] = settings.github_private_key_ref
     return github_config
+
+
+def _validate_codex_assets_for_tenant_init() -> None:
+    settings = get_settings()
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        validate_enforcement_assets(
+            repo_root=repo_root,
+            required_assets_version=settings.required_codex_assets_version,
+        )
+    except EnforcementAssetsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Codex assets validation failed: {exc}",
+        ) from exc
 
 
 def _resolve_secret_ref(session: Session, *, ref_name: str, settings) -> str:  # noqa: ANN001
@@ -368,6 +385,7 @@ def create_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
+    _validate_codex_assets_for_tenant_init()
     tenant_id = _allocate_tenant_id(session, name=payload.name)
     now = datetime.now(timezone.utc)
     tenant = Tenant(
@@ -408,6 +426,7 @@ def update_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
+    _validate_codex_assets_for_tenant_init()
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
