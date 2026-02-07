@@ -1,12 +1,41 @@
 import unittest
 
 from orchestrator.core.signal_templates import (
+    format_stage_discord_update,
+    format_stage_jira_update,
     format_discord_pr_ready_message,
     format_jira_final_comment,
 )
 
 
 class SignalTemplateTests(unittest.TestCase):
+    def test_stage_update_templates_include_core_identifiers(self) -> None:
+        discord_message = format_stage_discord_update(
+            tenant_id="tenant-demo",
+            issue_key="MAB-17",
+            run_id="run-123",
+            stage="pr_opened",
+            jira_url="https://example.atlassian.net/browse/MAB-17",
+            pr_url="https://github.com/example/repo/pull/5",
+        )
+        jira_message = format_stage_jira_update(
+            tenant_id="tenant-demo",
+            issue_key="MAB-17",
+            run_id="run-123",
+            stage="run_failed",
+            jira_url="https://example.atlassian.net/browse/MAB-17",
+            error="test stage failed",
+            next_steps=("Investigate CI logs", "Rerun once fixed"),
+        )
+
+        self.assertIn("tenant-demo", discord_message)
+        self.assertIn("MAB-17", discord_message)
+        self.assertIn("run-123", discord_message)
+        self.assertIn("pr_opened", discord_message)
+        self.assertIn("run_failed", jira_message)
+        self.assertIn("test stage failed", jira_message)
+        self.assertIn("Investigate CI logs", jira_message)
+
     def test_discord_template_applies_signal_limits(self) -> None:
         message = format_discord_pr_ready_message(
             pr_url="https://github.com/example/repo/pull/1",
