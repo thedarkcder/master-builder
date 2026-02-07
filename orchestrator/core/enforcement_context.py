@@ -6,7 +6,9 @@ from pathlib import Path
 REQUIRED_GUIDANCE_FILES = (
     ".codex/POLICY.md",
     ".codex/ENGINEERING_STANDARDS.md",
+    ".codex/OPERATING.md",
     ".codex/DECISION_GATE_TEMPLATE.md",
+    ".codex/PR_READY_TEMPLATES.md",
 )
 
 
