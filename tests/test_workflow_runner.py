@@ -256,3 +256,43 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertEqual(result.diagnostics.stage, "preflight")
         self.assertIn("Good To Do validation failed", result.diagnostics.message)
         self.assertEqual(agents.calls, [])
+
+    def test_placeholder_without_tracked_followup_blocks_with_draft_followup(self) -> None:
+        agents = _FakeAgents()
+        agents.review_results_by_attempt[1] = ReviewResult(
+            approved=True,
+            summary=["TODO: finish webhook validation for orchestrator/api/routes_webhook.py"],
+            feedback=None,
+            pr_url=None,
+        )
+
+        result = WorkflowRunner(agents).run(self._request(loops=1))
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "review")
+        self.assertIn("without tracked follow-up issue", result.diagnostics.message)
+        self.assertIsNotNone(result.follow_up_issue)
+        self.assertEqual(result.follow_up_issue["target_status"], "Backlog")
+        self.assertIn("placeholder", result.follow_up_issue["labels"])
+        self.assertIn("routes_webhook.py", result.follow_up_issue["description"])
+
+    def test_placeholder_with_tracked_followup_still_blocks_without_new_draft(self) -> None:
+        agents = _FakeAgents()
+        agents.review_results_by_attempt[1] = ReviewResult(
+            approved=True,
+            summary=[
+                "Temporary placeholder kept for compatibility.",
+                "Tracked in MAB-777 with exact removal steps.",
+            ],
+            feedback=None,
+            pr_url=None,
+        )
+
+        result = WorkflowRunner(agents).run(self._request(loops=1))
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "review")
+        self.assertIn("tracked follow-up issue(s) present", result.diagnostics.message)
+        self.assertIsNone(result.follow_up_issue)

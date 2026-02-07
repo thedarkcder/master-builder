@@ -25,6 +25,7 @@ cp "${REPO_ROOT}/.codex/OPERATING.md" "${MODULE_ROOT}/OPERATING.md"
 cp "${REPO_ROOT}/.codex/DECISION_GATE_TEMPLATE.md" "${MODULE_ROOT}/DECISION_GATE_TEMPLATE.md"
 cp "${REPO_ROOT}/.codex/PR_READY_TEMPLATES.md" "${MODULE_ROOT}/PR_READY_TEMPLATES.md"
 cp "${REPO_ROOT}/.codex/codex_assets_manifest.json" "${MODULE_ROOT}/codex_assets_manifest.json"
+cp "${REPO_ROOT}/.codex/rules/decision_gate.md" "${MODULE_ROOT}/decision_gate.md"
 cp "${REPO_ROOT}/.codex/policy_pack"*.json "${MODULE_ROOT}/"
 
 cat > "${MODULE_ROOT}/__init__.py" <<EOF
