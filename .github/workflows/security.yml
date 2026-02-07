@@ -1,0 +1,151 @@
+name: Security
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: Detect SAST languages
+    runs-on: ubuntu-latest
+    outputs:
+      codeql_languages: ${{ steps.detect.outputs.codeql_languages }}
+      is_python: ${{ steps.detect.outputs.is_python }}
+      is_node: ${{ steps.detect.outputs.is_node }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_file_pattern() {
+            local pattern="$1"
+            find . -path './.git' -prune -o -type f -name "$pattern" -print -quit | grep -q .
+          }
+
+          languages=()
+          is_python=false
+          is_node=false
+
+          if has_file_pattern "*.py"; then
+            languages+=("python")
+            is_python=true
+          fi
+          if has_file_pattern "*.js" || has_file_pattern "*.jsx" || has_file_pattern "*.ts" || has_file_pattern "*.tsx"; then
+            languages+=("javascript-typescript")
+            is_node=true
+          fi
+          if has_file_pattern "*.java" || has_file_pattern "*.kt" || has_file_pattern "*.kts"; then
+            languages+=("java-kotlin")
+          fi
+
+          if [ ${#languages[@]} -eq 0 ]; then
+            echo "codeql_languages=" >> "$GITHUB_OUTPUT"
+          else
+            codeql_languages=$(IFS=,; echo "${languages[*]}")
+            echo "codeql_languages=$codeql_languages" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "is_python=$is_python" >> "$GITHUB_OUTPUT"
+          echo "is_node=$is_node" >> "$GITHUB_OUTPUT"
+
+  dependency-review:
+    name: Dependency review
+    needs: detect
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && vars.ENABLE_DEPENDENCY_REVIEW == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  python-dependency-audit:
+    name: Python dependency audit
+    needs: detect
+    if: needs.detect.outputs.is_python == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies for audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f "pyproject.toml" ]; then
+            python -m pip install -e .[dev] || python -m pip install -e .
+          elif [ -f "requirements.txt" ]; then
+            python -m pip install -r requirements.txt
+          fi
+          python -m pip install pip-audit
+
+      - name: Run pip-audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip-audit --progress-spinner off
+
+  gitleaks:
+    name: Secret scanning (gitleaks)
+    needs: detect
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ""
+
+  codeql:
+    name: SAST (CodeQL)
+    needs: detect
+    if: needs.detect.outputs.codeql_languages != '' && vars.ENABLE_CODEQL == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ needs.detect.outputs.codeql_languages }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
