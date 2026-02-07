@@ -45,16 +45,13 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: master-builder-cloudflared
+    container_name: cloudflared
+    restart: unless-stopped
     depends_on:
       - api
-    command:
-      - tunnel
-      - --no-autoupdate
-      - --loglevel
-      - info
-      - --url
-      - http://api:4000
+    volumes:
+      - .cloudflared:/etc/cloudflared:ro
+    command: tunnel --config /etc/cloudflared/config.yml run
 
 volumes:
   orchestrator-data:
