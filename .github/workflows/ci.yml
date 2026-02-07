@@ -17,7 +17,9 @@ concurrency:
 jobs:
   detect:
     name: Detect project type
-    runs-on: ubuntu-latest
+    runs-on: 
+        - self-hosted
+        - Linux
     outputs:
       is_java: ${{ steps.detect.outputs.is_java }}
       is_node: ${{ steps.detect.outputs.is_node }}

@@ -24,13 +24,14 @@ services:
       PACKAGE_INDEX_PASSWORD: ${PACKAGE_INDEX_PASSWORD:-change-me}
     ports:
       - "4401:8080"
-    command:
-      - sh
+    entrypoint:
+      - /bin/sh
       - -c
-      - |
-        set -euo pipefail
-        printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /data/.htpasswd
-        exec pypi-server run -p 8080 -P /data/.htpasswd -H plaintext -a update,download,list /data/packages
+    command: |
+      set -eu
+      mkdir -p /data/packages
+      printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /tmp/.htpasswd
+      exec pypi-server run -p 8080 -P /tmp/.htpasswd -H plaintext -a update,download,list /data/packages
     volumes:
       - packages-data:/data/packages
 
@@ -123,15 +124,36 @@ services:
     depends_on:
       - api
     network_mode: "service:api"
+    entrypoint:
+      - /bin/sh
+      - /etc/tailscale/funnel-bootstrap.sh
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "true"
-      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---advertise-tags=tag:container --accept-dns=false}
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---accept-dns=false}
+      TS_FUNNEL_PORT: ${TS_FUNNEL_PORT:-4000}
     volumes:
       - tailscale-state:/var/lib/tailscale
+      - ./scripts/tailscale/funnel-bootstrap.sh:/etc/tailscale/funnel-bootstrap.sh:ro
+  gha-linux-runner:
+    image: myoung34/github-runner:latest
+    platform: linux/amd64
+    container_name: master-builder-gha-linux-runner
+    restart: unless-stopped
+    environment:
+      RUNNER_SCOPE: repo
+      REPO_URL: https://github.com/thedarkcder/master-builder
+      RUNNER_NAME_PREFIX: master-builder-linux
+      LABELS: self-hosted,linux,non-macos
+      RUNNER_WORKDIR: /tmp/runner/work
+      DISABLE_AUTO_UPDATE: "true"
+    volumes:
+      - runner-data:/runner
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   postgres-data:
   packages-data:
   tailscale-state:
+  runner-data:

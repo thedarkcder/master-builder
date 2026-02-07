@@ -209,6 +209,7 @@ UI sections:
 ## Docker
 Build and run API + worker + Postgres + package service + optional admin UI + tailscale sidecar:
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
