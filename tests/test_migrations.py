@@ -17,6 +17,7 @@ class MigrationTests(unittest.TestCase):
             inspector = inspect(engine)
 
             self.assertIn("tenants", inspector.get_table_names())
+            self.assertIn("jira_oauth_connections", inspector.get_table_names())
             self.assertIn("runs", inspector.get_table_names())
             self.assertIn("run_locks", inspector.get_table_names())
             self.assertIn("webhook_deliveries", inspector.get_table_names())

@@ -89,7 +89,6 @@ def _count_runs_for_tenant(session, *, tenant_id: str, status: str) -> int:  # n
 
 
 def _tenant_poll_snapshot(session, tenant: Tenant) -> dict:  # noqa: ANN001
-    ready_jql = str(tenant.jira_config.get("ready_jql") or "")
     max_concurrent_runs = _coerce_positive_int(
         tenant.policy_config.get("max_concurrent_runs"),
         default=1,
@@ -97,7 +96,6 @@ def _tenant_poll_snapshot(session, tenant: Tenant) -> dict:  # noqa: ANN001
     return {
         "tenant_id": tenant.tenant_id,
         "enabled": tenant.is_enabled,
-        "ready_jql": ready_jql,
         "queued_runs": _count_runs_for_tenant(session, tenant_id=tenant.tenant_id, status="queued"),
         "running_runs": _count_runs_for_tenant(
             session,

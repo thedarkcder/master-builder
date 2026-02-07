@@ -43,24 +43,19 @@ class JiraWebhookTests(unittest.TestCase):
         max_concurrent_runs: int = 2,
     ) -> None:
         payload = {
-            "tenant_id": tenant_id,
-            "name": "Webhook Tenant",
+            "name": tenant_id,
             "is_enabled": is_enabled,
             "jira": {
                 "mcp_endpoint": "https://mcp.example.test",
-                "auth_ref": "secret/jira",
                 "project_keys": ["TP"],
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
                 "blocked_label": "agent:blocked",
                 "done_label": None,
-                "ready_jql": "project = TP",
                 "webhook_secret_ref": webhook_secret_ref,
             },
             "github": {
                 "mode": "github_app",
-                "app_id_ref": "secret/app-id",
-                "private_key_ref": "secret/private-key",
                 "webhook_secret_ref": None,
                 "installation_id": "12345",
             },
@@ -84,6 +79,7 @@ class JiraWebhookTests(unittest.TestCase):
         }
         response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
         self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["tenant_id"], tenant_id)
 
     def test_webhook_ignores_disabled_tenant(self) -> None:
         self._create_tenant("tenant-disabled", is_enabled=False)

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from orchestrator.tools.github_app import (
     GitHubAppClient,
     GitHubAppConfig,
+    InstallationRepository,
     PullRequestDetails,
     PullRequestResult,
     WorkflowCheckSuite,
@@ -242,5 +243,63 @@ class GitHubAppClientTests(unittest.TestCase):
             [
                 WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
                 WorkflowCheckSuite(name="Security", status="in_progress", conclusion=None),
+            ],
+        )
+
+    def test_list_installation_repositories_parses_response(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_5",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            {
+                "repositories": [
+                    {
+                        "full_name": "example/repo-b",
+                        "html_url": "https://github.com/example/repo-b",
+                        "default_branch": "develop",
+                        "private": True,
+                    },
+                    {
+                        "full_name": "example/repo-a",
+                        "html_url": "https://github.com/example/repo-a",
+                        "default_branch": "main",
+                        "private": False,
+                    },
+                ]
+            },
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            repositories = client.list_installation_repositories()
+
+        self.assertEqual(
+            repositories,
+            [
+                InstallationRepository(
+                    full_name="example/repo-a",
+                    html_url="https://github.com/example/repo-a",
+                    default_branch="main",
+                    private=False,
+                ),
+                InstallationRepository(
+                    full_name="example/repo-b",
+                    html_url="https://github.com/example/repo-b",
+                    default_branch="develop",
+                    private=True,
+                ),
             ],
         )
