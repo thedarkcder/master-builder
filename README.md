@@ -71,6 +71,11 @@ Default upload target (if not set):
 Authentication:
 - Uses workflow `GITHUB_TOKEN` (no PAT required for same-repo publish)
 
+Same-repo quick setup:
+1. In GitHub repo settings, set Actions variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`.
+2. Merge a PR that bumps `.codex/codex_assets_manifest.json` `assets_version`.
+3. Confirm workflow `Publish Codex Assets` uploads release artifacts and publishes package index files.
+
 ## Public API
 - `GET /health`
 - `POST /jira/webhook/{tenant_id}`
