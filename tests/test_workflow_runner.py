@@ -184,6 +184,10 @@ class WorkflowRunnerTests(unittest.TestCase):
                 {"stage": "test", "attempt": "2", "event": "test failure attempt 2"},
             ],
         )
+        self.assertIsNotNone(result.follow_up_issue)
+        self.assertEqual(result.follow_up_issue["target_status"], "Backlog")
+        self.assertFalse(result.follow_up_issue["auto_promote"])
+        self.assertIn("Why it matters", result.follow_up_issue["description"])
 
     def test_missing_pr_url_is_safe_failure(self) -> None:
         agents = _FakeAgents()
