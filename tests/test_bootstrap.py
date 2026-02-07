@@ -67,6 +67,8 @@ class CodexBootstrapTests(unittest.TestCase):
             self.assertIn("Never add or expose secrets", context["policy"])
             self.assertIn("Read and follow", context["operating_or_agents"])
             self.assertEqual(context["operating_source"], "AGENTS.md")
+            self.assertIn("Thread.sleep(...)", context["engineering_standards"])
+            self.assertIn("Decision Gate", context["decision_gate_template"])
 
     def test_codex_bootstrap_is_idempotent(self) -> None:
         with TemporaryDirectory() as tmp_dir:

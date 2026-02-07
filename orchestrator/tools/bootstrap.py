@@ -60,6 +60,8 @@ Use `.codex/OPERATING.md` for repository execution conventions.
 CODEX_REQUIRED_FILES = (
     ".codex/OPERATING.md",
     ".codex/POLICY.md",
+    ".codex/ENGINEERING_STANDARDS.md",
+    ".codex/DECISION_GATE_TEMPLATE.md",
     ".codex/skills/run_tests.md",
     ".codex/skills/add_tests.md",
     ".codex/skills/pr_checklist.md",
@@ -135,8 +137,15 @@ def bootstrap_codex_assets(
 
     source_operating = source_repo / ".codex" / "OPERATING.md"
     source_policy = source_repo / ".codex" / "POLICY.md"
-    if not source_operating.exists() or not source_policy.exists():
-        raise FileNotFoundError("Canonical .codex OPERATING/POLICY templates are missing")
+    source_engineering = source_repo / ".codex" / "ENGINEERING_STANDARDS.md"
+    source_decision_gate = source_repo / ".codex" / "DECISION_GATE_TEMPLATE.md"
+    if (
+        not source_operating.exists()
+        or not source_policy.exists()
+        or not source_engineering.exists()
+        or not source_decision_gate.exists()
+    ):
+        raise FileNotFoundError("Canonical .codex templates are missing required baseline docs")
 
     created_files: list[str] = []
     codex_dir = target_repo / ".codex"
@@ -147,6 +156,8 @@ def bootstrap_codex_assets(
     mapping = {
         ".codex/OPERATING.md": source_operating.read_text(encoding="utf-8"),
         ".codex/POLICY.md": source_policy.read_text(encoding="utf-8"),
+        ".codex/ENGINEERING_STANDARDS.md": source_engineering.read_text(encoding="utf-8"),
+        ".codex/DECISION_GATE_TEMPLATE.md": source_decision_gate.read_text(encoding="utf-8"),
     }
     for skill_filename, skill_content in SKILL_TEMPLATES.items():
         mapping[f".codex/skills/{skill_filename}"] = skill_content
@@ -186,6 +197,8 @@ def load_codex_preflight_context(target_repo_dir: str | Path) -> dict[str, str]:
     target_repo = Path(target_repo_dir).resolve()
     policy_path = target_repo / ".codex" / "POLICY.md"
     operating_path = target_repo / ".codex" / "OPERATING.md"
+    engineering_path = target_repo / ".codex" / "ENGINEERING_STANDARDS.md"
+    decision_gate_path = target_repo / ".codex" / "DECISION_GATE_TEMPLATE.md"
     agents_path = target_repo / "AGENTS.md"
 
     if not policy_path.exists():
@@ -200,10 +213,17 @@ def load_codex_preflight_context(target_repo_dir: str | Path) -> dict[str, str]:
     else:
         raise FileNotFoundError("Missing required preflight file: AGENTS.md or .codex/OPERATING.md")
 
+    if not engineering_path.exists():
+        raise FileNotFoundError("Missing required preflight file: .codex/ENGINEERING_STANDARDS.md")
+    if not decision_gate_path.exists():
+        raise FileNotFoundError("Missing required preflight file: .codex/DECISION_GATE_TEMPLATE.md")
+
     return {
         "policy": policy_path.read_text(encoding="utf-8"),
         "operating_or_agents": operating_or_agents,
         "operating_source": operating_source,
+        "engineering_standards": engineering_path.read_text(encoding="utf-8"),
+        "decision_gate_template": decision_gate_path.read_text(encoding="utf-8"),
     }
 
 
