@@ -31,6 +31,13 @@ services:
         mkdir -p /data/packages
         printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /tmp/.htpasswd
         exec pypi-server --hash-algo off run -p 4401 -P /tmp/.htpasswd -a update,download,list /data/packages
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s = socket.create_connection(('127.0.0.1', 4401), 2); s.close()"
+      interval: 5s
+      timeout: 5s
+      retries: 20
     volumes:
       - packages-data:/data/packages
 
@@ -148,8 +155,7 @@ services:
       RUNNER_NAME_PREFIX: master-builder-linux
       LABELS: self-hosted,linux,non-macos
       RUNNER_WORKDIR: /tmp/runner/work
-      DISABLE_AUTO_UPDATE: "true"
-      ACCESS_TOKEN: ${GHA_ACCESS_TOKEN:-}
+      DISABLE_AUTO_UPDATE: "false"
       RUNNER_TOKEN: ${GHA_RUNNER_TOKEN:-}
     volumes:
       - runner-data:/runner
