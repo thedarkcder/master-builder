@@ -17,7 +17,7 @@ Set required environment values:
 ```bash
 export ORCHESTRATOR_ADMIN_USERNAME=admin
 export ORCHESTRATOR_ADMIN_PASSWORD=change-me
-export ORCHESTRATOR_DATABASE_URL=sqlite:///./orchestrator.db
+export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@localhost:4402/orchestrator
 export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
 export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
@@ -37,15 +37,14 @@ export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
 export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
 
 # Optional extra Python index for pinned codex assets wheel
-# Example for TestPyPI:
-# export PIP_EXTRA_INDEX_URL=https://__token__:YOUR_TOKEN@test.pypi.org/simple/
+# Example local package service (docker-compose):
+# export PIP_EXTRA_INDEX_URL=http://tenant:change-me@localhost:4401/simple/
 ```
 
-`ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex policy/docs package version used for tenant init.
+`ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex assets version used for tenant init.
 If required assets are missing or the version mismatches, tenant create/update returns `503`.
 
-The orchestrator runtime installs pinned codex assets from:
-- `master-builder-codex-assets==0.1.1` (extra: `codex_assets`)
+The orchestrator runtime loads codex assets from local `.codex` when present (including Docker image builds in this repo), and can fall back to the packaged `master-builder-codex-assets` dependency path where configured.
 
 ## Codex assets package publishing
 Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.
@@ -66,15 +65,12 @@ What happens automatically:
 
 Optional direct package-index publish (same workflow run):
 - Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
-- Optional: set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to override the upload endpoint (must be repo-scoped)
-- Optional: set `CODEX_ASSETS_PUBLISH_USERNAME` (defaults to `${GITHUB_ACTOR}`)
-- Optional: set secret `CODEX_ASSETS_PUBLISH_PASSWORD` (defaults to `${GITHUB_TOKEN}`)
-
-Default upload target (if not set):
-- `https://pypi.pkg.github.com/<OWNER>/<REPO>/`
+- Set repo variable `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` (must be repo-scoped for GitHub Packages, e.g. `https://pypi.pkg.github.com/<OWNER>/<REPO>/`)
+- Set repo variable `CODEX_ASSETS_PUBLISH_USERNAME`
+- Set repo secret `CODEX_ASSETS_PUBLISH_PASSWORD`
 
 Authentication:
-- Uses configured credentials if provided; otherwise falls back to workflow `${GITHUB_ACTOR}` + `${GITHUB_TOKEN}`
+- Uses the explicit package-service credentials above (no fallback credentials).
 
 Same-repo quick setup:
 1. In GitHub repo settings, set Actions variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`.
@@ -89,13 +85,17 @@ Version bump helpers:
 - CI enforces this on pull requests via job: `Codex assets version guard`.
 
 ## Jira release-train automation (repo-level)
-This repo can auto-assign `READY TO RELEASE` Jira issues to the next release and auto-close them on release publish.
+This repo uses two release-train workflows:
+- a fast label sync loop for `Ready to Release` issues
+- a close loop that waits checks, merges release PRs, and closes Jira issues
 
 Workflows:
 - `.github/workflows/release-train-sync.yml`
+  - runs every 30 minutes (and manual dispatch)
   - assigns `release:vX.Y.Z` labels to `READY TO RELEASE` issues
 - `.github/workflows/release-train-close.yml`
-  - transitions `release:vX.Y.Z` issues to `Done` after GitHub release publish
+  - runs hourly (plus release publish/manual dispatch)
+  - finds `release:vX.Y.Z` issues, waits for required checks, merges matching PRs to `main`, then transitions issues to `Done`
 
 Enable with:
 - Repository variable: `ENABLE_JIRA_RELEASE_AUTOMATION=true`
@@ -207,13 +207,25 @@ UI sections:
 - `/runs` for run observability
 
 ## Docker
-Build and run API + worker + optional admin UI + cloudflared:
+Build and run API + worker + Postgres + package service + optional admin UI + cloudflared:
 ```bash
 docker compose up --build
 ```
 
 API is exposed on `http://localhost:4000`.
+Postgres is exposed on `localhost:4402`.
+Private package service is exposed on `http://localhost:4401`.
 Admin UI (if running locally) is exposed on `http://localhost:4100`.
+
+Default local package service credentials:
+- username: `tenant`
+- password: `change-me`
+
+Examples:
+- Install from local package service:
+  - `pip install --extra-index-url "http://tenant:change-me@localhost:4401/simple/" master-builder-codex-assets==0.1.1`
+- Upload with twine:
+  - `python -m twine upload --repository-url "http://localhost:4401/" -u tenant -p change-me dist/codex-assets/*`
 
 ### Quick tunnel URL (trycloudflare)
 The stack includes `cloudflared` in Quick Tunnel mode, targeting the API service directly (`api:4000`).
