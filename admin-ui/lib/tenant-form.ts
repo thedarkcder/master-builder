@@ -68,6 +68,8 @@ export function defaultTenantFormValues(): TenantFormValues {
     jira: {
       connection_id: null,
       project_keys: [],
+      ready_statuses: ["Ready for Agent"],
+      ready_jql: null,
       ready_label: "agent:ready",
       in_progress_label: "agent:in-progress",
       blocked_label: "agent:blocked",
@@ -125,6 +127,7 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
 
 export type TenantFormTextFields = {
   projectKeysText: string;
+  readyStatusesText: string;
   allowlistText: string;
   policyAllowedCommandsText: string;
   notifyEventsText: string;
@@ -135,6 +138,7 @@ export type TenantFormTextFields = {
 export function formValuesToTextFields(values: TenantFormValues): TenantFormTextFields {
   return {
     projectKeysText: joinCsv(values.jira.project_keys),
+    readyStatusesText: joinCsv(values.jira.ready_statuses),
     allowlistText: values.repos.allowlist.join("\n"),
     policyAllowedCommandsText: values.policy.allowed_commands.join("\n"),
     notifyEventsText: values.discord.notify_events.join("\n"),
@@ -154,6 +158,8 @@ export function toCreatePayload(
       ...values.jira,
       connection_id: values.jira.connection_id?.trim() || null,
       project_keys: splitCsv(textFields.projectKeysText),
+      ready_statuses: splitCsv(textFields.readyStatusesText),
+      ready_jql: values.jira.ready_jql?.trim() || null,
       ready_label: values.jira.ready_label.trim(),
       in_progress_label: values.jira.in_progress_label.trim(),
       blocked_label: values.jira.blocked_label.trim(),

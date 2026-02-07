@@ -16,6 +16,8 @@ from orchestrator.api.schemas import (
     GitHubInstallStart,
     IntegrationTestResult,
     JiraConnectStart,
+    ReadyGatePreviewRead,
+    ReadyIssuePreviewRead,
     JiraProjectRead,
     ManagedSecretRead,
     ManagedSecretResolveRequest,
@@ -171,6 +173,12 @@ def _secret_metadata_to_schema(metadata) -> ManagedSecretRead:  # noqa: ANN001
         source=metadata.source,
         updated_at=metadata.updated_at,
     )
+
+
+def _default_ready_jql(*, project_keys: list[str], ready_statuses: list[str]) -> str:
+    quoted_projects = ", ".join(f"\"{key}\"" for key in project_keys)
+    quoted_statuses = ", ".join(f"\"{status}\"" for status in ready_statuses)
+    return f"project in ({quoted_projects}) AND status in ({quoted_statuses}) ORDER BY updated DESC"
 
 
 @router.get("/secrets", response_model=list[ManagedSecretRead])
@@ -351,6 +359,74 @@ def list_jira_projects_for_connection(
     client = _jira_oauth_client(session=session, settings=settings)
     projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
     return [JiraProjectRead(key=project.key, name=project.name) for project in projects]
+
+
+@router.get("/tenants/{tenant_id}/ready-preview", response_model=ReadyGatePreviewRead)
+def preview_tenant_ready_gate(
+    tenant_id: str,
+    max_results: int = Query(default=10, ge=1, le=50),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ReadyGatePreviewRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    jira_config = tenant.jira_config
+    project_keys = jira_config.get("project_keys")
+    if not isinstance(project_keys, list) or not project_keys:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Jira project_keys")
+
+    raw_ready_statuses = jira_config.get("ready_statuses")
+    if isinstance(raw_ready_statuses, list):
+        ready_statuses = [str(value).strip() for value in raw_ready_statuses if str(value).strip()]
+    else:
+        ready_statuses = []
+    if not ready_statuses:
+        ready_statuses = ["Ready for Agent"]
+
+    raw_ready_jql = jira_config.get("ready_jql")
+    ready_jql = raw_ready_jql.strip() if isinstance(raw_ready_jql, str) else ""
+    if not ready_jql:
+        ready_jql = _default_ready_jql(project_keys=project_keys, ready_statuses=ready_statuses)
+
+    connection_id = jira_config.get("connection_id")
+    if not isinstance(connection_id, str) or not connection_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Jira OAuth connection is not linked")
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Configured Jira connection was not found")
+
+    settings = get_settings()
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        issues = client.search_issues_by_jql(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            jql=ready_jql,
+            max_results=max_results,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Ready preview failed: {exc}") from exc
+
+    guidance = (
+        "Issues are executable only when they are in a configured ready status. "
+        "If an issue is missing here, move it to a ready status and retry."
+    )
+    return ReadyGatePreviewRead(
+        ready_statuses=ready_statuses,
+        ready_jql=ready_jql,
+        eligible_issues=[
+            ReadyIssuePreviewRead(key=issue.key, summary=issue.summary, status=issue.status)
+            for issue in issues
+        ],
+        guidance=guidance,
+    )
 
 
 @router.get("/tenants", response_model=list[TenantRead])

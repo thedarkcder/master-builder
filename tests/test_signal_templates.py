@@ -1,12 +1,24 @@
 import unittest
 
 from orchestrator.core.signal_templates import (
+    format_discord_ready_gate_guidance,
     format_discord_pr_ready_message,
     format_jira_final_comment,
 )
 
 
 class SignalTemplateTests(unittest.TestCase):
+    def test_ready_gate_guidance_is_actionable(self) -> None:
+        guidance = format_discord_ready_gate_guidance(
+            issue_key="MAB-20",
+            issue_status="To Do",
+            ready_statuses=("Ready for Agent", "Ready"),
+        )
+        self.assertIn("MAB-20", guidance)
+        self.assertIn("To Do", guidance)
+        self.assertIn("Ready for Agent", guidance)
+        self.assertIn("Move the issue to a ready status", guidance)
+
     def test_discord_template_applies_signal_limits(self) -> None:
         message = format_discord_pr_ready_message(
             pr_url="https://github.com/example/repo/pull/1",
