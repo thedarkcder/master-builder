@@ -101,7 +101,7 @@ Enable with:
   - `RELEASE_JIRA_BASE_URL`
   - `RELEASE_JIRA_EMAIL`
   - `RELEASE_JIRA_PROJECT_KEY`
-  - optional `RELEASE_READY_STATUS` (default `Ready to Release`)
+  - optional `RELEASE_READY_STATUS` (default `READY TO RELEASE`)
   - optional `RELEASE_DONE_STATUS` (default `Done`)
 - Secret:
   - `RELEASE_JIRA_API_TOKEN`
