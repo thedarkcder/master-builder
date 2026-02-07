@@ -24,6 +24,11 @@ router = APIRouter(tags=["jira-webhook"])
 
 logger = logging.getLogger(__name__)
 DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1_048_576
+HTTP_413_TOO_LARGE = getattr(
+    status,
+    "HTTP_413_CONTENT_TOO_LARGE",
+    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+)
 
 
 def _max_webhook_body_bytes() -> int:
@@ -59,7 +64,7 @@ async def _read_json_payload(
             max_bytes,
         )
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=HTTP_413_TOO_LARGE,
             detail="Payload too large",
         )
 
