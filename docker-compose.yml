@@ -2,7 +2,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: orchestrator/Dockerfile
     container_name: master-builder-api
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
@@ -16,7 +16,7 @@ services:
   worker:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: orchestrator/Dockerfile
     container_name: master-builder-worker
     depends_on:
       - api
