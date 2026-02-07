@@ -25,12 +25,14 @@ services:
     ports:
       - "4401:8080"
     command:
-      - sh
-      - -c
-      - |
-        set -euo pipefail
-        printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /data/.htpasswd
-        exec pypi-server run -p 8080 -P /data/.htpasswd -H plaintext -a update,download,list /data/packages
+      - run
+      - -p
+      - "8080"
+      - -P
+      - .
+      - -a
+      - .
+      - /data/packages
     volumes:
       - packages-data:/data/packages
 

@@ -17,7 +17,8 @@ COPY alembic.ini ./alembic.ini
 
 RUN python -m pip install --upgrade pip && \
     test -n "$PIP_EXTRA_INDEX_URL" && \
-    pip install .[codex_assets]
+    PIP_TRUSTED_HOST="$(echo "$PIP_EXTRA_INDEX_URL" | sed -E 's#^[a-zA-Z]+://([^/@]+@)?([^/:]+).*#\2#')" && \
+    pip install --trusted-host "$PIP_TRUSTED_HOST" .[codex_assets]
 
 RUN mkdir -p /app/data
 
