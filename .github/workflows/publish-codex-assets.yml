@@ -27,7 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          # Need full history so github.event.before is always resolvable on multi-commit pushes.
+          fetch-depth: 0
 
       - id: detect
         shell: bash
