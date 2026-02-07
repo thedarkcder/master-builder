@@ -154,7 +154,13 @@ jobs:
           set -euo pipefail
 
           if [ -z "${TWINE_REPOSITORY_URL:-}" ]; then
-            TWINE_REPOSITORY_URL="https://upload.pypi.pkg.github.com/${GITHUB_REPOSITORY_OWNER}/"
+            TWINE_REPOSITORY_URL="https://pypi.pkg.github.com/${GITHUB_REPOSITORY_OWNER}/"
+          fi
+
+          # Backward-compat: normalize deprecated upload.pypi host to pypi.pkg.github.com.
+          if [[ "${TWINE_REPOSITORY_URL}" == https://upload.pypi.pkg.github.com/* ]]; then
+            TWINE_REPOSITORY_URL="${TWINE_REPOSITORY_URL/https:\/\/upload.pypi.pkg.github.com\//https:\/\/pypi.pkg.github.com\/}"
+            echo "Normalized CODEX_ASSETS_PUBLISH_REPOSITORY_URL to ${TWINE_REPOSITORY_URL}"
           fi
 
           python -m pip install --upgrade twine
