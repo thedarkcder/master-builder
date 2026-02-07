@@ -1,4 +1,7 @@
 import os
+import json
+import hmac
+import hashlib
 import unittest
 from tempfile import TemporaryDirectory
 
@@ -16,11 +19,14 @@ class JiraWebhookTests(unittest.TestCase):
         self.database_url = f"sqlite:///{self.temp_dir.name}/webhook_test.db"
         self.webhook_secret_env = "ORCHESTRATOR_TEST_WEBHOOK_SECRET"
         self.webhook_secret_value = "super-secret-token"
+        self.github_webhook_secret_env = "ORCHESTRATOR_TEST_GITHUB_WEBHOOK_SECRET"
+        self.github_webhook_secret_value = "github-super-secret-token"
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
         os.environ[self.webhook_secret_env] = self.webhook_secret_value
+        os.environ[self.github_webhook_secret_env] = self.github_webhook_secret_value
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -32,6 +38,9 @@ class JiraWebhookTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         os.environ.pop(self.webhook_secret_env, None)
+        os.environ.pop(self.github_webhook_secret_env, None)
+        os.environ.pop("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF", None)
+        os.environ.pop("ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
@@ -39,6 +48,8 @@ class JiraWebhookTests(unittest.TestCase):
         self,
         tenant_id: str,
         webhook_secret_ref: str | None = None,
+        github_webhook_secret_ref: str | None = None,
+        github_installation_id: str = "12345",
         is_enabled: bool = True,
         max_concurrent_runs: int = 2,
     ) -> None:
@@ -56,8 +67,8 @@ class JiraWebhookTests(unittest.TestCase):
             },
             "github": {
                 "mode": "github_app",
-                "webhook_secret_ref": None,
-                "installation_id": "12345",
+                "webhook_secret_ref": github_webhook_secret_ref,
+                "installation_id": github_installation_id,
             },
             "repos": {
                 "allowlist": ["https://github.com/example/repo"],
@@ -80,6 +91,10 @@ class JiraWebhookTests(unittest.TestCase):
         response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["tenant_id"], tenant_id)
+
+    def _sign_github_payload(self, payload_bytes: bytes, secret: str) -> str:
+        digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+        return f"sha256={digest}"
 
     def test_webhook_ignores_disabled_tenant(self) -> None:
         self._create_tenant("tenant-disabled", is_enabled=False)
@@ -209,3 +224,115 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(invalid_token.status_code, 401)
         self.assertEqual(valid_token.status_code, 200)
         self.assertTrue(valid_token.json()["enqueued"])
+
+    def test_github_webhook_ping_is_accepted(self) -> None:
+        response = self.client.post(
+            "/github/webhook",
+            json={"zen": "keep it logically awesome"},
+            headers={
+                "X-GitHub-Event": "ping",
+                "X-GitHub-Delivery": "gh-delivery-1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "ping")
+
+    def test_github_webhook_unknown_installation_is_accepted_without_handler(self) -> None:
+        response = self.client.post(
+            "/github/webhook",
+            json={
+                "action": "opened",
+                "installation": {"id": 999999},
+                "repository": {"full_name": "example/repo"},
+            },
+            headers={
+                "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": "gh-delivery-2",
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "unknown_installation")
+
+    def test_github_webhook_resolves_tenant_from_installation_id(self) -> None:
+        response = self.client.post(
+            "/github/webhook",
+            json={
+                "action": "synchronize",
+                "installation": {"id": 12345},
+                "repository": {"full_name": "example/repo"},
+            },
+            headers={
+                "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": "gh-delivery-3",
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["accepted"])
+        self.assertEqual(response.json()["tenant_id"], "tenant-webhook")
+        self.assertEqual(response.json()["reason"], "accepted_no_handler")
+
+    def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(self) -> None:
+        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = self.github_webhook_secret_env
+        payload = {
+            "action": "opened",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "example/repo"},
+        }
+        payload_bytes = json.dumps(payload).encode("utf-8")
+
+        response = self.client.post(
+            "/github/webhook",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": self._sign_github_payload(payload_bytes, "wrong-secret"),
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_github_webhook_accepts_valid_signature_when_global_secret_configured(self) -> None:
+        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = self.github_webhook_secret_env
+        payload = {
+            "action": "opened",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "example/repo"},
+        }
+        payload_bytes = json.dumps(payload).encode("utf-8")
+        signature = self._sign_github_payload(payload_bytes, self.github_webhook_secret_value)
+
+        response = self.client.post(
+            "/github/webhook",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": signature,
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "accepted_no_handler")
+
+    def test_github_webhook_enforces_payload_size_limit(self) -> None:
+        os.environ["ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES"] = "20"
+        payload = {"zen": "abcdefghijklmnopqrstuvwxyz"}
+        payload_bytes = json.dumps(payload).encode("utf-8")
+
+        response = self.client.post(
+            "/github/webhook",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "ping",
+            },
+        )
+
+        self.assertEqual(response.status_code, 413)
