@@ -37,6 +37,10 @@ class JiraClient:
         auth_raw = f"{email}:{api_token}".encode("utf-8")
         self._auth_header = "Basic " + base64.b64encode(auth_raw).decode("ascii")
 
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     def _request_json(
         self,
         *,
@@ -65,16 +69,20 @@ class JiraClient:
             raise RuntimeError(f"Jira API request failed ({exc.code}) {path}: {body}") from exc
 
     def search_issues(self, *, jql: str) -> list[JiraIssue]:
-        start_at = 0
+        next_page_token = ""
+        seen_page_tokens: set[str] = set()
         collected: list[JiraIssue] = []
         while True:
             payload = {
                 "jql": jql,
                 "maxResults": 100,
-                "startAt": start_at,
                 "fields": ["labels", "status"],
             }
-            data = self._request_json(method="POST", path="/rest/api/3/search", payload=payload)
+            if next_page_token:
+                payload["nextPageToken"] = next_page_token
+
+            # Jira Cloud removed /rest/api/3/search and requires /rest/api/3/search/jql.
+            data = self._request_json(method="POST", path="/rest/api/3/search/jql", payload=payload)
             issues = data.get("issues", [])
             for issue in issues:
                 fields = issue.get("fields", {})
@@ -87,10 +95,15 @@ class JiraClient:
                     )
                 )
 
-            total = int(data.get("total", 0))
-            start_at += len(issues)
-            if start_at >= total or not issues:
+            # New search API uses nextPageToken pagination.
+            # Guard against repeated tokens to avoid infinite loops on API anomalies.
+            raw_next_page_token = str(data.get("nextPageToken", "")).strip()
+            if not issues or not raw_next_page_token:
                 break
+            if raw_next_page_token in seen_page_tokens:
+                raise RuntimeError("Jira search pagination loop detected (repeated nextPageToken)")
+            seen_page_tokens.add(raw_next_page_token)
+            next_page_token = raw_next_page_token
         return collected
 
     def update_issue_labels(self, *, issue_key: str, labels: list[str]) -> None:
@@ -152,6 +165,10 @@ def assign_release_label(
 ) -> int:
     release_label = release_label_for_version(release_version)
     jql = f'project = "{project_key}" AND status = "{ready_status}"'
+    print(
+        f"[assign] base_url={client.base_url} project={project_key} ready_status={ready_status} release={release_version}"
+    )
+    print(f"[assign] jql={jql}")
     issues = client.search_issues(jql=jql)
     updated_count = 0
     for issue in issues:
@@ -185,6 +202,10 @@ def close_released_issues(
 ) -> int:
     release_label = release_label_for_version(release_version)
     jql = f'project = "{project_key}" AND labels = "{release_label}"'
+    print(
+        f"[close] base_url={client.base_url} project={project_key} done_status={done_status} release={release_version}"
+    )
+    print(f"[close] jql={jql}")
     issues = client.search_issues(jql=jql)
     transitioned = 0
     skipped = 0
