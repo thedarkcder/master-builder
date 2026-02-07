@@ -16,7 +16,11 @@ from orchestrator.worker import process_next_queued_run
 
 
 class _SuccessRunner:
+    def __init__(self) -> None:
+        self.last_request = None
+
     def run(self, request):  # noqa: ANN001
+        self.last_request = request
         return WorkflowResult(
             succeeded=True,
             plan=PmPlan(
@@ -159,9 +163,10 @@ class WorkerWorkflowTests(unittest.TestCase):
 
     def test_process_next_queued_run_marks_success_and_persists_plan(self) -> None:
         run_id = self._queue_run("TP-300")
+        runner = _SuccessRunner()
 
         with self.session_factory() as session:
-            processed = process_next_queued_run(session, _SuccessRunner())
+            processed = process_next_queued_run(session, runner)
             self.assertIsNotNone(processed)
             self.assertEqual(processed.run_id, run_id)
             self.assertEqual(processed.status, "succeeded")
@@ -171,6 +176,9 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertTrue(processed.plan["succeeded"])
             self.assertEqual(processed.plan["attempts"], 1)
+            self.assertIsNotNone(runner.last_request)
+            self.assertIn("Good To Do checklist", runner.last_request.issue_description)
+            self.assertIn("Decision Gate", runner.last_request.issue_description)
 
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
         run_id = self._queue_run("TP-301")
