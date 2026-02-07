@@ -158,4 +158,5 @@ jobs:
           fi
 
           python -m pip install --upgrade twine
-          python -m twine upload --skip-existing --repository-url "${TWINE_REPOSITORY_URL}" dist/codex-assets/*
+          # GitHub Packages does not support twine's --skip-existing flag.
+          python -m twine upload --repository-url "${TWINE_REPOSITORY_URL}" dist/codex-assets/*
