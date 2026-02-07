@@ -16,6 +16,7 @@ COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
 RUN python -m pip install --upgrade pip && \
+    test -n "$PIP_EXTRA_INDEX_URL" && \
     pip install .[codex_assets]
 
 RUN mkdir -p /app/data
