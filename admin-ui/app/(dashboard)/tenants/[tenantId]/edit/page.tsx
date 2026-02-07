@@ -186,6 +186,28 @@ export default function EditTenantPage() {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">Connection prerequisites</p>
+          <p>
+            Jira secrets:
+            {" "}
+            <code className="font-mono">MB_JIRA_CLIENT_ID</code>,
+            {" "}
+            <code className="font-mono">MB_JIRA_CLIENT_SECRET</code>
+          </p>
+          <p>
+            GitHub secrets:
+            {" "}
+            <code className="font-mono">MB_GH_APP_ID</code>,
+            {" "}
+            <code className="font-mono">MB_GH_PRIVATE_KEY</code>
+          </p>
+          <p>
+            Required API env var for install:
+            {" "}
+            <code className="font-mono">ORCHESTRATOR_GITHUB_APP_SLUG</code>
+          </p>
+        </div>
         <TenantForm mode="edit" initialValues={recordToFormValues(tenant)} onSubmit={handleSave} submitting={saving} />
         {readyPreview ? (
           <Card>

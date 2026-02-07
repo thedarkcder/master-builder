@@ -393,6 +393,23 @@ export default function NewTenantPage() {
 
         {step === 1 ? (
           <div className="space-y-3">
+            <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">Before connecting Jira</p>
+              <p>
+                Save these secret refs in <strong>Secrets</strong>:
+                {" "}
+                <code className="font-mono">MB_JIRA_CLIENT_ID</code>,
+                {" "}
+                <code className="font-mono">MB_JIRA_CLIENT_SECRET</code>.
+              </p>
+              <p>
+                API env refs should point to those names:
+                {" "}
+                <code className="font-mono">ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF</code>,
+                {" "}
+                <code className="font-mono">ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF</code>.
+              </p>
+            </div>
             <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               <CheckCircle2 className="mr-1 inline h-4 w-4" />
               Jira connection: <strong>{values.jira.connection_id ?? "not connected"}</strong>
@@ -452,6 +469,26 @@ export default function NewTenantPage() {
 
         {step === 2 ? (
           <div className="space-y-3">
+            <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">Before installing GitHub App</p>
+              <p>
+                Required API env var:
+                {" "}
+                <code className="font-mono">ORCHESTRATOR_GITHUB_APP_SLUG</code>
+              </p>
+              <p>
+                Required secret refs in <strong>Secrets</strong>:
+                {" "}
+                <code className="font-mono">MB_GH_APP_ID</code>,
+                {" "}
+                <code className="font-mono">MB_GH_PRIVATE_KEY</code>
+              </p>
+              <p>
+                Optional webhook secret ref:
+                {" "}
+                <code className="font-mono">MB_GH_WEBHOOK_SECRET</code>
+              </p>
+            </div>
             <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               <CheckCircle2 className="mr-1 inline h-4 w-4" />
               Tenant <strong>{createdTenantId || previewTenantId(values.name)}</strong> is ready for GitHub install.
