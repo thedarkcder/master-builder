@@ -8,7 +8,7 @@ This repo supports Jira-driven release-train automation without manually setting
 
 ## Workflows
 - `.github/workflows/release-train-sync.yml`
-  - Polls Jira every 3 minutes (and via manual dispatch).
+  - Polls Jira every 30 minutes (and via manual dispatch).
   - Finds `READY TO RELEASE` issues and assigns `release:vX.Y.Z` automatically.
   - If no explicit version is passed, computes the next release from git tags.
 - `.github/workflows/release-train-close.yml`
