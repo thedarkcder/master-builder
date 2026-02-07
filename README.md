@@ -99,6 +99,7 @@ Enable with:
 - Repository variable: `ENABLE_JIRA_RELEASE_AUTOMATION=true`
 - Variables:
   - `RELEASE_JIRA_BASE_URL`
+  - optional `RELEASE_JIRA_CLOUD_ID` (required for scoped Atlassian API tokens)
   - `RELEASE_JIRA_EMAIL`
   - `RELEASE_JIRA_PROJECT_KEY`
   - optional `RELEASE_DONE_STATUS` (default `Done`)

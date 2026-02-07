@@ -21,6 +21,7 @@ Set repository variable:
 
 Set repository variables:
 - `RELEASE_JIRA_BASE_URL` (for example `https://example.atlassian.net`)
+- `RELEASE_JIRA_CLOUD_ID` (optional; required when using scoped Atlassian API tokens)
 - `RELEASE_JIRA_EMAIL` (automation account email)
 - `RELEASE_JIRA_PROJECT_KEY` (for example `KAN`)
 - `RELEASE_DONE_STATUS` (optional, defaults to `Done`)
