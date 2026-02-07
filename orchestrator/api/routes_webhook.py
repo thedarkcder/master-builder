@@ -71,7 +71,29 @@ async def _read_json_payload(
     return payload, body
 
 
-def _extract_issue_payload(payload: dict) -> tuple[str, list[str]]:
+def _normalize_status_name(value: str) -> str:
+    return " ".join(value.strip().split()).lower()
+
+
+def _normalized_status_set(
+    raw_values: object,
+    *,
+    default_values: tuple[str, ...],
+) -> set[str]:
+    values = raw_values if isinstance(raw_values, list) else list(default_values)
+    normalized: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        candidate = _normalize_status_name(value)
+        if candidate:
+            normalized.add(candidate)
+    if normalized:
+        return normalized
+    return {_normalize_status_name(value) for value in default_values if value.strip()}
+
+
+def _extract_issue_payload(payload: dict) -> tuple[str, list[str], str | None, str | None]:
     issue = payload.get("issue")
     if not isinstance(issue, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue object")
@@ -85,8 +107,21 @@ def _extract_issue_payload(payload: dict) -> tuple[str, list[str]]:
     if not isinstance(labels, list):
         labels = []
 
+    status_name: str | None = None
+    status_category_key: str | None = None
+    status_payload = fields.get("status") if isinstance(fields, dict) else None
+    if isinstance(status_payload, dict):
+        raw_status_name = status_payload.get("name")
+        if isinstance(raw_status_name, str) and raw_status_name.strip():
+            status_name = raw_status_name.strip()
+        raw_status_category = status_payload.get("statusCategory")
+        if isinstance(raw_status_category, dict):
+            category_key = raw_status_category.get("key")
+            if isinstance(category_key, str) and category_key.strip():
+                status_category_key = category_key.strip().lower()
+
     normalized_labels = [str(label) for label in labels]
-    return issue_key, normalized_labels
+    return issue_key, normalized_labels, status_name, status_category_key
 
 
 def _extract_webhook_token(request: Request) -> str | None:
@@ -313,15 +348,93 @@ async def ingest_jira_webhook(
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
 
-    issue_key, labels = _extract_issue_payload(payload)
+    issue_key, labels, issue_status_name, issue_status_category = _extract_issue_payload(payload)
     delivery_id = _extract_delivery_id(request)
     logger.info(
-        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
+        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s issue_status=%s issue_status_category=%s delivery_id=%s",
         request_id,
         tenant_id,
         issue_key,
+        issue_status_name,
+        issue_status_category,
         delivery_id,
     )
+
+    if not issue_status_name:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=issue_status_missing",
+            request_id,
+            tenant_id,
+            issue_key,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "issue_status_missing",
+        }
+
+    normalized_issue_status = _normalize_status_name(issue_status_name)
+    executable_statuses = _normalized_status_set(
+        tenant.jira_config.get("executable_statuses"),
+        default_values=("To Do",),
+    )
+    non_executable_statuses = _normalized_status_set(
+        tenant.jira_config.get("non_executable_statuses"),
+        default_values=("Backlog",),
+    )
+
+    if issue_status_category == "done":
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=done_status_category issue_status=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            issue_status_name,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "done_status_category",
+            "issue_status": issue_status_name,
+        }
+
+    if normalized_issue_status in non_executable_statuses:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=non_executable_status issue_status=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            issue_status_name,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "non_executable_status",
+            "issue_status": issue_status_name,
+        }
+
+    if normalized_issue_status not in executable_statuses:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=not_executable_status issue_status=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            issue_status_name,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "not_executable_status",
+            "issue_status": issue_status_name,
+        }
 
     ready_label = tenant.jira_config.get("ready_label", "agent:ready")
     if ready_label not in labels:
