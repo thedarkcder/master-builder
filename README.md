@@ -47,6 +47,20 @@ If required assets are missing or the version mismatches, tenant create/update r
 The orchestrator runtime installs pinned codex assets from:
 - `master-builder-codex-assets==0.1.0` (extra: `codex_assets`)
 
+## Codex assets package publishing
+Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.
+
+How to cut a new codex assets package version:
+1. Update `.codex/codex_assets_manifest.json` and bump `assets_version`.
+2. Keep `.codex` content aligned with that version bump.
+3. Merge to `staging` or `main`.
+
+What happens automatically:
+- The workflow detects whether `assets_version` changed.
+- If changed, it builds a wheel/sdist directly from `.codex`.
+- It uploads artifacts to the workflow run and creates/updates a GitHub Release tag:
+  - `codex-assets-v<assets_version>`
+
 ## Public API
 - `GET /health`
 - `POST /jira/webhook/{tenant_id}`
