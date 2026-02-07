@@ -23,14 +23,14 @@ services:
       PACKAGE_INDEX_USERNAME: ${PACKAGE_INDEX_USERNAME:-tenant}
       PACKAGE_INDEX_PASSWORD: ${PACKAGE_INDEX_PASSWORD:-change-me}
     ports:
-      - "4401:8080"
+      - "4401:4401"
     entrypoint:
       - /bin/sh
       - -ceu
       - |
         mkdir -p /data/packages
         printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /tmp/.htpasswd
-        exec pypi-server run -p 8080 -P /tmp/.htpasswd -H plaintext -a update,download,list /data/packages
+        exec pypi-server --hash-algo off run -p 4401 -P /tmp/.htpasswd -a update,download,list /data/packages
     volumes:
       - packages-data:/data/packages
 
@@ -68,7 +68,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
+      packages:
+        condition: service_healthy
+        
   worker:
     build:
       context: .
