@@ -24,7 +24,7 @@ class GithubConfig(BaseModel):
     app_id_ref: str = Field(min_length=1)
     private_key_ref: str = Field(min_length=1)
     webhook_secret_ref: str | None = None
-    installation_id: str = Field(min_length=1)
+    installation_id: str | None = None
 
 
 class ReposConfig(BaseModel):
@@ -98,6 +98,11 @@ class TenantRead(BaseModel):
 class IntegrationTestResult(BaseModel):
     ok: bool
     details: str
+
+
+class GitHubInstallStart(BaseModel):
+    install_url: str
+    expires_at: datetime
 
 
 class RunRead(BaseModel):

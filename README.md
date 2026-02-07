@@ -19,6 +19,9 @@ export ORCHESTRATOR_ADMIN_USERNAME=admin
 export ORCHESTRATOR_ADMIN_PASSWORD=change-me
 export ORCHESTRATOR_DATABASE_URL=sqlite:///./orchestrator.db
 export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
+export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
+export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
+export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 ```
 
 ## Public API
@@ -133,6 +136,9 @@ Short version:
   - approve install on GitHub
   - save returned installation details to tenant config
   - continue wizard to repo mapping and webhook checks
+
+GitHub App setup callback URL:
+- `GET /api/admin/github/install/callback`
 
 ## Jira webhook setup
 Point Jira webhook to:
