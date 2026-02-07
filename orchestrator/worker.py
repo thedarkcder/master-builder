@@ -4,13 +4,20 @@ import asyncio
 import logging
 import signal
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_gate import evaluate_decision_gate
+from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.signal_templates import (
+    format_stage_discord_update,
+    format_stage_jira_update,
+)
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
 from orchestrator.storage.models import Run, Tenant
 
@@ -20,6 +27,7 @@ RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
+RUN_STATUS_BLOCKED = "blocked"
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
@@ -57,12 +65,19 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
         enforce_safe_command(command_text)
         suggested_test_commands.append(command_text)
 
+    repo_root = Path(__file__).resolve().parents[1]
+    enforcement_context = build_agent_enforcement_context(repo_root=repo_root)
+
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
         run_id=run.run_id,
         issue_key=run.issue_key,
-        issue_summary=f"Execute {run.issue_key}",
-        issue_description="",
+        issue_summary=run.issue_summary or f"Execute {run.issue_key}",
+        issue_description=(
+            f"{run.issue_description}\n\n{enforcement_context}"
+            if (run.issue_description or "").strip()
+            else enforcement_context
+        ),
         max_dev_test_review_loops=max_loops,
         max_runtime_minutes=max_runtime_minutes,
         suggested_test_commands=suggested_test_commands,
@@ -108,6 +123,34 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     if run is None:
         return None
 
+    try:
+        decision_gate = evaluate_decision_gate(
+            issue_summary=run.issue_summary,
+            issue_description=run.issue_description,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        run.status = RUN_STATUS_FAILED
+        run.last_error = f"Decision Gate configuration error: {exc}"
+        run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(run)
+        return run
+    if decision_gate.triggered:
+        run.status = RUN_STATUS_BLOCKED
+        run.last_error = f"Decision Gate required: {decision_gate.reason}"
+        run.plan = {
+            "succeeded": False,
+            "attempts": 0,
+            "summary": [],
+            "test_guidance": [],
+            "pr_url": None,
+            "decision_gate": decision_gate.to_payload(),
+        }
+        run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(run)
+        return run
+
     run.status = RUN_STATUS_RUNNING
     run.started_at = datetime.now(timezone.utc)
     session.commit()
@@ -125,8 +168,126 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         session.refresh(run)
         return run
 
+    stage_updates: list[dict[str, str]] = []
+    jira_issue_url = (
+        f"https://master-builder.atlassian.net/browse/{run.issue_key}"
+        if run.issue_key
+        else None
+    )
+    stage_updates.append(
+        {
+            "stage": "lock_acquired",
+            "tenant_id": run.tenant_id,
+            "issue_key": run.issue_key,
+            "run_id": run.run_id,
+            "jira_message": format_stage_jira_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                stage="lock_acquired",
+                jira_url=jira_issue_url,
+            ),
+            "discord_message": format_stage_discord_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                stage="lock_acquired",
+                jira_url=jira_issue_url,
+            ),
+        }
+    )
+
     workflow_result = runner.run(workflow_request)
-    run.plan = workflow_result.to_plan_payload()
+    plan_payload = workflow_result.to_plan_payload()
+    if workflow_result.plan is not None:
+        stage_updates.append(
+            {
+                "stage": "plan_posted",
+                "tenant_id": run.tenant_id,
+                "issue_key": run.issue_key,
+                "run_id": run.run_id,
+                "jira_message": format_stage_jira_update(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    stage="plan_posted",
+                    jira_url=jira_issue_url,
+                ),
+                "discord_message": format_stage_discord_update(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    stage="plan_posted",
+                    jira_url=jira_issue_url,
+                ),
+            }
+        )
+    if workflow_result.pr_url:
+        stage_updates.append(
+            {
+                "stage": "pr_opened",
+                "tenant_id": run.tenant_id,
+                "issue_key": run.issue_key,
+                "run_id": run.run_id,
+                "jira_message": format_stage_jira_update(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    stage="pr_opened",
+                    jira_url=jira_issue_url,
+                    pr_url=workflow_result.pr_url,
+                ),
+                "discord_message": format_stage_discord_update(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    stage="pr_opened",
+                    jira_url=jira_issue_url,
+                    pr_url=workflow_result.pr_url,
+                ),
+            }
+        )
+    if not workflow_result.succeeded:
+        error_text = (
+            workflow_result.diagnostics.message
+            if workflow_result.diagnostics is not None
+            else "Workflow failed without diagnostics"
+        )
+        stage_updates.append(
+            {
+                "stage": "run_failed",
+                "tenant_id": run.tenant_id,
+                "issue_key": run.issue_key,
+                "run_id": run.run_id,
+                "jira_message": format_stage_jira_update(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    stage="run_failed",
+                    jira_url=jira_issue_url,
+                    error=error_text,
+                    next_steps=(
+                        "Review diagnostics and follow-up issue payload.",
+                        "Apply fix and move issue back to To Do when ready.",
+                    ),
+                ),
+                "discord_message": format_stage_discord_update(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    stage="run_failed",
+                    jira_url=jira_issue_url,
+                    error=error_text,
+                    next_steps=(
+                        "Review diagnostics and follow-up issue payload.",
+                        "Apply fix and move issue back to To Do when ready.",
+                    ),
+                ),
+            }
+        )
+
+    plan_payload["stage_updates"] = stage_updates
+    run.plan = plan_payload
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)
     if workflow_result.succeeded:

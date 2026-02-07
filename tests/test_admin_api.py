@@ -5,10 +5,12 @@ from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
+from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -31,7 +33,7 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
         os.environ["ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF"] = "secret/jira-client-id"
         os.environ["ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF"] = "secret/jira-client-secret"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 
         os.environ["secret/app-id"] = "12345"
         os.environ["secret/private-key"] = "not-a-real-key-for-tests"
@@ -70,6 +72,8 @@ class AdminApiTests(unittest.TestCase):
             "jira": {
                 "connection_id": "conn-1",
                 "project_keys": ["TP"],
+                "ready_statuses": ["Ready for Agent"],
+                "ready_jql": 'project = TP AND status = "Ready for Agent"',
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
                 "blocked_label": "agent:blocked",
@@ -136,6 +140,52 @@ class AdminApiTests(unittest.TestCase):
         response = self.client.get("/api/admin/tenants")
         self.assertEqual(response.status_code, 401)
 
+    def test_managed_secret_upsert_and_resolve(self) -> None:
+        put_response = self.client.put(
+            "/api/admin/secrets/secret%2Fgithub-webhook",
+            json={"value": "managed-webhook-secret"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(put_response.status_code, 200)
+        self.assertEqual(put_response.json()["secret_ref"], "secret/github-webhook")
+        self.assertEqual(put_response.json()["source"], "managed")
+
+        list_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
+        self.assertEqual(list_response.status_code, 200)
+        refs = [item["secret_ref"] for item in list_response.json()]
+        self.assertIn("secret/github-webhook", refs)
+
+        resolve_response = self.client.post(
+            "/api/admin/secrets/resolve",
+            json={"secret_ref": "secret/github-webhook"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(resolve_response.status_code, 200)
+        self.assertTrue(resolve_response.json()["resolved"])
+        self.assertEqual(resolve_response.json()["source"], "managed")
+
+    def test_jira_connect_uses_managed_secret_when_env_not_set(self) -> None:
+        os.environ.pop("secret/jira-client-id", None)
+        os.environ.pop("secret/jira-client-secret", None)
+
+        self.client.put(
+            "/api/admin/secrets/secret%2Fjira-client-id",
+            json={"value": "jira-client-id-managed"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/secrets/secret%2Fjira-client-secret",
+            json={"value": "jira-client-secret-managed"},
+            auth=("admin", "secret"),
+        )
+
+        response = self.client.post(
+            "/api/admin/jira/connect/start?return_to=wizard",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("jira-client-id-managed", response.json()["authorize_url"])
+
     def test_create_and_update_tenant(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -147,6 +197,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.json()["tenant_id"], "tenant-a")
+        self.assertEqual(create_response.json()["jira"]["ready_statuses"], ["Ready for Agent"])
 
         list_response = self.client.get("/api/admin/tenants", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)
@@ -193,6 +244,53 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
 
+    def test_ready_preview_returns_eligible_issues(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeJiraClient:
+            def search_issues_by_jql(  # noqa: ANN001
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                jql: str,
+                max_results: int = 20,
+            ):
+                self.last_jql = jql
+                self.last_max_results = max_results
+                self.last_access_token = access_token
+                self.last_cloud_id = cloud_id
+                return [
+                    type("Issue", (), {"key": "TP-101", "summary": "Ready issue", "status": "Ready for Agent"})(),
+                    type("Issue", (), {"key": "TP-102", "summary": "Another ready issue", "status": "Ready"})(),
+                ]
+
+        fake_client = _FakeJiraClient()
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+        ):
+            preview_response = self.client.get(
+                "/api/admin/tenants/tenant-a/ready-preview",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(preview_response.status_code, 200)
+        body = preview_response.json()
+        self.assertEqual(body["ready_statuses"], ["Ready for Agent"])
+        self.assertIn("status", body["ready_jql"])
+        self.assertEqual(len(body["eligible_issues"]), 2)
+        self.assertEqual(body["eligible_issues"][0]["key"], "TP-101")
+        self.assertIn("executable only", body["guidance"])
+        self.assertEqual(fake_client.last_access_token, "access-token")
+
     def test_delete_tenant(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
@@ -222,6 +320,44 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_create_tenant_blocks_when_codex_assets_invalid(self) -> None:
+        payload = self._tenant_payload()
+        with patch(
+            "orchestrator.api.routes_admin.validate_enforcement_assets",
+            side_effect=EnforcementAssetsError("version mismatch"),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Codex assets validation failed", response.json()["detail"])
+
+    def test_update_tenant_blocks_when_codex_assets_invalid(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        payload["name"] = "Tenant Updated"
+        with patch(
+            "orchestrator.api.routes_admin.validate_enforcement_assets",
+            side_effect=EnforcementAssetsError("missing packaged asset"),
+        ):
+            update_response = self.client.put(
+                "/api/admin/tenants/tenant-a",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(update_response.status_code, 503)
+        self.assertIn("Codex assets validation failed", update_response.json()["detail"])
 
     def test_start_install_and_callback_persist_installation_id(self) -> None:
         payload = self._tenant_payload()

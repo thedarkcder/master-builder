@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -17,7 +17,13 @@ from orchestrator.api.schemas import (
     GitHubInstallStart,
     IntegrationTestResult,
     JiraConnectStart,
+    ReadyGatePreviewRead,
+    ReadyIssuePreviewRead,
     JiraProjectRead,
+    ManagedSecretRead,
+    ManagedSecretResolveRequest,
+    ManagedSecretResolveResult,
+    ManagedSecretUpsert,
     RepoBootstrapStateRead,
     RunRead,
     TenantCreate,
@@ -25,6 +31,14 @@ from orchestrator.api.schemas import (
     TenantUpdate,
 )
 from orchestrator.core.config import get_settings
+from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
+from orchestrator.core.secret_manager import (
+    list_managed_secret_refs,
+    normalize_secret_ref,
+    resolve_secret_ref,
+    resolve_secret_ref_metadata,
+    upsert_managed_secret,
+)
 from orchestrator.core.jira_oauth_state import (
     create_jira_oauth_state_token,
     parse_jira_oauth_state_token,
@@ -95,16 +109,37 @@ def _with_managed_github_refs(raw_github_config: dict) -> dict:
     return github_config
 
 
-def _resolve_secret_ref(ref_name: str) -> str:
-    value = os.environ.get(ref_name)
+def _validate_codex_assets_for_tenant_init() -> None:
+    settings = get_settings()
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        validate_enforcement_assets(
+            repo_root=repo_root,
+            required_assets_version=settings.required_codex_assets_version,
+        )
+    except EnforcementAssetsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Codex assets validation failed: {exc}",
+        ) from exc
+
+
+def _resolve_secret_ref(session: Session, *, ref_name: str, settings) -> str:  # noqa: ANN001
+    value = resolve_secret_ref(
+        session,
+        secret_ref=ref_name,
+        encryption_key=settings.secrets_encryption_key,
+    )
     if not value:
         raise ValueError(f"Missing secret value for ref '{ref_name}'")
     return value
 
 
-def _jira_oauth_client(*, settings) -> JiraOAuthClient:  # noqa: ANN001
-    client_id = _resolve_secret_ref(settings.jira_oauth_client_id_ref)
-    client_secret = _resolve_secret_ref(settings.jira_oauth_client_secret_ref)
+def _jira_oauth_client(*, session: Session, settings) -> JiraOAuthClient:  # noqa: ANN001
+    client_id = _resolve_secret_ref(session, ref_name=settings.jira_oauth_client_id_ref, settings=settings)
+    client_secret = _resolve_secret_ref(
+        session, ref_name=settings.jira_oauth_client_secret_ref, settings=settings
+    )
     redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/jira/connect/callback"
     return JiraOAuthClient(
         JiraOAuthClientConfig(
@@ -128,7 +163,7 @@ def _refresh_jira_connection_tokens(
             encryption_key=settings.secrets_encryption_key,
         )
 
-    client = _jira_oauth_client(settings=settings)
+    client = _jira_oauth_client(session=session, settings=settings)
     refresh_token = decrypt_value(
         ciphertext=connection.refresh_token_encrypted,
         encryption_key=settings.secrets_encryption_key,
@@ -147,6 +182,73 @@ def _refresh_jira_connection_tokens(
     connection.updated_at = now
     session.commit()
     return token_set.access_token
+
+
+def _secret_metadata_to_schema(metadata) -> ManagedSecretRead:  # noqa: ANN001
+    return ManagedSecretRead(
+        secret_ref=metadata.secret_ref,
+        source=metadata.source,
+        updated_at=metadata.updated_at,
+    )
+
+
+def _default_ready_jql(*, project_keys: list[str], ready_statuses: list[str]) -> str:
+    quoted_projects = ", ".join(f"\"{key}\"" for key in project_keys)
+    quoted_statuses = ", ".join(f"\"{status}\"" for status in ready_statuses)
+    return f"project in ({quoted_projects}) AND status in ({quoted_statuses}) ORDER BY updated DESC"
+
+
+@router.get("/secrets", response_model=list[ManagedSecretRead])
+def list_secrets(
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[ManagedSecretRead]:
+    refs = list_managed_secret_refs(session)
+    return [_secret_metadata_to_schema(metadata) for metadata in refs]
+
+
+@router.put("/secrets/{secret_ref:path}", response_model=ManagedSecretRead)
+def upsert_secret(
+    secret_ref: str,
+    payload: ManagedSecretUpsert,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ManagedSecretRead:
+    settings = get_settings()
+    try:
+        metadata = upsert_managed_secret(
+            session,
+            secret_ref=secret_ref,
+            plaintext_value=payload.value,
+            encryption_key=settings.secrets_encryption_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _secret_metadata_to_schema(metadata)
+
+
+@router.post("/secrets/resolve", response_model=ManagedSecretResolveResult)
+def resolve_secret(
+    payload: ManagedSecretResolveRequest,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ManagedSecretResolveResult:
+    settings = get_settings()
+    try:
+        secret_ref = normalize_secret_ref(payload.secret_ref)
+        metadata = resolve_secret_ref_metadata(session, secret_ref=secret_ref)
+        resolved_value = resolve_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ManagedSecretResolveResult(
+        secret_ref=secret_ref,
+        source=metadata.source,
+        resolved=bool(resolved_value),
+    )
 
 
 @router.post("/jira/connect/start", response_model=JiraConnectStart)
@@ -173,7 +275,7 @@ def start_jira_connect(
         tenant_id=tenant_id,
     )
     try:
-        client = _jira_oauth_client(settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     authorize_url = client.build_authorize_url(state=state_token)
@@ -196,7 +298,7 @@ def jira_connect_callback(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     try:
-        client = _jira_oauth_client(settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings)
         token_set = client.exchange_code(code=code)
         resources = client.list_accessible_resources(access_token=token_set.access_token)
     except (ValueError, JiraOAuthError) as exc:
@@ -271,9 +373,77 @@ def list_jira_projects_for_connection(
         connection=connection,
         settings=settings,
     )
-    client = _jira_oauth_client(settings=settings)
+    client = _jira_oauth_client(session=session, settings=settings)
     projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
     return [JiraProjectRead(key=project.key, name=project.name) for project in projects]
+
+
+@router.get("/tenants/{tenant_id}/ready-preview", response_model=ReadyGatePreviewRead)
+def preview_tenant_ready_gate(
+    tenant_id: str,
+    max_results: int = Query(default=10, ge=1, le=50),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ReadyGatePreviewRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    jira_config = tenant.jira_config
+    project_keys = jira_config.get("project_keys")
+    if not isinstance(project_keys, list) or not project_keys:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Jira project_keys")
+
+    raw_ready_statuses = jira_config.get("ready_statuses")
+    if isinstance(raw_ready_statuses, list):
+        ready_statuses = [str(value).strip() for value in raw_ready_statuses if str(value).strip()]
+    else:
+        ready_statuses = []
+    if not ready_statuses:
+        ready_statuses = ["Ready for Agent"]
+
+    raw_ready_jql = jira_config.get("ready_jql")
+    ready_jql = raw_ready_jql.strip() if isinstance(raw_ready_jql, str) else ""
+    if not ready_jql:
+        ready_jql = _default_ready_jql(project_keys=project_keys, ready_statuses=ready_statuses)
+
+    connection_id = jira_config.get("connection_id")
+    if not isinstance(connection_id, str) or not connection_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Jira OAuth connection is not linked")
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Configured Jira connection was not found")
+
+    settings = get_settings()
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        issues = client.search_issues_by_jql(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            jql=ready_jql,
+            max_results=max_results,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Ready preview failed: {exc}") from exc
+
+    guidance = (
+        "Issues are executable only when they are in a configured ready status. "
+        "If an issue is missing here, move it to a ready status and retry."
+    )
+    return ReadyGatePreviewRead(
+        ready_statuses=ready_statuses,
+        ready_jql=ready_jql,
+        eligible_issues=[
+            ReadyIssuePreviewRead(key=issue.key, summary=issue.summary, status=issue.status)
+            for issue in issues
+        ],
+        guidance=guidance,
+    )
 
 
 @router.get("/tenants", response_model=list[TenantRead])
@@ -291,6 +461,7 @@ def create_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
+    _validate_codex_assets_for_tenant_init()
     tenant_id = _allocate_tenant_id(session, name=payload.name)
     now = datetime.now(timezone.utc)
     tenant = Tenant(
@@ -331,6 +502,7 @@ def update_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
+    _validate_codex_assets_for_tenant_init()
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
@@ -396,7 +568,7 @@ def test_jira_connection(
             connection=connection,
             settings=settings,
         )
-        client = _jira_oauth_client(settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings)
         projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
     except (ValueError, JiraOAuthError) as exc:
         return IntegrationTestResult(ok=False, details=f"Jira OAuth validation failed: {exc}")
@@ -436,7 +608,15 @@ def test_github_connection(
         )
 
     try:
-        github_client_from_tenant_config(_with_managed_github_refs(github))
+        settings = get_settings()
+        github_client_from_tenant_config(
+            _with_managed_github_refs(github),
+            secret_lookup=lambda ref: resolve_secret_ref(
+                session,
+                secret_ref=ref,
+                encryption_key=settings.secrets_encryption_key,
+            ),
+        )
     except ValueError as exc:
         return IntegrationTestResult(ok=False, details=str(exc))
 
@@ -571,7 +751,15 @@ def list_tenant_github_repositories(
         )
 
     try:
-        client = github_client_from_tenant_config(_with_managed_github_refs(github))
+        settings = get_settings()
+        client = github_client_from_tenant_config(
+            _with_managed_github_refs(github),
+            secret_lookup=lambda ref: resolve_secret_ref(
+                session,
+                secret_ref=ref,
+                encryption_key=settings.secrets_encryption_key,
+            ),
+        )
         repositories = client.list_installation_repositories()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

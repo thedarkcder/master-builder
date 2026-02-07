@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Activity, Building2, LogOut, PlusSquare } from "lucide-react";
+import { Activity, Building2, KeyRound, LogOut, PlusSquare } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,7 +11,8 @@ import { useAuth } from "@/components/auth-provider";
 const navItems = [
   { href: "/tenants", label: "Tenants", icon: Building2 },
   { href: "/tenants/new", label: "New Tenant", icon: PlusSquare },
-  { href: "/runs", label: "Runs", icon: Activity }
+  { href: "/runs", label: "Runs", icon: Activity },
+  { href: "/secrets", label: "Secrets", icon: KeyRound }
 ];
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {

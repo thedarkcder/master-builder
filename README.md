@@ -23,18 +23,68 @@ export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=secret/jira-client-id
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=secret/jira-client-secret
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
+export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.1
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
 PY
 )
 
-export secret/jira-client-id=your-atlassian-oauth-client-id
-export secret/jira-client-secret=your-atlassian-oauth-client-secret
+export SECRET_JIRA_CLIENT_ID=your-atlassian-oauth-client-id
+export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
+export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
+export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
+
+# GitHub Packages index for pinned codex assets wheel
+# Replace OWNER and TOKEN with your GitHub org/user and packages:read PAT.
+export PIP_EXTRA_INDEX_URL=https://OWNER:TOKEN@pip.pkg.github.com/OWNER
 ```
+
+`ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex policy/docs package version used for tenant init.
+If required assets are missing or the version mismatches, tenant create/update returns `503`.
+
+The orchestrator runtime installs pinned codex assets from:
+- `master-builder-codex-assets==0.1.1` (extra: `codex_assets`)
+
+## Codex assets package publishing
+Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.
+
+How to cut a new codex assets package version:
+1. Update `.codex/codex_assets_manifest.json` and bump `assets_version`.
+2. Keep `.codex` content aligned with that version bump.
+3. Merge to `staging` or `main`.
+
+What happens automatically:
+- The workflow detects whether `assets_version` changed.
+- If changed, it builds a wheel/sdist directly from `.codex`.
+- Branch behavior:
+  - `staging` publishes beta/pre-release package versions (`<assets_version>b<run_number>`)
+  - `main` publishes stable package versions (`<assets_version>`)
+- It uploads artifacts to the workflow run and creates/updates a GitHub Release tag:
+  - `codex-assets-v<publish_version>`
+
+Optional direct package-index publish (same workflow run):
+- Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
+- Optional: set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to override the upload endpoint
+
+Default upload target (if not set):
+- `https://upload.pypi.pkg.github.com/<repo_owner>/`
+
+Authentication:
+- Uses workflow `GITHUB_TOKEN` (no PAT required for same-repo publish)
+
+Same-repo quick setup:
+1. In GitHub repo settings, set Actions variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`.
+2. Merge a PR that bumps `.codex/codex_assets_manifest.json` `assets_version`.
+3. Confirm workflow `Publish Codex Assets` uploads release artifacts and publishes package index files.
+
+Version bump helpers:
+- Auto-bump patch version + sync pin:
+  - `python3 scripts/bump_codex_assets_version.py`
+- Validate bump + pin consistency:
+  - `scripts/validate_codex_assets_version.sh origin/staging`
+- CI enforces this on pull requests via job: `Codex assets version guard`.
 
 ## Public API
 - `GET /health`
@@ -51,10 +101,41 @@ export secret/jira-client-secret=your-atlassian-oauth-client-secret
 - `POST /api/admin/tenants/{tenant_id}/test-github`
 - `GET /api/admin/runs`
 - `GET /api/admin/runs/{run_id}`
+- `GET /api/admin/secrets`
+- `PUT /api/admin/secrets/{secret_ref}`
+- `POST /api/admin/secrets/resolve`
 
 All admin and run lookup endpoints use HTTP Basic auth with:
 - username: `ORCHESTRATOR_ADMIN_USERNAME`
 - password: `ORCHESTRATOR_ADMIN_PASSWORD`
+
+## Managed secrets
+The orchestrator now supports an encrypted managed secret store (database-backed) with environment fallback:
+- store/update refs via admin API/UI without restarting containers
+- resolve refs at runtime for Jira OAuth, GitHub App credentials, and webhook secrets
+- list endpoints never return plaintext values
+
+Example upsert:
+```bash
+AUTH_HEADER="Authorization: Basic $(printf '%s:%s' \"$ORCHESTRATOR_ADMIN_USERNAME\" \"$ORCHESTRATOR_ADMIN_PASSWORD\" | base64)"
+curl \
+  -X PUT \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{"value":"12345"}' \
+  http://localhost:4000/api/admin/secrets/MB_GH_APP_ID
+```
+
+Example resolve check:
+```bash
+AUTH_HEADER="Authorization: Basic $(printf '%s:%s' \"$ORCHESTRATOR_ADMIN_USERNAME\" \"$ORCHESTRATOR_ADMIN_PASSWORD\" | base64)"
+curl \
+  -X POST \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{"secret_ref":"MB_GH_APP_ID"}' \
+  http://localhost:4000/api/admin/secrets/resolve
+```
 
 ## CLI entrypoints
 ```bash
@@ -101,13 +182,30 @@ UI sections:
 - `/runs` for run observability
 
 ## Docker
-Build and run API + worker + admin UI:
+Build and run API + worker + optional admin UI + cloudflared:
 ```bash
 docker compose up --build
 ```
 
 API is exposed on `http://localhost:4000`.
-Admin UI is exposed on `http://localhost:4100`.
+Admin UI (if running locally) is exposed on `http://localhost:4100`.
+
+### Quick tunnel URL (trycloudflare)
+The stack includes `cloudflared` in Quick Tunnel mode, targeting the API service directly (`api:4000`).
+
+Watch logs and copy the generated public URL:
+```bash
+docker compose logs -f cloudflared
+```
+
+Extract just the URL:
+```bash
+docker compose logs cloudflared | grep -Eo \"https://[-a-z0-9]+\\.trycloudflare\\.com\" | tail -n 1
+```
+
+Use that URL for external callbacks (Jira/GitHub/Discord) during local testing.
+
+If your admin UI is hosted on Vercel, use this tunnel URL for API callbacks only.
 
 ## Tenant onboarding
 1. Create a tenant via `POST /api/admin/tenants`.
@@ -149,6 +247,14 @@ Short version:
 GitHub App setup callback URL:
 - `GET /api/admin/github/install/callback`
 
+GitHub App webhook URL:
+- `POST /github/webhook`
+
+Recommended webhook signature verification setup:
+- set `ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF` to the secret-ref key name (example: `secret/github-webhook`)
+- set the matching environment variable to the raw GitHub App webhook secret value
+- configure the same raw secret in GitHub App webhook settings
+
 ## Jira webhook setup
 Point Jira webhook to:
 ```text
@@ -159,13 +265,16 @@ If tenant webhook auth is configured:
 - set `jira.webhook_secret_ref` to an environment variable name
 - send token via `X-Webhook-Token` or `Authorization: Bearer <token>`
 
-Only issues containing the tenant `ready_label` are enqueued.
+Only issues in tenant `ready_statuses` are enqueued (default: `Ready for Agent`).
+Issues in done status categories are never enqueued.
+Issue status is not auto-transitioned when a run starts.
+Status transitions into a ready status are treated as primary triggers; updates while already ready are rechecked idempotently.
 
 ## End-to-end local flow
 1. Apply migrations:
    - `python -m orchestrator migrate`
 2. Create tenant via Admin API.
-3. Send Jira webhook payload with `ready_label`.
+3. Send Jira webhook payload with issue status set to a configured ready status (for example `Ready for Agent`).
 4. Confirm run created:
    - `GET /api/admin/runs?tenant_id=...`
    - or `GET /runs/{run_id}`
