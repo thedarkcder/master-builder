@@ -95,7 +95,7 @@ This repo uses two release-train workflows:
 
 Workflows:
 - `.github/workflows/release-train-sync.yml`
-  - runs every 3 minutes (and manual dispatch)
+  - runs every 30 minutes (and manual dispatch)
   - assigns `release:vX.Y.Z` labels to `READY TO RELEASE` issues
 - `.github/workflows/release-train-close.yml`
   - runs hourly (plus release publish/manual dispatch)
