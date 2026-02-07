@@ -41,11 +41,10 @@ export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
 # export PIP_EXTRA_INDEX_URL=http://tenant:change-me@localhost:8081/simple/
 ```
 
-`ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex policy/docs package version used for tenant init.
+`ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex assets version used for tenant init.
 If required assets are missing or the version mismatches, tenant create/update returns `503`.
 
-The orchestrator runtime installs pinned codex assets from:
-- `master-builder-codex-assets==0.1.1` (extra: `codex_assets`)
+The orchestrator runtime loads codex assets from local `.codex` when present (including Docker image builds in this repo), and can fall back to the packaged `master-builder-codex-assets` dependency path where configured.
 
 ## Codex assets package publishing
 Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.
