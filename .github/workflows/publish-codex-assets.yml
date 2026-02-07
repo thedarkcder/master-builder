@@ -148,24 +148,22 @@ jobs:
         env:
           TWINE_USERNAME: ${{ vars.CODEX_ASSETS_PUBLISH_USERNAME }}
           TWINE_PASSWORD: ${{ secrets.CODEX_ASSETS_PUBLISH_PASSWORD }}
-          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
           TWINE_REPOSITORY_URL: ${{ vars.CODEX_ASSETS_PUBLISH_REPOSITORY_URL }}
         shell: bash
         run: |
           set -euo pipefail
 
           if [ -z "${TWINE_REPOSITORY_URL:-}" ]; then
-            TWINE_REPOSITORY_URL="https://pypi.pkg.github.com/${GITHUB_REPOSITORY}/"
+            echo "CODEX_ASSETS_PUBLISH_REPOSITORY_URL is required when CODEX_ASSETS_PUBLISH_TO_INDEX=true."
+            exit 1
           fi
 
           if [ -z "${TWINE_USERNAME:-}" ]; then
-            TWINE_USERNAME="${GITHUB_ACTOR}"
+            echo "CODEX_ASSETS_PUBLISH_USERNAME is required when CODEX_ASSETS_PUBLISH_TO_INDEX=true."
+            exit 1
           fi
           if [ -z "${TWINE_PASSWORD:-}" ]; then
-            TWINE_PASSWORD="${GITHUB_TOKEN_FALLBACK}"
-          fi
-          if [ -z "${TWINE_PASSWORD:-}" ]; then
-            echo "No credentials available for package publish (CODEX_ASSETS_PUBLISH_PASSWORD or GITHUB_TOKEN)."
+            echo "CODEX_ASSETS_PUBLISH_PASSWORD secret is required when CODEX_ASSETS_PUBLISH_TO_INDEX=true."
             exit 1
           fi
 
