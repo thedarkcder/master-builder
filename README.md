@@ -18,6 +18,7 @@ Set required environment values:
 export ORCHESTRATOR_ADMIN_USERNAME=admin
 export ORCHESTRATOR_ADMIN_PASSWORD=change-me
 export ORCHESTRATOR_DATABASE_URL=sqlite:///./orchestrator.db
+export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
 ```
 
 ## Public API
@@ -57,7 +58,7 @@ orchestrator migrate
 ## Run locally
 Start API:
 ```bash
-uvicorn orchestrator.api.main:app --reload
+uvicorn orchestrator.api.main:app --reload --port 4000
 ```
 
 Start worker:
@@ -65,13 +66,26 @@ Start worker:
 python -m orchestrator worker
 ```
 
+## Admin UI (Next.js + shadcn)
+The admin UI lives in `admin-ui/` and runs separately from the API service.
+
+Local UI dev:
+```bash
+cd admin-ui
+npm install
+npm run dev
+```
+
+Default UI URL: `http://localhost:4100`
+
 ## Docker
-Build and run API + worker:
+Build and run API + worker + admin UI:
 ```bash
 docker compose up --build
 ```
 
-API is exposed on `http://localhost:8000`.
+API is exposed on `http://localhost:4000`.
+Admin UI is exposed on `http://localhost:4100`.
 
 ## Tenant onboarding
 1. Create a tenant via `POST /api/admin/tenants`.
