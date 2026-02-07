@@ -9,6 +9,7 @@ This document describes the tenant onboarding model for GitHub integration.
   - complete install on GitHub
   - callback persists `installation_id` on tenant config
 - GitHub App credentials are server-managed (`ORCHESTRATOR_GITHUB_APP_ID_REF`, `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF`).
+- Secret refs can be managed in admin UI at `/secrets` (encrypted-at-rest, no restart required).
 
 ## Jira + GitHub flow summary
 - Step 1: tenant basics

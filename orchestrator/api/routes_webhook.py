@@ -14,7 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
+from orchestrator.core.config import get_settings
 from orchestrator.core.runs import enqueue_run
+from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(tags=["jira-webhook"])
@@ -114,12 +116,23 @@ def _extract_delivery_id(request: Request) -> str | None:
     return None
 
 
-def _validate_webhook_auth(tenant: Tenant, request: Request, request_id: str) -> None:
+def _validate_webhook_auth(
+    tenant: Tenant,
+    request: Request,
+    request_id: str,
+    *,
+    session: Session,
+    settings,
+) -> None:  # noqa: ANN001
     webhook_secret_ref = tenant.jira_config.get("webhook_secret_ref")
     if not webhook_secret_ref:
         return
 
-    expected_token = os.environ.get(str(webhook_secret_ref))
+    expected_token = resolve_secret_ref(
+        session,
+        secret_ref=str(webhook_secret_ref),
+        encryption_key=settings.secrets_encryption_key,
+    )
     if not expected_token:
         logger.error(
             "jira_webhook_auth_misconfigured request_id=%s tenant_id=%s secret_ref=%s",
@@ -145,12 +158,21 @@ def _validate_webhook_auth(tenant: Tenant, request: Request, request_id: str) ->
         )
 
 
-def _resolve_global_github_webhook_secret(*, request_id: str) -> str | None:
+def _resolve_global_github_webhook_secret(
+    *,
+    request_id: str,
+    session: Session,
+    settings,
+) -> str | None:  # noqa: ANN001
     secret_ref = (os.environ.get("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF") or "").strip()
     if not secret_ref:
         return None
 
-    secret_value = os.environ.get(secret_ref)
+    secret_value = resolve_secret_ref(
+        session,
+        secret_ref=secret_ref,
+        encryption_key=settings.secrets_encryption_key,
+    )
     if not secret_value:
         logger.error(
             "github_webhook_auth_misconfigured request_id=%s secret_ref=%s",
@@ -164,12 +186,22 @@ def _resolve_global_github_webhook_secret(*, request_id: str) -> str | None:
     return secret_value
 
 
-def _resolve_tenant_github_webhook_secret(*, tenant: Tenant, request_id: str) -> str | None:
+def _resolve_tenant_github_webhook_secret(
+    *,
+    tenant: Tenant,
+    request_id: str,
+    session: Session,
+    settings,
+) -> str | None:  # noqa: ANN001
     webhook_secret_ref = tenant.github_config.get("webhook_secret_ref")
     if not webhook_secret_ref:
         return None
 
-    secret_value = os.environ.get(str(webhook_secret_ref))
+    secret_value = resolve_secret_ref(
+        session,
+        secret_ref=str(webhook_secret_ref),
+        encryption_key=settings.secrets_encryption_key,
+    )
     if not secret_value:
         logger.error(
             "github_webhook_auth_misconfigured request_id=%s tenant_id=%s secret_ref=%s",
@@ -250,6 +282,7 @@ async def ingest_jira_webhook(
     request: Request,
     session: Session = Depends(get_session),
 ) -> dict:
+    settings = get_settings()
     request_id = request.headers.get("X-Request-Id") or str(uuid4())
     logger.info("jira_webhook_received request_id=%s tenant_id=%s", request_id, tenant_id)
 
@@ -270,7 +303,13 @@ async def ingest_jira_webhook(
             "reason": "tenant_disabled",
         }
 
-    _validate_webhook_auth(tenant=tenant, request=request, request_id=request_id)
+    _validate_webhook_auth(
+        tenant=tenant,
+        request=request,
+        request_id=request_id,
+        session=session,
+        settings=settings,
+    )
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
 
@@ -346,6 +385,7 @@ async def ingest_github_webhook(
     request: Request,
     session: Session = Depends(get_session),
 ) -> JSONResponse:
+    settings = get_settings()
     request_id = request.headers.get("X-Request-Id") or str(uuid4())
     delivery_id = _extract_delivery_id(request) or str(uuid4())
     github_event = (request.headers.get("X-GitHub-Event") or "").strip().lower()
@@ -358,7 +398,11 @@ async def ingest_github_webhook(
     )
 
     payload, payload_bytes = await _read_json_payload(request, request_id=request_id, source="github")
-    global_secret = _resolve_global_github_webhook_secret(request_id=request_id)
+    global_secret = _resolve_global_github_webhook_secret(
+        request_id=request_id,
+        session=session,
+        settings=settings,
+    )
     if global_secret is not None:
         _validate_github_webhook_signature(
             request=request,
@@ -432,7 +476,12 @@ async def ingest_github_webhook(
         )
 
     if global_secret is None:
-        tenant_secret = _resolve_tenant_github_webhook_secret(tenant=tenant, request_id=request_id)
+        tenant_secret = _resolve_tenant_github_webhook_secret(
+            tenant=tenant,
+            request_id=request_id,
+            session=session,
+            settings=settings,
+        )
         if tenant_secret is not None:
             _validate_github_webhook_signature(
                 request=request,
