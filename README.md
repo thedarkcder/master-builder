@@ -51,10 +51,41 @@ export secret/jira-client-secret=your-atlassian-oauth-client-secret
 - `POST /api/admin/tenants/{tenant_id}/test-github`
 - `GET /api/admin/runs`
 - `GET /api/admin/runs/{run_id}`
+- `GET /api/admin/secrets`
+- `PUT /api/admin/secrets/{secret_ref}`
+- `POST /api/admin/secrets/resolve`
 
 All admin and run lookup endpoints use HTTP Basic auth with:
 - username: `ORCHESTRATOR_ADMIN_USERNAME`
 - password: `ORCHESTRATOR_ADMIN_PASSWORD`
+
+## Managed secrets
+The orchestrator now supports an encrypted managed secret store (database-backed) with environment fallback:
+- store/update refs via admin API/UI without restarting containers
+- resolve refs at runtime for Jira OAuth, GitHub App credentials, and webhook secrets
+- list endpoints never return plaintext values
+
+Example upsert:
+```bash
+AUTH_HEADER="Authorization: Basic $(printf '%s:%s' \"$ORCHESTRATOR_ADMIN_USERNAME\" \"$ORCHESTRATOR_ADMIN_PASSWORD\" | base64)"
+curl \
+  -X PUT \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{"value":"12345"}' \
+  http://localhost:4000/api/admin/secrets/MB_GH_APP_ID
+```
+
+Example resolve check:
+```bash
+AUTH_HEADER="Authorization: Basic $(printf '%s:%s' \"$ORCHESTRATOR_ADMIN_USERNAME\" \"$ORCHESTRATOR_ADMIN_PASSWORD\" | base64)"
+curl \
+  -X POST \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{"secret_ref":"MB_GH_APP_ID"}' \
+  http://localhost:4000/api/admin/secrets/resolve
+```
 
 ## CLI entrypoints
 ```bash

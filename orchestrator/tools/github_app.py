@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -66,7 +67,11 @@ def _parse_github_datetime(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def github_client_from_tenant_config(tenant_github_config: dict) -> "GitHubAppClient":
+def github_client_from_tenant_config(
+    tenant_github_config: dict,
+    *,
+    secret_lookup: Callable[[str], str | None] | None = None,
+) -> "GitHubAppClient":
     mode = str(tenant_github_config.get("mode") or "")
     if mode != "github_app":
         raise ValueError("Only github_app mode is supported")
@@ -78,11 +83,13 @@ def github_client_from_tenant_config(tenant_github_config: dict) -> "GitHubAppCl
     if not app_id_ref or not private_key_ref or not installation_id:
         raise ValueError("Missing github_app required config fields")
 
-    app_id = os.environ.get(app_id_ref)
+    resolver = secret_lookup or os.environ.get
+
+    app_id = resolver(app_id_ref)
     if not app_id:
         raise ValueError(f"Missing GitHub App ID secret for ref '{app_id_ref}'")
 
-    private_key_pem = os.environ.get(private_key_ref)
+    private_key_pem = resolver(private_key_ref)
     if not private_key_pem:
         raise ValueError(f"Missing GitHub private key secret for ref '{private_key_ref}'")
 
