@@ -88,8 +88,11 @@ export default function NewTenantPage() {
   const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
 
   const canAdvance = useMemo(() => {
+    if (!values.name.trim()) {
+      return false;
+    }
     if (step === 0) {
-      return Boolean(values.name.trim());
+      return true;
     }
     if (step === 1) {
       return Boolean(values.jira.connection_id?.trim() && textFields.projectKeysText.trim());
@@ -156,6 +159,10 @@ export default function NewTenantPage() {
   async function ensureTenantCreated(): Promise<string | null> {
     if (!credentials) {
       setStatusLine("Missing API credentials.");
+      return null;
+    }
+    if (!values.name.trim()) {
+      setStatusLine("Tenant name is required. Go back to Step 1 and enter a name.");
       return null;
     }
     if (createdTenantId) {
@@ -323,7 +330,11 @@ export default function NewTenantPage() {
 
   async function nextStep() {
     if (!canAdvance) {
-      setStatusLine("Please complete required fields before continuing.");
+      if (!values.name.trim()) {
+        setStatusLine("Tenant name is required. Go back to Step 1 and enter a name.");
+      } else {
+        setStatusLine("Please complete required fields before continuing.");
+      }
       return;
     }
 
