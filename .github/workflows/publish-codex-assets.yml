@@ -146,16 +146,29 @@ jobs:
       - name: Publish to Python package index
         if: vars.CODEX_ASSETS_PUBLISH_TO_INDEX == 'true'
         env:
-          TWINE_USERNAME: ${{ github.actor }}
-          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TWINE_USERNAME: ${{ vars.CODEX_ASSETS_PUBLISH_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.CODEX_ASSETS_PUBLISH_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
           TWINE_REPOSITORY_URL: ${{ vars.CODEX_ASSETS_PUBLISH_REPOSITORY_URL }}
         shell: bash
         run: |
           set -euo pipefail
 
           if [ -z "${TWINE_REPOSITORY_URL:-}" ]; then
-            TWINE_REPOSITORY_URL="https://upload.pypi.pkg.github.com/${GITHUB_REPOSITORY_OWNER}/"
+            TWINE_REPOSITORY_URL="https://pypi.pkg.github.com/${GITHUB_REPOSITORY}/"
+          fi
+
+          if [ -z "${TWINE_USERNAME:-}" ]; then
+            TWINE_USERNAME="${GITHUB_ACTOR}"
+          fi
+          if [ -z "${TWINE_PASSWORD:-}" ]; then
+            TWINE_PASSWORD="${GITHUB_TOKEN_FALLBACK}"
+          fi
+          if [ -z "${TWINE_PASSWORD:-}" ]; then
+            echo "No credentials available for package publish (CODEX_ASSETS_PUBLISH_PASSWORD or GITHUB_TOKEN)."
+            exit 1
           fi
 
           python -m pip install --upgrade twine
-          python -m twine upload --skip-existing --repository-url "${TWINE_REPOSITORY_URL}" dist/codex-assets/*
+          # GitHub Packages does not support twine's --skip-existing flag.
+          python -m twine upload --repository-url "${TWINE_REPOSITORY_URL}" dist/codex-assets/*
