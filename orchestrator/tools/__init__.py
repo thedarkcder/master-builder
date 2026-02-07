@@ -18,6 +18,14 @@ from orchestrator.tools.github_app import (
     WorkflowCheckSuite,
     github_client_from_tenant_config,
 )
+from orchestrator.tools.jira_oauth import (
+    JiraOAuthClient,
+    JiraOAuthClientConfig,
+    JiraOAuthError,
+    JiraOAuthResource,
+    JiraOAuthTokenSet,
+    JiraProject,
+)
 
 __all__ = [
     "WorkflowBootstrapResult",
@@ -35,4 +43,10 @@ __all__ = [
     "PullRequestResult",
     "WorkflowCheckSuite",
     "github_client_from_tenant_config",
+    "JiraOAuthClient",
+    "JiraOAuthClientConfig",
+    "JiraOAuthError",
+    "JiraOAuthResource",
+    "JiraOAuthTokenSet",
+    "JiraProject",
 ]

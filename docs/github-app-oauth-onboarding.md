@@ -1,18 +1,21 @@
 # GitHub App Creation and OAuth-Style Onboarding
 
-This document describes the desired tenant onboarding model for GitHub integration.
+This document describes the tenant onboarding model for GitHub integration.
 
 ## Current state (implemented today)
-- Tenant creation requires manual GitHub App references:
-  - `app_id_ref`
-  - `private_key_ref`
-  - `installation_id`
-- This works, but is operator-heavy and error-prone.
+- Tenant onboarding uses a wizard flow in the admin UI.
+- GitHub setup is install-button based:
+  - click `Install GitHub App`
+  - complete install on GitHub
+  - callback persists `installation_id` on tenant config
+- GitHub App credentials are server-managed (`ORCHESTRATOR_GITHUB_APP_ID_REF`, `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF`).
 
-## Target state (requested)
-- Tenant onboarding should be a wizard, not a single long form.
-- GitHub setup should use an install button and callback flow, not manual copy/paste of installation details.
-- After tenant creation, operator should click a GitHub install/connect button, authorize installation, and have details saved automatically.
+## Jira + GitHub flow summary
+- Step 1: tenant basics
+- Step 2: connect Jira OAuth and choose project keys
+- Step 3: connect GitHub App installation
+- Step 4: map repos and policy
+- Step 5: review and save
 
 ## Do we need to create the GitHub App ourselves?
 Yes. You must create a GitHub App (or use an existing app owned by your org) and install it on the target repositories.
@@ -23,7 +26,7 @@ Yes. You must create a GitHub App (or use an existing app owned by your org) and
 3. Generate a private key and store it in your secret manager.
 4. Record the App ID.
 5. Install the app to repos the tenant is allowed to use.
-6. Record the installation ID (for current manual mode).
+6. Verify the install button callback sets `installation_id` during wizard/edit flow.
 
 ## Recommended minimum app permissions
 - Repository `Contents`: Read and write (branch + commits)
@@ -34,7 +37,7 @@ Yes. You must create a GitHub App (or use an existing app owned by your org) and
 
 If webhook processing is enabled for GitHub events, also configure webhook delivery and secret handling.
 
-## OAuth-style install/connect flow (target behavior)
+## OAuth-style install/connect flow
 1. Operator creates a tenant with basic tenant/Jira fields.
 2. Wizard step `Connect GitHub` shows button: `Install GitHub App`.
 3. Clicking button redirects to GitHub App installation URL with signed `state` containing tenant context.
@@ -45,14 +48,6 @@ If webhook processing is enabled for GitHub events, also configure webhook deliv
 5. Service persists tenant GitHub integration details.
 6. Wizard continues to repo mapping and test connection.
 7. Tenant is marked ready only when GitHub + Jira checks pass.
-
-## Tenant setup wizard shape (target)
-1. Tenant basics
-2. Jira connection
-3. GitHub install/connect
-4. Repo mapping
-5. Policy + limits
-6. Review + save
 
 ## Data that should be saved from install callback
 - `installation_id`

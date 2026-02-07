@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     github_install_state_secret: str = "local-dev-change-me"
     github_app_id_ref: str = "secret/app-id"
     github_private_key_ref: str = "secret/private-key"
+    public_api_base_url: str = "http://localhost:4000"
+    jira_oauth_client_id_ref: str = "secret/jira-client-id"
+    jira_oauth_client_secret_ref: str = "secret/jira-client-secret"
+    jira_oauth_state_secret: str = "local-dev-change-me"
+    secrets_encryption_key: str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",

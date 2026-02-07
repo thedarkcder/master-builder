@@ -66,7 +66,7 @@ export function defaultTenantFormValues(): TenantFormValues {
     name: "",
     isEnabled: true,
     jira: {
-      mcp_endpoint: "",
+      connection_id: null,
       project_keys: [],
       ready_label: "agent:ready",
       in_progress_label: "agent:in-progress",
@@ -152,7 +152,7 @@ export function toCreatePayload(
     is_enabled: values.isEnabled,
     jira: {
       ...values.jira,
-      mcp_endpoint: values.jira.mcp_endpoint.trim(),
+      connection_id: values.jira.connection_id?.trim() || null,
       project_keys: splitCsv(textFields.projectKeysText),
       ready_label: values.jira.ready_label.trim(),
       in_progress_label: values.jira.in_progress_label.trim(),

@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
@@ -8,8 +9,10 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.storage.db import reset_db_engine_cache
+from orchestrator.core.secrets import encrypt_value
+from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
+from orchestrator.storage.models import JiraOAuthConnection
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -24,8 +27,16 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
         os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
+        os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
+        os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
+        os.environ["ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF"] = "secret/jira-client-id"
+        os.environ["ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF"] = "secret/jira-client-secret"
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
         os.environ["secret/app-id"] = "12345"
         os.environ["secret/private-key"] = "not-a-real-key-for-tests"
+        os.environ["secret/jira-client-id"] = "jira-client-id"
+        os.environ["secret/jira-client-secret"] = "jira-client-secret"
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -37,9 +48,18 @@ class AdminApiTests(unittest.TestCase):
         self.temp_dir.cleanup()
         os.environ.pop("secret/app-id", None)
         os.environ.pop("secret/private-key", None)
+        os.environ.pop("secret/jira-client-id", None)
+        os.environ.pop("secret/jira-client-secret", None)
+
         os.environ.pop("ORCHESTRATOR_GITHUB_APP_SLUG", None)
         os.environ.pop("ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", None)
         os.environ.pop("ORCHESTRATOR_ADMIN_UI_BASE_URL", None)
+        os.environ.pop("ORCHESTRATOR_PUBLIC_API_BASE_URL", None)
+        os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", None)
+        os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF", None)
+        os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF", None)
+        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
+
         get_settings.cache_clear()
         reset_db_engine_cache()
 
@@ -48,7 +68,7 @@ class AdminApiTests(unittest.TestCase):
             "name": "Tenant A",
             "is_enabled": True,
             "jira": {
-                "mcp_endpoint": "https://mcp.example.test",
+                "connection_id": "conn-1",
                 "project_keys": ["TP"],
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
@@ -84,12 +104,41 @@ class AdminApiTests(unittest.TestCase):
             },
         }
 
+    def _insert_jira_connection(self, connection_id: str = "conn-1") -> None:
+        session_factory = create_session_factory(self.database_url)
+        settings = get_settings()
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                JiraOAuthConnection(
+                    connection_id=connection_id,
+                    account_id="account-1",
+                    account_email="test@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://example.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted=encrypt_value(
+                        plaintext="access-token",
+                        encryption_key=settings.secrets_encryption_key,
+                    ),
+                    refresh_token_encrypted=encrypt_value(
+                        plaintext="refresh-token",
+                        encryption_key=settings.secrets_encryption_key,
+                    ),
+                    access_token_expires_at=now + timedelta(hours=1),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
     def test_admin_routes_require_auth(self) -> None:
         response = self.client.get("/api/admin/tenants")
         self.assertEqual(response.status_code, 401)
 
     def test_create_and_update_tenant(self) -> None:
         payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
 
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -115,10 +164,18 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_response.json()["name"], "Tenant A Updated")
         self.assertFalse(update_response.json()["is_enabled"])
 
-        jira_test = self.client.post(
-            "/api/admin/tenants/tenant-a/test-jira",
-            auth=("admin", "secret"),
-        )
+        class _FakeJiraClient:
+            def list_projects(self, *, access_token: str, cloud_id: str):  # noqa: ANN001
+                return []
+
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeJiraClient()),
+        ):
+            jira_test = self.client.post(
+                "/api/admin/tenants/tenant-a/test-jira",
+                auth=("admin", "secret"),
+            )
         self.assertEqual(jira_test.status_code, 200)
         self.assertTrue(jira_test.json()["ok"])
 
@@ -277,3 +334,126 @@ class AdminApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(len(payload), 2)
         self.assertEqual(payload[0]["full_name"], "example/repo-one")
+
+    def test_jira_connect_start_requires_tenant_for_edit_mode(self) -> None:
+        response = self.client.post(
+            "/api/admin/jira/connect/start?return_to=edit",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_jira_connect_wizard_callback_creates_connection(self) -> None:
+        start_response = self.client.post(
+            "/api/admin/jira/connect/start?return_to=wizard",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(start_response.status_code, 200)
+        authorize_url = start_response.json()["authorize_url"]
+        parsed = urlparse(authorize_url)
+        state_token = parse_qs(parsed.query).get("state", [None])[0]
+        self.assertIsNotNone(state_token)
+
+        class _FakeClient:
+            def exchange_code(self, *, code: str):  # noqa: ANN001
+                now = datetime.now(timezone.utc)
+                return type(
+                    "TokenSet",
+                    (),
+                    {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "expires_at": now + timedelta(hours=1),
+                        "scopes": ["read:jira-work", "write:jira-work"],
+                    },
+                )()
+
+            def list_accessible_resources(self, *, access_token: str):  # noqa: ANN001
+                return [
+                    type(
+                        "Resource",
+                        (),
+                        {
+                            "cloud_id": "cloud-1",
+                            "site_url": "https://example.atlassian.net",
+                            "name": "Example",
+                        },
+                    )()
+                ]
+
+        with patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()):
+            callback_response = self.client.get(
+                "/api/admin/jira/connect/callback",
+                params={"code": "abc123", "state": state_token},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback_response.status_code, 302)
+        self.assertIn("/tenants/new?jira_oauth=success&jira_connection_id=", callback_response.headers.get("location", ""))
+
+    def test_jira_connect_edit_callback_updates_tenant(self) -> None:
+        payload = self._tenant_payload()
+        payload["jira"]["connection_id"] = None
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        start_response = self.client.post(
+            "/api/admin/jira/connect/start?return_to=edit&tenant_id=tenant-a",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(start_response.status_code, 200)
+        authorize_url = start_response.json()["authorize_url"]
+        parsed = urlparse(authorize_url)
+        state_token = parse_qs(parsed.query).get("state", [None])[0]
+        self.assertIsNotNone(state_token)
+
+        class _FakeClient:
+            def exchange_code(self, *, code: str):  # noqa: ANN001
+                now = datetime.now(timezone.utc)
+                return type(
+                    "TokenSet",
+                    (),
+                    {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "expires_at": now + timedelta(hours=1),
+                        "scopes": ["read:jira-work", "write:jira-work"],
+                    },
+                )()
+
+            def list_accessible_resources(self, *, access_token: str):  # noqa: ANN001
+                return [
+                    type(
+                        "Resource",
+                        (),
+                        {
+                            "cloud_id": "cloud-1",
+                            "site_url": "https://example.atlassian.net",
+                            "name": "Example",
+                        },
+                    )()
+                ]
+
+        with patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()):
+            callback_response = self.client.get(
+                "/api/admin/jira/connect/callback",
+                params={"code": "abc123", "state": state_token},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback_response.status_code, 302)
+        self.assertIn(
+            "/tenants/tenant-a/edit?jira_oauth=success&jira_connection_id=",
+            callback_response.headers.get("location", ""),
+        )
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertTrue(tenant_response.json()["jira"]["connection_id"])
+
+
+if __name__ == "__main__":
+    unittest.main()

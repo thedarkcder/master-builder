@@ -1,5 +1,5 @@
 export type JiraConfig = {
-  mcp_endpoint: string;
+  connection_id: string | null;
   project_keys: string[];
   ready_label: string;
   in_progress_label: string;
@@ -76,6 +76,11 @@ export type GitHubRepositoryRecord = {
   html_url: string;
   default_branch: string;
   private: boolean;
+};
+
+export type JiraProjectRecord = {
+  key: string;
+  name: string;
 };
 
 export type RunRecord = {
@@ -189,6 +194,33 @@ export function testJira(
   return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/test-jira`, {
     method: "POST"
   });
+}
+
+export function startJiraConnect(
+  credentials: Credentials,
+  options?: { returnTo?: "wizard" | "edit"; tenantId?: string }
+): Promise<{ authorize_url: string; expires_at: string }> {
+  const query = new URLSearchParams();
+  if (options?.returnTo) {
+    query.set("return_to", options.returnTo);
+  }
+  if (options?.tenantId) {
+    query.set("tenant_id", options.tenantId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(credentials, `/api/admin/jira/connect/start${suffix}`, {
+    method: "POST"
+  });
+}
+
+export function listJiraProjects(
+  credentials: Credentials,
+  connectionId: string
+): Promise<JiraProjectRecord[]> {
+  return request<JiraProjectRecord[]>(
+    credentials,
+    `/api/admin/jira/connections/${encodeURIComponent(connectionId)}/projects`
+  );
 }
 
 export function testGithub(
