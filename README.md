@@ -65,12 +65,12 @@ What happens automatically:
 
 Optional direct package-index publish (same workflow run):
 - Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
-- Set repo variable `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` (example: `https://packages.example.com/`)
+- Set repo variable `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` (must be repo-scoped for GitHub Packages, e.g. `https://pypi.pkg.github.com/<OWNER>/<REPO>/`)
 - Set repo variable `CODEX_ASSETS_PUBLISH_USERNAME`
 - Set repo secret `CODEX_ASSETS_PUBLISH_PASSWORD`
 
 Authentication:
-- Uses the explicit package-service credentials above (no GitHub package fallback behavior).
+- Uses the explicit package-service credentials above (no fallback credentials).
 
 Same-repo quick setup:
 1. In GitHub repo settings, set Actions variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`.
