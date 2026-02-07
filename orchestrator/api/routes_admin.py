@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
+    GitHubRepositoryRead,
     GitHubInstallStart,
     IntegrationTestResult,
     RunRead,
@@ -21,7 +23,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import Run, Tenant
-from orchestrator.tools.github_app import github_client_from_tenant_config
+from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_mcp_adapter import JiraMcpAdapter, REQUIRED_CAPABILITIES
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -59,6 +61,21 @@ def _run_to_schema(run: Run) -> RunRead:
     )
 
 
+def _slugify_tenant_name(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    return slug or "tenant"
+
+
+def _allocate_tenant_id(session: Session, *, name: str) -> str:
+    base = _slugify_tenant_name(name)
+    candidate = base
+    suffix = 2
+    while session.get(Tenant, candidate) is not None:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
 @router.get("/tenants", response_model=list[TenantRead])
 def list_tenants(
     _: str = Depends(require_admin),
@@ -74,13 +91,10 @@ def create_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    existing = session.get(Tenant, payload.tenant_id)
-    if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant already exists")
-
+    tenant_id = _allocate_tenant_id(session, name=payload.name)
     now = datetime.now(timezone.utc)
     tenant = Tenant(
-        tenant_id=payload.tenant_id,
+        tenant_id=tenant_id,
         name=payload.name,
         is_enabled=payload.is_enabled,
         jira_config=payload.jira.model_dump(),
@@ -162,7 +176,7 @@ def test_jira_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     jira = tenant.jira_config
-    required = ["mcp_endpoint", "auth_ref", "project_keys", "ready_jql"]
+    required = ["mcp_endpoint", "project_keys"]
     missing = [field for field in required if not jira.get(field)]
     if missing:
         return IntegrationTestResult(ok=False, details=f"Missing Jira fields: {', '.join(missing)}")
@@ -219,6 +233,7 @@ def test_github_connection(
 @router.post("/tenants/{tenant_id}/github/install/start", response_model=GitHubInstallStart)
 def start_github_install(
     tenant_id: str,
+    return_to: str = Query(default="edit", pattern="^(edit|wizard)$"),
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> GitHubInstallStart:
@@ -246,6 +261,7 @@ def start_github_install(
         tenant_id=tenant_id,
         exp=expires_at,
         secret=settings.github_install_state_secret,
+        return_to=return_to,
     )
     install_url = (
         f"https://github.com/apps/{quote(app_slug, safe='')}/installations/new?"
@@ -283,11 +299,55 @@ def github_install_callback(
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
 
-    redirect_url = (
-        f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/edit"
-        "?github_install=success"
-    )
+    if state.return_to == "wizard":
+        redirect_url = (
+            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new"
+            f"?tenant_id={quote(tenant.tenant_id, safe='')}&github_install=success"
+        )
+    else:
+        redirect_url = (
+            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/edit"
+            "?github_install=success"
+        )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/tenants/{tenant_id}/github/repositories", response_model=list[GitHubRepositoryRead])
+def list_tenant_github_repositories(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[GitHubRepositoryRead]:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    github = tenant.github_config
+    if github.get("mode") != "github_app":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only github_app mode is supported")
+    if not github.get("installation_id"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitHub App installation is not connected for this tenant",
+        )
+
+    try:
+        client = github_client_from_tenant_config(github)
+        repositories = client.list_installation_repositories()
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except GitHubApiError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    return [
+        GitHubRepositoryRead(
+            full_name=repo.full_name,
+            html_url=repo.html_url,
+            default_branch=repo.default_branch,
+            private=repo.private,
+        )
+        for repo in repositories
+    ]
 
 
 @router.get("/runs", response_model=list[RunRead])

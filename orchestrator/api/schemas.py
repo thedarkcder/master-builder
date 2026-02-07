@@ -9,13 +9,11 @@ from orchestrator.core.guardrails import enforce_safe_command
 
 class JiraConfig(BaseModel):
     mcp_endpoint: str = Field(min_length=1)
-    auth_ref: str = Field(min_length=1)
     project_keys: list[str] = Field(default_factory=list, min_length=1)
     ready_label: str = Field(default="agent:ready", min_length=1)
     in_progress_label: str = Field(default="agent:in-progress", min_length=1)
     blocked_label: str = Field(default="agent:blocked", min_length=1)
     done_label: str | None = None
-    ready_jql: str = Field(min_length=1)
     webhook_secret_ref: str | None = None
 
 
@@ -28,7 +26,7 @@ class GithubConfig(BaseModel):
 
 
 class ReposConfig(BaseModel):
-    allowlist: list[str] = Field(default_factory=list, min_length=1)
+    allowlist: list[str] = Field(default_factory=list)
     mapping_rules_by_project_key: dict[str, str] = Field(default_factory=dict)
     mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
     fallback_repo: str | None = None
@@ -62,7 +60,6 @@ class DiscordConfig(BaseModel):
 
 
 class TenantCreate(BaseModel):
-    tenant_id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     is_enabled: bool = True
     jira: JiraConfig
@@ -103,6 +100,13 @@ class IntegrationTestResult(BaseModel):
 class GitHubInstallStart(BaseModel):
     install_url: str
     expires_at: datetime
+
+
+class GitHubRepositoryRead(BaseModel):
+    full_name: str
+    html_url: str
+    default_branch: str
+    private: bool
 
 
 class RunRead(BaseModel):

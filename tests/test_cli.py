@@ -42,13 +42,11 @@ class CliEntrypointTests(unittest.TestCase):
                     is_enabled=True,
                     jira_config={
                         "mcp_endpoint": "https://mcp.example.test",
-                        "auth_ref": "secret/jira",
                         "project_keys": ["TP"],
                         "ready_label": "agent:ready",
                         "in_progress_label": "agent:in-progress",
                         "blocked_label": "agent:blocked",
                         "done_label": "agent:done",
-                        "ready_jql": "project = TP AND labels = agent:ready",
                         "webhook_secret_ref": None,
                     },
                     github_config={

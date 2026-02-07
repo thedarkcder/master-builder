@@ -64,14 +64,11 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
   const submitLabel = mode === "create" ? "Create Tenant" : "Save Tenant";
 
   const validation = useMemo(() => {
-    if (mode === "create" && !values.tenantId.trim()) {
-      return "Tenant ID is required.";
-    }
     if (!values.name.trim()) {
       return "Tenant name is required.";
     }
-    if (!values.jira.mcp_endpoint.trim() || !values.jira.auth_ref.trim()) {
-      return "Jira endpoint and auth reference are required.";
+    if (!values.jira.mcp_endpoint.trim()) {
+      return "Jira endpoint is required.";
     }
     if (!textFields.projectKeysText.trim()) {
       return "At least one Jira project key is required.";
@@ -81,9 +78,6 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
     }
     if (!values.github.app_id_ref.trim() || !values.github.private_key_ref.trim()) {
       return "GitHub App ID ref and private key ref are required.";
-    }
-    if (!values.jira.ready_jql.trim()) {
-      return "Ready JQL is required.";
     }
     return "";
   }, [mode, textFields.allowlistText, textFields.projectKeysText, values]);
@@ -110,16 +104,15 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
       <Card>
         <CardHeader>
           <CardTitle>Identity</CardTitle>
-          <CardDescription>Tenant identity and activation state.</CardDescription>
+          <CardDescription>Tenant identity and activation state. Tenant ID is generated from name.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
           <div className="space-y-2">
             <FieldLabel>Tenant ID</FieldLabel>
             <Input
-              disabled={mode === "edit"}
+              disabled
               value={values.tenantId}
-              onChange={(event) => setValues((prev) => ({ ...prev, tenantId: event.target.value }))}
-              placeholder="tenant-demo"
+              placeholder="generated from tenant name"
             />
           </div>
           <div className="space-y-2">
@@ -152,14 +145,6 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
                 setValues((prev) => ({ ...prev, jira: { ...prev.jira, mcp_endpoint: event.target.value } }))
               }
               placeholder="https://mcp.example.test"
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Auth ref</FieldLabel>
-            <Input
-              value={values.jira.auth_ref}
-              onChange={(event) => setValues((prev) => ({ ...prev, jira: { ...prev.jira, auth_ref: event.target.value } }))}
-              placeholder="secret/jira"
             />
           </div>
           <div className="space-y-2">
@@ -208,16 +193,6 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
                 setValues((prev) => ({ ...prev, jira: { ...prev.jira, done_label: event.target.value || null } }))
               }
               placeholder="agent:done"
-            />
-          </div>
-          <div className="space-y-2 md:col-span-2">
-            <FieldLabel>Ready JQL</FieldLabel>
-            <Input
-              value={values.jira.ready_jql}
-              onChange={(event) =>
-                setValues((prev) => ({ ...prev, jira: { ...prev.jira, ready_jql: event.target.value } }))
-              }
-              placeholder="project = TP AND labels = agent:ready"
             />
           </div>
           <div className="space-y-2 md:col-span-2">

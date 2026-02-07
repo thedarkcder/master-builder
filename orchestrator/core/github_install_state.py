@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 class GitHubInstallState:
     tenant_id: str
     exp: int
+    return_to: str
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -23,16 +24,25 @@ def _b64url_decode(raw: str) -> bytes:
     return base64.urlsafe_b64decode((raw + padding).encode("ascii"))
 
 
-def create_install_state_token(*, tenant_id: str, exp: datetime, secret: str) -> str:
+def create_install_state_token(
+    *,
+    tenant_id: str,
+    exp: datetime,
+    secret: str,
+    return_to: str = "edit",
+) -> str:
     if not tenant_id.strip():
         raise ValueError("tenant_id is required")
     if not secret:
         raise ValueError("secret is required")
+    if return_to not in {"edit", "wizard"}:
+        raise ValueError("return_to must be 'edit' or 'wizard'")
 
     exp_utc = exp.astimezone(timezone.utc)
     payload = {
         "tenant_id": tenant_id.strip(),
         "exp": int(exp_utc.timestamp()),
+        "return_to": return_to,
     }
     payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     payload_token = _b64url_encode(payload_bytes)
@@ -68,14 +78,17 @@ def parse_install_state_token(*, token: str, secret: str, now: datetime | None =
 
     tenant_id = payload.get("tenant_id")
     exp = payload.get("exp")
+    return_to = payload.get("return_to")
 
     if not isinstance(tenant_id, str) or not tenant_id.strip():
         raise ValueError("invalid state token tenant_id")
     if not isinstance(exp, int):
         raise ValueError("invalid state token exp")
+    if return_to not in {"edit", "wizard"}:
+        raise ValueError("invalid state token return_to")
 
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     if exp <= int(now_utc.timestamp()):
         raise ValueError("state token expired")
 
-    return GitHubInstallState(tenant_id=tenant_id.strip(), exp=exp)
+    return GitHubInstallState(tenant_id=tenant_id.strip(), exp=exp, return_to=return_to)

@@ -2,6 +2,7 @@ import os
 import unittest
 from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, urlparse
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -9,6 +10,7 @@ from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
+from orchestrator.tools.github_app import InstallationRepository
 
 
 class AdminApiTests(unittest.TestCase):
@@ -43,18 +45,15 @@ class AdminApiTests(unittest.TestCase):
 
     def _tenant_payload(self) -> dict:
         return {
-            "tenant_id": "tenant-a",
             "name": "Tenant A",
             "is_enabled": True,
             "jira": {
                 "mcp_endpoint": "https://mcp.example.test",
-                "auth_ref": "secret/jira",
                 "project_keys": ["TP"],
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
                 "blocked_label": "agent:blocked",
                 "done_label": "agent:done",
-                "ready_jql": "project = TP",
                 "webhook_secret_ref": "secret/webhook",
             },
             "github": {
@@ -200,3 +199,83 @@ class AdminApiTests(unittest.TestCase):
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
         self.assertEqual(tenant_response.json()["github"]["installation_id"], "98765")
+
+    def test_create_tenant_generates_unique_slug_id(self) -> None:
+        payload = self._tenant_payload()
+        first = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.json()["tenant_id"], "tenant-a")
+
+        second = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(second.json()["tenant_id"], "tenant-a-2")
+
+    def test_start_install_supports_wizard_redirect(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = None
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        start_response = self.client.post(
+            "/api/admin/tenants/tenant-a/github/install/start?return_to=wizard",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(start_response.status_code, 200)
+        install_url = start_response.json()["install_url"]
+        parsed = urlparse(install_url)
+        state_token = parse_qs(parsed.query).get("state", [None])[0]
+        self.assertIsNotNone(state_token)
+
+        callback_response = self.client.get(
+            "/api/admin/github/install/callback",
+            params={
+                "state": state_token,
+                "installation_id": "11111",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(callback_response.status_code, 302)
+        self.assertIn("/tenants/new?tenant_id=tenant-a&github_install=success", callback_response.headers.get("location", ""))
+
+    def test_list_github_repositories_for_tenant(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = "12345"
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeClient:
+            def list_installation_repositories(self):  # noqa: ANN001
+                return [
+                    InstallationRepository(
+                        full_name="example/repo-one",
+                        html_url="https://github.com/example/repo-one",
+                        default_branch="main",
+                        private=False,
+                    ),
+                    InstallationRepository(
+                        full_name="example/repo-two",
+                        html_url="https://github.com/example/repo-two",
+                        default_branch="develop",
+                        private=True,
+                    ),
+                ]
+
+        with patch("orchestrator.api.routes_admin.github_client_from_tenant_config", return_value=_FakeClient()):
+            response = self.client.get(
+                "/api/admin/tenants/tenant-a/github/repositories",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[0]["full_name"], "example/repo-one")

@@ -67,13 +67,11 @@ export function defaultTenantFormValues(): TenantFormValues {
     isEnabled: true,
     jira: {
       mcp_endpoint: "",
-      auth_ref: "",
       project_keys: [],
       ready_label: "agent:ready",
       in_progress_label: "agent:in-progress",
       blocked_label: "agent:blocked",
       done_label: "agent:done",
-      ready_jql: "",
       webhook_secret_ref: null
     },
     github: {
@@ -152,19 +150,16 @@ export function toCreatePayload(
   textFields: TenantFormTextFields
 ): TenantCreatePayload {
   return {
-    tenant_id: values.tenantId.trim(),
     name: values.name.trim(),
     is_enabled: values.isEnabled,
     jira: {
       ...values.jira,
       mcp_endpoint: values.jira.mcp_endpoint.trim(),
-      auth_ref: values.jira.auth_ref.trim(),
       project_keys: splitCsv(textFields.projectKeysText),
       ready_label: values.jira.ready_label.trim(),
       in_progress_label: values.jira.in_progress_label.trim(),
       blocked_label: values.jira.blocked_label.trim(),
       done_label: values.jira.done_label?.trim() || null,
-      ready_jql: values.jira.ready_jql.trim(),
       webhook_secret_ref: values.jira.webhook_secret_ref?.trim() || null
     },
     github: {
