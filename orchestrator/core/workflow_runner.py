@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass, field
 from collections.abc import Callable
 from typing import Protocol
 
+from orchestrator.core.followups import build_backlog_follow_up_draft
+
 
 @dataclass(frozen=True)
 class WorkflowRequest:
@@ -62,6 +64,7 @@ class WorkflowResult:
     summary: list[str]
     test_guidance: list[str]
     attempts: int
+    follow_up_issue: dict | None = None
     diagnostics: WorkflowDiagnostics | None = None
 
     def to_plan_payload(self) -> dict:
@@ -71,6 +74,7 @@ class WorkflowResult:
             "summary": self.summary,
             "test_guidance": self.test_guidance,
             "pr_url": self.pr_url,
+            "follow_up_issue": self.follow_up_issue,
         }
         if self.plan is not None:
             payload["plan"] = asdict(self.plan)
@@ -147,6 +151,7 @@ class WorkflowRunner:
                 message=f"PM stage failed: {exc}",
                 attempts=0,
                 history=history,
+                request=request,
             )
 
         runtime_failure = self._runtime_failure(
@@ -184,6 +189,7 @@ class WorkflowRunner:
                     message=f"Dev stage failed: {exc}",
                     attempts=attempt,
                     history=history,
+                    request=request,
                 )
 
             runtime_failure = self._runtime_failure(
@@ -208,6 +214,7 @@ class WorkflowRunner:
                     message=f"Test stage failed: {exc}",
                     attempts=attempt,
                     history=history,
+                    request=request,
                 )
 
             runtime_failure = self._runtime_failure(
@@ -230,6 +237,7 @@ class WorkflowRunner:
                         message="Max workflow attempts reached after test failures",
                         attempts=attempt,
                         history=history,
+                        request=request,
                     )
                 continue
 
@@ -251,6 +259,7 @@ class WorkflowRunner:
                     message=f"Review stage failed: {exc}",
                     attempts=attempt,
                     history=history,
+                    request=request,
                 )
 
             runtime_failure = self._runtime_failure(
@@ -273,6 +282,7 @@ class WorkflowRunner:
                         message="Max workflow attempts reached after review feedback",
                         attempts=attempt,
                         history=history,
+                        request=request,
                     )
                 continue
 
@@ -291,6 +301,7 @@ class WorkflowRunner:
                     message="Workflow succeeded but no PR URL was produced",
                     attempts=attempt,
                     history=history,
+                    request=request,
                 )
 
             return WorkflowResult(
@@ -308,6 +319,7 @@ class WorkflowRunner:
             message="Workflow stopped before producing a terminal result",
             attempts=max_attempts,
             history=history,
+            request=request,
         )
 
     def _failure(
@@ -318,7 +330,22 @@ class WorkflowRunner:
         message: str,
         attempts: int,
         history: list[dict[str, str]],
+        request: WorkflowRequest | None,
     ) -> WorkflowResult:
+        follow_up_issue = None
+        if request is not None:
+            draft = build_backlog_follow_up_draft(
+                title=f"Follow-up for {request.issue_key}: {stage} handling",
+                why_it_matters=message,
+                impact=(
+                    f"Workflow run {request.run_id} for {request.issue_key} ended in stage '{stage}'"
+                ),
+                suggested_approach=(
+                    "Address the reported stage failure and rerun from To Do after validation."
+                ),
+                origin_issue_key=request.issue_key,
+            )
+            follow_up_issue = draft.to_payload()
         return WorkflowResult(
             succeeded=False,
             plan=plan,
@@ -326,6 +353,7 @@ class WorkflowRunner:
             summary=[],
             test_guidance=[],
             attempts=attempts,
+            follow_up_issue=follow_up_issue,
             diagnostics=WorkflowDiagnostics(
                 stage=stage,
                 message=message,
@@ -360,4 +388,5 @@ class WorkflowRunner:
             message=f"Run exceeded max runtime of {request.max_runtime_minutes} minute(s)",
             attempts=attempts,
             history=history,
+            request=request,
         )
