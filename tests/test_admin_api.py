@@ -71,6 +71,8 @@ class AdminApiTests(unittest.TestCase):
             "jira": {
                 "connection_id": "conn-1",
                 "project_keys": ["TP"],
+                "ready_statuses": ["Ready for Agent"],
+                "ready_jql": 'project = TP AND status = "Ready for Agent"',
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
                 "blocked_label": "agent:blocked",
@@ -194,6 +196,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.json()["tenant_id"], "tenant-a")
+        self.assertEqual(create_response.json()["jira"]["ready_statuses"], ["Ready for Agent"])
 
         list_response = self.client.get("/api/admin/tenants", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)

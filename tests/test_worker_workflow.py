@@ -160,6 +160,13 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertTrue(processed.plan["succeeded"])
             self.assertEqual(processed.plan["attempts"], 1)
+            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(
+                [entry["stage"] for entry in stage_updates],
+                ["lock_acquired", "plan_posted", "pr_opened"],
+            )
+            self.assertIn("TP-300", stage_updates[0]["discord_message"])
+            self.assertIn("run-TP-300", stage_updates[0]["discord_message"])
             self.assertIsNotNone(runner.last_request)
             self.assertIn("Good To Do", runner.last_request.issue_description)
             self.assertIn("Decision Gate", runner.last_request.issue_description)
@@ -180,3 +187,12 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertFalse(processed.plan["succeeded"])
             self.assertEqual(processed.plan["diagnostics"]["stage"], "test")
+            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(
+                [entry["stage"] for entry in stage_updates],
+                ["lock_acquired", "plan_posted", "run_failed"],
+            )
+            self.assertIn(
+                "Max workflow attempts reached after test failures",
+                stage_updates[-1]["jira_message"],
+            )

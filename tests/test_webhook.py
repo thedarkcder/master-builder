@@ -62,6 +62,8 @@ class JiraWebhookTests(unittest.TestCase):
             "jira": {
                 "mcp_endpoint": "https://mcp.example.test",
                 "project_keys": ["TP"],
+                "ready_statuses": ["Ready for Agent"],
+                "ready_jql": 'project = TP AND status = "Ready for Agent"',
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
                 "blocked_label": "agent:blocked",
@@ -99,14 +101,30 @@ class JiraWebhookTests(unittest.TestCase):
         digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
         return f"sha256={digest}"
 
-    def test_webhook_ignores_disabled_tenant(self) -> None:
-        self._create_tenant("tenant-disabled", is_enabled=False)
-        payload = {
+    def _jira_issue_payload(
+        self,
+        *,
+        issue_key: str,
+        labels: list[str] | None = None,
+        status_name: str = "Ready for Agent",
+        status_category_key: str = "indeterminate",
+    ) -> dict:
+        return {
             "issue": {
-                "key": "TP-126",
-                "fields": {"labels": ["agent:ready"]},
+                "key": issue_key,
+                "fields": {
+                    "labels": labels or [],
+                    "status": {
+                        "name": status_name,
+                        "statusCategory": {"key": status_category_key},
+                    },
+                },
             }
         }
+
+    def test_webhook_ignores_disabled_tenant(self) -> None:
+        self._create_tenant("tenant-disabled", is_enabled=False)
+        payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/tenant-disabled", json=payload)
 
@@ -114,46 +132,65 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(response.json()["enqueued"])
         self.assertEqual(response.json()["reason"], "tenant_disabled")
 
-    def test_webhook_requires_ready_label(self) -> None:
-        payload = {
-            "issue": {
-                "key": "TP-123",
-                "fields": {"labels": ["not-ready"]},
-            }
-        }
+    def test_webhook_requires_ready_status(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["enqueued"])
-        self.assertEqual(response.json()["reason"], "ready_label_missing")
+        self.assertEqual(response.json()["reason"], "status_not_ready")
+
+    def test_webhook_ignores_done_issue_status(self) -> None:
+        payload = self._jira_issue_payload(
+            issue_key="TP-123",
+            status_name="Done",
+            status_category_key="done",
+            labels=["agent:ready"],
+        )
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "issue_done")
 
     def test_webhook_enqueues_once_for_active_issue(self) -> None:
-        payload = {
-            "issue": {
-                "key": "TP-124",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-124", labels=["agent:ready"])
 
         first = self.client.post("/jira/webhook/tenant-webhook", json=payload)
         second = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(first.status_code, 200)
         self.assertTrue(first.json()["enqueued"])
+        self.assertEqual(first.json()["trigger_reason"], "ready_status_recheck")
 
         self.assertEqual(second.status_code, 200)
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "run_already_active")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
+        self.assertEqual(second.json()["trigger_reason"], "ready_status_recheck")
+
+    def test_webhook_marks_transition_into_ready_status(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
+        payload["changelog"] = {
+            "items": [
+                {
+                    "field": "status",
+                    "fromString": "To Do",
+                    "toString": "Ready for Agent",
+                }
+            ]
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+        self.assertEqual(response.json()["trigger_reason"], "status_transition_to_ready")
 
     def test_webhook_deduplicates_delivery_identifier(self) -> None:
-        payload = {
-            "issue": {
-                "key": "TP-126",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
         headers = {"X-Atlassian-Webhook-Identifier": "delivery-123"}
 
         first = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
@@ -168,18 +205,8 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_webhook_respects_tenant_concurrency_limit(self) -> None:
         self._create_tenant("tenant-single", max_concurrent_runs=1)
-        first_payload = {
-            "issue": {
-                "key": "TP-126",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
-        second_payload = {
-            "issue": {
-                "key": "TP-127",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        first_payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
+        second_payload = self._jira_issue_payload(issue_key="TP-127", labels=["agent:ready"])
 
         first = self.client.post("/jira/webhook/tenant-single", json=first_payload)
         second = self.client.post("/jira/webhook/tenant-single", json=second_payload)
@@ -191,12 +218,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.json()["reason"], "tenant_concurrency_limit_reached")
 
     def test_webhook_unknown_tenant_returns_404(self) -> None:
-        payload = {
-            "issue": {
-                "key": "TP-999",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-999", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/missing-tenant", json=payload)
 
@@ -204,12 +226,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_webhook_requires_valid_token_when_secret_ref_configured(self) -> None:
         self._create_tenant("tenant-auth", webhook_secret_ref=self.webhook_secret_env)
-        payload = {
-            "issue": {
-                "key": "TP-125",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-125", labels=["agent:ready"])
 
         unauthenticated = self.client.post("/jira/webhook/tenant-auth", json=payload)
         invalid_token = self.client.post(
@@ -349,12 +366,7 @@ class JiraWebhookTests(unittest.TestCase):
         )
         self._create_tenant("tenant-managed-jira", webhook_secret_ref=managed_ref)
 
-        payload = {
-            "issue": {
-                "key": "TP-555",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-555", labels=["agent:ready"])
         response = self.client.post(
             "/jira/webhook/tenant-managed-jira",
             json=payload,
