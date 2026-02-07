@@ -148,28 +148,24 @@ jobs:
         env:
           TWINE_USERNAME: ${{ vars.CODEX_ASSETS_PUBLISH_USERNAME }}
           TWINE_PASSWORD: ${{ secrets.CODEX_ASSETS_PUBLISH_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
           TWINE_REPOSITORY_URL: ${{ vars.CODEX_ASSETS_PUBLISH_REPOSITORY_URL }}
         shell: bash
         run: |
           set -euo pipefail
 
           if [ -z "${TWINE_REPOSITORY_URL:-}" ]; then
-            echo "CODEX_ASSETS_PUBLISH_REPOSITORY_URL is required when CODEX_ASSETS_PUBLISH_TO_INDEX=true."
-            exit 1
-          fi
-
-          # GitHub Packages on github.com does not support Python package uploads.
-          if [[ "${TWINE_REPOSITORY_URL}" == *"pkg.github.com"* ]]; then
-            echo "Invalid CODEX_ASSETS_PUBLISH_REPOSITORY_URL: GitHub Packages Python registry is not supported on github.com."
-            echo "Use PyPI/TestPyPI (e.g. https://upload.pypi.org/legacy/ or https://test.pypi.org/legacy/)."
-            exit 1
+            TWINE_REPOSITORY_URL="https://pypi.pkg.github.com/${GITHUB_REPOSITORY}/"
           fi
 
           if [ -z "${TWINE_USERNAME:-}" ]; then
-            TWINE_USERNAME="__token__"
+            TWINE_USERNAME="${GITHUB_ACTOR}"
           fi
           if [ -z "${TWINE_PASSWORD:-}" ]; then
-            echo "CODEX_ASSETS_PUBLISH_PASSWORD secret is required when CODEX_ASSETS_PUBLISH_TO_INDEX=true."
+            TWINE_PASSWORD="${GITHUB_TOKEN_FALLBACK}"
+          fi
+          if [ -z "${TWINE_PASSWORD:-}" ]; then
+            echo "No credentials available for package publish (CODEX_ASSETS_PUBLISH_PASSWORD or GITHUB_TOKEN)."
             exit 1
           fi
 
