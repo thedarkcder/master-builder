@@ -243,6 +243,53 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
 
+    def test_ready_preview_returns_eligible_issues(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeJiraClient:
+            def search_issues_by_jql(  # noqa: ANN001
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                jql: str,
+                max_results: int = 20,
+            ):
+                self.last_jql = jql
+                self.last_max_results = max_results
+                self.last_access_token = access_token
+                self.last_cloud_id = cloud_id
+                return [
+                    type("Issue", (), {"key": "TP-101", "summary": "Ready issue", "status": "Ready for Agent"})(),
+                    type("Issue", (), {"key": "TP-102", "summary": "Another ready issue", "status": "Ready"})(),
+                ]
+
+        fake_client = _FakeJiraClient()
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+        ):
+            preview_response = self.client.get(
+                "/api/admin/tenants/tenant-a/ready-preview",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(preview_response.status_code, 200)
+        body = preview_response.json()
+        self.assertEqual(body["ready_statuses"], ["Ready for Agent"])
+        self.assertIn("status", body["ready_jql"])
+        self.assertEqual(len(body["eligible_issues"]), 2)
+        self.assertEqual(body["eligible_issues"][0]["key"], "TP-101")
+        self.assertIn("executable only", body["guidance"])
+        self.assertEqual(fake_client.last_access_token, "access-token")
+
     def test_delete_tenant(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(

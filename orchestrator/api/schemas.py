@@ -112,6 +112,19 @@ class JiraProjectRead(BaseModel):
     name: str
 
 
+class ReadyIssuePreviewRead(BaseModel):
+    key: str
+    summary: str
+    status: str
+
+
+class ReadyGatePreviewRead(BaseModel):
+    ready_statuses: list[str]
+    ready_jql: str
+    eligible_issues: list[ReadyIssuePreviewRead]
+    guidance: str
+
+
 class GitHubRepositoryRead(BaseModel):
     full_name: str
     html_url: str
