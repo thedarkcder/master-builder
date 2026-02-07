@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 
@@ -66,6 +67,11 @@ export default function LoginPage() {
             <Button className="w-full" type="submit" disabled={!ready}>
               Sign In
             </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              <Link href="/privacy" className="text-primary underline-offset-2 hover:underline">
+                Privacy Policy
+              </Link>
+            </p>
           </form>
         </CardContent>
       </Card>

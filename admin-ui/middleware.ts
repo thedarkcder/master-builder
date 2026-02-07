@@ -6,6 +6,7 @@ import { AUTH_COOKIE_KEY } from "@/lib/auth-constants";
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(AUTH_COOKIE_KEY)?.value);
+  const isPublicPath = pathname === "/login" || pathname === "/privacy";
 
   if (pathname.startsWith("/_next") || pathname === "/favicon.ico") {
     return NextResponse.next();
@@ -15,7 +16,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/tenants", request.url));
   }
 
-  if (pathname !== "/login" && !hasSession) {
+  if (!isPublicPath && !hasSession) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
