@@ -163,11 +163,31 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertEqual(first.status_code, 200)
         self.assertTrue(first.json()["enqueued"])
+        self.assertEqual(first.json()["trigger_reason"], "ready_status_recheck")
 
         self.assertEqual(second.status_code, 200)
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "run_already_active")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
+        self.assertEqual(second.json()["trigger_reason"], "ready_status_recheck")
+
+    def test_webhook_marks_transition_into_ready_status(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
+        payload["changelog"] = {
+            "items": [
+                {
+                    "field": "status",
+                    "fromString": "To Do",
+                    "toString": "Ready for Agent",
+                }
+            ]
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+        self.assertEqual(response.json()["trigger_reason"], "status_transition_to_ready")
 
     def test_webhook_deduplicates_delivery_identifier(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])

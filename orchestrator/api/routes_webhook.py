@@ -107,6 +107,31 @@ def _extract_issue_payload(payload: dict) -> tuple[str, list[str], str | None, s
     return issue_key, normalized_labels, status_name, status_category_key
 
 
+def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
+    changelog = payload.get("changelog")
+    if not isinstance(changelog, dict):
+        return None, None
+
+    items = changelog.get("items")
+    if not isinstance(items, list):
+        return None, None
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        field = item.get("field")
+        if not isinstance(field, str) or field.strip().lower() != "status":
+            continue
+
+        from_status = item.get("fromString")
+        to_status = item.get("toString")
+        normalized_from_status = from_status.strip() if isinstance(from_status, str) and from_status.strip() else None
+        normalized_to_status = to_status.strip() if isinstance(to_status, str) and to_status.strip() else None
+        return normalized_from_status, normalized_to_status
+
+    return None, None
+
+
 def _extract_webhook_token(request: Request) -> str | None:
     webhook_token = request.headers.get("X-Webhook-Token")
     if webhook_token:
@@ -400,6 +425,26 @@ async def ingest_jira_webhook(
             "ready_statuses": ready_statuses,
         }
 
+    from_status, to_status = _extract_status_transition(payload)
+    trigger_reason = "ready_status_recheck"
+    if (
+        to_status is not None
+        and to_status.casefold() in normalized_ready_statuses
+        and from_status is not None
+        and from_status.casefold() != to_status.casefold()
+    ):
+        trigger_reason = "status_transition_to_ready"
+    logger.info(
+        "jira_webhook_ready_trigger request_id=%s tenant_id=%s issue_key=%s trigger_reason=%s issue_status=%s from_status=%s to_status=%s",
+        request_id,
+        tenant_id,
+        issue_key,
+        trigger_reason,
+        issue_status,
+        from_status,
+        to_status,
+    )
+
     enqueue_result = enqueue_run(
         session,
         tenant_id=tenant_id,
@@ -423,6 +468,7 @@ async def ingest_jira_webhook(
             "enqueued": False,
             "reason": enqueue_result.reason,
             "run_id": enqueue_result.run.run_id,
+            "trigger_reason": trigger_reason,
         }
     logger.info(
         "jira_webhook_enqueued request_id=%s tenant_id=%s issue_key=%s run_id=%s",
@@ -438,6 +484,7 @@ async def ingest_jira_webhook(
         "issue_key": issue_key,
         "enqueued": True,
         "run_id": enqueue_result.run.run_id,
+        "trigger_reason": trigger_reason,
     }
 
 

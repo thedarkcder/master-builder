@@ -218,6 +218,7 @@ If tenant webhook auth is configured:
 Only issues in tenant `ready_statuses` are enqueued (default: `Ready for Agent`).
 Issues in done status categories are never enqueued.
 Issue status is not auto-transitioned when a run starts.
+Status transitions into a ready status are treated as primary triggers; updates while already ready are rechecked idempotently.
 
 ## End-to-end local flow
 1. Apply migrations:
