@@ -140,6 +140,36 @@ class AdminApiTests(unittest.TestCase):
         response = self.client.get("/api/admin/tenants")
         self.assertEqual(response.status_code, 401)
 
+    def test_admin_login_issues_bearer_token(self) -> None:
+        login_response = self.client.post(
+            "/api/admin/auth/login",
+            json={"username": "admin", "password": "secret"},
+        )
+        self.assertEqual(login_response.status_code, 200)
+        token = login_response.json()["access_token"]
+        self.assertTrue(token)
+        self.assertEqual(login_response.json()["token_type"], "bearer")
+
+        me_response = self.client.get(
+            "/api/admin/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me_response.json()["username"], "admin")
+
+        tenants_response = self.client.get(
+            "/api/admin/tenants",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(tenants_response.status_code, 200)
+
+    def test_admin_login_rejects_invalid_credentials(self) -> None:
+        login_response = self.client.post(
+            "/api/admin/auth/login",
+            json={"username": "admin", "password": "wrong"},
+        )
+        self.assertEqual(login_response.status_code, 401)
+
     def test_managed_secret_upsert_and_resolve(self) -> None:
         put_response = self.client.put(
             "/api/admin/secrets/secret%2Fgithub-webhook",

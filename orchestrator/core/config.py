@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     admin_username: str = "admin"
     admin_password: str = "change-me"
+    admin_token_secret: str = "local-dev-admin-token-secret"
+    admin_token_ttl_seconds: int = 28800
     cors_origins: str = "http://localhost:4100,http://127.0.0.1:4100"
     admin_ui_base_url: str = "http://localhost:4100"
     github_app_slug: str = ""

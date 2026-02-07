@@ -69,6 +69,21 @@ class TenantCreate(BaseModel):
     discord: DiscordConfig | None = None
 
 
+class AdminLoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class AdminLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class AdminSessionRead(BaseModel):
+    username: str
+
+
 class TenantUpdate(BaseModel):
     name: str = Field(min_length=1)
     is_enabled: bool
