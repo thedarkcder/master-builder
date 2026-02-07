@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
+from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -269,6 +270,44 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_create_tenant_blocks_when_codex_assets_invalid(self) -> None:
+        payload = self._tenant_payload()
+        with patch(
+            "orchestrator.api.routes_admin.validate_enforcement_assets",
+            side_effect=EnforcementAssetsError("version mismatch"),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Codex assets validation failed", response.json()["detail"])
+
+    def test_update_tenant_blocks_when_codex_assets_invalid(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        payload["name"] = "Tenant Updated"
+        with patch(
+            "orchestrator.api.routes_admin.validate_enforcement_assets",
+            side_effect=EnforcementAssetsError("missing packaged asset"),
+        ):
+            update_response = self.client.put(
+                "/api/admin/tenants/tenant-a",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(update_response.status_code, 503)
+        self.assertIn("Codex assets validation failed", update_response.json()["detail"])
 
     def test_start_install_and_callback_persist_installation_id(self) -> None:
         payload = self._tenant_payload()

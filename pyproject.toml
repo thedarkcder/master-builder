@@ -34,3 +34,6 @@ addopts = "-q"
 
 [tool.setuptools.packages.find]
 include = ["orchestrator*"]
+
+[tool.setuptools.package-data]
+"orchestrator.codex_assets" = ["*.md", "*.json"]
