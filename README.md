@@ -166,6 +166,14 @@ Short version:
 GitHub App setup callback URL:
 - `GET /api/admin/github/install/callback`
 
+GitHub App webhook URL:
+- `POST /github/webhook`
+
+Recommended webhook signature verification setup:
+- set `ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF` to the secret-ref key name (example: `secret/github-webhook`)
+- set the matching environment variable to the raw GitHub App webhook secret value
+- configure the same raw secret in GitHub App webhook settings
+
 ## Jira webhook setup
 Point Jira webhook to:
 ```text
