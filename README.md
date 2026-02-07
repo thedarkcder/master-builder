@@ -61,6 +61,15 @@ What happens automatically:
 - It uploads artifacts to the workflow run and creates/updates a GitHub Release tag:
   - `codex-assets-v<assets_version>`
 
+Optional direct package-index publish (same workflow run):
+- Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
+- Set repo variable `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to your upload endpoint
+- Set repo secret `CODEX_ASSETS_PUBLISH_USERNAME`
+- Set repo secret `CODEX_ASSETS_PUBLISH_TOKEN`
+
+Example for a GitHub-style Python registry endpoint:
+- `CODEX_ASSETS_PUBLISH_REPOSITORY_URL=https://upload.pypi.pkg.github.com/<OWNER>/`
+
 ## Public API
 - `GET /health`
 - `POST /jira/webhook/{tenant_id}`
