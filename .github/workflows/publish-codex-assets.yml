@@ -69,6 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -85,7 +86,31 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install build
 
+      - name: Resolve publish channel/version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="${{ needs.detect.outputs.assets_version }}"
+          branch="${GITHUB_REF_NAME}"
+
+          if [ "${branch}" = "staging" ]; then
+            publish_channel="beta"
+            publish_version="${base_version}b${GITHUB_RUN_NUMBER}"
+            prerelease="true"
+          else
+            publish_channel="stable"
+            publish_version="${base_version}"
+            prerelease="false"
+          fi
+
+          echo "publish_channel=${publish_channel}" >> "$GITHUB_OUTPUT"
+          echo "publish_version=${publish_version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
       - name: Build codex assets package
+        env:
+          CODEX_ASSETS_PACKAGE_VERSION: ${{ steps.release.outputs.publish_version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -95,7 +120,7 @@ jobs:
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: codex-assets-${{ needs.detect.outputs.assets_version }}
+          name: codex-assets-${{ steps.release.outputs.publish_version }}
           path: dist/codex-assets/*
 
       - name: Create or update release
@@ -104,13 +129,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="codex-assets-v${{ needs.detect.outputs.assets_version }}"
-          title="Codex assets v${{ needs.detect.outputs.assets_version }}"
+          tag="codex-assets-v${{ steps.release.outputs.publish_version }}"
+          title="Codex assets v${{ steps.release.outputs.publish_version }} (${{ steps.release.outputs.publish_channel }})"
+          prerelease="${{ steps.release.outputs.prerelease }}"
 
           if gh release view "${tag}" >/dev/null 2>&1; then
             gh release upload "${tag}" dist/codex-assets/* --clobber
           else
-            gh release create "${tag}" dist/codex-assets/* --title "${title}" --notes "Automated codex assets package release."
+            create_args=("${tag}" dist/codex-assets/* --title "${title}" --notes "Automated codex assets package release.")
+            if [ "${prerelease}" = "true" ]; then
+              create_args+=(--prerelease)
+            fi
+            gh release create "${create_args[@]}"
           fi
 
       - name: Publish to Python package index
