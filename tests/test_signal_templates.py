@@ -1,6 +1,7 @@
 import unittest
 
 from orchestrator.core.signal_templates import (
+    format_discord_ready_gate_guidance,
     format_stage_discord_update,
     format_stage_jira_update,
     format_discord_pr_ready_message,
@@ -9,6 +10,17 @@ from orchestrator.core.signal_templates import (
 
 
 class SignalTemplateTests(unittest.TestCase):
+    def test_ready_gate_guidance_is_actionable(self) -> None:
+        guidance = format_discord_ready_gate_guidance(
+            issue_key="MAB-20",
+            issue_status="To Do",
+            ready_statuses=("Ready for Agent", "Ready"),
+        )
+        self.assertIn("MAB-20", guidance)
+        self.assertIn("To Do", guidance)
+        self.assertIn("Ready for Agent", guidance)
+        self.assertIn("Move the issue to a ready status", guidance)
+
     def test_stage_update_templates_include_core_identifiers(self) -> None:
         discord_message = format_stage_discord_update(
             tenant_id="tenant-demo",

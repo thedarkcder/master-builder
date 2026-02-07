@@ -17,6 +17,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import enqueue_run
 from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(tags=["jira-webhook"])
@@ -423,6 +424,11 @@ async def ingest_jira_webhook(
             "reason": "status_not_ready",
             "issue_status": issue_status,
             "ready_statuses": ready_statuses,
+            "guidance": format_discord_ready_gate_guidance(
+                issue_key=issue_key,
+                issue_status=issue_status,
+                ready_statuses=ready_statuses,
+            ),
         }
 
     from_status, to_status = _extract_status_transition(payload)
