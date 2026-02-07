@@ -138,7 +138,15 @@ def find_banned_pattern_violations(
     violations: list[str] = []
     compiled_patterns: list[tuple[str, re.Pattern[str]]] = []
     for pattern in policy_pack.banned_patterns:
-        compiled_patterns.append((pattern, re.compile(pattern, flags=re.IGNORECASE | re.MULTILINE)))
+        try:
+            compiled = re.compile(pattern, flags=re.IGNORECASE | re.MULTILINE)
+        except re.error as exc:
+            violations.append(
+                f"policy_pack.{policy_pack.language_key}.json: invalid banned pattern "
+                f"`{pattern}` ({exc})"
+            )
+            continue
+        compiled_patterns.append((pattern, compiled))
 
     for file_change in files:
         if not file_change.patch:
