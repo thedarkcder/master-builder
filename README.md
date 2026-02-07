@@ -47,6 +47,45 @@ If required assets are missing or the version mismatches, tenant create/update r
 The orchestrator runtime installs pinned codex assets from:
 - `master-builder-codex-assets==0.1.0` (extra: `codex_assets`)
 
+## Codex assets package publishing
+Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.
+
+How to cut a new codex assets package version:
+1. Update `.codex/codex_assets_manifest.json` and bump `assets_version`.
+2. Keep `.codex` content aligned with that version bump.
+3. Merge to `staging` or `main`.
+
+What happens automatically:
+- The workflow detects whether `assets_version` changed.
+- If changed, it builds a wheel/sdist directly from `.codex`.
+- Branch behavior:
+  - `staging` publishes beta/pre-release package versions (`<assets_version>b<run_number>`)
+  - `main` publishes stable package versions (`<assets_version>`)
+- It uploads artifacts to the workflow run and creates/updates a GitHub Release tag:
+  - `codex-assets-v<publish_version>`
+
+Optional direct package-index publish (same workflow run):
+- Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
+- Optional: set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to override the upload endpoint
+
+Default upload target (if not set):
+- `https://upload.pypi.pkg.github.com/<repo_owner>/`
+
+Authentication:
+- Uses workflow `GITHUB_TOKEN` (no PAT required for same-repo publish)
+
+Same-repo quick setup:
+1. In GitHub repo settings, set Actions variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`.
+2. Merge a PR that bumps `.codex/codex_assets_manifest.json` `assets_version`.
+3. Confirm workflow `Publish Codex Assets` uploads release artifacts and publishes package index files.
+
+Version bump helpers:
+- Auto-bump patch version + sync pin:
+  - `python3 scripts/bump_codex_assets_version.py`
+- Validate bump + pin consistency:
+  - `scripts/validate_codex_assets_version.sh origin/staging`
+- CI enforces this on pull requests via job: `Codex assets version guard`.
+
 ## Public API
 - `GET /health`
 - `POST /jira/webhook/{tenant_id}`
