@@ -14,9 +14,12 @@ import {
   createTenant,
   getTenant,
   listGitHubRepositories,
+  listJiraProjects,
   startGitHubInstall,
+  startJiraConnect,
   updateTenant,
-  type GitHubRepositoryRecord
+  type GitHubRepositoryRecord,
+  type JiraProjectRecord
 } from "@/lib/api";
 import {
   defaultTenantFormValues,
@@ -32,7 +35,7 @@ import {
 
 const STEPS = [
   "Tenant Basics",
-  "Jira",
+  "Connect Jira",
   "Connect GitHub App",
   "Repositories + Policy",
   "Review + Save"
@@ -78,15 +81,18 @@ export default function NewTenantPage() {
   const [statusLine, setStatusLine] = useState("Start with tenant basics.");
   const [saving, setSaving] = useState(false);
   const [createdTenantId, setCreatedTenantId] = useState("");
+
   const [installationRepos, setInstallationRepos] = useState<GitHubRepositoryRecord[]>([]);
   const [selectedRepoUrl, setSelectedRepoUrl] = useState("");
+
+  const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
 
   const canAdvance = useMemo(() => {
     if (step === 0) {
       return Boolean(values.name.trim());
     }
     if (step === 1) {
-      return Boolean(values.jira.mcp_endpoint.trim() && textFields.projectKeysText.trim());
+      return Boolean(values.jira.connection_id?.trim() && textFields.projectKeysText.trim());
     }
     if (step === 2) {
       return Boolean(values.github.installation_id);
@@ -135,6 +141,18 @@ export default function NewTenantPage() {
     };
   }, [credentials, searchParams]);
 
+  useEffect(() => {
+    const connectionId = searchParams.get("jira_connection_id");
+    if (!connectionId) {
+      return;
+    }
+    setValues((prev) => ({ ...prev, jira: { ...prev.jira, connection_id: connectionId } }));
+    if (searchParams.get("jira_oauth") === "success") {
+      setStep(1);
+      setStatusLine("Jira OAuth connected. Load Jira projects and select project keys.");
+    }
+  }, [searchParams]);
+
   async function ensureTenantCreated(): Promise<string | null> {
     if (!credentials) {
       setStatusLine("Missing API credentials.");
@@ -160,6 +178,59 @@ export default function NewTenantPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleStartJiraConnect() {
+    if (!credentials) {
+      return;
+    }
+    try {
+      const result = await startJiraConnect(credentials, { returnTo: "wizard" });
+      window.location.href = result.authorize_url;
+    } catch (error) {
+      setStatusLine(`Unable to start Jira OAuth: ${(error as Error).message}`);
+    }
+  }
+
+  async function loadJiraProjectsForConnection() {
+    if (!credentials || !values.jira.connection_id) {
+      return;
+    }
+    try {
+      const projects = await listJiraProjects(credentials, values.jira.connection_id);
+      setJiraProjects(projects);
+      if (projects.length === 0) {
+        setStatusLine("Connected Jira site is valid, but no projects were returned.");
+        return;
+      }
+
+      const existing = new Set(splitCsv(textFields.projectKeysText));
+      const selected = projects
+        .map((project) => project.key)
+        .filter((projectKey) => existing.has(projectKey));
+      if (selected.length === 0) {
+        setTextFields((prev) => ({
+          ...prev,
+          projectKeysText: projects.map((project) => project.key).join(", ")
+        }));
+      }
+
+      setStatusLine(`Loaded ${projects.length} Jira project option(s).`);
+    } catch (error) {
+      setStatusLine(`Unable to load Jira projects: ${(error as Error).message}`);
+    }
+  }
+
+  function toggleJiraProject(projectKey: string) {
+    const current = new Set(splitCsv(textFields.projectKeysText));
+    if (current.has(projectKey)) {
+      current.delete(projectKey);
+    } else {
+      current.add(projectKey);
+    }
+    const ordered = jiraProjects.map((project) => project.key).filter((key) => current.has(key));
+    const extras = [...current].filter((key) => !ordered.includes(key)).sort();
+    setTextFields((prev) => ({ ...prev, projectKeysText: [...ordered, ...extras].join(", ") }));
   }
 
   async function handleStartInstall() {
@@ -251,7 +322,7 @@ export default function NewTenantPage() {
   }
 
   async function nextStep() {
-    if (!canAdvance && step !== 1) {
+    if (!canAdvance) {
       setStatusLine("Please complete required fields before continuing.");
       return;
     }
@@ -264,6 +335,7 @@ export default function NewTenantPage() {
       setStep(2);
       return;
     }
+
     setStep((current) => Math.min(current + 1, STEPS.length - 1));
   }
 
@@ -271,11 +343,15 @@ export default function NewTenantPage() {
     setStep((current) => Math.max(current - 1, 0));
   }
 
+  const selectedProjectKeys = new Set(splitCsv(textFields.projectKeysText));
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Tenant Setup Wizard</CardTitle>
-        <CardDescription>GitHub-first onboarding with generated tenant IDs and installation-driven repository setup.</CardDescription>
+        <CardDescription>
+          Connect Jira and GitHub, then apply discovered projects and repositories into tenant policy.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <WizardProgress step={step} />
@@ -298,18 +374,48 @@ export default function NewTenantPage() {
         ) : null}
 
         {step === 1 ? (
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-2 md:col-span-2">
-              <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">MCP Endpoint</label>
-              <Input
-                value={values.jira.mcp_endpoint}
-                onChange={(event) =>
-                  setValues((prev) => ({ ...prev, jira: { ...prev.jira, mcp_endpoint: event.target.value } }))
-                }
-                placeholder="https://mcp.example.test"
-              />
+          <div className="space-y-3">
+            <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              <CheckCircle2 className="mr-1 inline h-4 w-4" />
+              Jira connection: <strong>{values.jira.connection_id ?? "not connected"}</strong>
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => void handleStartJiraConnect()}>
+                <Link2 className="mr-2 h-4 w-4" />
+                Connect Jira
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => void loadJiraProjectsForConnection()}
+                disabled={!values.jira.connection_id}
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Load Jira Projects
+              </Button>
             </div>
-            <div className="space-y-2 md:col-span-2">
+
+            {jiraProjects.length > 0 ? (
+              <div className="grid gap-2 md:grid-cols-2">
+                {jiraProjects.map((project) => {
+                  const selected = selectedProjectKeys.has(project.key);
+                  return (
+                    <label key={project.key} className="flex items-center gap-2 rounded-md border p-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleJiraProject(project.key)}
+                        className="h-4 w-4 rounded border-input"
+                      />
+                      <span>
+                        <strong>{project.key}</strong> - {project.name}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
               <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Project Keys</label>
               <Input
                 value={textFields.projectKeysText}
@@ -430,7 +536,7 @@ export default function NewTenantPage() {
               <strong>Tenant:</strong> {createdTenantId || previewTenantId(values.name)} ({values.name || "-"})
             </p>
             <p className="rounded-md border bg-muted/30 p-3">
-              <strong>Jira:</strong> {values.jira.mcp_endpoint || "-"} | keys: {joinCsv(splitCsv(textFields.projectKeysText)) || "-"}
+              <strong>Jira connection:</strong> {values.jira.connection_id || "-"} | keys: {joinCsv(splitCsv(textFields.projectKeysText)) || "-"}
             </p>
             <p className="rounded-md border bg-muted/30 p-3">
               <strong>GitHub installation:</strong> {values.github.installation_id || "not connected"}

@@ -8,7 +8,7 @@ from orchestrator.core.guardrails import enforce_safe_command
 
 
 class JiraConfig(BaseModel):
-    mcp_endpoint: str = Field(min_length=1)
+    connection_id: str | None = None
     project_keys: list[str] = Field(default_factory=list, min_length=1)
     ready_label: str = Field(default="agent:ready", min_length=1)
     in_progress_label: str = Field(default="agent:in-progress", min_length=1)
@@ -98,6 +98,16 @@ class IntegrationTestResult(BaseModel):
 class GitHubInstallStart(BaseModel):
     install_url: str
     expires_at: datetime
+
+
+class JiraConnectStart(BaseModel):
+    authorize_url: str
+    expires_at: datetime
+
+
+class JiraProjectRead(BaseModel):
+    key: str
+    name: str
 
 
 class GitHubRepositoryRead(BaseModel):

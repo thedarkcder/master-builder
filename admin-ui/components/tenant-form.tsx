@@ -67,8 +67,8 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
     if (!values.name.trim()) {
       return "Tenant name is required.";
     }
-    if (!values.jira.mcp_endpoint.trim()) {
-      return "Jira endpoint is required.";
+    if (!values.jira.connection_id?.trim()) {
+      return "Connect Jira before saving.";
     }
     if (!textFields.projectKeysText.trim()) {
       return "At least one Jira project key is required.";
@@ -135,14 +135,8 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
           <div className="space-y-2 md:col-span-2">
-            <FieldLabel>MCP endpoint</FieldLabel>
-            <Input
-              value={values.jira.mcp_endpoint}
-              onChange={(event) =>
-                setValues((prev) => ({ ...prev, jira: { ...prev.jira, mcp_endpoint: event.target.value } }))
-              }
-              placeholder="https://mcp.example.test"
-            />
+            <FieldLabel>OAuth Connection ID</FieldLabel>
+            <Input value={values.jira.connection_id ?? ""} disabled placeholder="Connect Jira to generate a connection" />
           </div>
           <div className="space-y-2">
             <FieldLabel>Project keys (comma separated)</FieldLabel>

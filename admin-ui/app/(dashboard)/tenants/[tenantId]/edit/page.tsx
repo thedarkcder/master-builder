@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getTenant,
+  startJiraConnect,
   startGitHubInstall,
   testGithub,
   testJira,
@@ -55,6 +56,9 @@ export default function EditTenantPage() {
   useEffect(() => {
     if (searchParams.get("github_install") === "success") {
       setStatusLine("GitHub App install callback received. Installation details were saved.");
+    }
+    if (searchParams.get("jira_oauth") === "success") {
+      setStatusLine("Jira OAuth callback received. Update project keys if needed, then save.");
     }
   }, [searchParams]);
 
@@ -101,6 +105,18 @@ export default function EditTenantPage() {
     }
   }
 
+  async function connectJira() {
+    if (!credentials) {
+      return;
+    }
+    try {
+      const result = await startJiraConnect(credentials, { returnTo: "edit", tenantId: params.tenantId });
+      window.location.href = result.authorize_url;
+    } catch (error) {
+      setStatusLine(`Unable to start Jira OAuth: ${(error as Error).message}`);
+    }
+  }
+
   if (loading) {
     return <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">Loading tenant configuration...</p>;
   }
@@ -130,6 +146,10 @@ export default function EditTenantPage() {
             <CardDescription>Update tenant configuration through structured form fields.</CardDescription>
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" onClick={() => void connectJira()}>
+              <Link2 className="mr-2 h-4 w-4" />
+              Connect Jira
+            </Button>
             <Button variant="outline" onClick={() => void connectGitHubApp()}>
               <Link2 className="mr-2 h-4 w-4" />
               Install GitHub App

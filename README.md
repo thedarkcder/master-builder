@@ -4,7 +4,7 @@ Multi-tenant Jira-driven agent orchestrator service.
 
 ## Requirements
 - Python 3.11+
-- Jira MCP access configured in your Codex environment
+- Atlassian OAuth app credentials for Jira connect flow
 
 ## Local setup
 ```bash
@@ -20,8 +20,20 @@ export ORCHESTRATOR_ADMIN_PASSWORD=change-me
 export ORCHESTRATOR_DATABASE_URL=sqlite:///./orchestrator.db
 export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
 export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
+export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
+export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=secret/jira-client-id
+export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=secret/jira-client-secret
+export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
+export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
+from cryptography.fernet import Fernet
+print(Fernet.generate_key().decode())
+PY
+)
+
+export secret/jira-client-id=your-atlassian-oauth-client-id
+export secret/jira-client-secret=your-atlassian-oauth-client-secret
 ```
 
 ## Public API
@@ -84,7 +96,7 @@ Login route: `http://localhost:4100/login`
 
 UI sections:
 - `/tenants` for list and health checks
-- `/tenants/new` for structured tenant create form
+- `/tenants/new` for wizard-based tenant setup (Jira connect + GitHub install)
 - `/tenants/{tenant_id}/edit` for structured tenant update form
 - `/runs` for run observability
 
@@ -99,25 +111,20 @@ Admin UI is exposed on `http://localhost:4100`.
 
 ## Tenant onboarding
 1. Create a tenant via `POST /api/admin/tenants`.
-2. Configure Jira fields:
-   - `mcp_endpoint`
-   - `auth_ref`
-   - `project_keys`
-   - `ready_label`
-   - `ready_jql`
-3. Configure GitHub integration:
-   - current mode: manual GitHub App references (`app_id_ref`, `private_key_ref`, `installation_id`)
-   - planned mode: OAuth-style install flow from Admin UI wizard (see `docs/github-app-oauth-onboarding.md`)
+2. Connect Jira from the wizard (`Connect Jira`) and select `project_keys`.
+3. Connect GitHub integration from the wizard (`Install GitHub App`) so `installation_id` is saved automatically.
 4. Configure allowed repositories under `repos.allowlist`.
 5. Validate connections:
    - `POST /api/admin/tenants/{tenant_id}/test-jira`
    - `POST /api/admin/tenants/{tenant_id}/test-github`
 
-## GitHub App setup (tenant config)
-Each tenant uses GitHub App mode (`mode=github_app`) with secret references:
-- `app_id_ref` must resolve to your GitHub App ID
-- `private_key_ref` must resolve to your GitHub App private key PEM
-- `installation_id` must be the installation for the tenant repos
+## GitHub App setup
+The service uses one server-managed GitHub App for all tenants:
+- `ORCHESTRATOR_GITHUB_APP_SLUG`
+- `ORCHESTRATOR_GITHUB_APP_ID_REF` (defaults to `secret/app-id`)
+- `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF` (defaults to `secret/private-key`)
+
+Tenants only store GitHub mode + installation state (`installation_id`).
 
 The service enforces tenant repo allowlists before clone/push/PR actions.
 
@@ -129,12 +136,12 @@ The full creation + onboarding direction is documented here:
 
 Short version:
 - Create one org-level GitHub App with required repo permissions.
-- Install it on tenant repos.
-- Replace manual secret/reference entry in tenant setup with an install button and callback flow:
-  - create tenant
-  - click "Install GitHub App"
+- Configure app ID/private key in server-managed secret refs.
+- In tenant setup:
+  - create tenant basics
+  - click `Connect Jira`
+  - click `Install GitHub App`
   - approve install on GitHub
-  - save returned installation details to tenant config
   - continue wizard to repo mapping and webhook checks
 
 GitHub App setup callback URL:
