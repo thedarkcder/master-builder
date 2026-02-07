@@ -30,6 +30,7 @@ from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
 PY
 )
+# Non-empty passphrases are also supported for local development.
 
 export SECRET_JIRA_CLIENT_ID=your-atlassian-oauth-client-id
 export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
