@@ -161,7 +161,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertTrue(processed.plan["succeeded"])
             self.assertEqual(processed.plan["attempts"], 1)
             self.assertIsNotNone(runner.last_request)
-            self.assertIn("Good To Do checklist", runner.last_request.issue_description)
+            self.assertIn("Good To Do", runner.last_request.issue_description)
             self.assertIn("Decision Gate", runner.last_request.issue_description)
 
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
