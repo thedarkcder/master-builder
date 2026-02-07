@@ -71,7 +71,25 @@ async def _read_json_payload(
     return payload, body
 
 
-def _extract_issue_payload(payload: dict) -> tuple[str, list[str]]:
+def _adf_to_text(node: object) -> str:
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return " ".join(part for part in (_adf_to_text(item) for item in node) if part).strip()
+    if not isinstance(node, dict):
+        return ""
+
+    text = node.get("text")
+    if isinstance(text, str):
+        return text
+
+    content = node.get("content")
+    if isinstance(content, list):
+        return " ".join(part for part in (_adf_to_text(item) for item in content) if part).strip()
+    return ""
+
+
+def _extract_issue_payload(payload: dict) -> tuple[str, list[str], str | None, str | None]:
     issue = payload.get("issue")
     if not isinstance(issue, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue object")
@@ -85,8 +103,15 @@ def _extract_issue_payload(payload: dict) -> tuple[str, list[str]]:
     if not isinstance(labels, list):
         labels = []
 
+    summary_raw = fields.get("summary") if isinstance(fields, dict) else None
+    summary = str(summary_raw).strip() if isinstance(summary_raw, str) and summary_raw.strip() else None
+
+    description_raw = fields.get("description") if isinstance(fields, dict) else None
+    description_text = _adf_to_text(description_raw).strip()
+    description = description_text or None
+
     normalized_labels = [str(label) for label in labels]
-    return issue_key, normalized_labels
+    return issue_key, normalized_labels, summary, description
 
 
 def _extract_webhook_token(request: Request) -> str | None:
@@ -313,7 +338,7 @@ async def ingest_jira_webhook(
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
 
-    issue_key, labels = _extract_issue_payload(payload)
+    issue_key, labels, issue_summary, issue_description = _extract_issue_payload(payload)
     delivery_id = _extract_delivery_id(request)
     logger.info(
         "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
@@ -343,6 +368,8 @@ async def ingest_jira_webhook(
         session,
         tenant_id=tenant_id,
         issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
         delivery_id=delivery_id,
         max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
     )

@@ -118,15 +118,31 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             session.commit()
 
-    def _queue_run(self, issue_key: str) -> str:
+    def _queue_run(
+        self,
+        issue_key: str,
+        *,
+        issue_summary: str | None = None,
+        issue_description: str | None = None,
+    ) -> str:
         now = datetime.now(timezone.utc)
         run_id = f"run-{issue_key}"
+        effective_summary = issue_summary or f"Implement {issue_key}"
+        effective_description = issue_description or (
+            "Objective: Deliver requested behavior. "
+            "Scope: in scope and out of scope are documented. "
+            "Acceptance Criteria: all required checks pass. "
+            "How to test: run unit tests and validate expected outputs. "
+            "NFR intent: MVP."
+        )
         with self.session_factory() as session:
             session.add(
                 Run(
                     run_id=run_id,
                     tenant_id="tenant-worker",
                     issue_key=issue_key,
+                    issue_summary=effective_summary,
+                    issue_description=effective_description,
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
@@ -172,3 +188,20 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertFalse(processed.plan["succeeded"])
             self.assertEqual(processed.plan["diagnostics"]["stage"], "test")
+
+    def test_process_next_queued_run_blocks_when_decision_gate_is_required(self) -> None:
+        run_id = self._queue_run(
+            "TP-302",
+            issue_summary="Unclear requirements",
+            issue_description="TBD: need to decide later?",
+        )
+
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, _SuccessRunner())
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "blocked")
+            self.assertIn("Decision Gate required", processed.last_error or "")
+            self.assertIsInstance(processed.plan, dict)
+            self.assertIn("decision_gate", processed.plan)
+            self.assertTrue(processed.plan["decision_gate"]["triggered"])
