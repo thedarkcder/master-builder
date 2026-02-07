@@ -127,15 +127,20 @@ export type ManagedSecretResolveResult = {
 
 export type Credentials = {
   apiBaseUrl: string;
+  accessToken: string;
+};
+
+export type AdminLoginInput = {
+  apiBaseUrl: string;
   username: string;
   password: string;
 };
 
 function authHeader(credentials: Credentials): string {
-  if (!credentials.username || !credentials.password) {
-    throw new Error("Username and password are required.");
+  if (!credentials.accessToken) {
+    throw new Error("Admin access token is required.");
   }
-  return `Basic ${btoa(`${credentials.username}:${credentials.password}`)}`;
+  return `Bearer ${credentials.accessToken}`;
 }
 
 function parseResponseBody(text: string): unknown {
@@ -177,6 +182,42 @@ async function request<T>(
   }
 
   return body as T;
+}
+
+export async function verifyAdminCredentials(credentials: Credentials): Promise<void> {
+  await request<{ username: string }>(credentials, "/api/admin/auth/me");
+}
+
+export async function authenticateAdmin(input: AdminLoginInput): Promise<Credentials> {
+  const base = input.apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/admin/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username: input.username,
+      password: input.password
+    })
+  });
+
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? String((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+
+  const parsed = body as { access_token?: string };
+  if (!parsed.access_token) {
+    throw new Error("Authentication failed: missing access token");
+  }
+
+  return {
+    apiBaseUrl: base,
+    accessToken: parsed.access_token
+  };
 }
 
 export function listTenants(credentials: Credentials): Promise<TenantRecord[]> {

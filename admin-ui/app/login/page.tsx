@@ -17,6 +17,8 @@ export default function LoginPage() {
 
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (ready && credentials) {
@@ -24,14 +26,24 @@ export default function LoginPage() {
     }
   }, [credentials, ready, router]);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    login({
-      apiBaseUrl: DEFAULT_API_BASE_URL,
-      username: username.trim(),
-      password
-    });
-    router.push("/tenants");
+    setErrorMessage(null);
+    setIsSubmitting(true);
+
+    try {
+      await login({
+        apiBaseUrl: DEFAULT_API_BASE_URL,
+        username: username.trim(),
+        password
+      });
+      router.push("/tenants");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid admin credentials";
+      setErrorMessage(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -64,9 +76,14 @@ export default function LoginPage() {
                 required
               />
             </div>
-            <Button className="w-full" type="submit" disabled={!ready}>
+            <Button className="w-full" type="submit" disabled={!ready || isSubmitting}>
               Sign In
             </Button>
+            {errorMessage ? (
+              <p className="text-sm text-red-600" role="alert">
+                {errorMessage}
+              </p>
+            ) : null}
             <p className="text-center text-xs text-muted-foreground">
               <Link href="/privacy" className="text-primary underline-offset-2 hover:underline">
                 Privacy Policy

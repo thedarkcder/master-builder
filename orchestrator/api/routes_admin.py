@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
+    AdminLoginRequest,
+    AdminLoginResponse,
+    AdminSessionRead,
     GitHubRepositoryRead,
     GitHubInstallStart,
     IntegrationTestResult,
@@ -45,13 +48,37 @@ from orchestrator.core.jira_oauth_state import (
 )
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
-from orchestrator.core.security import require_admin
+from orchestrator.core.admin_tokens import create_admin_access_token
+from orchestrator.core.security import require_admin, validate_admin_credentials
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+@router.post("/auth/login", response_model=AdminLoginResponse)
+def admin_login(payload: AdminLoginRequest) -> AdminLoginResponse:
+    if not validate_admin_credentials(username=payload.username, password=payload.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    settings = get_settings()
+    access_token, expires_in = create_admin_access_token(
+        username=payload.username,
+        secret=settings.admin_token_secret,
+        ttl_seconds=settings.admin_token_ttl_seconds,
+    )
+    return AdminLoginResponse(access_token=access_token, expires_in=expires_in)
+
+
+@router.get("/auth/me", response_model=AdminSessionRead)
+def admin_me(admin_username: str = Depends(require_admin)) -> AdminSessionRead:
+    return AdminSessionRead(username=admin_username)
 
 
 def _tenant_to_schema(tenant: Tenant) -> TenantRead:
