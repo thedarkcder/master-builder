@@ -46,6 +46,10 @@ class TestResult:
     feedback: str | None = None
 
 
+# Prevent pytest from collecting this dataclass as a test class.
+TestResult.__test__ = False
+
+
 @dataclass(frozen=True)
 class ReviewResult:
     approved: bool
