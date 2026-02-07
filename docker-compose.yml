@@ -39,7 +39,7 @@ services:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your codex package server simple index URL}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-http://tenant:change-me@host.docker.internal:4401/simple/}
     container_name: master-builder-api
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
@@ -74,7 +74,7 @@ services:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your codex package server simple index URL}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-http://tenant:change-me@host.docker.internal:4401/simple/}
     container_name: master-builder-worker
     depends_on:
       api:
