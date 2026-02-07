@@ -25,12 +25,14 @@ services:
     ports:
       - "4401:8080"
     command:
-      - sh
-      - -c
-      - |
-        set -euo pipefail
-        printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /data/.htpasswd
-        exec pypi-server run -p 8080 -P /data/.htpasswd -H plaintext -a update,download,list /data/packages
+      - run
+      - -p
+      - "8080"
+      - -P
+      - .
+      - -a
+      - .
+      - /data/packages
     volumes:
       - packages-data:/data/packages
 
@@ -39,7 +41,7 @@ services:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your codex package server simple index URL}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-http://tenant:change-me@host.docker.internal:4401/simple/}
     container_name: master-builder-api
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
@@ -74,7 +76,7 @@ services:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your codex package server simple index URL}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-http://tenant:change-me@host.docker.internal:4401/simple/}
     container_name: master-builder-worker
     depends_on:
       api:
