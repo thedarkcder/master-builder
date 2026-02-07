@@ -3,13 +3,13 @@
 This repo supports Jira-driven release-train automation without manually setting `Fix Version`.
 
 ## Goal
-- When an issue transitions to `Ready to Release`, it is automatically assigned a release label: `release:vX.Y.Z`.
+- When an issue transitions to `READY TO RELEASE`, it is automatically assigned a release label: `release:vX.Y.Z`.
 - When release `vX.Y.Z` is published in GitHub, matching Jira issues transition to `Done`.
 
 ## Workflows
 - `.github/workflows/release-train-sync.yml`
   - Polls Jira (every 15 minutes and via manual dispatch).
-  - Finds `Ready to Release` issues and assigns `release:vX.Y.Z` automatically.
+  - Finds `READY TO RELEASE` issues and assigns `release:vX.Y.Z` automatically.
   - If no explicit version is passed, computes the next release from git tags.
 - `.github/workflows/release-train-close.yml`
   - Runs on GitHub release publish (and manual dispatch).
@@ -21,9 +21,9 @@ Set repository variable:
 
 Set repository variables:
 - `RELEASE_JIRA_BASE_URL` (for example `https://example.atlassian.net`)
+- `RELEASE_JIRA_CLOUD_ID` (optional; required when using scoped Atlassian API tokens)
 - `RELEASE_JIRA_EMAIL` (automation account email)
 - `RELEASE_JIRA_PROJECT_KEY` (for example `KAN`)
-- `RELEASE_READY_STATUS` (optional, defaults to `READY TO RELEASE`)
 - `RELEASE_DONE_STATUS` (optional, defaults to `Done`)
 
 Set repository secret:
@@ -31,7 +31,7 @@ Set repository secret:
 
 ## Optional Jira automation rule (event-driven)
 If you want immediate assignment (instead of polling), create a Jira automation rule:
-1. Trigger: `Issue transitioned` to `Ready to Release`.
+1. Trigger: `Issue transitioned` to `READY TO RELEASE`.
 2. Action: send web request to GitHub workflow dispatch endpoint for `release-train-sync.yml`.
 3. Use a GitHub token with workflow dispatch permission.
 

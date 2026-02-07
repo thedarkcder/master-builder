@@ -59,6 +59,7 @@ jobs:
       - name: Transition release-train Jira issues to Done
         env:
           JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
           JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
@@ -90,6 +91,9 @@ jobs:
             "--release-version" "${RELEASE_VERSION}"
             "--comment"
           )
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=("--jira-cloud-id" "${JIRA_CLOUD_ID}")
+          fi
           if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
             args+=("--dry-run")
           fi

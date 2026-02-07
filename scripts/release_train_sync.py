@@ -32,8 +32,18 @@ class JiraIssue:
 
 
 class JiraClient:
-    def __init__(self, *, base_url: str, email: str, api_token: str) -> None:
-        self._base_url = base_url.rstrip("/")
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        email: str,
+        api_token: str,
+        cloud_id: str = "",
+    ) -> None:
+        resolved_base_url = base_url.rstrip("/")
+        if cloud_id.strip():
+            resolved_base_url = f"https://api.atlassian.com/ex/jira/{cloud_id.strip()}"
+        self._base_url = resolved_base_url
         auth_raw = f"{email}:{api_token}".encode("utf-8")
         self._auth_header = "Basic " + base64.b64encode(auth_raw).decode("ascii")
 
@@ -127,6 +137,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Assign and close Jira release-train issues.")
     parser.add_argument("mode", choices=["assign", "close"], help="assign: label Ready to Release issues; close: transition release issues to Done.")
     parser.add_argument("--jira-base-url", required=True)
+    parser.add_argument("--jira-cloud-id", default="")
     parser.add_argument("--jira-email", required=True)
     parser.add_argument("--jira-api-token", required=True)
     parser.add_argument("--project-key", required=True)
@@ -251,6 +262,7 @@ def main() -> int:
     release_version = resolve_release_version(args.release_version)
     client = JiraClient(
         base_url=args.jira_base_url,
+        cloud_id=args.jira_cloud_id,
         email=args.jira_email,
         api_token=args.jira_api_token,
     )
