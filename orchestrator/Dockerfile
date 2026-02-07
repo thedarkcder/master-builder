@@ -6,6 +6,9 @@ ENV ORCHESTRATOR_DATABASE_URL=sqlite:////app/data/orchestrator.db
 ENV ORCHESTRATOR_ADMIN_USERNAME=admin
 ENV ORCHESTRATOR_ADMIN_PASSWORD=change-me
 
+ARG PIP_EXTRA_INDEX_URL=""
+ENV PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}
+
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
@@ -13,7 +16,7 @@ COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
 RUN python -m pip install --upgrade pip && \
-    pip install .
+    pip install .[codex_assets]
 
 RUN mkdir -p /app/data
 

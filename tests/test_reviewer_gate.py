@@ -3,12 +3,13 @@ from __future__ import annotations
 import unittest
 
 from orchestrator.core.reviewer import ReviewAgentGate
-from orchestrator.tools.github_app import PullRequestDetails, WorkflowCheckSuite
+from orchestrator.tools.github_app import PullRequestDetails, PullRequestFileChange, WorkflowCheckSuite
 
 
 class _FakeGitHubClient:
-    def __init__(self, checks: list[WorkflowCheckSuite]):
+    def __init__(self, checks: list[WorkflowCheckSuite], files: list[PullRequestFileChange] | None = None):
         self._checks = checks
+        self._files = files or []
 
     def get_pull_request_details(self, *, repo_full_name: str, pr_number: int):  # noqa: ANN001
         return PullRequestDetails(
@@ -19,6 +20,9 @@ class _FakeGitHubClient:
 
     def list_check_suites(self, *, repo_full_name: str, ref: str):  # noqa: ANN001
         return list(self._checks)
+
+    def list_pull_request_files(self, *, repo_full_name: str, pr_number: int):  # noqa: ANN001
+        return list(self._files)
 
 
 class ReviewerGateTests(unittest.TestCase):
@@ -78,3 +82,30 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "failing_checks")
         self.assertEqual(signal.message, "PR checks failing: CI")
+
+    def test_reviewer_reports_policy_violations_as_must_fix(self) -> None:
+        gate = ReviewAgentGate(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(
+                        filename="admin-ui/src/components/TenantForm.tsx",
+                        patch="+ await new Promise((resolve) => setTimeout(resolve, 500));",
+                    )
+                ],
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=13,
+            review_summary_present=True,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "policy_violations")
+        self.assertEqual(signal.policy_pack, "react")
+        self.assertTrue(signal.must_fix_findings)

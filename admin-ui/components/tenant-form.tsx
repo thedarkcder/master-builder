@@ -73,11 +73,14 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
     if (!textFields.projectKeysText.trim()) {
       return "At least one Jira project key is required.";
     }
+    if (!textFields.readyStatusesText.trim()) {
+      return "At least one ready status is required.";
+    }
     if (!textFields.allowlistText.trim()) {
       return "At least one repository allowlist entry is required.";
     }
     return "";
-  }, [mode, textFields.allowlistText, textFields.projectKeysText, values]);
+  }, [mode, textFields.allowlistText, textFields.projectKeysText, textFields.readyStatusesText, values]);
 
   async function handleSubmit(): Promise<void> {
     if (validation) {
@@ -144,6 +147,25 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
               value={textFields.projectKeysText}
               onChange={(event) => setTextFields((prev) => ({ ...prev, projectKeysText: event.target.value }))}
               placeholder="TP, APP"
+            />
+          </div>
+          <div className="space-y-2">
+            <FieldLabel>Ready statuses (comma separated)</FieldLabel>
+            <Input
+              value={textFields.readyStatusesText}
+              onChange={(event) => setTextFields((prev) => ({ ...prev, readyStatusesText: event.target.value }))}
+              placeholder="Ready for Agent, Ready"
+            />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <FieldLabel>Ready JQL (optional)</FieldLabel>
+            <Textarea
+              value={values.jira.ready_jql ?? ""}
+              onChange={(event) =>
+                setValues((prev) => ({ ...prev, jira: { ...prev.jira, ready_jql: event.target.value || null } }))
+              }
+              className="min-h-[88px]"
+              placeholder='project in ("TP") AND status in ("Ready for Agent") ORDER BY updated DESC'
             />
           </div>
           <div className="space-y-2">

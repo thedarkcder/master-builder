@@ -62,8 +62,8 @@ class JiraWebhookTests(unittest.TestCase):
             "jira": {
                 "mcp_endpoint": "https://mcp.example.test",
                 "project_keys": ["TP"],
-                "executable_statuses": ["To Do"],
-                "non_executable_statuses": ["Backlog"],
+                "ready_statuses": ["Ready for Agent"],
+                "ready_jql": 'project = TP AND status = "Ready for Agent"',
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
                 "blocked_label": "agent:blocked",
@@ -105,15 +105,15 @@ class JiraWebhookTests(unittest.TestCase):
         self,
         *,
         issue_key: str,
-        labels: list[str],
-        status_name: str = "To Do",
-        status_category_key: str = "new",
+        labels: list[str] | None = None,
+        status_name: str = "Ready for Agent",
+        status_category_key: str = "indeterminate",
     ) -> dict:
         return {
             "issue": {
                 "key": issue_key,
                 "fields": {
-                    "labels": labels,
+                    "labels": labels or [],
                     "status": {
                         "name": status_name,
                         "statusCategory": {"key": status_category_key},
@@ -132,14 +132,29 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(response.json()["enqueued"])
         self.assertEqual(response.json()["reason"], "tenant_disabled")
 
-    def test_webhook_requires_ready_label(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-123", labels=["not-ready"])
+    def test_webhook_requires_ready_status(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["enqueued"])
-        self.assertEqual(response.json()["reason"], "ready_label_missing")
+        self.assertEqual(response.json()["reason"], "status_not_ready")
+        self.assertIn("Move the issue to a ready status", response.json()["guidance"])
+
+    def test_webhook_ignores_done_issue_status(self) -> None:
+        payload = self._jira_issue_payload(
+            issue_key="TP-123",
+            status_name="Done",
+            status_category_key="done",
+            labels=["agent:ready"],
+        )
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "issue_done")
 
     def test_webhook_enqueues_once_for_active_issue(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-124", labels=["agent:ready"])
@@ -149,11 +164,31 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertEqual(first.status_code, 200)
         self.assertTrue(first.json()["enqueued"])
+        self.assertEqual(first.json()["trigger_reason"], "ready_status_recheck")
 
         self.assertEqual(second.status_code, 200)
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "run_already_active")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
+        self.assertEqual(second.json()["trigger_reason"], "ready_status_recheck")
+
+    def test_webhook_marks_transition_into_ready_status(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
+        payload["changelog"] = {
+            "items": [
+                {
+                    "field": "status",
+                    "fromString": "To Do",
+                    "toString": "Ready for Agent",
+                }
+            ]
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+        self.assertEqual(response.json()["trigger_reason"], "status_transition_to_ready")
 
     def test_webhook_deduplicates_delivery_identifier(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
@@ -210,34 +245,6 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(invalid_token.status_code, 401)
         self.assertEqual(valid_token.status_code, 200)
         self.assertTrue(valid_token.json()["enqueued"])
-
-    def test_webhook_rejects_non_executable_status(self) -> None:
-        payload = self._jira_issue_payload(
-            issue_key="TP-130",
-            labels=["agent:ready"],
-            status_name="Backlog",
-            status_category_key="new",
-        )
-
-        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["enqueued"])
-        self.assertEqual(response.json()["reason"], "non_executable_status")
-
-    def test_webhook_rejects_done_status_category(self) -> None:
-        payload = self._jira_issue_payload(
-            issue_key="TP-131",
-            labels=["agent:ready"],
-            status_name="Done",
-            status_category_key="done",
-        )
-
-        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["enqueued"])
-        self.assertEqual(response.json()["reason"], "done_status_category")
 
     def test_github_webhook_ping_is_accepted(self) -> None:
         response = self.client.post(
