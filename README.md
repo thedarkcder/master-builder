@@ -207,7 +207,7 @@ UI sections:
 - `/runs` for run observability
 
 ## Docker
-Build and run API + worker + Postgres + package service + optional admin UI + cloudflared:
+Build and run API + worker + Postgres + package service + optional admin UI + tailscale sidecar:
 ```bash
 docker compose up --build
 ```
@@ -216,6 +216,7 @@ API is exposed on `http://localhost:4000`.
 Postgres is exposed on `localhost:4402`.
 Private package service is exposed on `http://localhost:4401`.
 Admin UI (if running locally) is exposed on `http://localhost:4100`.
+Tailscale sidecar uses `TS_AUTHKEY` from your environment (required for tailnet auth).
 
 Default local package service credentials:
 - username: `tenant`
@@ -227,22 +228,26 @@ Examples:
 - Upload with twine:
   - `python -m twine upload --repository-url "http://localhost:4401/" -u tenant -p change-me dist/codex-assets/*`
 
-### Quick tunnel URL (trycloudflare)
-The stack includes `cloudflared` in Quick Tunnel mode, targeting the API service directly (`api:4000`).
-
-Watch logs and copy the generated public URL:
+### Tailscale Funnel URL
+Start API and Tailscale sidecar:
 ```bash
-docker compose logs -f cloudflared
+docker compose up -d api tailscale
 ```
 
-Extract just the URL:
+Connect and verify:
 ```bash
-docker compose logs cloudflared | grep -Eo \"https://[-a-z0-9]+\\.trycloudflare\\.com\" | tail -n 1
+docker exec -it master-builder-tailscale tailscale status
 ```
 
-Use that URL for external callbacks (Jira/GitHub/Discord) during local testing.
+Expose API publicly on Funnel:
+```bash
+docker exec -it master-builder-tailscale tailscale funnel --bg 4000
+docker exec -it master-builder-tailscale tailscale funnel status
+```
 
-If your admin UI is hosted on Vercel, use this tunnel URL for API callbacks only.
+Use the returned `https://<device>.<tailnet>.ts.net` URL for external callbacks (Jira/GitHub/Discord) during local testing.
+
+If your admin UI is hosted on Vercel, use this Funnel URL for API callbacks only.
 
 ## Tenant onboarding
 1. Create a tenant via `POST /api/admin/tenants`.

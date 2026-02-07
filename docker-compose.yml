@@ -116,16 +116,22 @@ services:
     ports:
       - "4100:4100"
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: master-builder-tailscale
     restart: unless-stopped
     depends_on:
       - api
+    network_mode: "service:api"
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---advertise-tags=tag:container --accept-dns=false}
     volumes:
-      - .cloudflared:/etc/cloudflared:ro
-    command: tunnel --config /etc/cloudflared/config.yml run
+      - tailscale-state:/var/lib/tailscale
 
 volumes:
   postgres-data:
   packages-data:
+  tailscale-state:
