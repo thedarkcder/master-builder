@@ -12,6 +12,8 @@ on:
         required: false
         type: boolean
         default: false
+  schedule:
+    - cron: "*/3 * * * *"
 
 permissions:
   contents: read
@@ -41,6 +43,33 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
 
+      - name: Resolve release version
+        id: release
+        env:
+          WORKFLOW_RELEASE_VERSION: ${{ inputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${WORKFLOW_RELEASE_VERSION:-}" ]; then
+            release_version="${WORKFLOW_RELEASE_VERSION}"
+          else
+            release_version="$(python - <<'PY'
+from orchestrator.core.release_train import next_release_version_from_tags
+import subprocess
+
+result = subprocess.run(
+    ["git", "tag", "--list", "v*.*.*", "--sort=-v:refname"],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+print(next_release_version_from_tags(tags))
+PY
+)"
+          fi
+          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+
       - name: Assign Ready to Release issues to next release
         env:
           JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
@@ -48,7 +77,7 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
           READY_STATUS: ${{ vars.RELEASE_READY_STATUS }}
-          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+          RELEASE_VERSION_INPUT: ${{ steps.release.outputs.release_version }}
           DRY_RUN_INPUT: ${{ inputs.dry_run }}
         shell: bash
         run: |

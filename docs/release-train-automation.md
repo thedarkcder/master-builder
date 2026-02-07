@@ -8,14 +8,14 @@ This repo supports Jira-driven release-train automation without manually setting
 
 ## Workflows
 - `.github/workflows/release-train-sync.yml`
-  - Manual helper workflow.
+  - Runs every 3 minutes (and via manual dispatch).
   - Finds `Ready to Release` issues and assigns `release:vX.Y.Z`.
   - If no explicit version is passed, computes the next release from git tags.
 - `.github/workflows/release-train-close.yml`
   - Runs hourly (and via manual dispatch).
   - Resolves target release version.
-  - Assigns `Ready to Release` issues to `release:vX.Y.Z`.
-  - Finds open PRs with matching Jira keys in PR title and merges them to `main`.
+  - Finds issues tagged for the release (`release:vX.Y.Z`).
+  - Waits for required checks on matching open PRs, then merges to `main`.
   - Transitions Jira issues labeled `release:vX.Y.Z` to `Done`.
 
 ## Required GitHub configuration
@@ -33,7 +33,7 @@ Set repository secret:
 - `RELEASE_JIRA_API_TOKEN`
 
 ## Optional Jira automation rule (event-driven)
-If you want immediate assignment outside the hourly cycle, create a Jira automation rule:
+If you want immediate assignment outside the 3-minute cycle, create a Jira automation rule:
 1. Trigger: `Issue transitioned` to `Ready to Release`.
 2. Action: send web request to GitHub workflow dispatch endpoint for `release-train-sync.yml`.
 3. Use a GitHub token with workflow dispatch permission.

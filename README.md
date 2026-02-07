@@ -87,16 +87,17 @@ Version bump helpers:
 - CI enforces this on pull requests via job: `Codex assets version guard`.
 
 ## Jira release-train automation (repo-level)
-This repo can run an hourly release-train close loop that:
-- assigns `Ready to Release` Jira issues to the next release label
-- merges matching open PRs to `main`
-- transitions release-labeled Jira issues to `Done`
+This repo uses two release-train workflows:
+- a fast label sync loop for `Ready to Release` issues
+- a close loop that waits checks, merges release PRs, and closes Jira issues
 
 Workflows:
 - `.github/workflows/release-train-sync.yml`
-  - manual helper to assign `release:vX.Y.Z` labels to `Ready to Release` issues
+  - runs every 3 minutes (and manual dispatch)
+  - assigns `release:vX.Y.Z` labels to `Ready to Release` issues
 - `.github/workflows/release-train-close.yml`
-  - runs hourly (and manual dispatch) to assign, merge to `main`, and close `release:vX.Y.Z` Jira issues
+  - runs hourly (plus release publish/manual dispatch)
+  - finds `release:vX.Y.Z` issues, waits for required checks, merges matching PRs to `main`, then transitions issues to `Done`
 
 Enable with:
 - Repository variable: `ENABLE_JIRA_RELEASE_AUTOMATION=true`
