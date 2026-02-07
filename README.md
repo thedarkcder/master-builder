@@ -30,12 +30,12 @@ from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
 PY
 )
-# Non-empty passphrases are also supported for local development.
+export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=MB_JIRA_CLIENT_ID
+export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=MB_JIRA_CLIENT_SECRET
 
-export SECRET_JIRA_CLIENT_ID=your-atlassian-oauth-client-id
-export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
+# Store OAuth secret values via managed secrets API/UI, not shell exports:
+# - secret ref MB_JIRA_CLIENT_ID -> Jira OAuth client id
+# - secret ref MB_JIRA_CLIENT_SECRET -> Jira OAuth client secret
 
 # Optional extra Python index for pinned codex assets wheel
 # Example local package service (docker-compose):

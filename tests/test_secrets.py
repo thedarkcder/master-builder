@@ -12,11 +12,9 @@ class SecretsTests(unittest.TestCase):
         decrypted = decrypt_value(ciphertext=encrypted, encryption_key=key)
         self.assertEqual(decrypted, "hello")
 
-    def test_encrypt_decrypt_with_passphrase(self) -> None:
-        key = "local-dev-passphrase"
-        encrypted = encrypt_value(plaintext="hello", encryption_key=key)
-        decrypted = decrypt_value(ciphertext=encrypted, encryption_key=key)
-        self.assertEqual(decrypted, "hello")
+    def test_encrypt_with_invalid_key_fails(self) -> None:
+        with self.assertRaisesRegex(ValueError, "valid Fernet key"):
+            encrypt_value(plaintext="hello", encryption_key="not-a-fernet-key")
 
     def test_encrypt_with_blank_key_fails(self) -> None:
         with self.assertRaisesRegex(ValueError, "Secrets encryption key is not configured"):
