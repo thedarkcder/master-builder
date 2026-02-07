@@ -87,11 +87,11 @@ Version bump helpers:
 - CI enforces this on pull requests via job: `Codex assets version guard`.
 
 ## Jira release-train automation (repo-level)
-This repo can auto-assign `Ready to Release` Jira issues to the next release and auto-close them on release publish.
+This repo can auto-assign `READY TO RELEASE` Jira issues to the next release and auto-close them on release publish.
 
 Workflows:
 - `.github/workflows/release-train-sync.yml`
-  - assigns `release:vX.Y.Z` labels to `Ready to Release` issues
+  - assigns `release:vX.Y.Z` labels to `READY TO RELEASE` issues
 - `.github/workflows/release-train-close.yml`
   - transitions `release:vX.Y.Z` issues to `Done` after GitHub release publish
 
@@ -101,7 +101,6 @@ Enable with:
   - `RELEASE_JIRA_BASE_URL`
   - `RELEASE_JIRA_EMAIL`
   - `RELEASE_JIRA_PROJECT_KEY`
-  - optional `RELEASE_READY_STATUS` (default `READY TO RELEASE`)
   - optional `RELEASE_DONE_STATUS` (default `Done`)
 - Secret:
   - `RELEASE_JIRA_API_TOKEN`
