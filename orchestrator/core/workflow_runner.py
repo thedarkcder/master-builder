@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from orchestrator.core.followups import build_backlog_follow_up_draft
+from orchestrator.core.gtd import validate_good_to_do
 
 PLACEHOLDER_PATTERN = re.compile(r"\b(todo|fixme|tbd|placeholder|stub)\b", re.IGNORECASE)
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
@@ -146,6 +147,35 @@ class WorkflowRunner:
         )
         if runtime_failure is not None:
             return runtime_failure
+
+        gtd_result = validate_good_to_do(
+            issue_summary=request.issue_summary,
+            issue_description=request.issue_description,
+        )
+        if not gtd_result.valid:
+            history.append(
+                {
+                    "stage": "preflight",
+                    "attempt": "0",
+                    "event": f"missing_gtd:{', '.join(gtd_result.missing_criteria)}",
+                }
+            )
+            question_lines = "\n".join(
+                f"- {question}" for question in gtd_result.clarification_questions
+            )
+            return self._failure(
+                plan=None,
+                stage="preflight",
+                message=(
+                    "Good To Do validation failed. Missing criteria: "
+                    f"{', '.join(gtd_result.missing_criteria)}.\n"
+                    "Clarification needed before execution:\n"
+                    f"{question_lines}"
+                ),
+                attempts=0,
+                history=history,
+                request=request,
+            )
 
         try:
             plan = self._agents.pm(request)

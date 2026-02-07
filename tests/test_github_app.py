@@ -10,6 +10,7 @@ from orchestrator.tools.github_app import (
     GitHubAppConfig,
     InstallationRepository,
     PullRequestDetails,
+    PullRequestFileChange,
     PullRequestResult,
     WorkflowCheckSuite,
     github_client_from_tenant_config,
@@ -303,3 +304,92 @@ class GitHubAppClientTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_list_pull_request_files_parses_patch_payload(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_6",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            [
+                {
+                    "filename": "src/app.ts",
+                    "patch": "+ setTimeout(() => {}, 1000)",
+                },
+                {
+                    "filename": "README.md",
+                },
+            ],
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            files = client.list_pull_request_files(repo_full_name="example/repo", pr_number=99)
+
+        self.assertEqual(
+            files,
+            [
+                PullRequestFileChange(
+                    filename="src/app.ts",
+                    patch="+ setTimeout(() => {}, 1000)",
+                ),
+                PullRequestFileChange(
+                    filename="README.md",
+                    patch=None,
+                ),
+            ],
+        )
+
+    def test_list_pull_request_files_paginates_until_final_page(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        first_page = [
+            {
+                "filename": f"src/file-{index}.ts",
+                "patch": "+ const x = 1;",
+            }
+            for index in range(100)
+        ]
+        second_page = [
+            {
+                "filename": "README.md",
+            }
+        ]
+        responses = [
+            {
+                "token": "inst_token_7",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            first_page,
+            second_page,
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            files = client.list_pull_request_files(repo_full_name="example/repo", pr_number=100)
+
+        self.assertEqual(len(files), 101)
+        self.assertEqual(files[0].filename, "src/file-0.ts")
+        self.assertEqual(files[-1].filename, "README.md")
