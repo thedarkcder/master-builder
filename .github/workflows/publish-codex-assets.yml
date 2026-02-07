@@ -158,6 +158,15 @@ jobs:
             TWINE_REPOSITORY_URL="https://pypi.pkg.github.com/${GITHUB_REPOSITORY}/"
           fi
 
+          # Normalize common legacy misconfigurations.
+          if [[ "${TWINE_REPOSITORY_URL}" == https://upload.pypi.pkg.github.com/* ]]; then
+            TWINE_REPOSITORY_URL="${TWINE_REPOSITORY_URL/https:\/\/upload.pypi.pkg.github.com\//https:\/\/pypi.pkg.github.com\/}"
+          fi
+          if [[ "${TWINE_REPOSITORY_URL}" =~ ^https://pypi\.pkg\.github\.com/[^/]+/?$ ]]; then
+            TWINE_REPOSITORY_URL="https://pypi.pkg.github.com/${GITHUB_REPOSITORY}/"
+            echo "Normalized repository URL to repo-scoped endpoint: ${TWINE_REPOSITORY_URL}"
+          fi
+
           if [ -z "${TWINE_USERNAME:-}" ]; then
             TWINE_USERNAME="${GITHUB_ACTOR}"
           fi

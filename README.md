@@ -66,7 +66,7 @@ What happens automatically:
 
 Optional direct package-index publish (same workflow run):
 - Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
-- Optional: set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to override the upload endpoint
+- Optional: set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to override the upload endpoint (must be repo-scoped)
 - Optional: set `CODEX_ASSETS_PUBLISH_USERNAME` (defaults to `${GITHUB_ACTOR}`)
 - Optional: set secret `CODEX_ASSETS_PUBLISH_PASSWORD` (defaults to `${GITHUB_TOKEN}`)
 
