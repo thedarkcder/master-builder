@@ -27,6 +27,9 @@ dev = [
   "pytest>=8.3.0",
   "ruff>=0.6.0",
 ]
+codex_assets = [
+  "master-builder-codex-assets==0.1.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -34,6 +37,3 @@ addopts = "-q"
 
 [tool.setuptools.packages.find]
 include = ["orchestrator*"]
-
-[tool.setuptools.package-data]
-"orchestrator.codex_assets" = ["*.md", "*.json"]

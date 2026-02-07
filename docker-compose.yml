@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
     container_name: master-builder-api
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
@@ -35,6 +37,8 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      args:
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
     container_name: master-builder-worker
     depends_on:
       - api
