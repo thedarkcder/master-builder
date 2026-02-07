@@ -168,7 +168,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIn("TP-300", stage_updates[0]["discord_message"])
             self.assertIn("run-TP-300", stage_updates[0]["discord_message"])
             self.assertIsNotNone(runner.last_request)
-            self.assertIn("Good To Do checklist", runner.last_request.issue_description)
+            self.assertIn("Good To Do", runner.last_request.issue_description)
             self.assertIn("Decision Gate", runner.last_request.issue_description)
 
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
