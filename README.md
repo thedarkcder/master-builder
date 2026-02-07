@@ -215,13 +215,15 @@ If tenant webhook auth is configured:
 - set `jira.webhook_secret_ref` to an environment variable name
 - send token via `X-Webhook-Token` or `Authorization: Bearer <token>`
 
-Only issues containing the tenant `ready_label` are enqueued.
+Only issues in tenant `ready_statuses` are enqueued (default: `Ready for Agent`).
+Issues in done status categories are never enqueued.
+Issue status is not auto-transitioned when a run starts.
 
 ## End-to-end local flow
 1. Apply migrations:
    - `python -m orchestrator migrate`
 2. Create tenant via Admin API.
-3. Send Jira webhook payload with `ready_label`.
+3. Send Jira webhook payload with issue status set to a configured ready status (for example `Ready for Agent`).
 4. Confirm run created:
    - `GET /api/admin/runs?tenant_id=...`
    - or `GET /runs/{run_id}`
