@@ -20,7 +20,7 @@ def upgrade() -> None:
         "tenants",
         sa.Column("tenant_id", sa.String(length=128), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("jira_config", sa.JSON(), nullable=False),
         sa.Column("github_config", sa.JSON(), nullable=False),
         sa.Column("repos_config", sa.JSON(), nullable=False),
