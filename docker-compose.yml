@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
     ports:
-      - "5432:5432"
+      - "4402:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator}"]
       interval: 5s
@@ -23,7 +23,7 @@ services:
       PACKAGE_INDEX_USERNAME: ${PACKAGE_INDEX_USERNAME:-tenant}
       PACKAGE_INDEX_PASSWORD: ${PACKAGE_INDEX_PASSWORD:-change-me}
     ports:
-      - "8081:8080"
+      - "4401:8080"
     command:
       - sh
       - -c

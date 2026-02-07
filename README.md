@@ -17,7 +17,7 @@ Set required environment values:
 ```bash
 export ORCHESTRATOR_ADMIN_USERNAME=admin
 export ORCHESTRATOR_ADMIN_PASSWORD=change-me
-export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@localhost:5432/orchestrator
+export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@localhost:4402/orchestrator
 export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
 export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
@@ -38,7 +38,7 @@ export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
 
 # Optional extra Python index for pinned codex assets wheel
 # Example local package service (docker-compose):
-# export PIP_EXTRA_INDEX_URL=http://tenant:change-me@localhost:8081/simple/
+# export PIP_EXTRA_INDEX_URL=http://tenant:change-me@localhost:4401/simple/
 ```
 
 `ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex assets version used for tenant init.
@@ -209,8 +209,8 @@ docker compose up --build
 ```
 
 API is exposed on `http://localhost:4000`.
-Postgres is exposed on `localhost:5432`.
-Private package service is exposed on `http://localhost:8081`.
+Postgres is exposed on `localhost:4402`.
+Private package service is exposed on `http://localhost:4401`.
 Admin UI (if running locally) is exposed on `http://localhost:4100`.
 
 Default local package service credentials:
@@ -219,9 +219,9 @@ Default local package service credentials:
 
 Examples:
 - Install from local package service:
-  - `pip install --extra-index-url "http://tenant:change-me@localhost:8081/simple/" master-builder-codex-assets==0.1.1`
+  - `pip install --extra-index-url "http://tenant:change-me@localhost:4401/simple/" master-builder-codex-assets==0.1.1`
 - Upload with twine:
-  - `python -m twine upload --repository-url "http://localhost:8081/" -u tenant -p change-me dist/codex-assets/*`
+  - `python -m twine upload --repository-url "http://localhost:4401/" -u tenant -p change-me dist/codex-assets/*`
 
 ### Quick tunnel URL (trycloudflare)
 The stack includes `cloudflared` in Quick Tunnel mode, targeting the API service directly (`api:4000`).
