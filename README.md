@@ -79,6 +79,13 @@ Same-repo quick setup:
 2. Merge a PR that bumps `.codex/codex_assets_manifest.json` `assets_version`.
 3. Confirm workflow `Publish Codex Assets` uploads release artifacts and publishes package index files.
 
+Version bump helpers:
+- Auto-bump patch version + sync pin:
+  - `python3 scripts/bump_codex_assets_version.py`
+- Validate bump + pin consistency:
+  - `scripts/validate_codex_assets_version.sh origin/staging`
+- CI enforces this on pull requests via job: `Codex assets version guard`.
+
 ## Public API
 - `GET /health`
 - `POST /jira/webhook/{tenant_id}`
