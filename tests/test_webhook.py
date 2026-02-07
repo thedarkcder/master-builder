@@ -140,6 +140,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["enqueued"])
         self.assertEqual(response.json()["reason"], "status_not_ready")
+        self.assertIn("Move the issue to a ready status", response.json()["guidance"])
 
     def test_webhook_ignores_done_issue_status(self) -> None:
         payload = self._jira_issue_payload(

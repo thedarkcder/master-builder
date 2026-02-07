@@ -25,6 +25,18 @@ def _clip_message_lines(lines: list[str], *, max_lines: int = 40, max_chars: int
     return f"{rendered[: max_chars - 1].rstrip()}…"
 
 
+def format_discord_ready_gate_guidance(*, issue_key: str, issue_status: str, ready_statuses: Iterable[str]) -> str:
+    statuses = _normalize_lines(ready_statuses, max_items=6, max_line_chars=80)
+    formatted_statuses = ", ".join(statuses) if statuses else "Ready for Agent"
+    lines = [
+        f"Issue {issue_key} was not queued.",
+        f"Current status: {issue_status}",
+        f"Required ready status: {formatted_statuses}",
+        "Move the issue to a ready status, then retry.",
+    ]
+    return _clip_message_lines(lines, max_lines=8, max_chars=500)
+
+
 def format_stage_discord_update(
     *,
     tenant_id: str,
