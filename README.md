@@ -200,7 +200,7 @@ docker compose logs -f cloudflared
 
 Extract just the URL:
 ```bash
-docker compose logs cloudflared | rg -o \"https://[-a-z0-9]+\\.trycloudflare\\.com\" | tail -n 1
+docker compose logs cloudflared | grep -Eo \"https://[-a-z0-9]+\\.trycloudflare\\.com\" | tail -n 1
 ```
 
 Use that URL for external callbacks (Jira/GitHub/Discord) during local testing.
