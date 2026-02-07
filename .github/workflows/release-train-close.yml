@@ -1,0 +1,96 @@
+name: Release Train Close
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Release version to close in Jira (vX.Y.Z)."
+        required: true
+      dry_run:
+        description: "Dry run only (no Jira writes)."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-train-close-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  close-released-issues:
+    if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Resolve release version
+        id: release
+        env:
+          WORKFLOW_RELEASE_VERSION: ${{ inputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            release_version="${{ github.event.release.tag_name }}"
+          else
+            release_version="${WORKFLOW_RELEASE_VERSION}"
+          fi
+          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Transition release-train Jira issues to Done
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+          DONE_STATUS: ${{ vars.RELEASE_DONE_STATUS }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_BASE_URL}" ] || [ -z "${JIRA_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ] || [ -z "${JIRA_PROJECT_KEY}" ]; then
+            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
+            exit 1
+          fi
+          if [ -z "${RELEASE_VERSION}" ]; then
+            echo "Missing release version."
+            exit 1
+          fi
+
+          done_status="${DONE_STATUS:-Done}"
+          args=(
+            "scripts/release_train_sync.py"
+            "close"
+            "--jira-base-url" "${JIRA_BASE_URL}"
+            "--jira-email" "${JIRA_EMAIL}"
+            "--jira-api-token" "${JIRA_API_TOKEN}"
+            "--project-key" "${JIRA_PROJECT_KEY}"
+            "--done-status" "${done_status}"
+            "--release-version" "${RELEASE_VERSION}"
+            "--comment"
+          )
+          if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
+            args+=("--dry-run")
+          fi
+          python "${args[@]}"
