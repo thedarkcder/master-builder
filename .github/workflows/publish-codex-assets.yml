@@ -154,23 +154,23 @@ jobs:
           set -euo pipefail
 
           if [ -z "${TWINE_REPOSITORY_URL:-}" ]; then
-            echo "CODEX_ASSETS_PUBLISH_REPOSITORY_URL is not set; skipping index publish."
-            exit 0
+            echo "CODEX_ASSETS_PUBLISH_REPOSITORY_URL is required when CODEX_ASSETS_PUBLISH_TO_INDEX=true."
+            exit 1
           fi
 
           # GitHub Packages on github.com does not support Python package uploads.
           if [[ "${TWINE_REPOSITORY_URL}" == *"pkg.github.com"* ]]; then
-            echo "Skipping index publish: GitHub Packages Python registry is not supported on github.com."
+            echo "Invalid CODEX_ASSETS_PUBLISH_REPOSITORY_URL: GitHub Packages Python registry is not supported on github.com."
             echo "Use PyPI/TestPyPI (e.g. https://upload.pypi.org/legacy/ or https://test.pypi.org/legacy/)."
-            exit 0
+            exit 1
           fi
 
           if [ -z "${TWINE_USERNAME:-}" ]; then
             TWINE_USERNAME="__token__"
           fi
           if [ -z "${TWINE_PASSWORD:-}" ]; then
-            echo "CODEX_ASSETS_PUBLISH_PASSWORD secret is missing; skipping index publish."
-            exit 0
+            echo "CODEX_ASSETS_PUBLISH_PASSWORD secret is required when CODEX_ASSETS_PUBLISH_TO_INDEX=true."
+            exit 1
           fi
 
           python -m pip install --upgrade twine

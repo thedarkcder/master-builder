@@ -36,9 +36,9 @@ export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
 export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
 export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
 
-# GitHub Packages index for pinned codex assets wheel
-# Replace OWNER and TOKEN with your GitHub org/user and packages:read PAT.
-export PIP_EXTRA_INDEX_URL=https://OWNER:TOKEN@pip.pkg.github.com/OWNER
+# Optional extra Python index for pinned codex assets wheel
+# Example for TestPyPI:
+# export PIP_EXTRA_INDEX_URL=https://__token__:YOUR_TOKEN@test.pypi.org/simple/
 ```
 
 `ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex policy/docs package version used for tenant init.
@@ -70,14 +70,12 @@ Optional direct package-index publish (same workflow run):
 - Optional: set `CODEX_ASSETS_PUBLISH_USERNAME` (defaults to `__token__`)
 - Set secret `CODEX_ASSETS_PUBLISH_PASSWORD` (token/password for the target index)
 
-Default upload target (if not set):
-- none (workflow skips index publish)
-
 Important:
 - GitHub Packages on `github.com` does not support Python package uploads.
 - Use PyPI/TestPyPI endpoints instead:
   - `https://upload.pypi.org/legacy/`
   - `https://test.pypi.org/legacy/`
+- When index publish is enabled, missing/invalid index config fails the workflow (no silent skip).
 
 Authentication:
 - Uses your configured index credentials (`CODEX_ASSETS_PUBLISH_USERNAME` / `CODEX_ASSETS_PUBLISH_PASSWORD`)
