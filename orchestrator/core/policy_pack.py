@@ -151,8 +151,19 @@ def find_banned_pattern_violations(
     for file_change in files:
         if not file_change.patch:
             continue
+
+        added_lines: list[str] = []
+        for line in file_change.patch.splitlines():
+            if line.startswith("+++ "):
+                continue
+            if line.startswith("+"):
+                added_lines.append(line[1:])
+        if not added_lines:
+            continue
+
+        added_patch = "\n".join(added_lines)
         for raw_pattern, compiled in compiled_patterns:
-            if compiled.search(file_change.patch):
+            if compiled.search(added_patch):
                 violations.append(
                     f"{file_change.filename}: matched banned pattern `{raw_pattern}` "
                     f"from policy pack `{policy_pack.language_key}`"

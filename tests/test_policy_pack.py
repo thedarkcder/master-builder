@@ -76,3 +76,31 @@ class PolicyPackTests(unittest.TestCase):
 
         self.assertEqual(len(violations), 1)
         self.assertIn("invalid banned pattern", violations[0])
+
+    def test_find_banned_pattern_violations_ignores_removed_lines(self) -> None:
+        selected = select_policy_pack_for_files(
+            files=[
+                PullRequestFileChange(
+                    filename="admin-ui/src/components/TenantWizard.tsx",
+                    patch="@@ -1,2 +1,2 @@",
+                )
+            ]
+        )
+        self.assertIsNotNone(selected)
+        assert selected is not None
+
+        violations = find_banned_pattern_violations(
+            policy_pack=selected,
+            files=[
+                PullRequestFileChange(
+                    filename="admin-ui/src/components/TenantWizard.tsx",
+                    patch=(
+                        "@@ -10,2 +10,2 @@\n"
+                        "- await new Promise((resolve) => setTimeout(resolve, 500));\n"
+                        "+ await doWorkWithoutSleep();\n"
+                    ),
+                )
+            ],
+        )
+
+        self.assertEqual(violations, [])
