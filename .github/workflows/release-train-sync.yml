@@ -1,0 +1,87 @@
+name: Release Train Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Optional release version (vX.Y.Z). If empty, next version is computed from git tags."
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run only (no Jira writes)."
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-train-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assign-ready-to-release:
+    if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Assign Ready to Release issues to next release
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+          READY_STATUS: ${{ vars.RELEASE_READY_STATUS }}
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_BASE_URL}" ] || [ -z "${JIRA_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ] || [ -z "${JIRA_PROJECT_KEY}" ]; then
+            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
+            exit 1
+          fi
+
+          ready_status="${READY_STATUS:-Ready to Release}"
+          dry_run="false"
+          if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
+            dry_run="true"
+          fi
+          release_version="${RELEASE_VERSION_INPUT:-}"
+
+          args=(
+            "scripts/release_train_sync.py"
+            "assign"
+            "--jira-base-url" "${JIRA_BASE_URL}"
+            "--jira-email" "${JIRA_EMAIL}"
+            "--jira-api-token" "${JIRA_API_TOKEN}"
+            "--project-key" "${JIRA_PROJECT_KEY}"
+            "--ready-status" "${ready_status}"
+            "--comment"
+          )
+          if [ "${dry_run}" = "true" ]; then
+            args+=("--dry-run")
+          fi
+          if [ -n "${release_version}" ]; then
+            args+=("--release-version" "${release_version}")
+          fi
+          python "${args[@]}"
