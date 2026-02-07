@@ -77,6 +77,13 @@ npm run dev
 ```
 
 Default UI URL: `http://localhost:4100`
+Login route: `http://localhost:4100/login`
+
+UI sections:
+- `/tenants` for list and health checks
+- `/tenants/new` for structured tenant create form
+- `/tenants/{tenant_id}/edit` for structured tenant update form
+- `/runs` for run observability
 
 ## Docker
 Build and run API + worker + admin UI:
@@ -95,10 +102,9 @@ Admin UI is exposed on `http://localhost:4100`.
    - `project_keys`
    - `ready_label`
    - `ready_jql`
-3. Configure GitHub App fields:
-   - `app_id_ref`
-   - `private_key_ref`
-   - `installation_id`
+3. Configure GitHub integration:
+   - current mode: manual GitHub App references (`app_id_ref`, `private_key_ref`, `installation_id`)
+   - planned mode: OAuth-style install flow from Admin UI wizard (see `docs/github-app-oauth-onboarding.md`)
 4. Configure allowed repositories under `repos.allowlist`.
 5. Validate connections:
    - `POST /api/admin/tenants/{tenant_id}/test-jira`
@@ -111,6 +117,22 @@ Each tenant uses GitHub App mode (`mode=github_app`) with secret references:
 - `installation_id` must be the installation for the tenant repos
 
 The service enforces tenant repo allowlists before clone/push/PR actions.
+
+## GitHub App creation and OAuth onboarding direction
+Yes, you need to create a GitHub App (or use one already owned by your org) and install it on target repos.
+
+The full creation + onboarding direction is documented here:
+- `docs/github-app-oauth-onboarding.md`
+
+Short version:
+- Create one org-level GitHub App with required repo permissions.
+- Install it on tenant repos.
+- Replace manual secret/reference entry in tenant setup with an install button and callback flow:
+  - create tenant
+  - click "Install GitHub App"
+  - approve install on GitHub
+  - save returned installation details to tenant config
+  - continue wizard to repo mapping and webhook checks
 
 ## Jira webhook setup
 Point Jira webhook to:
