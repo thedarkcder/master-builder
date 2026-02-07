@@ -37,6 +37,10 @@ class JiraClient:
         auth_raw = f"{email}:{api_token}".encode("utf-8")
         self._auth_header = "Basic " + base64.b64encode(auth_raw).decode("ascii")
 
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     def _request_json(
         self,
         *,
@@ -161,6 +165,10 @@ def assign_release_label(
 ) -> int:
     release_label = release_label_for_version(release_version)
     jql = f'project = "{project_key}" AND status = "{ready_status}"'
+    print(
+        f"[assign] base_url={client.base_url} project={project_key} ready_status={ready_status} release={release_version}"
+    )
+    print(f"[assign] jql={jql}")
     issues = client.search_issues(jql=jql)
     updated_count = 0
     for issue in issues:
@@ -194,6 +202,10 @@ def close_released_issues(
 ) -> int:
     release_label = release_label_for_version(release_version)
     jql = f'project = "{project_key}" AND labels = "{release_label}"'
+    print(
+        f"[close] base_url={client.base_url} project={project_key} done_status={done_status} release={release_version}"
+    )
+    print(f"[close] jql={jql}")
     issues = client.search_issues(jql=jql)
     transitioned = 0
     skipped = 0
