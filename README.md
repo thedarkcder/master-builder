@@ -24,7 +24,7 @@ export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
-export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.0
+export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.1
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
@@ -45,7 +45,7 @@ export PIP_EXTRA_INDEX_URL=https://OWNER:TOKEN@pip.pkg.github.com/OWNER
 If required assets are missing or the version mismatches, tenant create/update returns `503`.
 
 The orchestrator runtime installs pinned codex assets from:
-- `master-builder-codex-assets==0.1.0` (extra: `codex_assets`)
+- `master-builder-codex-assets==0.1.1` (extra: `codex_assets`)
 
 ## Codex assets package publishing
 Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.

@@ -5,7 +5,7 @@ from functools import lru_cache
 import importlib.resources
 from pathlib import Path
 
-RULES_FILE_PATH = Path(".codex/rules/decision_gate.md")
+RULES_FILE_PATH = Path(".codex/DECISION_GATE_TEMPLATE.md")
 CODEX_ASSETS_PACKAGE = "master_builder_codex_assets"
 PACKAGED_RULES_FILENAME = "decision_gate.md"
 
