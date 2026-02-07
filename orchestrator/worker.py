@@ -4,11 +4,13 @@ import asyncio
 import logging
 import signal
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
@@ -57,12 +59,15 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
         enforce_safe_command(command_text)
         suggested_test_commands.append(command_text)
 
+    repo_root = Path(__file__).resolve().parents[1]
+    enforcement_context = build_agent_enforcement_context(repo_root=repo_root)
+
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
         run_id=run.run_id,
         issue_key=run.issue_key,
         issue_summary=f"Execute {run.issue_key}",
-        issue_description="",
+        issue_description=enforcement_context,
         max_dev_test_review_loops=max_loops,
         max_runtime_minutes=max_runtime_minutes,
         suggested_test_commands=suggested_test_commands,
