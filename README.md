@@ -117,6 +117,8 @@ Admin UI is exposed on `http://localhost:4100`.
 5. Validate connections:
    - `POST /api/admin/tenants/{tenant_id}/test-jira`
    - `POST /api/admin/tenants/{tenant_id}/test-github`
+6. Inspect repo bootstrap state:
+   - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
 
 ## GitHub App setup
 The service uses one server-managed GitHub App for all tenants:
@@ -169,6 +171,18 @@ Only issues containing the tenant `ready_label` are enqueued.
    - or `GET /runs/{run_id}`
 5. Use manual queue command when needed:
    - `python -m orchestrator run --tenant TENANT_ID --issue MAB-123`
+
+## Repo bootstrap
+Canonical bootstrap utilities now ensure repo-level `.codex` assets exist:
+- `.codex/OPERATING.md`
+- `.codex/POLICY.md`
+- `.codex/skills/run_tests.md`
+- `.codex/skills/add_tests.md`
+- `.codex/skills/pr_checklist.md`
+- `.codex/skills/security_sanity.md`
+- optional `AGENTS.md` at repo root
+
+Bootstrap persistence is tracked per tenant/repo in `repo_bootstrap_states`.
 
 ## Tests
 ```bash

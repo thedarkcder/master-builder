@@ -117,6 +117,15 @@ class GitHubRepositoryRead(BaseModel):
     private: bool
 
 
+class RepoBootstrapStateRead(BaseModel):
+    tenant_id: str
+    repo_url: str
+    bootstrap_count: int
+    last_created_files: list[str]
+    bootstrapped_at: datetime
+    updated_at: datetime
+
+
 class RunRead(BaseModel):
     run_id: str
     tenant_id: str

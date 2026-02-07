@@ -18,6 +18,7 @@ from orchestrator.api.schemas import (
     IntegrationTestResult,
     JiraConnectStart,
     JiraProjectRead,
+    RepoBootstrapStateRead,
     RunRead,
     TenantCreate,
     TenantRead,
@@ -34,6 +35,7 @@ from orchestrator.core.security import require_admin
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
+from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -442,6 +444,29 @@ def test_github_connection(
         ok=True,
         details="GitHub tenant configuration looks valid and secret refs resolve",
     )
+
+@router.get("/tenants/{tenant_id}/repo-bootstrap", response_model=list[RepoBootstrapStateRead])
+def list_tenant_repo_bootstrap_states(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[RepoBootstrapStateRead]:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    states = list_repo_bootstrap_states(session=session, tenant_id=tenant_id)
+    return [
+        RepoBootstrapStateRead(
+            tenant_id=state.tenant_id,
+            repo_url=state.repo_url,
+            bootstrap_count=state.bootstrap_count,
+            last_created_files=list(state.last_created_files),
+            bootstrapped_at=state.bootstrapped_at,
+            updated_at=state.updated_at,
+        )
+        for state in states
+    ]
 
 
 @router.post("/tenants/{tenant_id}/github/install/start", response_model=GitHubInstallStart)
