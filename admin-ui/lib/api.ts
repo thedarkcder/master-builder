@@ -1,12 +1,10 @@
 export type JiraConfig = {
   mcp_endpoint: string;
-  auth_ref: string;
   project_keys: string[];
   ready_label: string;
   in_progress_label: string;
   blocked_label: string;
   done_label: string | null;
-  ready_jql: string;
   webhook_secret_ref: string | null;
 };
 
@@ -43,7 +41,6 @@ export type DiscordConfig = {
 };
 
 export type TenantCreatePayload = {
-  tenant_id: string;
   name: string;
   is_enabled: boolean;
   jira: JiraConfig;
@@ -63,9 +60,24 @@ export type TenantUpdatePayload = {
   discord: DiscordConfig | null;
 };
 
-export type TenantRecord = TenantCreatePayload & {
+export type TenantRecord = {
+  tenant_id: string;
+  name: string;
+  is_enabled: boolean;
+  jira: JiraConfig;
+  github: GithubConfig;
+  repos: ReposConfig;
+  policy: PolicyConfig;
+  discord: DiscordConfig | null;
   created_at: string;
   updated_at: string;
+};
+
+export type GitHubRepositoryRecord = {
+  full_name: string;
+  html_url: string;
+  default_branch: string;
+  private: boolean;
 };
 
 export type RunRecord = {
@@ -192,11 +204,27 @@ export function testGithub(
 
 export function startGitHubInstall(
   credentials: Credentials,
-  tenantId: string
+  tenantId: string,
+  options?: { returnTo?: "edit" | "wizard" }
 ): Promise<{ install_url: string; expires_at: string }> {
-  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/github/install/start`, {
+  const query = new URLSearchParams();
+  if (options?.returnTo) {
+    query.set("return_to", options.returnTo);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/github/install/start${suffix}`, {
     method: "POST"
   });
+}
+
+export function listGitHubRepositories(
+  credentials: Credentials,
+  tenantId: string
+): Promise<GitHubRepositoryRecord[]> {
+  return request<GitHubRepositoryRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/github/repositories`
+  );
 }
 
 export function listRuns(

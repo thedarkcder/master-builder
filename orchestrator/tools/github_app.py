@@ -44,6 +44,14 @@ class WorkflowCheckSuite:
     conclusion: str | None
 
 
+@dataclass(frozen=True)
+class InstallationRepository:
+    full_name: str
+    html_url: str
+    default_branch: str
+    private: bool
+
+
 @dataclass
 class _InstallationToken:
     token: str
@@ -248,4 +256,45 @@ class GitHubAppClient:
 
             parsed.append(WorkflowCheckSuite(name=name, status=status, conclusion=conclusion))
 
+        return parsed
+
+    def list_installation_repositories(self) -> list[InstallationRepository]:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path="/installation/repositories?per_page=100",
+            bearer_token=installation_token,
+        )
+
+        repositories = response.get("repositories")
+        if not isinstance(repositories, list):
+            raise GitHubApiError("GitHub installation repositories response did not include repositories")
+
+        parsed: list[InstallationRepository] = []
+        for item in repositories:
+            if not isinstance(item, dict):
+                continue
+            full_name = item.get("full_name")
+            html_url = item.get("html_url")
+            default_branch = item.get("default_branch")
+            private = item.get("private")
+            if not isinstance(full_name, str) or not full_name:
+                continue
+            if not isinstance(html_url, str) or not html_url:
+                continue
+            if not isinstance(default_branch, str) or not default_branch:
+                default_branch = "main"
+            if not isinstance(private, bool):
+                private = False
+
+            parsed.append(
+                InstallationRepository(
+                    full_name=full_name,
+                    html_url=html_url,
+                    default_branch=default_branch,
+                    private=private,
+                )
+            )
+
+        parsed.sort(key=lambda repo: repo.full_name.lower())
         return parsed
