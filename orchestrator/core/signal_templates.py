@@ -25,6 +25,81 @@ def _clip_message_lines(lines: list[str], *, max_lines: int = 40, max_chars: int
     return f"{rendered[: max_chars - 1].rstrip()}…"
 
 
+def format_discord_ready_gate_guidance(*, issue_key: str, issue_status: str, ready_statuses: Iterable[str]) -> str:
+    statuses = _normalize_lines(ready_statuses, max_items=6, max_line_chars=80)
+    formatted_statuses = ", ".join(statuses) if statuses else "Ready for Agent"
+    lines = [
+        f"Issue {issue_key} was not queued.",
+        f"Current status: {issue_status}",
+        f"Required ready status: {formatted_statuses}",
+        "Move the issue to a ready status, then retry.",
+    ]
+    return _clip_message_lines(lines, max_lines=8, max_chars=500)
+
+
+def format_stage_discord_update(
+    *,
+    tenant_id: str,
+    issue_key: str,
+    run_id: str,
+    stage: str,
+    jira_url: str | None = None,
+    pr_url: str | None = None,
+    error: str | None = None,
+    next_steps: Iterable[str] = (),
+) -> str:
+    lines = [
+        f"Stage update: {stage}",
+        f"Tenant: {tenant_id} | Issue: {issue_key} | Run: {run_id}",
+    ]
+    if jira_url:
+        lines.append(f"Jira: {jira_url}")
+    if pr_url:
+        lines.append(f"PR: {pr_url}")
+    if error:
+        lines.append(f"Error: {' '.join(error.strip().split())[:200]}")
+
+    steps = _normalize_lines(next_steps, max_items=3, max_line_chars=140)
+    if steps:
+        lines.append("Next steps:")
+        lines.extend(f"- {step}" for step in steps)
+
+    return _clip_message_lines(lines, max_lines=20, max_chars=900)
+
+
+def format_stage_jira_update(
+    *,
+    tenant_id: str,
+    issue_key: str,
+    run_id: str,
+    stage: str,
+    jira_url: str | None = None,
+    pr_url: str | None = None,
+    error: str | None = None,
+    next_steps: Iterable[str] = (),
+) -> str:
+    lines = [
+        f"Stage: {stage}",
+        f"- Tenant: `{tenant_id}`",
+        f"- Issue: `{issue_key}`",
+        f"- Run: `{run_id}`",
+    ]
+    if jira_url:
+        lines.append(f"- Jira: {jira_url}")
+    if pr_url:
+        lines.append(f"- PR: {pr_url}")
+    if error:
+        lines.append(f"- Error: {' '.join(error.strip().split())[:300]}")
+
+    steps = _normalize_lines(next_steps, max_items=3, max_line_chars=200)
+    if steps:
+        lines.append("")
+        lines.append("Next steps:")
+        lines.extend(f"- {step}" for step in steps)
+
+    return _clip_message_lines(lines, max_lines=30, max_chars=1800)
+
+
 def format_discord_pr_ready_message(
     *,
     pr_url: str,

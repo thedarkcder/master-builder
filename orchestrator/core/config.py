@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     jira_oauth_client_secret_ref: str = "secret/jira-client-secret"
     jira_oauth_state_secret: str = "local-dev-change-me"
     secrets_encryption_key: str = ""
+    required_codex_assets_version: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",
