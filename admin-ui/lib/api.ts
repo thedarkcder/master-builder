@@ -1,6 +1,8 @@
 export type JiraConfig = {
   connection_id: string | null;
   project_keys: string[];
+  ready_statuses: string[];
+  ready_jql: string | null;
   ready_label: string;
   in_progress_label: string;
   blocked_label: string;
@@ -81,6 +83,19 @@ export type GitHubRepositoryRecord = {
 export type JiraProjectRecord = {
   key: string;
   name: string;
+};
+
+export type ReadyIssuePreviewRecord = {
+  key: string;
+  summary: string;
+  status: string;
+};
+
+export type ReadyGatePreviewRecord = {
+  ready_statuses: string[];
+  ready_jql: string;
+  eligible_issues: ReadyIssuePreviewRecord[];
+  guidance: string;
 };
 
 export type RunRecord = {
@@ -232,6 +247,18 @@ export function listJiraProjects(
   return request<JiraProjectRecord[]>(
     credentials,
     `/api/admin/jira/connections/${encodeURIComponent(connectionId)}/projects`
+  );
+}
+
+export function previewReadyGate(
+  credentials: Credentials,
+  tenantId: string,
+  maxResults = 10
+): Promise<ReadyGatePreviewRecord> {
+  const query = new URLSearchParams({ max_results: String(maxResults) });
+  return request<ReadyGatePreviewRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/ready-preview?${query.toString()}`
   );
 }
 

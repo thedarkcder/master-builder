@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getTenant,
+  previewReadyGate,
+  type ReadyGatePreviewRecord,
   startJiraConnect,
   startGitHubInstall,
   testGithub,
@@ -30,6 +32,7 @@ export default function EditTenantPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusLine, setStatusLine] = useState("Loading tenant...");
+  const [readyPreview, setReadyPreview] = useState<ReadyGatePreviewRecord | null>(null);
 
   async function loadTenant() {
     if (!credentials) {
@@ -90,6 +93,19 @@ export default function EditTenantPage() {
       );
     } catch (error) {
       setStatusLine(`Health check failed: ${(error as Error).message}`);
+    }
+  }
+
+  async function runReadyPreview() {
+    if (!credentials) {
+      return;
+    }
+    try {
+      const preview = await previewReadyGate(credentials, params.tenantId, 10);
+      setReadyPreview(preview);
+      setStatusLine(`Ready preview loaded: ${preview.eligible_issues.length} issue(s) currently eligible.`);
+    } catch (error) {
+      setStatusLine(`Ready preview failed: ${(error as Error).message}`);
     }
   }
 
@@ -163,11 +179,44 @@ export default function EditTenantPage() {
             <Button variant="secondary" onClick={() => void runHealthChecks()}>
               Run Health Checks
             </Button>
+            <Button variant="secondary" onClick={() => void runReadyPreview()}>
+              Preview Ready Gate
+            </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         <TenantForm mode="edit" initialValues={recordToFormValues(tenant)} onSubmit={handleSave} submitting={saving} />
+        {readyPreview ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Ready Gate Preview</CardTitle>
+              <CardDescription>{readyPreview.guidance}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <p>
+                <strong>Ready statuses:</strong> {readyPreview.ready_statuses.join(", ")}
+              </p>
+              <p>
+                <strong>JQL:</strong> {readyPreview.ready_jql}
+              </p>
+              <div className="space-y-2">
+                <strong>Eligible issues</strong>
+                {readyPreview.eligible_issues.length ? (
+                  <ul className="list-disc space-y-1 pl-5">
+                    {readyPreview.eligible_issues.map((issue) => (
+                      <li key={issue.key}>
+                        {issue.key} - {issue.summary} ({issue.status})
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-muted-foreground">No currently eligible issues for this tenant.</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
         <p className="text-sm text-muted-foreground">{statusLine}</p>
       </CardContent>
     </Card>

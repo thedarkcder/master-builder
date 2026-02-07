@@ -17,6 +17,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import enqueue_run
 from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(tags=["jira-webhook"])
@@ -71,7 +72,7 @@ async def _read_json_payload(
     return payload, body
 
 
-def _extract_issue_payload(payload: dict) -> tuple[str, list[str]]:
+def _extract_issue_payload(payload: dict) -> tuple[str, list[str], str | None, str | None]:
     issue = payload.get("issue")
     if not isinstance(issue, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue object")
@@ -85,8 +86,51 @@ def _extract_issue_payload(payload: dict) -> tuple[str, list[str]]:
     if not isinstance(labels, list):
         labels = []
 
+    status_name: str | None = None
+    status_category_key: str | None = None
+    status_field = fields.get("status")
+    if isinstance(status_field, dict):
+        raw_status_name = status_field.get("name")
+        if isinstance(raw_status_name, str):
+            normalized_status_name = raw_status_name.strip()
+            if normalized_status_name:
+                status_name = normalized_status_name
+
+        status_category = status_field.get("statusCategory")
+        if isinstance(status_category, dict):
+            raw_status_category_key = status_category.get("key")
+            if isinstance(raw_status_category_key, str):
+                normalized_status_category_key = raw_status_category_key.strip().lower()
+                if normalized_status_category_key:
+                    status_category_key = normalized_status_category_key
+
     normalized_labels = [str(label) for label in labels]
-    return issue_key, normalized_labels
+    return issue_key, normalized_labels, status_name, status_category_key
+
+
+def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
+    changelog = payload.get("changelog")
+    if not isinstance(changelog, dict):
+        return None, None
+
+    items = changelog.get("items")
+    if not isinstance(items, list):
+        return None, None
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        field = item.get("field")
+        if not isinstance(field, str) or field.strip().lower() != "status":
+            continue
+
+        from_status = item.get("fromString")
+        to_status = item.get("toString")
+        normalized_from_status = from_status.strip() if isinstance(from_status, str) and from_status.strip() else None
+        normalized_to_status = to_status.strip() if isinstance(to_status, str) and to_status.strip() else None
+        return normalized_from_status, normalized_to_status
+
+    return None, None
 
 
 def _extract_webhook_token(request: Request) -> str | None:
@@ -313,7 +357,7 @@ async def ingest_jira_webhook(
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
 
-    issue_key, labels = _extract_issue_payload(payload)
+    issue_key, _, issue_status, issue_status_category_key = _extract_issue_payload(payload)
     delivery_id = _extract_delivery_id(request)
     logger.info(
         "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
@@ -323,10 +367,17 @@ async def ingest_jira_webhook(
         delivery_id,
     )
 
-    ready_label = tenant.jira_config.get("ready_label", "agent:ready")
-    if ready_label not in labels:
+    configured_ready_statuses = tenant.jira_config.get("ready_statuses")
+    if isinstance(configured_ready_statuses, list):
+        ready_statuses = [str(status).strip() for status in configured_ready_statuses if str(status).strip()]
+    else:
+        ready_statuses = []
+    if not ready_statuses:
+        ready_statuses = ["Ready for Agent"]
+
+    if issue_status is None:
         logger.info(
-            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=ready_label_missing",
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=issue_status_missing",
             request_id,
             tenant_id,
             issue_key,
@@ -336,8 +387,69 @@ async def ingest_jira_webhook(
             "tenant_id": tenant_id,
             "issue_key": issue_key,
             "enqueued": False,
-            "reason": "ready_label_missing",
+            "reason": "issue_status_missing",
         }
+
+    if issue_status_category_key == "done":
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=issue_done issue_status=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            issue_status,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "issue_done",
+            "issue_status": issue_status,
+        }
+
+    normalized_ready_statuses = {status.casefold() for status in ready_statuses}
+    if issue_status.casefold() not in normalized_ready_statuses:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=status_not_ready issue_status=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            issue_status,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "status_not_ready",
+            "issue_status": issue_status,
+            "ready_statuses": ready_statuses,
+            "guidance": format_discord_ready_gate_guidance(
+                issue_key=issue_key,
+                issue_status=issue_status,
+                ready_statuses=ready_statuses,
+            ),
+        }
+
+    from_status, to_status = _extract_status_transition(payload)
+    trigger_reason = "ready_status_recheck"
+    if (
+        to_status is not None
+        and to_status.casefold() in normalized_ready_statuses
+        and from_status is not None
+        and from_status.casefold() != to_status.casefold()
+    ):
+        trigger_reason = "status_transition_to_ready"
+    logger.info(
+        "jira_webhook_ready_trigger request_id=%s tenant_id=%s issue_key=%s trigger_reason=%s issue_status=%s from_status=%s to_status=%s",
+        request_id,
+        tenant_id,
+        issue_key,
+        trigger_reason,
+        issue_status,
+        from_status,
+        to_status,
+    )
 
     enqueue_result = enqueue_run(
         session,
@@ -362,6 +474,7 @@ async def ingest_jira_webhook(
             "enqueued": False,
             "reason": enqueue_result.reason,
             "run_id": enqueue_result.run.run_id,
+            "trigger_reason": trigger_reason,
         }
     logger.info(
         "jira_webhook_enqueued request_id=%s tenant_id=%s issue_key=%s run_id=%s",
@@ -377,6 +490,7 @@ async def ingest_jira_webhook(
         "issue_key": issue_key,
         "enqueued": True,
         "run_id": enqueue_result.run.run_id,
+        "trigger_reason": trigger_reason,
     }
 
 

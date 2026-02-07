@@ -10,6 +10,8 @@ from orchestrator.core.guardrails import enforce_safe_command
 class JiraConfig(BaseModel):
     connection_id: str | None = None
     project_keys: list[str] = Field(default_factory=list, min_length=1)
+    ready_statuses: list[str] = Field(default_factory=lambda: ["Ready for Agent"], min_length=1)
+    ready_jql: str | None = None
     ready_label: str = Field(default="agent:ready", min_length=1)
     in_progress_label: str = Field(default="agent:in-progress", min_length=1)
     blocked_label: str = Field(default="agent:blocked", min_length=1)
@@ -108,6 +110,19 @@ class JiraConnectStart(BaseModel):
 class JiraProjectRead(BaseModel):
     key: str
     name: str
+
+
+class ReadyIssuePreviewRead(BaseModel):
+    key: str
+    summary: str
+    status: str
+
+
+class ReadyGatePreviewRead(BaseModel):
+    ready_statuses: list[str]
+    ready_jql: str
+    eligible_issues: list[ReadyIssuePreviewRead]
+    guidance: str
 
 
 class GitHubRepositoryRead(BaseModel):
