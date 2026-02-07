@@ -3,12 +3,13 @@ name: Release Train Close
 on:
   schedule:
     - cron: "0 * * * *"
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       release_version:
-        description: "Optional release version (vX.Y.Z). If empty, next version is computed from git tags."
-        required: false
-        default: ""
+        description: "Release version to close in Jira (vX.Y.Z)."
+        required: true
       dry_run:
         description: "Dry run only (no Jira writes)."
         required: false
@@ -51,7 +52,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${WORKFLOW_RELEASE_VERSION}" ]; then
+          if [ "${{ github.event_name }}" = "release" ]; then
+            release_version="${{ github.event.release.tag_name }}"
+          elif [ -n "${WORKFLOW_RELEASE_VERSION:-}" ]; then
             release_version="${WORKFLOW_RELEASE_VERSION}"
           else
             release_version="$(python - <<'PY'
@@ -70,41 +73,6 @@ PY
 )"
           fi
           echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
-
-      - name: Assign Ready to Release issues to resolved release
-        env:
-          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
-          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
-          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
-          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
-          READY_STATUS: ${{ vars.RELEASE_READY_STATUS }}
-          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
-          DRY_RUN_INPUT: ${{ inputs.dry_run }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -z "${JIRA_BASE_URL}" ] || [ -z "${JIRA_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ] || [ -z "${JIRA_PROJECT_KEY}" ]; then
-            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
-            exit 1
-          fi
-
-          ready_status="${READY_STATUS:-Ready to Release}"
-          args=(
-            "scripts/release_train_sync.py"
-            "assign"
-            "--jira-base-url" "${JIRA_BASE_URL}"
-            "--jira-email" "${JIRA_EMAIL}"
-            "--jira-api-token" "${JIRA_API_TOKEN}"
-            "--project-key" "${JIRA_PROJECT_KEY}"
-            "--ready-status" "${ready_status}"
-            "--release-version" "${RELEASE_VERSION}"
-            "--comment"
-          )
-          if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
-            args+=("--dry-run")
-          fi
-          python "${args[@]}"
 
       - name: Collect release issue keys
         id: issue-keys
@@ -128,7 +96,7 @@ PY
           issue_count=$(wc -l < /tmp/release_issue_keys.txt | tr -d '[:space:]')
           echo "issue_count=${issue_count}" >> "$GITHUB_OUTPUT"
 
-      - name: Merge release issue PRs to main
+      - name: Wait for checks and merge release issue PRs to main
         if: steps.issue-keys.outputs.issue_count != '0' && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -147,24 +115,29 @@ PY
 
           if [ "${#prs_by_issue[@]}" -eq 0 ]; then
             echo "No open PRs found for release issues."
-            exit 0
+            exit 1
           fi
 
           merge_failures=()
           for pr_number in $(printf '%s\n' "${!prs_by_issue[@]}" | sort -n); do
+            if ! gh pr checks "${pr_number}" --required --watch --interval 20; then
+              merge_failures+=("${pr_number}:${prs_by_issue[$pr_number]}:checks")
+              continue
+            fi
             if gh pr merge "${pr_number}" --merge --delete-branch; then
               echo "Merged PR #${pr_number} for ${prs_by_issue[$pr_number]}"
             else
-              merge_failures+=("${pr_number}:${prs_by_issue[$pr_number]}")
+              merge_failures+=("${pr_number}:${prs_by_issue[$pr_number]}:merge")
             fi
           done
 
           if [ "${#merge_failures[@]}" -gt 0 ]; then
-            printf 'Failed merges: %s\n' "${merge_failures[*]}"
+            printf 'Failed merge/check operations: %s\n' "${merge_failures[*]}"
             exit 1
           fi
 
       - name: Transition release-train Jira issues to Done
+        if: steps.issue-keys.outputs.issue_count != '0'
         env:
           JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
           JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
