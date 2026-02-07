@@ -39,6 +39,9 @@ export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
 # Optional extra Python index for pinned codex assets wheel
 # Example local package service (docker-compose):
 # export PIP_EXTRA_INDEX_URL=http://tenant:change-me@localhost:4401/simple/
+#
+# If not set, docker-compose defaults to:
+# http://tenant:change-me@host.docker.internal:4401/simple/
 ```
 
 `ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex assets version used for tenant init.

@@ -26,12 +26,11 @@ services:
       - "4401:8080"
     entrypoint:
       - /bin/sh
-      - -c
-    command: |
-      set -eu
-      mkdir -p /data/packages
-      printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /tmp/.htpasswd
-      exec pypi-server run -p 8080 -P /tmp/.htpasswd -H plaintext -a update,download,list /data/packages
+      - -ceu
+      - |
+        mkdir -p /data/packages
+        printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /tmp/.htpasswd
+        exec pypi-server run -p 8080 -P /tmp/.htpasswd -H plaintext -a update,download,list /data/packages
     volumes:
       - packages-data:/data/packages
 
@@ -40,7 +39,7 @@ services:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your codex package server simple index URL}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-http://tenant:change-me@host.docker.internal:4401/simple/}
     container_name: master-builder-api
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
@@ -75,7 +74,7 @@ services:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your codex package server simple index URL}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-http://tenant:change-me@host.docker.internal:4401/simple/}
     container_name: master-builder-worker
     depends_on:
       api:
