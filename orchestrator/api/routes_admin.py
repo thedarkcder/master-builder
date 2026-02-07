@@ -1,19 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
+    GitHubInstallStart,
     IntegrationTestResult,
     RunRead,
     TenantCreate,
     TenantRead,
     TenantUpdate,
 )
+from orchestrator.core.config import get_settings
+from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import Run, Tenant
 from orchestrator.tools.github_app import github_client_from_tenant_config
@@ -186,13 +191,19 @@ def test_github_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     github = tenant.github_config
-    required = ["mode", "app_id_ref", "private_key_ref", "installation_id"]
+    required = ["mode", "app_id_ref", "private_key_ref"]
     missing = [field for field in required if not github.get(field)]
     if missing:
         return IntegrationTestResult(ok=False, details=f"Missing GitHub fields: {', '.join(missing)}")
 
     if github.get("mode") != "github_app":
         return IntegrationTestResult(ok=False, details="Only github_app mode is supported")
+
+    if not github.get("installation_id"):
+        return IntegrationTestResult(
+            ok=False,
+            details="GitHub App installation is not connected for this tenant",
+        )
 
     try:
         github_client_from_tenant_config(github)
@@ -203,6 +214,80 @@ def test_github_connection(
         ok=True,
         details="GitHub tenant configuration looks valid and secret refs resolve",
     )
+
+
+@router.post("/tenants/{tenant_id}/github/install/start", response_model=GitHubInstallStart)
+def start_github_install(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> GitHubInstallStart:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    github = tenant.github_config
+    if github.get("mode") != "github_app":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only github_app mode is supported",
+        )
+
+    settings = get_settings()
+    app_slug = settings.github_app_slug.strip()
+    if not app_slug:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitHub app slug is not configured",
+        )
+
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    state_token = create_install_state_token(
+        tenant_id=tenant_id,
+        exp=expires_at,
+        secret=settings.github_install_state_secret,
+    )
+    install_url = (
+        f"https://github.com/apps/{quote(app_slug, safe='')}/installations/new?"
+        f"state={quote(state_token, safe='')}"
+    )
+    return GitHubInstallStart(install_url=install_url, expires_at=expires_at)
+
+
+@router.get("/github/install/callback", include_in_schema=False)
+def github_install_callback(
+    state_token: str = Query(..., alias="state"),
+    installation_id: str = Query(..., min_length=1),
+    setup_action: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> RedirectResponse:
+    settings = get_settings()
+    try:
+        state = parse_install_state_token(
+            token=state_token,
+            secret=settings.github_install_state_secret,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    tenant = session.get(Tenant, state.tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    github_config = dict(tenant.github_config)
+    github_config["installation_id"] = str(installation_id)
+    if setup_action:
+        github_config["installation_setup_action"] = setup_action
+    github_config["installation_updated_at"] = datetime.now(timezone.utc).isoformat()
+    tenant.github_config = github_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+    redirect_url = (
+        f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/edit"
+        "?github_install=success"
+    )
+    return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/runs", response_model=list[RunRead])

@@ -1,6 +1,7 @@
 import os
 import unittest
 from tempfile import TemporaryDirectory
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 
@@ -18,6 +19,9 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+        os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
+        os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
+        os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
         os.environ["secret/app-id"] = "12345"
         os.environ["secret/private-key"] = "not-a-real-key-for-tests"
 
@@ -31,6 +35,9 @@ class AdminApiTests(unittest.TestCase):
         self.temp_dir.cleanup()
         os.environ.pop("secret/app-id", None)
         os.environ.pop("secret/private-key", None)
+        os.environ.pop("ORCHESTRATOR_GITHUB_APP_SLUG", None)
+        os.environ.pop("ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", None)
+        os.environ.pop("ORCHESTRATOR_ADMIN_UI_BASE_URL", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
@@ -154,3 +161,42 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_start_install_and_callback_persist_installation_id(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = None
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        start_response = self.client.post(
+            "/api/admin/tenants/tenant-a/github/install/start",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(start_response.status_code, 200)
+        install_url = start_response.json()["install_url"]
+        self.assertIn("https://github.com/apps/master-builder-app/installations/new", install_url)
+
+        parsed = urlparse(install_url)
+        state_token = parse_qs(parsed.query).get("state", [None])[0]
+        self.assertIsNotNone(state_token)
+
+        callback_response = self.client.get(
+            "/api/admin/github/install/callback",
+            params={
+                "state": state_token,
+                "installation_id": "98765",
+                "setup_action": "install",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(callback_response.status_code, 302)
+        self.assertIn("/tenants/tenant-a/edit?github_install=success", callback_response.headers.get("location", ""))
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["github"]["installation_id"], "98765")
