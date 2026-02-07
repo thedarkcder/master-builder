@@ -8,7 +8,7 @@ RUN npm install
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
+ENV NEXT_PUBLIC_API_BASE_URL=http://localhost:4080
 
 RUN npm run build
 

@@ -18,13 +18,11 @@ Set required environment values:
 export ORCHESTRATOR_ADMIN_USERNAME=admin
 export ORCHESTRATOR_ADMIN_PASSWORD=change-me
 export ORCHESTRATOR_DATABASE_URL=sqlite:///./orchestrator.db
-export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
-export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
-export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
+export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4080,http://127.0.0.1:4080
+export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4080
+export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4080
 export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=secret/jira-client-id
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=secret/jira-client-secret
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
 from cryptography.fernet import Fernet
@@ -32,8 +30,10 @@ print(Fernet.generate_key().decode())
 PY
 )
 
-export secret/jira-client-id=your-atlassian-oauth-client-id
-export secret/jira-client-secret=your-atlassian-oauth-client-secret
+export SECRET_JIRA_CLIENT_ID=your-atlassian-oauth-client-id
+export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
+export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
+export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
 ```
 
 ## Public API
@@ -91,8 +91,8 @@ npm install
 npm run dev
 ```
 
-Default UI URL: `http://localhost:4100`
-Login route: `http://localhost:4100/login`
+Default ingress URL: `http://localhost:4080`
+Login route via ingress: `http://localhost:4080/login`
 
 UI sections:
 - `/tenants` for list and health checks
@@ -101,13 +101,36 @@ UI sections:
 - `/runs` for run observability
 
 ## Docker
-Build and run API + worker + admin UI:
+Build and run API + worker + admin UI + reverse proxy + cloudflared:
 ```bash
 docker compose up --build
 ```
 
-API is exposed on `http://localhost:4000`.
-Admin UI is exposed on `http://localhost:4100`.
+Primary local ingress is `http://localhost:4080`.
+- API through ingress: `http://localhost:4080/health`, `http://localhost:4080/api/*`
+- Admin UI through ingress: `http://localhost:4080/login`
+
+Direct service ports are still exposed for troubleshooting:
+- API direct: `http://localhost:4000`
+- Admin UI direct: `http://localhost:4100`
+
+### Quick tunnel URL (trycloudflare)
+The stack includes `cloudflared` in Quick Tunnel mode, targeting the reverse proxy.
+
+Watch logs and copy the generated public URL:
+```bash
+docker compose logs -f cloudflared
+```
+
+Extract just the URL:
+```bash
+docker compose logs cloudflared | rg -o \"https://[-a-z0-9]+\\.trycloudflare\\.com\" | tail -n 1
+```
+
+Use that URL for external callbacks (Jira/GitHub/Discord) during local testing.
+
+Detailed route matrix and verification steps:
+- `docs/local-reverse-proxy.md`
 
 ## Tenant onboarding
 1. Create a tenant via `POST /api/admin/tenants`.

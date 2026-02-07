@@ -1,0 +1,10 @@
+:8080 {
+  @api_routes path /api* /health /jira* /runs* /docs* /redoc* /openapi.json
+  handle @api_routes {
+    reverse_proxy api:4000
+  }
+
+  handle {
+    reverse_proxy admin-ui:4100
+  }
+}
