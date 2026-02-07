@@ -212,11 +212,15 @@ jobs:
           CI: "true"
         run: |
           set -euo pipefail
-          case "${{ needs.detect.outputs.node_pm }}" in
-            pnpm) pnpm test ;;
-            yarn) yarn test ;;
-            npm)  npm test ;;
-          esac
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+            case "${{ needs.detect.outputs.node_pm }}" in
+              pnpm) pnpm test ;;
+              yarn) yarn test ;;
+              npm)  npm test ;;
+            esac
+          else
+            echo "No test script found; skipping."
+          fi
 
       - name: Build (if script exists)
         working-directory: ${{ needs.detect.outputs.node_project_dir }}
