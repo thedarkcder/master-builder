@@ -9,6 +9,7 @@ This document describes the tenant onboarding model for GitHub integration.
   - complete install on GitHub
   - callback persists `installation_id` on tenant config
 - GitHub App credentials are server-managed (`ORCHESTRATOR_GITHUB_APP_ID_REF`, `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF`).
+- Secret refs can be managed in admin UI at `/secrets` (encrypted-at-rest, no restart required).
 
 ## Jira + GitHub flow summary
 - Step 1: tenant basics
@@ -22,7 +23,9 @@ Yes. You must create a GitHub App (or use an existing app owned by your org) and
 
 ## GitHub App creation checklist
 1. In GitHub, go to `Settings -> Developer settings -> GitHub Apps -> New GitHub App`.
-2. Set app name, homepage URL, and webhook URL (can be placeholder for local dev).
+2. Set app name, homepage URL, callback URL, and webhook URL:
+   - Callback URL: `GET /api/admin/github/install/callback` on your public API base URL
+   - Webhook URL: `POST /github/webhook` on your public API base URL
 3. Generate a private key and store it in your secret manager.
 4. Record the App ID.
 5. Install the app to repos the tenant is allowed to use.
@@ -36,6 +39,13 @@ Yes. You must create a GitHub App (or use an existing app owned by your org) and
 - Repository `Commit statuses`: Read
 
 If webhook processing is enabled for GitHub events, also configure webhook delivery and secret handling.
+
+## Webhook secret handling
+- Configure one shared GitHub App webhook secret in GitHub.
+- In orchestrator runtime, set:
+  - `ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF` (example value: `secret/github-webhook`)
+  - environment variable keyed by that ref containing the raw secret.
+- The API validates `X-Hub-Signature-256` for inbound GitHub webhook deliveries.
 
 ## OAuth-style install/connect flow
 1. Operator creates a tenant with basic tenant/Jira fields.

@@ -16,7 +16,11 @@ from orchestrator.worker import process_next_queued_run
 
 
 class _SuccessRunner:
+    def __init__(self) -> None:
+        self.last_request = None
+
     def run(self, request):  # noqa: ANN001
+        self.last_request = request
         return WorkflowResult(
             succeeded=True,
             plan=PmPlan(
@@ -118,15 +122,31 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             session.commit()
 
-    def _queue_run(self, issue_key: str) -> str:
+    def _queue_run(
+        self,
+        issue_key: str,
+        *,
+        issue_summary: str | None = None,
+        issue_description: str | None = None,
+    ) -> str:
         now = datetime.now(timezone.utc)
         run_id = f"run-{issue_key}"
+        effective_summary = issue_summary or f"Implement {issue_key}"
+        effective_description = issue_description or (
+            "Objective: Deliver requested behavior. "
+            "Scope: in scope and out of scope are documented. "
+            "Acceptance Criteria: all required checks pass. "
+            "How to test: run unit tests and validate expected outputs. "
+            "NFR intent: MVP."
+        )
         with self.session_factory() as session:
             session.add(
                 Run(
                     run_id=run_id,
                     tenant_id="tenant-worker",
                     issue_key=issue_key,
+                    issue_summary=effective_summary,
+                    issue_description=effective_description,
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
@@ -143,9 +163,10 @@ class WorkerWorkflowTests(unittest.TestCase):
 
     def test_process_next_queued_run_marks_success_and_persists_plan(self) -> None:
         run_id = self._queue_run("TP-300")
+        runner = _SuccessRunner()
 
         with self.session_factory() as session:
-            processed = process_next_queued_run(session, _SuccessRunner())
+            processed = process_next_queued_run(session, runner)
             self.assertIsNotNone(processed)
             self.assertEqual(processed.run_id, run_id)
             self.assertEqual(processed.status, "succeeded")
@@ -155,6 +176,16 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertTrue(processed.plan["succeeded"])
             self.assertEqual(processed.plan["attempts"], 1)
+            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(
+                [entry["stage"] for entry in stage_updates],
+                ["lock_acquired", "plan_posted", "pr_opened"],
+            )
+            self.assertIn("TP-300", stage_updates[0]["discord_message"])
+            self.assertIn("run-TP-300", stage_updates[0]["discord_message"])
+            self.assertIsNotNone(runner.last_request)
+            self.assertIn("Good To Do", runner.last_request.issue_description)
+            self.assertIn("Decision Gate", runner.last_request.issue_description)
 
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
         run_id = self._queue_run("TP-301")
@@ -172,3 +203,29 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertFalse(processed.plan["succeeded"])
             self.assertEqual(processed.plan["diagnostics"]["stage"], "test")
+            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(
+                [entry["stage"] for entry in stage_updates],
+                ["lock_acquired", "plan_posted", "run_failed"],
+            )
+            self.assertIn(
+                "Max workflow attempts reached after test failures",
+                stage_updates[-1]["jira_message"],
+            )
+
+    def test_process_next_queued_run_blocks_when_decision_gate_is_required(self) -> None:
+        run_id = self._queue_run(
+            "TP-302",
+            issue_summary="Unclear requirements",
+            issue_description="TBD: need to decide later?",
+        )
+
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, _SuccessRunner())
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "blocked")
+            self.assertIn("Decision Gate required", processed.last_error or "")
+            self.assertIsInstance(processed.plan, dict)
+            self.assertIn("decision_gate", processed.plan)
+            self.assertTrue(processed.plan["decision_gate"]["triggered"])

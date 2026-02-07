@@ -1,7 +1,11 @@
 import os
+import json
+import hmac
+import hashlib
 import unittest
 from tempfile import TemporaryDirectory
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
@@ -16,11 +20,15 @@ class JiraWebhookTests(unittest.TestCase):
         self.database_url = f"sqlite:///{self.temp_dir.name}/webhook_test.db"
         self.webhook_secret_env = "ORCHESTRATOR_TEST_WEBHOOK_SECRET"
         self.webhook_secret_value = "super-secret-token"
+        self.github_webhook_secret_env = "ORCHESTRATOR_TEST_GITHUB_WEBHOOK_SECRET"
+        self.github_webhook_secret_value = "github-super-secret-token"
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
         os.environ[self.webhook_secret_env] = self.webhook_secret_value
+        os.environ[self.github_webhook_secret_env] = self.github_webhook_secret_value
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -32,6 +40,10 @@ class JiraWebhookTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         os.environ.pop(self.webhook_secret_env, None)
+        os.environ.pop(self.github_webhook_secret_env, None)
+        os.environ.pop("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF", None)
+        os.environ.pop("ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES", None)
+        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
@@ -39,6 +51,8 @@ class JiraWebhookTests(unittest.TestCase):
         self,
         tenant_id: str,
         webhook_secret_ref: str | None = None,
+        github_webhook_secret_ref: str | None = None,
+        github_installation_id: str = "12345",
         is_enabled: bool = True,
         max_concurrent_runs: int = 2,
     ) -> None:
@@ -48,6 +62,8 @@ class JiraWebhookTests(unittest.TestCase):
             "jira": {
                 "mcp_endpoint": "https://mcp.example.test",
                 "project_keys": ["TP"],
+                "ready_statuses": ["Ready for Agent"],
+                "ready_jql": 'project = TP AND status = "Ready for Agent"',
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
                 "blocked_label": "agent:blocked",
@@ -56,8 +72,8 @@ class JiraWebhookTests(unittest.TestCase):
             },
             "github": {
                 "mode": "github_app",
-                "webhook_secret_ref": None,
-                "installation_id": "12345",
+                "webhook_secret_ref": github_webhook_secret_ref,
+                "installation_id": github_installation_id,
             },
             "repos": {
                 "allowlist": ["https://github.com/example/repo"],
@@ -81,14 +97,34 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["tenant_id"], tenant_id)
 
-    def test_webhook_ignores_disabled_tenant(self) -> None:
-        self._create_tenant("tenant-disabled", is_enabled=False)
-        payload = {
+    def _sign_github_payload(self, payload_bytes: bytes, secret: str) -> str:
+        digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+        return f"sha256={digest}"
+
+    def _jira_issue_payload(
+        self,
+        *,
+        issue_key: str,
+        labels: list[str] | None = None,
+        status_name: str = "Ready for Agent",
+        status_category_key: str = "indeterminate",
+    ) -> dict:
+        return {
             "issue": {
-                "key": "TP-126",
-                "fields": {"labels": ["agent:ready"]},
+                "key": issue_key,
+                "fields": {
+                    "labels": labels or [],
+                    "status": {
+                        "name": status_name,
+                        "statusCategory": {"key": status_category_key},
+                    },
+                },
             }
         }
+
+    def test_webhook_ignores_disabled_tenant(self) -> None:
+        self._create_tenant("tenant-disabled", is_enabled=False)
+        payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/tenant-disabled", json=payload)
 
@@ -96,46 +132,66 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(response.json()["enqueued"])
         self.assertEqual(response.json()["reason"], "tenant_disabled")
 
-    def test_webhook_requires_ready_label(self) -> None:
-        payload = {
-            "issue": {
-                "key": "TP-123",
-                "fields": {"labels": ["not-ready"]},
-            }
-        }
+    def test_webhook_requires_ready_status(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["enqueued"])
-        self.assertEqual(response.json()["reason"], "ready_label_missing")
+        self.assertEqual(response.json()["reason"], "status_not_ready")
+        self.assertIn("Move the issue to a ready status", response.json()["guidance"])
+
+    def test_webhook_ignores_done_issue_status(self) -> None:
+        payload = self._jira_issue_payload(
+            issue_key="TP-123",
+            status_name="Done",
+            status_category_key="done",
+            labels=["agent:ready"],
+        )
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "issue_done")
 
     def test_webhook_enqueues_once_for_active_issue(self) -> None:
-        payload = {
-            "issue": {
-                "key": "TP-124",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-124", labels=["agent:ready"])
 
         first = self.client.post("/jira/webhook/tenant-webhook", json=payload)
         second = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(first.status_code, 200)
         self.assertTrue(first.json()["enqueued"])
+        self.assertEqual(first.json()["trigger_reason"], "ready_status_recheck")
 
         self.assertEqual(second.status_code, 200)
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "run_already_active")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
+        self.assertEqual(second.json()["trigger_reason"], "ready_status_recheck")
+
+    def test_webhook_marks_transition_into_ready_status(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
+        payload["changelog"] = {
+            "items": [
+                {
+                    "field": "status",
+                    "fromString": "To Do",
+                    "toString": "Ready for Agent",
+                }
+            ]
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+        self.assertEqual(response.json()["trigger_reason"], "status_transition_to_ready")
 
     def test_webhook_deduplicates_delivery_identifier(self) -> None:
-        payload = {
-            "issue": {
-                "key": "TP-126",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
         headers = {"X-Atlassian-Webhook-Identifier": "delivery-123"}
 
         first = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
@@ -150,18 +206,8 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_webhook_respects_tenant_concurrency_limit(self) -> None:
         self._create_tenant("tenant-single", max_concurrent_runs=1)
-        first_payload = {
-            "issue": {
-                "key": "TP-126",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
-        second_payload = {
-            "issue": {
-                "key": "TP-127",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        first_payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
+        second_payload = self._jira_issue_payload(issue_key="TP-127", labels=["agent:ready"])
 
         first = self.client.post("/jira/webhook/tenant-single", json=first_payload)
         second = self.client.post("/jira/webhook/tenant-single", json=second_payload)
@@ -173,12 +219,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.json()["reason"], "tenant_concurrency_limit_reached")
 
     def test_webhook_unknown_tenant_returns_404(self) -> None:
-        payload = {
-            "issue": {
-                "key": "TP-999",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-999", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/missing-tenant", json=payload)
 
@@ -186,12 +227,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_webhook_requires_valid_token_when_secret_ref_configured(self) -> None:
         self._create_tenant("tenant-auth", webhook_secret_ref=self.webhook_secret_env)
-        payload = {
-            "issue": {
-                "key": "TP-125",
-                "fields": {"labels": ["agent:ready"]},
-            }
-        }
+        payload = self._jira_issue_payload(issue_key="TP-125", labels=["agent:ready"])
 
         unauthenticated = self.client.post("/jira/webhook/tenant-auth", json=payload)
         invalid_token = self.client.post(
@@ -209,3 +245,161 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(invalid_token.status_code, 401)
         self.assertEqual(valid_token.status_code, 200)
         self.assertTrue(valid_token.json()["enqueued"])
+
+    def test_github_webhook_ping_is_accepted(self) -> None:
+        response = self.client.post(
+            "/github/webhook",
+            json={"zen": "keep it logically awesome"},
+            headers={
+                "X-GitHub-Event": "ping",
+                "X-GitHub-Delivery": "gh-delivery-1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "ping")
+
+    def test_github_webhook_unknown_installation_is_accepted_without_handler(self) -> None:
+        response = self.client.post(
+            "/github/webhook",
+            json={
+                "action": "opened",
+                "installation": {"id": 999999},
+                "repository": {"full_name": "example/repo"},
+            },
+            headers={
+                "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": "gh-delivery-2",
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "unknown_installation")
+
+    def test_github_webhook_resolves_tenant_from_installation_id(self) -> None:
+        response = self.client.post(
+            "/github/webhook",
+            json={
+                "action": "synchronize",
+                "installation": {"id": 12345},
+                "repository": {"full_name": "example/repo"},
+            },
+            headers={
+                "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": "gh-delivery-3",
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["accepted"])
+        self.assertEqual(response.json()["tenant_id"], "tenant-webhook")
+        self.assertEqual(response.json()["reason"], "accepted_no_handler")
+
+    def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(self) -> None:
+        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = self.github_webhook_secret_env
+        payload = {
+            "action": "opened",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "example/repo"},
+        }
+        payload_bytes = json.dumps(payload).encode("utf-8")
+
+        response = self.client.post(
+            "/github/webhook",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": self._sign_github_payload(payload_bytes, "wrong-secret"),
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_github_webhook_accepts_valid_signature_when_global_secret_configured(self) -> None:
+        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = self.github_webhook_secret_env
+        payload = {
+            "action": "opened",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "example/repo"},
+        }
+        payload_bytes = json.dumps(payload).encode("utf-8")
+        signature = self._sign_github_payload(payload_bytes, self.github_webhook_secret_value)
+
+        response = self.client.post(
+            "/github/webhook",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": signature,
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "accepted_no_handler")
+
+    def test_github_webhook_enforces_payload_size_limit(self) -> None:
+        os.environ["ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES"] = "20"
+        payload = {"zen": "abcdefghijklmnopqrstuvwxyz"}
+        payload_bytes = json.dumps(payload).encode("utf-8")
+
+        response = self.client.post(
+            "/github/webhook",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "ping",
+            },
+        )
+
+        self.assertEqual(response.status_code, 413)
+
+    def test_jira_webhook_uses_managed_secret_ref(self) -> None:
+        managed_ref = "secret/jira-managed-token"
+        self.client.put(
+            "/api/admin/secrets/secret%2Fjira-managed-token",
+            json={"value": "managed-jira-token"},
+            auth=("admin", "secret"),
+        )
+        self._create_tenant("tenant-managed-jira", webhook_secret_ref=managed_ref)
+
+        payload = self._jira_issue_payload(issue_key="TP-555", labels=["agent:ready"])
+        response = self.client.post(
+            "/jira/webhook/tenant-managed-jira",
+            json=payload,
+            headers={"X-Webhook-Token": "managed-jira-token"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+
+    def test_github_webhook_uses_managed_global_secret_ref(self) -> None:
+        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = "secret/github-global-webhook"
+        self.client.put(
+            "/api/admin/secrets/secret%2Fgithub-global-webhook",
+            json={"value": "managed-global-secret"},
+            auth=("admin", "secret"),
+        )
+        payload = {
+            "action": "opened",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "example/repo"},
+        }
+        payload_bytes = json.dumps(payload).encode("utf-8")
+        signature = self._sign_github_payload(payload_bytes, "managed-global-secret")
+
+        response = self.client.post(
+            "/github/webhook",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": signature,
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["accepted"])

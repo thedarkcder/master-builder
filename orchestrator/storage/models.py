@@ -43,6 +43,15 @@ class JiraOAuthConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ManagedSecret(Base):
+    __tablename__ = "managed_secrets"
+
+    secret_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Run(Base):
     __tablename__ = "runs"
 
@@ -54,6 +63,8 @@ class Run(Base):
         index=True,
     )
     issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    issue_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issue_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

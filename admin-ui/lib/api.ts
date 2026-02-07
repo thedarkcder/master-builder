@@ -1,6 +1,8 @@
 export type JiraConfig = {
   connection_id: string | null;
   project_keys: string[];
+  ready_statuses: string[];
+  ready_jql: string | null;
   ready_label: string;
   in_progress_label: string;
   blocked_label: string;
@@ -83,6 +85,19 @@ export type JiraProjectRecord = {
   name: string;
 };
 
+export type ReadyIssuePreviewRecord = {
+  key: string;
+  summary: string;
+  status: string;
+};
+
+export type ReadyGatePreviewRecord = {
+  ready_statuses: string[];
+  ready_jql: string;
+  eligible_issues: ReadyIssuePreviewRecord[];
+  guidance: string;
+};
+
 export type RunRecord = {
   run_id: string;
   tenant_id: string;
@@ -96,6 +111,18 @@ export type RunRecord = {
   started_at: string | null;
   finished_at: string | null;
   plan: Record<string, unknown> | null;
+};
+
+export type ManagedSecretRecord = {
+  secret_ref: string;
+  source: "managed" | "environment" | "missing" | string;
+  updated_at: string | null;
+};
+
+export type ManagedSecretResolveResult = {
+  secret_ref: string;
+  source: "managed" | "environment" | "missing" | string;
+  resolved: boolean;
 };
 
 export type Credentials = {
@@ -223,6 +250,18 @@ export function listJiraProjects(
   );
 }
 
+export function previewReadyGate(
+  credentials: Credentials,
+  tenantId: string,
+  maxResults = 10
+): Promise<ReadyGatePreviewRecord> {
+  const query = new URLSearchParams({ max_results: String(maxResults) });
+  return request<ReadyGatePreviewRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/ready-preview?${query.toString()}`
+  );
+}
+
 export function testGithub(
   credentials: Credentials,
   tenantId: string
@@ -274,4 +313,29 @@ export function listRuns(
 
 export function getRun(credentials: Credentials, runId: string): Promise<RunRecord> {
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
+}
+
+export function listManagedSecrets(credentials: Credentials): Promise<ManagedSecretRecord[]> {
+  return request<ManagedSecretRecord[]>(credentials, "/api/admin/secrets");
+}
+
+export function upsertManagedSecret(
+  credentials: Credentials,
+  secretRef: string,
+  value: string
+): Promise<ManagedSecretRecord> {
+  return request<ManagedSecretRecord>(credentials, `/api/admin/secrets/${encodeURIComponent(secretRef)}`, {
+    method: "PUT",
+    body: JSON.stringify({ value })
+  });
+}
+
+export function resolveManagedSecret(
+  credentials: Credentials,
+  secretRef: string
+): Promise<ManagedSecretResolveResult> {
+  return request<ManagedSecretResolveResult>(credentials, "/api/admin/secrets/resolve", {
+    method: "POST",
+    body: JSON.stringify({ secret_ref: secretRef })
+  });
 }

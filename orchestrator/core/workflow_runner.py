@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from collections.abc import Callable
 from typing import Protocol
+
+from orchestrator.core.followups import build_backlog_follow_up_draft
+from orchestrator.core.gtd import validate_good_to_do
+
+PLACEHOLDER_PATTERN = re.compile(r"\b(todo|fixme|tbd|placeholder|stub)\b", re.IGNORECASE)
+ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+FILE_PATH_PATTERN = re.compile(r"\b[\w./-]+\.[A-Za-z0-9]+\b")
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,10 @@ class TestResult:
     feedback: str | None = None
 
 
+# Prevent pytest from collecting this dataclass as a test class.
+TestResult.__test__ = False
+
+
 @dataclass(frozen=True)
 class ReviewResult:
     approved: bool
@@ -62,6 +74,7 @@ class WorkflowResult:
     summary: list[str]
     test_guidance: list[str]
     attempts: int
+    follow_up_issue: dict | None = None
     diagnostics: WorkflowDiagnostics | None = None
 
     def to_plan_payload(self) -> dict:
@@ -71,6 +84,7 @@ class WorkflowResult:
             "summary": self.summary,
             "test_guidance": self.test_guidance,
             "pr_url": self.pr_url,
+            "follow_up_issue": self.follow_up_issue,
         }
         if self.plan is not None:
             payload["plan"] = asdict(self.plan)
@@ -138,6 +152,35 @@ class WorkflowRunner:
         if runtime_failure is not None:
             return runtime_failure
 
+        gtd_result = validate_good_to_do(
+            issue_summary=request.issue_summary,
+            issue_description=request.issue_description,
+        )
+        if not gtd_result.valid:
+            history.append(
+                {
+                    "stage": "preflight",
+                    "attempt": "0",
+                    "event": f"missing_gtd:{', '.join(gtd_result.missing_criteria)}",
+                }
+            )
+            question_lines = "\n".join(
+                f"- {question}" for question in gtd_result.clarification_questions
+            )
+            return self._failure(
+                plan=None,
+                stage="preflight",
+                message=(
+                    "Good To Do validation failed. Missing criteria: "
+                    f"{', '.join(gtd_result.missing_criteria)}.\n"
+                    "Clarification needed before execution:\n"
+                    f"{question_lines}"
+                ),
+                attempts=0,
+                history=history,
+                request=request,
+            )
+
         try:
             plan = self._agents.pm(request)
         except Exception as exc:  # pragma: no cover - exercised via tests
@@ -147,6 +190,7 @@ class WorkflowRunner:
                 message=f"PM stage failed: {exc}",
                 attempts=0,
                 history=history,
+                request=request,
             )
 
         runtime_failure = self._runtime_failure(
@@ -184,6 +228,7 @@ class WorkflowRunner:
                     message=f"Dev stage failed: {exc}",
                     attempts=attempt,
                     history=history,
+                    request=request,
                 )
 
             runtime_failure = self._runtime_failure(
@@ -208,6 +253,7 @@ class WorkflowRunner:
                     message=f"Test stage failed: {exc}",
                     attempts=attempt,
                     history=history,
+                    request=request,
                 )
 
             runtime_failure = self._runtime_failure(
@@ -230,6 +276,7 @@ class WorkflowRunner:
                         message="Max workflow attempts reached after test failures",
                         attempts=attempt,
                         history=history,
+                        request=request,
                     )
                 continue
 
@@ -251,6 +298,7 @@ class WorkflowRunner:
                     message=f"Review stage failed: {exc}",
                     attempts=attempt,
                     history=history,
+                    request=request,
                 )
 
             runtime_failure = self._runtime_failure(
@@ -273,6 +321,7 @@ class WorkflowRunner:
                         message="Max workflow attempts reached after review feedback",
                         attempts=attempt,
                         history=history,
+                        request=request,
                     )
                 continue
 
@@ -291,7 +340,20 @@ class WorkflowRunner:
                     message="Workflow succeeded but no PR URL was produced",
                     attempts=attempt,
                     history=history,
+                    request=request,
                 )
+
+            placeholder_failure = self._placeholder_policy_failure(
+                request=request,
+                dev_result=dev_result,
+                test_result=test_result,
+                review_result=review_result,
+                pr_url=pr_url,
+                attempts=attempt,
+                history=history,
+            )
+            if placeholder_failure is not None:
+                return placeholder_failure
 
             return WorkflowResult(
                 succeeded=True,
@@ -308,6 +370,7 @@ class WorkflowRunner:
             message="Workflow stopped before producing a terminal result",
             attempts=max_attempts,
             history=history,
+            request=request,
         )
 
     def _failure(
@@ -318,7 +381,23 @@ class WorkflowRunner:
         message: str,
         attempts: int,
         history: list[dict[str, str]],
+        request: WorkflowRequest | None,
+        follow_up_issue: dict | None = None,
+        skip_auto_follow_up: bool = False,
     ) -> WorkflowResult:
+        if follow_up_issue is None and request is not None and not skip_auto_follow_up:
+            draft = build_backlog_follow_up_draft(
+                title=f"Follow-up for {request.issue_key}: {stage} handling",
+                why_it_matters=message,
+                impact=(
+                    f"Workflow run {request.run_id} for {request.issue_key} ended in stage '{stage}'"
+                ),
+                suggested_approach=(
+                    "Address the reported stage failure and rerun from To Do after validation."
+                ),
+                origin_issue_key=request.issue_key,
+            )
+            follow_up_issue = draft.to_payload()
         return WorkflowResult(
             succeeded=False,
             plan=plan,
@@ -326,12 +405,98 @@ class WorkflowRunner:
             summary=[],
             test_guidance=[],
             attempts=attempts,
+            follow_up_issue=follow_up_issue,
             diagnostics=WorkflowDiagnostics(
                 stage=stage,
                 message=message,
                 attempts=attempts,
                 history=history,
             ),
+        )
+
+    def _placeholder_policy_failure(
+        self,
+        *,
+        request: WorkflowRequest,
+        dev_result: DevResult,
+        test_result: TestResult,
+        review_result: ReviewResult,
+        pr_url: str,
+        attempts: int,
+        history: list[dict[str, str]],
+    ) -> WorkflowResult | None:
+        evidence_text = "\n".join(
+            [
+                *dev_result.change_summary,
+                *test_result.guidance,
+                *(review_result.summary or []),
+                test_result.feedback or "",
+                review_result.feedback or "",
+            ]
+        )
+
+        if not PLACEHOLDER_PATTERN.search(evidence_text):
+            return None
+
+        detected_issue_keys = {
+            key for key in ISSUE_KEY_PATTERN.findall(evidence_text) if key != request.issue_key
+        }
+        detected_paths = sorted(set(FILE_PATH_PATTERN.findall(evidence_text)))
+        path_summary = ", ".join(detected_paths[:8]) if detected_paths else "not specified"
+
+        if detected_issue_keys:
+            key_summary = ", ".join(sorted(detected_issue_keys))
+            history.append(
+                {
+                    "stage": "review",
+                    "attempt": str(attempts),
+                    "event": f"placeholder_detected_tracked:{key_summary}",
+                }
+            )
+            return self._failure(
+                plan=None,
+                stage="review",
+                message=(
+                    "Placeholder content detected; tracked follow-up issue(s) present "
+                    f"({key_summary}). Run must remain blocked until placeholders are removed."
+                ),
+                attempts=attempts,
+                history=history,
+                request=request,
+                skip_auto_follow_up=True,
+            )
+
+        history.append(
+            {"stage": "review", "attempt": str(attempts), "event": "placeholder_detected_untracked"}
+        )
+        draft = build_backlog_follow_up_draft(
+            title=f"Follow-up for {request.issue_key}: remove placeholder implementation(s)",
+            why_it_matters=(
+                "Placeholder/TODO markers were detected in workflow output without tracked follow-up."
+            ),
+            impact=(
+                f"Run {request.run_id} for {request.issue_key} cannot be completed while "
+                "placeholder behavior remains."
+            ),
+            suggested_approach=(
+                "Replace placeholder implementations and document exact remaining work by file path. "
+                f"Detected paths: {path_summary}."
+            ),
+            origin_issue_key=request.issue_key,
+            origin_pr_url=pr_url,
+            additional_labels=("placeholder", "policy"),
+        )
+        return self._failure(
+            plan=None,
+            stage="review",
+            message=(
+                "Placeholder content detected without tracked follow-up issue. "
+                "Created backlog follow-up draft and blocked the run."
+            ),
+            attempts=attempts,
+            history=history,
+            request=request,
+            follow_up_issue=draft.to_payload(),
         )
 
     def _runtime_failure(
@@ -360,4 +525,5 @@ class WorkflowRunner:
             message=f"Run exceeded max runtime of {request.max_runtime_minutes} minute(s)",
             attempts=attempts,
             history=history,
+            request=request,
         )
