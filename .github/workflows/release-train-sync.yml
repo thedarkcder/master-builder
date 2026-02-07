@@ -46,10 +46,10 @@ jobs:
       - name: Assign Ready to Release issues to next release
         env:
           JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
           JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
-          READY_STATUS: ${{ vars.RELEASE_READY_STATUS }}
           RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
           DRY_RUN_INPUT: ${{ inputs.dry_run }}
         shell: bash
@@ -61,7 +61,6 @@ jobs:
             exit 1
           fi
 
-          ready_status="${READY_STATUS:-Ready to Release}"
           dry_run="false"
           if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
             dry_run="true"
@@ -75,9 +74,12 @@ jobs:
             "--jira-email" "${JIRA_EMAIL}"
             "--jira-api-token" "${JIRA_API_TOKEN}"
             "--project-key" "${JIRA_PROJECT_KEY}"
-            "--ready-status" "${ready_status}"
+            "--ready-status" "READY TO RELEASE"
             "--comment"
           )
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=("--jira-cloud-id" "${JIRA_CLOUD_ID}")
+          fi
           if [ "${dry_run}" = "true" ]; then
             args+=("--dry-run")
           fi
