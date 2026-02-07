@@ -1,15 +1,50 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: master-builder-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
+    ports:
+      - "4402:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  packages:
+    image: pypiserver/pypiserver:latest
+    container_name: master-builder-packages
+    environment:
+      PACKAGE_INDEX_USERNAME: ${PACKAGE_INDEX_USERNAME:-tenant}
+      PACKAGE_INDEX_PASSWORD: ${PACKAGE_INDEX_PASSWORD:-change-me}
+    ports:
+      - "4401:8080"
+    command:
+      - sh
+      - -c
+      - |
+        set -euo pipefail
+        printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /data/.htpasswd
+        exec pypi-server run -p 8080 -P /data/.htpasswd -H plaintext -a update,download,list /data/packages
+    volumes:
+      - packages-data:/data/packages
+
   api:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your codex package server simple index URL}
     container_name: master-builder-api
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-change-me}
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-sqlite:////app/data/orchestrator.db}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:4100,http://127.0.0.1:4100}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
@@ -22,7 +57,7 @@ services:
       ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF: ${ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF:-MB_JIRA_CLIENT_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:-change-me}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:-}
-      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.0}
+      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.1}
       MB_GH_APP_ID: ${MB_GH_APP_ID:-}
       MB_GH_PRIVATE_KEY: ${MB_GH_PRIVATE_KEY:-}
       MB_GH_WEBHOOK_SECRET: ${MB_GH_WEBHOOK_SECRET:-}
@@ -30,22 +65,26 @@ services:
       MB_JIRA_CLIENT_SECRET: ${MB_JIRA_CLIENT_SECRET:-}
     ports:
       - "4000:4000"
-    volumes:
-      - orchestrator-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   worker:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your codex package server simple index URL}
     container_name: master-builder-worker
     depends_on:
-      - api
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-change-me}
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-sqlite:////app/data/orchestrator.db}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
       ORCHESTRATOR_GITHUB_APP_SLUG: ${ORCHESTRATOR_GITHUB_APP_SLUG:-}
@@ -57,15 +96,13 @@ services:
       ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF: ${ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF:-MB_JIRA_CLIENT_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:-change-me}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:-}
-      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.0}
+      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.1}
       MB_GH_APP_ID: ${MB_GH_APP_ID:-}
       MB_GH_PRIVATE_KEY: ${MB_GH_PRIVATE_KEY:-}
       MB_GH_WEBHOOK_SECRET: ${MB_GH_WEBHOOK_SECRET:-}
       MB_JIRA_CLIENT_ID: ${MB_JIRA_CLIENT_ID:-}
       MB_JIRA_CLIENT_SECRET: ${MB_JIRA_CLIENT_SECRET:-}
     command: ["sh", "-c", "python -m orchestrator migrate && python -m orchestrator worker"]
-    volumes:
-      - orchestrator-data:/app/data
 
   admin-ui:
     build:
@@ -90,4 +127,5 @@ services:
     command: tunnel --config /etc/cloudflared/config.yml run
 
 volumes:
-  orchestrator-data:
+  postgres-data:
+  packages-data:
