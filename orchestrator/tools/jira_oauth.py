@@ -34,6 +34,13 @@ class JiraProject:
 
 
 @dataclass(frozen=True)
+class JiraIssuePreview:
+    key: str
+    summary: str
+    status: str
+
+
+@dataclass(frozen=True)
 class JiraOAuthClientConfig:
     client_id: str
     client_secret: str
@@ -192,3 +199,49 @@ class JiraOAuthClient:
             projects.append(JiraProject(key=key, name=name))
         projects.sort(key=lambda project: project.key)
         return projects
+
+    def search_issues_by_jql(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        jql: str,
+        max_results: int = 20,
+    ) -> list[JiraIssuePreview]:
+        bounded_max_results = max(1, min(max_results, 50))
+        query = urlencode(
+            {
+                "jql": jql,
+                "maxResults": bounded_max_results,
+                "fields": "summary,status",
+            }
+        )
+        payload = self._get_json(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search?{query}",
+            access_token=access_token,
+        )
+        issues = payload.get("issues") if isinstance(payload, dict) else None
+        if not isinstance(issues, list):
+            raise JiraOAuthError("Issue search response missing issues list")
+
+        results: list[JiraIssuePreview] = []
+        for item in issues:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            fields = item.get("fields")
+            if not isinstance(fields, dict):
+                fields = {}
+            summary = fields.get("summary")
+            status_obj = fields.get("status")
+            status_name = status_obj.get("name") if isinstance(status_obj, dict) else None
+
+            if not isinstance(key, str) or not key:
+                continue
+            if not isinstance(summary, str) or not summary:
+                summary = key
+            if not isinstance(status_name, str) or not status_name:
+                status_name = "Unknown"
+
+            results.append(JiraIssuePreview(key=key, summary=summary, status=status_name))
+        return results

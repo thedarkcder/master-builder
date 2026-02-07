@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
+from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -71,6 +72,8 @@ class AdminApiTests(unittest.TestCase):
             "jira": {
                 "connection_id": "conn-1",
                 "project_keys": ["TP"],
+                "ready_statuses": ["Ready for Agent"],
+                "ready_jql": 'project = TP AND status = "Ready for Agent"',
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
                 "blocked_label": "agent:blocked",
@@ -194,6 +197,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.json()["tenant_id"], "tenant-a")
+        self.assertEqual(create_response.json()["jira"]["ready_statuses"], ["Ready for Agent"])
 
         list_response = self.client.get("/api/admin/tenants", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)
@@ -240,6 +244,53 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
 
+    def test_ready_preview_returns_eligible_issues(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeJiraClient:
+            def search_issues_by_jql(  # noqa: ANN001
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                jql: str,
+                max_results: int = 20,
+            ):
+                self.last_jql = jql
+                self.last_max_results = max_results
+                self.last_access_token = access_token
+                self.last_cloud_id = cloud_id
+                return [
+                    type("Issue", (), {"key": "TP-101", "summary": "Ready issue", "status": "Ready for Agent"})(),
+                    type("Issue", (), {"key": "TP-102", "summary": "Another ready issue", "status": "Ready"})(),
+                ]
+
+        fake_client = _FakeJiraClient()
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+        ):
+            preview_response = self.client.get(
+                "/api/admin/tenants/tenant-a/ready-preview",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(preview_response.status_code, 200)
+        body = preview_response.json()
+        self.assertEqual(body["ready_statuses"], ["Ready for Agent"])
+        self.assertIn("status", body["ready_jql"])
+        self.assertEqual(len(body["eligible_issues"]), 2)
+        self.assertEqual(body["eligible_issues"][0]["key"], "TP-101")
+        self.assertIn("executable only", body["guidance"])
+        self.assertEqual(fake_client.last_access_token, "access-token")
+
     def test_delete_tenant(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
@@ -269,6 +320,44 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_create_tenant_blocks_when_codex_assets_invalid(self) -> None:
+        payload = self._tenant_payload()
+        with patch(
+            "orchestrator.api.routes_admin.validate_enforcement_assets",
+            side_effect=EnforcementAssetsError("version mismatch"),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Codex assets validation failed", response.json()["detail"])
+
+    def test_update_tenant_blocks_when_codex_assets_invalid(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        payload["name"] = "Tenant Updated"
+        with patch(
+            "orchestrator.api.routes_admin.validate_enforcement_assets",
+            side_effect=EnforcementAssetsError("missing packaged asset"),
+        ):
+            update_response = self.client.put(
+                "/api/admin/tenants/tenant-a",
+                json=payload,
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(update_response.status_code, 503)
+        self.assertIn("Codex assets validation failed", update_response.json()["detail"])
 
     def test_start_install_and_callback_persist_installation_id(self) -> None:
         payload = self._tenant_payload()

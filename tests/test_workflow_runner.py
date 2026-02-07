@@ -81,7 +81,15 @@ class WorkflowRunnerTests(unittest.TestCase):
             run_id="run-1",
             issue_key="MAB-10",
             issue_summary="Build workflow runner",
-            issue_description="Implement PM->Dev->Test->Review",
+            issue_description=(
+                "Objective: Build PM->Dev->Test->Review runner.\n"
+                "Scope: in scope runner orchestration, out of scope deployment.\n"
+                "Acceptance Criteria: run returns PR URL and diagnostics.\n"
+                "Context: component=api, repo=master-builder.\n"
+                "How to test: run unit tests.\n"
+                "NFR intent: MVP.\n"
+                "Risks: dependency on GitHub integration."
+            ),
             max_dev_test_review_loops=loops,
             max_runtime_minutes=max_runtime_minutes,
             suggested_test_commands=["python3 -m unittest discover -s tests -p 'test_*.py'"],
@@ -227,3 +235,24 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "runtime")
         self.assertEqual(result.diagnostics.message, "Run exceeded max runtime of 1 minute(s)")
+
+    def test_gtd_preflight_blocks_when_required_context_missing(self) -> None:
+        agents = _FakeAgents()
+        request = WorkflowRequest(
+            tenant_id="tenant-a",
+            run_id="run-2",
+            issue_key="MAB-4",
+            issue_summary="Implement GTD preflight",
+            issue_description="Implement this quickly.",
+            max_dev_test_review_loops=1,
+            max_runtime_minutes=30,
+            suggested_test_commands=["python3 -m unittest"],
+        )
+
+        result = WorkflowRunner(agents).run(request)
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "preflight")
+        self.assertIn("Good To Do validation failed", result.diagnostics.message)
+        self.assertEqual(agents.calls, [])
