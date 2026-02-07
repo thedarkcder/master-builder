@@ -63,6 +63,8 @@ class Run(Base):
         index=True,
     )
     issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    issue_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issue_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

@@ -72,7 +72,27 @@ async def _read_json_payload(
     return payload, body
 
 
-def _extract_issue_payload(payload: dict) -> tuple[str, list[str], str | None, str | None]:
+def _adf_to_text(node: object) -> str:
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return " ".join(part for part in (_adf_to_text(item) for item in node) if part).strip()
+    if not isinstance(node, dict):
+        return ""
+
+    text = node.get("text")
+    if isinstance(text, str):
+        return text
+
+    content = node.get("content")
+    if isinstance(content, list):
+        return " ".join(part for part in (_adf_to_text(item) for item in content) if part).strip()
+    return ""
+
+
+def _extract_issue_payload(
+    payload: dict,
+) -> tuple[str, list[str], str | None, str | None, str | None, str | None]:
     issue = payload.get("issue")
     if not isinstance(issue, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue object")
@@ -85,6 +105,13 @@ def _extract_issue_payload(payload: dict) -> tuple[str, list[str], str | None, s
     labels = fields.get("labels") if isinstance(fields, dict) else []
     if not isinstance(labels, list):
         labels = []
+
+    summary_raw = fields.get("summary") if isinstance(fields, dict) else None
+    summary = str(summary_raw).strip() if isinstance(summary_raw, str) and summary_raw.strip() else None
+
+    description_raw = fields.get("description") if isinstance(fields, dict) else None
+    description_text = _adf_to_text(description_raw).strip()
+    description = description_text or None
 
     status_name: str | None = None
     status_category_key: str | None = None
@@ -105,7 +132,7 @@ def _extract_issue_payload(payload: dict) -> tuple[str, list[str], str | None, s
                     status_category_key = normalized_status_category_key
 
     normalized_labels = [str(label) for label in labels]
-    return issue_key, normalized_labels, status_name, status_category_key
+    return issue_key, normalized_labels, status_name, status_category_key, summary, description
 
 
 def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
@@ -131,8 +158,6 @@ def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
         return normalized_from_status, normalized_to_status
 
     return None, None
-
-
 def _extract_webhook_token(request: Request) -> str | None:
     webhook_token = request.headers.get("X-Webhook-Token")
     if webhook_token:
@@ -357,7 +382,9 @@ async def ingest_jira_webhook(
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
 
-    issue_key, _, issue_status, issue_status_category_key = _extract_issue_payload(payload)
+    issue_key, labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
+        _extract_issue_payload(payload)
+    )
     delivery_id = _extract_delivery_id(request)
     logger.info(
         "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
@@ -455,6 +482,8 @@ async def ingest_jira_webhook(
         session,
         tenant_id=tenant_id,
         issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
         delivery_id=delivery_id,
         max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
     )
