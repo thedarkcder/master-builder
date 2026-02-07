@@ -45,7 +45,7 @@ class JiraOAuthClientConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
-    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work")
+    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work", "offline_access")
 
 
 class JiraOAuthClient:
@@ -113,7 +113,9 @@ class JiraOAuthClient:
         if not isinstance(access_token, str) or not access_token:
             raise JiraOAuthError("Jira OAuth response missing access_token")
         if not isinstance(refresh_token, str) or not refresh_token:
-            raise JiraOAuthError("Jira OAuth response missing refresh_token")
+            raise JiraOAuthError(
+                "Jira OAuth response missing refresh_token; ensure offline_access scope is enabled for the OAuth app"
+            )
         if not isinstance(expires_in, int):
             raise JiraOAuthError("Jira OAuth response missing expires_in")
         if not isinstance(scope_raw, str):
