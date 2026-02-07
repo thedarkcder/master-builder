@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from orchestrator.core.decision_gate import (
     evaluate_decision_gate,
@@ -88,3 +89,57 @@ class DecisionGateTests(unittest.TestCase):
 
         self.assertFalse(result.triggered)
         self.assertEqual(result.reason, "No gate")
+
+    def test_decision_gate_falls_back_to_packaged_rules_when_local_file_missing(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            packaged_root = Path(tmpdir)
+            (packaged_root / "decision_gate.md").write_text(
+                "\n".join(
+                    [
+                        "# Decision Gate Rules",
+                        "## Required sections",
+                        "- Objective",
+                        "- Scope",
+                        "- Acceptance Criteria",
+                        "- How to test",
+                        "## NFR markers",
+                        "- mvp",
+                        "## Ambiguity markers",
+                        "- tbd",
+                        "## Resolution questions",
+                        "- Q1?",
+                        "## Tags",
+                        "- [NEEDS-PM]",
+                        "## Messages",
+                        "- clear_reason: Fallback clear",
+                        "- blocked_recommendation: Stop",
+                        "- clear_summary: clear",
+                        "- blocked_title: blocked",
+                        "- missing_sections_prefix: Missing",
+                        "- ambiguity_prefix: Ambiguous",
+                        "- options_line: options",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "orchestrator.core.decision_gate.RULES_FILE_PATH",
+                Path("/tmp/missing-decision-gate.md"),
+            ), patch(
+                "orchestrator.core.decision_gate.importlib.resources.files",
+                return_value=packaged_root,
+            ):
+                result = evaluate_decision_gate(
+                    issue_summary="MAB-3 implementation",
+                    issue_description=(
+                        "Objective: done.\n"
+                        "Scope: done.\n"
+                        "Acceptance Criteria: done.\n"
+                        "How to test: done.\n"
+                        "NFR intent: MVP."
+                    ),
+                )
+
+        self.assertFalse(result.triggered)
+        self.assertEqual(result.reason, "Fallback clear")

@@ -80,7 +80,19 @@ if [ ! -f "${PYPROJECT_PATH}" ]; then
   exit 1
 fi
 
-if ! rg -q "master-builder-codex-assets==${head_version}" "${PYPROJECT_PATH}"; then
+pin_pattern="master-builder-codex-assets==${head_version}"
+pin_matched=false
+if command -v rg >/dev/null 2>&1; then
+  if rg -q --fixed-strings "${pin_pattern}" "${PYPROJECT_PATH}"; then
+    pin_matched=true
+  fi
+else
+  if grep -Fq "${pin_pattern}" "${PYPROJECT_PATH}"; then
+    pin_matched=true
+  fi
+fi
+
+if [ "${pin_matched}" != "true" ]; then
   echo "Pinned dependency mismatch in ${PYPROJECT_PATH}." >&2
   echo "Expected: master-builder-codex-assets==${head_version}" >&2
   exit 1
