@@ -23,7 +23,7 @@ Set repository variables:
 - `RELEASE_JIRA_BASE_URL` (for example `https://example.atlassian.net`)
 - `RELEASE_JIRA_EMAIL` (automation account email)
 - `RELEASE_JIRA_PROJECT_KEY` (for example `KAN`)
-- `RELEASE_READY_STATUS` (optional, defaults to `Ready to Release`)
+- `RELEASE_READY_STATUS` (optional, defaults to `READY TO RELEASE`)
 - `RELEASE_DONE_STATUS` (optional, defaults to `Done`)
 
 Set repository secret:
