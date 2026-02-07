@@ -1,5 +1,6 @@
 import unittest
 from tempfile import TemporaryDirectory
+from pathlib import Path
 
 from sqlalchemy import create_engine, inspect
 
@@ -23,3 +24,20 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("webhook_deliveries", inspector.get_table_names())
             self.assertIn("repo_bootstrap_states", inspector.get_table_names())
             self.assertIn("managed_secrets", inspector.get_table_names())
+
+    def test_initial_migration_uses_boolean_default_for_tenants_enabled(self) -> None:
+        migration_file = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "storage"
+            / "migrations"
+            / "versions"
+            / "20260206_0001_initial.py"
+        )
+        contents = migration_file.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default=sa.true())',
+            contents,
+        )
+        self.assertNotIn('server_default=sa.text("1")', contents)

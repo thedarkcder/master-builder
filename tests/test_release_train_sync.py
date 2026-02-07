@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,27 @@ def _load_module() -> Any:
 
 
 class ReleaseTrainSyncSearchTests(unittest.TestCase):
+    def test_parse_args_ready_status_default(self) -> None:
+        module = _load_module()
+        with mock.patch.object(
+            sys,
+            "argv",
+            [
+                "release_train_sync.py",
+                "assign",
+                "--jira-base-url",
+                "https://example.atlassian.net",
+                "--jira-email",
+                "bot@example.com",
+                "--jira-api-token",
+                "token",
+                "--project-key",
+                "MAB",
+            ],
+        ):
+            args = module.parse_args()
+        self.assertEqual(args.ready_status, "READY TO RELEASE")
+
     def test_search_uses_search_jql_endpoint_and_paginates(self) -> None:
         module = _load_module()
 
