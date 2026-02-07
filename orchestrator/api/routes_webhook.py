@@ -71,7 +71,7 @@ async def _read_json_payload(
     return payload, body
 
 
-def _extract_issue_payload(payload: dict) -> tuple[str, list[str]]:
+def _extract_issue_payload(payload: dict) -> tuple[str, list[str], str | None, str | None]:
     issue = payload.get("issue")
     if not isinstance(issue, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue object")
@@ -85,8 +85,26 @@ def _extract_issue_payload(payload: dict) -> tuple[str, list[str]]:
     if not isinstance(labels, list):
         labels = []
 
+    status_name: str | None = None
+    status_category_key: str | None = None
+    status_field = fields.get("status")
+    if isinstance(status_field, dict):
+        raw_status_name = status_field.get("name")
+        if isinstance(raw_status_name, str):
+            normalized_status_name = raw_status_name.strip()
+            if normalized_status_name:
+                status_name = normalized_status_name
+
+        status_category = status_field.get("statusCategory")
+        if isinstance(status_category, dict):
+            raw_status_category_key = status_category.get("key")
+            if isinstance(raw_status_category_key, str):
+                normalized_status_category_key = raw_status_category_key.strip().lower()
+                if normalized_status_category_key:
+                    status_category_key = normalized_status_category_key
+
     normalized_labels = [str(label) for label in labels]
-    return issue_key, normalized_labels
+    return issue_key, normalized_labels, status_name, status_category_key
 
 
 def _extract_webhook_token(request: Request) -> str | None:
@@ -313,7 +331,7 @@ async def ingest_jira_webhook(
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
 
-    issue_key, labels = _extract_issue_payload(payload)
+    issue_key, _, issue_status, issue_status_category_key = _extract_issue_payload(payload)
     delivery_id = _extract_delivery_id(request)
     logger.info(
         "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
@@ -323,10 +341,17 @@ async def ingest_jira_webhook(
         delivery_id,
     )
 
-    ready_label = tenant.jira_config.get("ready_label", "agent:ready")
-    if ready_label not in labels:
+    configured_ready_statuses = tenant.jira_config.get("ready_statuses")
+    if isinstance(configured_ready_statuses, list):
+        ready_statuses = [str(status).strip() for status in configured_ready_statuses if str(status).strip()]
+    else:
+        ready_statuses = []
+    if not ready_statuses:
+        ready_statuses = ["Ready for Agent"]
+
+    if issue_status is None:
         logger.info(
-            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=ready_label_missing",
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=issue_status_missing",
             request_id,
             tenant_id,
             issue_key,
@@ -336,7 +361,43 @@ async def ingest_jira_webhook(
             "tenant_id": tenant_id,
             "issue_key": issue_key,
             "enqueued": False,
-            "reason": "ready_label_missing",
+            "reason": "issue_status_missing",
+        }
+
+    if issue_status_category_key == "done":
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=issue_done issue_status=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            issue_status,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "issue_done",
+            "issue_status": issue_status,
+        }
+
+    normalized_ready_statuses = {status.casefold() for status in ready_statuses}
+    if issue_status.casefold() not in normalized_ready_statuses:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=status_not_ready issue_status=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            issue_status,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "status_not_ready",
+            "issue_status": issue_status,
+            "ready_statuses": ready_statuses,
         }
 
     enqueue_result = enqueue_run(
