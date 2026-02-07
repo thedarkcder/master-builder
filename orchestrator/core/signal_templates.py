@@ -37,6 +37,69 @@ def format_discord_ready_gate_guidance(*, issue_key: str, issue_status: str, rea
     return _clip_message_lines(lines, max_lines=8, max_chars=500)
 
 
+def format_stage_discord_update(
+    *,
+    tenant_id: str,
+    issue_key: str,
+    run_id: str,
+    stage: str,
+    jira_url: str | None = None,
+    pr_url: str | None = None,
+    error: str | None = None,
+    next_steps: Iterable[str] = (),
+) -> str:
+    lines = [
+        f"Stage update: {stage}",
+        f"Tenant: {tenant_id} | Issue: {issue_key} | Run: {run_id}",
+    ]
+    if jira_url:
+        lines.append(f"Jira: {jira_url}")
+    if pr_url:
+        lines.append(f"PR: {pr_url}")
+    if error:
+        lines.append(f"Error: {' '.join(error.strip().split())[:200]}")
+
+    steps = _normalize_lines(next_steps, max_items=3, max_line_chars=140)
+    if steps:
+        lines.append("Next steps:")
+        lines.extend(f"- {step}" for step in steps)
+
+    return _clip_message_lines(lines, max_lines=20, max_chars=900)
+
+
+def format_stage_jira_update(
+    *,
+    tenant_id: str,
+    issue_key: str,
+    run_id: str,
+    stage: str,
+    jira_url: str | None = None,
+    pr_url: str | None = None,
+    error: str | None = None,
+    next_steps: Iterable[str] = (),
+) -> str:
+    lines = [
+        f"Stage: {stage}",
+        f"- Tenant: `{tenant_id}`",
+        f"- Issue: `{issue_key}`",
+        f"- Run: `{run_id}`",
+    ]
+    if jira_url:
+        lines.append(f"- Jira: {jira_url}")
+    if pr_url:
+        lines.append(f"- PR: {pr_url}")
+    if error:
+        lines.append(f"- Error: {' '.join(error.strip().split())[:300]}")
+
+    steps = _normalize_lines(next_steps, max_items=3, max_line_chars=200)
+    if steps:
+        lines.append("")
+        lines.append("Next steps:")
+        lines.extend(f"- {step}" for step in steps)
+
+    return _clip_message_lines(lines, max_lines=30, max_chars=1800)
+
+
 def format_discord_pr_ready_message(
     *,
     pr_url: str,
