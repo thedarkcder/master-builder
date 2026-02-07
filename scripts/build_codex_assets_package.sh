@@ -8,10 +8,11 @@ OUTPUT_DIR="${1:-${REPO_ROOT}/dist/codex-assets}"
 BUILD_ROOT="$(mktemp -d)"
 trap 'rm -rf "${BUILD_ROOT}"' EXIT
 
-ASSETS_VERSION="$(
+MANIFEST_ASSETS_VERSION="$(
   python3 -c 'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["assets_version"])' \
     "${REPO_ROOT}/.codex/codex_assets_manifest.json"
 )"
+ASSETS_VERSION="${CODEX_ASSETS_PACKAGE_VERSION:-${MANIFEST_ASSETS_VERSION}}"
 
 PACKAGE_ROOT="${BUILD_ROOT}/master-builder-codex-assets"
 MODULE_ROOT="${PACKAGE_ROOT}/src/master_builder_codex_assets"

@@ -58,8 +58,11 @@ How to cut a new codex assets package version:
 What happens automatically:
 - The workflow detects whether `assets_version` changed.
 - If changed, it builds a wheel/sdist directly from `.codex`.
+- Branch behavior:
+  - `staging` publishes beta/pre-release package versions (`<assets_version>b<run_number>`)
+  - `main` publishes stable package versions (`<assets_version>`)
 - It uploads artifacts to the workflow run and creates/updates a GitHub Release tag:
-  - `codex-assets-v<assets_version>`
+  - `codex-assets-v<publish_version>`
 
 Optional direct package-index publish (same workflow run):
 - Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
