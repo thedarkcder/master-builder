@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Link2 } from "lucide-react";
+import { KeyRound, Link2 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { TenantForm } from "@/components/tenant-form";
@@ -146,6 +146,12 @@ export default function EditTenantPage() {
             <CardDescription>Update tenant configuration through structured form fields.</CardDescription>
           </div>
           <div className="flex gap-2">
+            <Button asChild variant="outline">
+              <Link href="/secrets">
+                <KeyRound className="mr-2 h-4 w-4" />
+                Manage Secrets
+              </Link>
+            </Button>
             <Button variant="outline" onClick={() => void connectJira()}>
               <Link2 className="mr-2 h-4 w-4" />
               Connect Jira

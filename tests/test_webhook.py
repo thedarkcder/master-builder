@@ -5,6 +5,7 @@ import hashlib
 import unittest
 from tempfile import TemporaryDirectory
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
@@ -25,6 +26,7 @@ class JiraWebhookTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
         os.environ[self.webhook_secret_env] = self.webhook_secret_value
         os.environ[self.github_webhook_secret_env] = self.github_webhook_secret_value
 
@@ -41,6 +43,7 @@ class JiraWebhookTests(unittest.TestCase):
         os.environ.pop(self.github_webhook_secret_env, None)
         os.environ.pop("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF", None)
         os.environ.pop("ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES", None)
+        os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
@@ -336,3 +339,54 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 413)
+
+    def test_jira_webhook_uses_managed_secret_ref(self) -> None:
+        managed_ref = "secret/jira-managed-token"
+        self.client.put(
+            "/api/admin/secrets/secret%2Fjira-managed-token",
+            json={"value": "managed-jira-token"},
+            auth=("admin", "secret"),
+        )
+        self._create_tenant("tenant-managed-jira", webhook_secret_ref=managed_ref)
+
+        payload = {
+            "issue": {
+                "key": "TP-555",
+                "fields": {"labels": ["agent:ready"]},
+            }
+        }
+        response = self.client.post(
+            "/jira/webhook/tenant-managed-jira",
+            json=payload,
+            headers={"X-Webhook-Token": "managed-jira-token"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+
+    def test_github_webhook_uses_managed_global_secret_ref(self) -> None:
+        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = "secret/github-global-webhook"
+        self.client.put(
+            "/api/admin/secrets/secret%2Fgithub-global-webhook",
+            json={"value": "managed-global-secret"},
+            auth=("admin", "secret"),
+        )
+        payload = {
+            "action": "opened",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "example/repo"},
+        }
+        payload_bytes = json.dumps(payload).encode("utf-8")
+        signature = self._sign_github_payload(payload_bytes, "managed-global-secret")
+
+        response = self.client.post(
+            "/github/webhook",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-GitHub-Event": "pull_request",
+                "X-Hub-Signature-256": signature,
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["accepted"])

@@ -126,6 +126,26 @@ class RepoBootstrapStateRead(BaseModel):
     updated_at: datetime
 
 
+class ManagedSecretUpsert(BaseModel):
+    value: str = Field(min_length=1)
+
+
+class ManagedSecretRead(BaseModel):
+    secret_ref: str
+    source: str
+    updated_at: datetime | None
+
+
+class ManagedSecretResolveRequest(BaseModel):
+    secret_ref: str = Field(min_length=1)
+
+
+class ManagedSecretResolveResult(BaseModel):
+    secret_ref: str
+    source: str
+    resolved: bool
+
+
 class RunRead(BaseModel):
     run_id: str
     tenant_id: str

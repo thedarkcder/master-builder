@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
@@ -31,7 +32,7 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
         os.environ["ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF"] = "secret/jira-client-id"
         os.environ["ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF"] = "secret/jira-client-secret"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = "REMOVED_PRIVATE_CREDENTIAL"
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 
         os.environ["secret/app-id"] = "12345"
         os.environ["secret/private-key"] = "not-a-real-key-for-tests"
@@ -135,6 +136,52 @@ class AdminApiTests(unittest.TestCase):
     def test_admin_routes_require_auth(self) -> None:
         response = self.client.get("/api/admin/tenants")
         self.assertEqual(response.status_code, 401)
+
+    def test_managed_secret_upsert_and_resolve(self) -> None:
+        put_response = self.client.put(
+            "/api/admin/secrets/secret%2Fgithub-webhook",
+            json={"value": "managed-webhook-secret"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(put_response.status_code, 200)
+        self.assertEqual(put_response.json()["secret_ref"], "secret/github-webhook")
+        self.assertEqual(put_response.json()["source"], "managed")
+
+        list_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
+        self.assertEqual(list_response.status_code, 200)
+        refs = [item["secret_ref"] for item in list_response.json()]
+        self.assertIn("secret/github-webhook", refs)
+
+        resolve_response = self.client.post(
+            "/api/admin/secrets/resolve",
+            json={"secret_ref": "secret/github-webhook"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(resolve_response.status_code, 200)
+        self.assertTrue(resolve_response.json()["resolved"])
+        self.assertEqual(resolve_response.json()["source"], "managed")
+
+    def test_jira_connect_uses_managed_secret_when_env_not_set(self) -> None:
+        os.environ.pop("secret/jira-client-id", None)
+        os.environ.pop("secret/jira-client-secret", None)
+
+        self.client.put(
+            "/api/admin/secrets/secret%2Fjira-client-id",
+            json={"value": "jira-client-id-managed"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/secrets/secret%2Fjira-client-secret",
+            json={"value": "jira-client-secret-managed"},
+            auth=("admin", "secret"),
+        )
+
+        response = self.client.post(
+            "/api/admin/jira/connect/start?return_to=wizard",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("jira-client-id-managed", response.json()["authorize_url"])
 
     def test_create_and_update_tenant(self) -> None:
         payload = self._tenant_payload()
