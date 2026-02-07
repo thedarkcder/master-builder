@@ -58,8 +58,6 @@ class AdminApiTests(unittest.TestCase):
             },
             "github": {
                 "mode": "github_app",
-                "app_id_ref": "secret/app-id",
-                "private_key_ref": "secret/private-key",
                 "webhook_secret_ref": "secret/github-webhook",
                 "installation_id": "12345",
             },

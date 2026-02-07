@@ -76,9 +76,6 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
     if (!textFields.allowlistText.trim()) {
       return "At least one repository allowlist entry is required.";
     }
-    if (!values.github.app_id_ref.trim() || !values.github.private_key_ref.trim()) {
-      return "GitHub App ID ref and private key ref are required.";
-    }
     return "";
   }, [mode, textFields.allowlistText, textFields.projectKeysText, values]);
 
@@ -211,7 +208,7 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
       <Card>
         <CardHeader>
           <CardTitle>GitHub</CardTitle>
-          <CardDescription>GitHub App credentials and webhook settings.</CardDescription>
+          <CardDescription>GitHub App connection and webhook settings.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
           <div className="space-y-2">
@@ -223,27 +220,7 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
             />
           </div>
           <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground md:col-span-2">
-            Installation ID is set by the GitHub connect flow after tenant creation.
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>App ID ref</FieldLabel>
-            <Input
-              value={values.github.app_id_ref}
-              onChange={(event) =>
-                setValues((prev) => ({ ...prev, github: { ...prev.github, app_id_ref: event.target.value } }))
-              }
-              placeholder="secret/app-id"
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Private key ref</FieldLabel>
-            <Input
-              value={values.github.private_key_ref}
-              onChange={(event) =>
-                setValues((prev) => ({ ...prev, github: { ...prev.github, private_key_ref: event.target.value } }))
-              }
-              placeholder="secret/private-key"
-            />
+            Installation ID is set by the Connect GitHub App flow. App credentials are managed server-side.
           </div>
           <div className="space-y-2 md:col-span-2">
             <FieldLabel>Webhook secret ref (optional)</FieldLabel>
