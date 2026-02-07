@@ -135,7 +135,11 @@ class JiraClient:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Assign and close Jira release-train issues.")
-    parser.add_argument("mode", choices=["assign", "close"], help="assign: label Ready to Release issues; close: transition release issues to Done.")
+    parser.add_argument(
+        "mode",
+        choices=["assign", "close", "keys"],
+        help="assign: label Ready to Release issues; close: transition release issues to Done; keys: print issue keys for release label.",
+    )
     parser.add_argument("--jira-base-url", required=True)
     parser.add_argument("--jira-cloud-id", default="")
     parser.add_argument("--jira-email", required=True)
@@ -257,6 +261,25 @@ def close_released_issues(
     return 0
 
 
+def print_release_issue_keys(
+    *,
+    client: JiraClient,
+    project_key: str,
+    release_version: str,
+) -> int:
+    release_label = release_label_for_version(release_version)
+    jql = f'project = "{project_key}" AND labels = "{release_label}"'
+    issues = client.search_issues(jql=jql)
+    print(
+        f"[keys] base_url={client.base_url} project={project_key} release={release_version} scanned={len(issues)}",
+        file=sys.stderr,
+    )
+    for issue in issues:
+        if issue.key:
+            print(issue.key)
+    return 0
+
+
 def main() -> int:
     args = parse_args()
     release_version = resolve_release_version(args.release_version)
@@ -274,6 +297,12 @@ def main() -> int:
             release_version=release_version,
             dry_run=args.dry_run,
             comment=args.comment,
+        )
+    if args.mode == "keys":
+        return print_release_issue_keys(
+            client=client,
+            project_key=args.project_key,
+            release_version=release_version,
         )
     return close_released_issues(
         client=client,
