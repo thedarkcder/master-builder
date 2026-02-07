@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_gate import evaluate_decision_gate
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
@@ -26,6 +27,7 @@ RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
+RUN_STATUS_BLOCKED = "blocked"
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
@@ -70,8 +72,12 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
         tenant_id=tenant.tenant_id,
         run_id=run.run_id,
         issue_key=run.issue_key,
-        issue_summary=f"Execute {run.issue_key}",
-        issue_description=enforcement_context,
+        issue_summary=run.issue_summary or f"Execute {run.issue_key}",
+        issue_description=(
+            f"{run.issue_description}\n\n{enforcement_context}"
+            if (run.issue_description or "").strip()
+            else enforcement_context
+        ),
         max_dev_test_review_loops=max_loops,
         max_runtime_minutes=max_runtime_minutes,
         suggested_test_commands=suggested_test_commands,
@@ -116,6 +122,34 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
 
     if run is None:
         return None
+
+    try:
+        decision_gate = evaluate_decision_gate(
+            issue_summary=run.issue_summary,
+            issue_description=run.issue_description,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        run.status = RUN_STATUS_FAILED
+        run.last_error = f"Decision Gate configuration error: {exc}"
+        run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(run)
+        return run
+    if decision_gate.triggered:
+        run.status = RUN_STATUS_BLOCKED
+        run.last_error = f"Decision Gate required: {decision_gate.reason}"
+        run.plan = {
+            "succeeded": False,
+            "attempts": 0,
+            "summary": [],
+            "test_guidance": [],
+            "pr_url": None,
+            "decision_gate": decision_gate.to_payload(),
+        }
+        run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(run)
+        return run
 
     run.status = RUN_STATUS_RUNNING
     run.started_at = datetime.now(timezone.utc)
