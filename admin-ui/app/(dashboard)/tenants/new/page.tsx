@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, CheckCircle2, Link2, RefreshCw } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, KeyRound, Link2, RefreshCw } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -355,6 +355,13 @@ export default function NewTenantPage() {
       </CardHeader>
       <CardContent className="space-y-4">
         <WizardProgress step={step} />
+        <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          Manage credentials and webhook secrets in{" "}
+          <Link href="/secrets" className="font-medium text-primary underline underline-offset-2">
+            Secrets
+          </Link>{" "}
+          before running Jira/GitHub connection checks.
+        </p>
 
         {step === 0 ? (
           <div className="grid gap-3 md:grid-cols-2">
@@ -380,6 +387,12 @@ export default function NewTenantPage() {
               Jira connection: <strong>{values.jira.connection_id ?? "not connected"}</strong>
             </p>
             <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline">
+                <Link href="/secrets">
+                  <KeyRound className="mr-2 h-4 w-4" />
+                  Open Secrets
+                </Link>
+              </Button>
               <Button onClick={() => void handleStartJiraConnect()}>
                 <Link2 className="mr-2 h-4 w-4" />
                 Connect Jira
@@ -433,6 +446,12 @@ export default function NewTenantPage() {
               Tenant <strong>{createdTenantId || previewTenantId(values.name)}</strong> is ready for GitHub install.
             </p>
             <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline">
+                <Link href="/secrets">
+                  <KeyRound className="mr-2 h-4 w-4" />
+                  Open Secrets
+                </Link>
+              </Button>
               <Button onClick={() => void handleStartInstall()}>
                 <Link2 className="mr-2 h-4 w-4" />
                 Install GitHub App

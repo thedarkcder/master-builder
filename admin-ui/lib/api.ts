@@ -98,6 +98,18 @@ export type RunRecord = {
   plan: Record<string, unknown> | null;
 };
 
+export type ManagedSecretRecord = {
+  secret_ref: string;
+  source: "managed" | "environment" | "missing" | string;
+  updated_at: string | null;
+};
+
+export type ManagedSecretResolveResult = {
+  secret_ref: string;
+  source: "managed" | "environment" | "missing" | string;
+  resolved: boolean;
+};
+
 export type Credentials = {
   apiBaseUrl: string;
   username: string;
@@ -274,4 +286,29 @@ export function listRuns(
 
 export function getRun(credentials: Credentials, runId: string): Promise<RunRecord> {
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
+}
+
+export function listManagedSecrets(credentials: Credentials): Promise<ManagedSecretRecord[]> {
+  return request<ManagedSecretRecord[]>(credentials, "/api/admin/secrets");
+}
+
+export function upsertManagedSecret(
+  credentials: Credentials,
+  secretRef: string,
+  value: string
+): Promise<ManagedSecretRecord> {
+  return request<ManagedSecretRecord>(credentials, `/api/admin/secrets/${encodeURIComponent(secretRef)}`, {
+    method: "PUT",
+    body: JSON.stringify({ value })
+  });
+}
+
+export function resolveManagedSecret(
+  credentials: Credentials,
+  secretRef: string
+): Promise<ManagedSecretResolveResult> {
+  return request<ManagedSecretResolveResult>(credentials, "/api/admin/secrets/resolve", {
+    method: "POST",
+    body: JSON.stringify({ secret_ref: secretRef })
+  });
 }

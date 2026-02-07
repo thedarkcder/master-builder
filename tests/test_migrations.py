@@ -22,3 +22,4 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("run_locks", inspector.get_table_names())
             self.assertIn("webhook_deliveries", inspector.get_table_names())
             self.assertIn("repo_bootstrap_states", inspector.get_table_names())
+            self.assertIn("managed_secrets", inspector.get_table_names())
