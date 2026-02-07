@@ -12,11 +12,12 @@ ENV PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
+COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
 RUN python -m pip install --upgrade pip && \
-    pip install .[codex_assets]
+    pip install .
 
 RUN mkdir -p /app/data
 
