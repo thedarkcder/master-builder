@@ -46,6 +46,12 @@ class WorkflowCheckSuite:
 
 
 @dataclass(frozen=True)
+class PullRequestFileChange:
+    filename: str
+    patch: str | None
+
+
+@dataclass(frozen=True)
 class InstallationRepository:
     full_name: str
     html_url: str
@@ -262,6 +268,38 @@ class GitHubAppClient:
                 conclusion = None
 
             parsed.append(WorkflowCheckSuite(name=name, status=status, conclusion=conclusion))
+
+        return parsed
+
+    def list_pull_request_files(self, *, repo_full_name: str, pr_number: int) -> list[PullRequestFileChange]:
+        installation_token = self.get_installation_token()
+        parsed: list[PullRequestFileChange] = []
+        page = 1
+
+        while True:
+            response = self._request_json(
+                method="GET",
+                path=f"/repos/{repo_full_name}/pulls/{pr_number}/files?per_page=100&page={page}",
+                bearer_token=installation_token,
+            )
+
+            if not isinstance(response, list):
+                raise GitHubApiError("GitHub pull request files response was not a list")
+
+            for item in response:
+                if not isinstance(item, dict):
+                    continue
+                filename = item.get("filename")
+                if not isinstance(filename, str) or not filename:
+                    continue
+                patch = item.get("patch")
+                if patch is not None and not isinstance(patch, str):
+                    patch = None
+                parsed.append(PullRequestFileChange(filename=filename, patch=patch))
+
+            if len(response) < 100:
+                break
+            page += 1
 
         return parsed
 
