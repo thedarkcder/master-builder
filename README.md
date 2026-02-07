@@ -69,7 +69,7 @@ Optional direct package-index publish (same workflow run):
 - Optional: set `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` to override the upload endpoint
 
 Default upload target (if not set):
-- `https://upload.pypi.pkg.github.com/<repo_owner>/`
+- `https://pypi.pkg.github.com/<repo_owner>/`
 
 Authentication:
 - Uses workflow `GITHUB_TOKEN` (no PAT required for same-repo publish)
