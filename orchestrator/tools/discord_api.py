@@ -30,6 +30,7 @@ class DiscordApiClient:
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bot {self._bot_token}",
+            "User-Agent": "MasterBuilderDiscordClient/1.0 (+https://github.com/thedarkcder/master-builder)",
         }
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
@@ -46,6 +47,11 @@ class DiscordApiClient:
                 raw_body = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8")
+            if exc.code == 403 and "Cloudflare" in error_body and "Error 1010" in error_body:
+                raise DiscordApiError(
+                    "Discord API request was blocked by Cloudflare (Error 1010). "
+                    "This is an egress/IP or client-fingerprint block, not a bot-token validation failure."
+                ) from exc
             raise DiscordApiError(f"Discord API request failed ({exc.code}): {error_body}") from exc
 
         if not raw_body:
