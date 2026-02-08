@@ -297,15 +297,6 @@ export function testJira(
   });
 }
 
-export function disconnectJira(
-  credentials: Credentials,
-  tenantId: string
-): Promise<TenantRecord> {
-  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/disconnect`, {
-    method: "POST"
-  });
-}
-
 export function startJiraConnect(
   credentials: Credentials,
   options?: { returnTo?: "wizard" | "edit"; tenantId?: string }
