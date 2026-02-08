@@ -7,7 +7,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -241,6 +241,59 @@ def _parse_managed_webhook_ids(jira_config: dict) -> list[int]:
     return normalized
 
 
+def _all_managed_webhook_ids(session: Session) -> set[int]:
+    managed: set[int] = set()
+    tenants = session.execute(select(Tenant.jira_config)).all()
+    for (jira_config_raw,) in tenants:
+        if not isinstance(jira_config_raw, dict):
+            continue
+        managed.update(_parse_managed_webhook_ids(jira_config_raw))
+    return managed
+
+
+def _parse_jira_webhook_id(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _is_jira_webhook_limit_error(exc: Exception) -> bool:
+    return "maximum of 5 webhooks is allowed per app per user" in str(exc).lower()
+
+
+def _cleanup_unmanaged_jira_webhooks_for_connection(
+    *,
+    session: Session,
+    client: JiraOAuthClient,
+    access_token: str,
+    cloud_id: str,
+) -> tuple[int, str]:
+    webhooks = client.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+    if not webhooks:
+        return 0, "No existing Jira webhooks were listed for this app/user."
+
+    managed_ids = _all_managed_webhook_ids(session)
+    stale_ids: list[int] = []
+    for item in webhooks:
+        webhook_id = _parse_jira_webhook_id(item.get("id"))
+        if webhook_id is None:
+            continue
+        if webhook_id not in managed_ids:
+            stale_ids.append(webhook_id)
+
+    if not stale_ids:
+        return 0, "No unmanaged Jira webhooks were found to clean up."
+
+    client.delete_webhooks(
+        access_token=access_token,
+        cloud_id=cloud_id,
+        webhook_ids=stale_ids,
+    )
+    return len(stale_ids), f"Deleted {len(stale_ids)} unmanaged Jira webhook(s)."
+
+
 def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:
     merged = dict(proposed)
     for key in (
@@ -438,31 +491,67 @@ def _provision_jira_webhook(
         session.refresh(tenant)
         jira_config = dict(tenant.jira_config)
 
+    access_token = _refresh_jira_connection_tokens(
+        session,
+        connection=connection,
+        settings=settings,
+    )
+    client = _jira_oauth_client(session=session, settings=settings)
+    callback_url = _jira_webhook_callback_url(settings=settings, tenant_id=tenant.tenant_id)
+    jql_filter = _jira_webhook_filter_jql(jira_config)
+    webhook_ids: list[int] | None = None
+    cleanup_note: str | None = None
     try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-        )
-        client = _jira_oauth_client(session=session, settings=settings)
         webhook_ids = client.register_webhook(
             access_token=access_token,
             cloud_id=connection.cloud_id,
-            callback_url=_jira_webhook_callback_url(settings=settings, tenant_id=tenant.tenant_id),
-            jql_filter=_jira_webhook_filter_jql(jira_config),
+            callback_url=callback_url,
+            jql_filter=jql_filter,
             events=JIRA_WEBHOOK_EVENTS,
         )
     except (ValueError, JiraOAuthError) as exc:
-        jira_config["webhook_last_error"] = f"Failed to provision Jira webhook: {exc}"
-        tenant.jira_config = jira_config
-        tenant.updated_at = datetime.now(timezone.utc)
-        session.commit()
-        return JiraWebhookActionResult(
-            ok=False,
-            action=action_name,
-            details=jira_config["webhook_last_error"],
-            webhook_ids=_parse_managed_webhook_ids(jira_config),
-        )
+        if _is_jira_webhook_limit_error(exc):
+            try:
+                deleted_count, cleanup_details = _cleanup_unmanaged_jira_webhooks_for_connection(
+                    session=session,
+                    client=client,
+                    access_token=access_token,
+                    cloud_id=connection.cloud_id,
+                )
+                cleanup_note = cleanup_details
+                if deleted_count > 0:
+                    webhook_ids = client.register_webhook(
+                        access_token=access_token,
+                        cloud_id=connection.cloud_id,
+                        callback_url=callback_url,
+                        jql_filter=jql_filter,
+                        events=JIRA_WEBHOOK_EVENTS,
+                    )
+            except (ValueError, JiraOAuthError) as cleanup_exc:
+                jira_config["webhook_last_error"] = (
+                    "Failed to provision Jira webhook: "
+                    f"{exc}. Cleanup attempt failed: {cleanup_exc}"
+                )
+                tenant.jira_config = jira_config
+                tenant.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                return JiraWebhookActionResult(
+                    ok=False,
+                    action=action_name,
+                    details=jira_config["webhook_last_error"],
+                    webhook_ids=_parse_managed_webhook_ids(jira_config),
+                )
+        if webhook_ids is None:
+            jira_config["webhook_last_error"] = f"Failed to provision Jira webhook: {exc}"
+            tenant.jira_config = jira_config
+            tenant.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            return JiraWebhookActionResult(
+                ok=False,
+                action=action_name,
+                details=jira_config["webhook_last_error"],
+                webhook_ids=_parse_managed_webhook_ids(jira_config),
+            )
 
     now_iso = datetime.now(timezone.utc).isoformat()
     jira_config["managed_webhook_ids"] = webhook_ids
@@ -471,12 +560,25 @@ def _provision_jira_webhook(
     tenant.jira_config = jira_config
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
+    details = f"Provisioned {len(webhook_ids)} Jira webhook(s)."
+    if cleanup_note:
+        details = f"{details} {cleanup_note}"
     return JiraWebhookActionResult(
         ok=True,
         action=action_name,
-        details=f"Provisioned {len(webhook_ids)} Jira webhook(s).",
+        details=details,
         webhook_ids=webhook_ids,
     )
+
+
+def _jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
+    if result.ok:
+        return status.HTTP_200_OK
+    if result.details.startswith("Jira OAuth connection is not linked"):
+        return status.HTTP_400_BAD_REQUEST
+    if result.details.startswith("Configured Jira connection was not found"):
+        return status.HTTP_400_BAD_REQUEST
+    return status.HTTP_502_BAD_GATEWAY
 
 
 @router.get("/secrets", response_model=list[ManagedSecretRead])
@@ -729,11 +831,15 @@ def provision_tenant_jira_webhook(
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
     settings = get_settings()
-    return _provision_jira_webhook(
+    result = _provision_jira_webhook(
         session=session,
         tenant=tenant,
         settings=settings,
         replace_existing=False,
+    )
+    return JSONResponse(
+        status_code=_jira_webhook_action_status_code(result),
+        content=result.model_dump(),
     )
 
 
@@ -747,11 +853,15 @@ def reset_tenant_jira_webhook(
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
     settings = get_settings()
-    return _provision_jira_webhook(
+    result = _provision_jira_webhook(
         session=session,
         tenant=tenant,
         settings=settings,
         replace_existing=True,
+    )
+    return JSONResponse(
+        status_code=_jira_webhook_action_status_code(result),
+        content=result.model_dump(),
     )
 
 

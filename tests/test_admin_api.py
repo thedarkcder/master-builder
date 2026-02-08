@@ -755,12 +755,8 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_response.status_code, 201)
 
         class _FakeClient:
-            def ensure_webhook(self, **_: object):  # noqa: ANN003
-                return type(
-                    "Webhook",
-                    (),
-                    {"webhook_id": "2002"},
-                )()
+            def register_webhook(self, **_: object) -> list[int]:  # noqa: ANN003
+                return [2002]
 
         with (
             patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
@@ -774,11 +770,11 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["ok"], True)
-        self.assertEqual(body["webhook_id"], "2002")
+        self.assertEqual(body["webhook_ids"], [2002])
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
-        self.assertEqual(tenant_response.json()["jira"]["webhook_provisioning"]["webhook_id"], "2002")
+        self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [2002])
 
     def test_provision_tenant_jira_webhooks_permission_failure_is_persisted(self) -> None:
         payload = self._tenant_payload()
@@ -791,7 +787,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_response.status_code, 201)
 
         class _FakeClient:
-            def ensure_webhook(self, **_: object):  # noqa: ANN003
+            def register_webhook(self, **_: object) -> list[int]:  # noqa: ANN003
                 raise ValueError("Forbidden: missing Jira admin permission")
 
         with (
@@ -803,18 +799,86 @@ class AdminApiTests(unittest.TestCase):
                 auth=("admin", "secret"),
             )
 
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["ok"], False)
-        self.assertIn("missing Jira admin permission", body["details"])
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("missing Jira admin permission", response.json()["details"])
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
-        self.assertEqual(tenant_response.json()["jira"]["webhook_provisioning"]["ok"], False)
+        self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [])
         self.assertIn(
             "missing Jira admin permission",
-            tenant_response.json()["jira"]["webhook_provisioning"]["error"],
+            tenant_response.json()["jira"]["webhook_last_error"],
         )
+
+    def test_provision_tenant_jira_webhooks_recovers_after_limit_cleanup(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        second_payload = self._tenant_payload()
+        second_payload["name"] = "Tenant B"
+        second_create_response = self.client.post(
+            "/api/admin/tenants",
+            json=second_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(second_create_response.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant_b = session.get(Tenant, "tenant-b")
+            self.assertIsNotNone(tenant_b)
+            jira_config = dict(tenant_b.jira_config)
+            jira_config["managed_webhook_ids"] = [9002]
+            tenant_b.jira_config = jira_config
+            session.commit()
+
+        deleted_batches: list[list[int]] = []
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.register_attempts = 0
+
+            def register_webhook(self, **_: object) -> list[int]:  # noqa: ANN003
+                self.register_attempts += 1
+                if self.register_attempts == 1:
+                    raise ValueError(
+                        "Webhook registration did not return any webhook IDs "
+                        "(webhookRegistrationResult errors: A maximum of 5 webhooks is allowed per app per user.)"
+                    )
+                return [3003]
+
+            def list_webhooks(self, **_: object) -> list[dict]:  # noqa: ANN003
+                return [{"id": 9001}, {"id": 9002}]
+
+            def delete_webhooks(self, *, access_token: str, cloud_id: str, webhook_ids: list[int]) -> None:  # noqa: ANN001
+                deleted_batches.append(list(webhook_ids))
+
+        fake_client = _FakeClient()
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["webhook_ids"], [3003])
+        self.assertEqual(deleted_batches, [[9001]])
+        self.assertIn("Deleted 1 unmanaged Jira webhook(s).", response.json()["details"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [3003])
+        self.assertIsNone(tenant_response.json()["jira"]["webhook_last_error"])
 
     def test_list_discord_allowlist_requests_returns_pending_requests(self) -> None:
         payload = self._tenant_payload()
