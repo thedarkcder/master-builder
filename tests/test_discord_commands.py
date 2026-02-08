@@ -548,20 +548,21 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(fake_client.updated_issue_keys, ["TP-111"])
         self.assertFalse(fake_client.create_called)
 
-    def test_seed_issue_description_uses_bold_sections_and_omits_labels_section(self) -> None:
+    def test_seed_issue_description_is_native_jira_adf(self) -> None:
         description = _build_seed_issue_description(
             objective="Ship feature",
             scope_in=["API endpoint"],
             scope_out=["Mobile app changes"],
             acceptance_criteria=["Endpoint returns 200"],
         )
-        self.assertIn("**Objective**", description)
-        self.assertIn("**Scope In**", description)
-        self.assertIn("**Scope Out**", description)
-        self.assertIn("**Acceptance Criteria**", description)
-        self.assertIn("**Good To Do Checklist**", description)
-        self.assertNotIn("Tags", description)
-        self.assertNotIn("Labels", description)
+        self.assertEqual(description.get("type"), "doc")
+        content = description.get("content", [])
+        self.assertIsInstance(content, list)
+        self.assertEqual(content[0]["type"], "heading")
+        self.assertEqual(content[0]["content"][0]["text"], "Objective")
+        self.assertEqual(content[1]["type"], "bulletList")
+        first_bullet = content[1]["content"][0]["content"][0]["content"][0]["text"]
+        self.assertEqual(first_bullet, "Ship feature")
 
     def test_bug_creation_uploads_discord_attachments_to_jira_issue(self) -> None:
         now = datetime.now(timezone.utc)
