@@ -799,35 +799,54 @@ def _drop_issue_key_from_ask_history(
     channel_id: str,
     issue_key: str,
 ) -> None:
+    remove_issue_key_from_tenant_ask_history(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        user_id=user_id,
+        channel_id=channel_id,
+    )
+
+
+def remove_issue_key_from_tenant_ask_history(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+    user_id: str | None = None,
+    channel_id: str | None = None,
+) -> int:
     target_issue_key = issue_key.strip().upper()
     if not target_issue_key:
-        return
+        return 0
 
     entries = _tenant_ask_history(tenant)
     kept_entries: list[dict] = []
-    removed = False
+    removed_count = 0
     for entry in entries:
         entry_issue_key = str(entry.get("issue_key") or "").strip().upper()
-        if (
-            entry.get("user_id") == user_id
-            and entry.get("channel_id") == channel_id
-            and entry_issue_key == target_issue_key
-        ):
-            removed = True
+        matches_scope = True
+        if user_id is not None:
+            matches_scope = matches_scope and entry.get("user_id") == user_id
+        if channel_id is not None:
+            matches_scope = matches_scope and entry.get("channel_id") == channel_id
+        if matches_scope and entry_issue_key == target_issue_key:
+            removed_count += 1
             continue
         kept_entries.append(entry)
 
-    if not removed:
-        return
+    if removed_count == 0:
+        return 0
 
     discord_config = dict(tenant.discord_config or {})
     discord_config["ask_history"] = kept_entries[-MAX_ASK_HISTORY_ENTRIES:]
     tenant.discord_config = discord_config
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
+    return removed_count
 
 
-def _collect_ask_context_with_history_fallback(
+def _collect_ask_context_with_history_context(
     *,
     session: Session,
     tenant: Tenant,
@@ -861,7 +880,7 @@ def _collect_ask_context_with_history_fallback(
             scoped_issue_key=resolved_scoped_issue_key,
         )
     except HTTPException as exc:
-        # If a history-derived issue was deleted in Jira, clear stale memory and retry unscoped.
+        # If a history-derived issue was deleted in Jira, clear stale memory and ask user to re-scope.
         if history_issue_key and exc.status_code == status.HTTP_404_NOT_FOUND:
             _drop_issue_key_from_ask_history(
                 session=session,
@@ -870,17 +889,12 @@ def _collect_ask_context_with_history_fallback(
                 channel_id=channel_id,
                 issue_key=history_issue_key,
             )
-            history_context = _recent_ask_history(
-                tenant=tenant,
-                user_id=user_id,
-                channel_id=channel_id,
-                limit=MAX_ASK_HISTORY_CONTEXT,
-            )
-            normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
-                session=session,
-                tenant=tenant,
-                question=question,
-                scoped_issue_key=None,
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Previous issue context {history_issue_key} no longer exists in Jira. "
+                    "I cleared that stale context. Re-run with @ISSUE-KEY or ask a board-level question."
+                ),
             )
         else:
             raise
@@ -1248,7 +1262,7 @@ def _ask_board_message(
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str, dict]:
-    normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_fallback(
+    normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_context(
         session=session,
         tenant=tenant,
         user_id=user_id,
@@ -1460,7 +1474,7 @@ def execute_discord_command(
         normalized_user_id = payload.user_id.strip()
         normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
         if require_ask_confirmation:
-            normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_fallback(
+            normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_context(
                 session=session,
                 tenant=tenant,
                 user_id=normalized_user_id,

@@ -62,7 +62,13 @@ from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-JIRA_WEBHOOK_EVENTS = ["jira:issue_created", "jira:issue_updated"]
+JIRA_WEBHOOK_EVENTS = [
+    "jira:issue_created",
+    "jira:issue_updated",
+    "jira:issue_deleted",
+    "comment_created",
+    "comment_updated",
+]
 DISCORD_INTERNAL_CONFIG_KEYS = {
     "allowlist_requests",
     "pending_ask_actions",

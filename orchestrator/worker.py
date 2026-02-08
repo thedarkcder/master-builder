@@ -4,6 +4,7 @@ import asyncio
 import logging
 import signal
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -70,8 +71,8 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
         enforce_safe_command(command_text)
         suggested_test_commands.append(command_text)
 
-    repo_root = Path(__file__).resolve().parents[1]
-    enforcement_context = build_agent_enforcement_context(repo_root=repo_root)
+    settings = get_settings()
+    enforcement_context = _cached_enforcement_context(settings.required_codex_assets_version or "")
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
@@ -86,6 +87,15 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
         max_dev_test_review_loops=max_loops,
         max_runtime_minutes=max_runtime_minutes,
         suggested_test_commands=suggested_test_commands,
+    )
+
+
+@lru_cache(maxsize=1)
+def _cached_enforcement_context(required_assets_version: str) -> str:
+    repo_root = Path(__file__).resolve().parents[1]
+    return build_agent_enforcement_context(
+        repo_root=repo_root,
+        required_assets_version=required_assets_version or None,
     )
 
 
