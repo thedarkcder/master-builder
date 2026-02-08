@@ -16,7 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.routes_discord import execute_discord_command
+from orchestrator.api.routes_discord import (
+    _project_filter_jql,
+    _search_jira_issues_for_tenant,
+    execute_discord_command,
+)
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord_notifications import send_tenant_discord_message
@@ -276,6 +280,13 @@ def _discord_interaction_response(*, content: str, ephemeral: bool = True) -> JS
     )
 
 
+def _discord_autocomplete_response(*, choices: list[dict]) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"type": 8, "data": {"choices": choices[:25]}},
+    )
+
+
 def _find_tenant_for_discord_channel(
     *,
     session: Session,
@@ -313,6 +324,79 @@ def _flatten_discord_option_values(options: object) -> list[str]:
     return flattened
 
 
+def _find_focused_discord_option(options: object) -> tuple[str, str] | None:
+    if not isinstance(options, list):
+        return None
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_type = option.get("type")
+        if option_type in {1, 2}:  # SUB_COMMAND / SUB_COMMAND_GROUP
+            focused = _find_focused_discord_option(option.get("options"))
+            if focused is not None:
+                return focused
+            continue
+        if option.get("focused") is True:
+            name = str(option.get("name") or "").strip()
+            value = str(option.get("value") or "").strip()
+            if name:
+                return name, value
+    return None
+
+
+def _discord_option_value(options: object, *, name: str) -> str | None:
+    if not isinstance(options, list):
+        return None
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_type = option.get("type")
+        if option_type in {1, 2}:  # SUB_COMMAND / SUB_COMMAND_GROUP
+            nested = _discord_option_value(option.get("options"), name=name)
+            if nested is not None:
+                return nested
+            continue
+        option_name = str(option.get("name") or "").strip()
+        if option_name != name:
+            continue
+        value = option.get("value")
+        if value is None:
+            return None
+        return str(value).strip()
+    return None
+
+
+def _discord_issue_autocomplete_choices(
+    *,
+    session: Session,
+    tenant: Tenant,
+    current_value: str,
+) -> list[dict]:
+    project_jql = _project_filter_jql(tenant)
+    normalized = current_value.strip().upper()
+    if normalized:
+        jql = f'{project_jql} AND key ~ "{normalized}*" ORDER BY updated DESC'
+    else:
+        jql = f"{project_jql} ORDER BY updated DESC"
+    issues = _search_jira_issues_for_tenant(
+        session=session,
+        tenant=tenant,
+        jql=jql,
+        max_results=25,
+    )
+
+    choices: list[dict] = []
+    seen_keys: set[str] = set()
+    for issue in issues:
+        if issue.key in seen_keys:
+            continue
+        seen_keys.add(issue.key)
+        summary = (issue.summary or "").strip()
+        display = f"{issue.key} — {summary}" if summary else issue.key
+        choices.append({"name": display[:100], "value": issue.key[:100]})
+    return choices
+
+
 def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
     data = payload.get("data")
     if not isinstance(data, dict):
@@ -343,10 +427,47 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
     if user_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction user_id")
 
-    option_values = _flatten_discord_option_values(data.get("options"))
-    command_text = f"!{command_name.strip().lower()}"
-    if option_values:
-        command_text = f"{command_text} {' '.join(option_values)}"
+    normalized_command = command_name.strip().lower()
+    options = data.get("options")
+    command_text = f"!{normalized_command}"
+    if normalized_command == "ask":
+        issue_key = _discord_option_value(options, name="issue_key")
+        question = _discord_option_value(options, name="question")
+        if issue_key:
+            command_text = f"{command_text} @{issue_key}"
+        if question:
+            command_text = f"{command_text} {question}"
+    elif normalized_command == "run":
+        issue_key = _discord_option_value(options, name="issue_key")
+        if issue_key:
+            command_text = f"{command_text} {issue_key}"
+    elif normalized_command == "link":
+        issue_key = _discord_option_value(options, name="issue_key")
+        if issue_key:
+            command_text = f"{command_text} {issue_key}"
+    elif normalized_command == "retry":
+        target = _discord_option_value(options, name="target")
+        if target:
+            command_text = f"{command_text} {target}"
+    elif normalized_command == "issues":
+        subcommands = options if isinstance(options, list) else []
+        for option in subcommands:
+            if not isinstance(option, dict):
+                continue
+            if option.get("type") != 1:
+                continue
+            subcommand_name = str(option.get("name") or "").strip().lower()
+            if not subcommand_name:
+                continue
+            command_text = f"{command_text} {subcommand_name}"
+            spec = _discord_option_value(option.get("options"), name="spec")
+            if spec:
+                command_text = f"{command_text} {spec}"
+            break
+    else:
+        option_values = _flatten_discord_option_values(options)
+        if option_values:
+            command_text = f"{command_text} {' '.join(option_values)}"
 
     return user_id, channel_id.strip(), command_text
 
@@ -736,6 +857,39 @@ async def ingest_discord_interaction(
     interaction_type = payload.get("type")
     if interaction_type == 1:  # PING
         return JSONResponse(status_code=status.HTTP_200_OK, content={"type": 1})
+
+    if interaction_type == 4:  # APPLICATION_COMMAND_AUTOCOMPLETE
+        channel_id = payload.get("channel_id")
+        if not isinstance(channel_id, str) or not channel_id.strip():
+            return _discord_autocomplete_response(choices=[])
+        tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id.strip())
+        if tenant is None:
+            return _discord_autocomplete_response(choices=[])
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return _discord_autocomplete_response(choices=[])
+        command_name = str(data.get("name") or "").strip().lower()
+        focused = _find_focused_discord_option(data.get("options"))
+        if focused is None:
+            return _discord_autocomplete_response(choices=[])
+        focused_name, focused_value = focused
+        supports_issue_autocomplete = (
+            (command_name in {"run", "link"} and focused_name == "issue_key")
+            or (command_name in {"retry"} and focused_name == "target")
+            or (command_name in {"ask"} and focused_name == "issue_key")
+        )
+        if not supports_issue_autocomplete:
+            return _discord_autocomplete_response(choices=[])
+        try:
+            choices = _discord_issue_autocomplete_choices(
+                session=session,
+                tenant=tenant,
+                current_value=focused_value,
+            )
+        except HTTPException:
+            choices = []
+        return _discord_autocomplete_response(choices=choices)
 
     if interaction_type != 2:  # APPLICATION_COMMAND
         return _discord_interaction_response(

@@ -16,6 +16,12 @@ class DiscordCommandSyncTests(unittest.TestCase):
         seed_option = next(option for option in options if option.get("name") == "seed")
         self.assertEqual(seed_option.get("type"), 1)
 
+        ask_command = next(command for command in commands if command.get("name") == "ask")
+        ask_options = ask_command.get("options")
+        self.assertIsInstance(ask_options, list)
+        issue_key_option = next(option for option in ask_options if option.get("name") == "issue_key")
+        self.assertEqual(issue_key_option.get("autocomplete"), True)
+
 
 if __name__ == "__main__":
     unittest.main()

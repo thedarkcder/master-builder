@@ -42,6 +42,7 @@ def build_discord_guild_commands() -> list[dict]:
                     "name": "issue_key",
                     "description": "Jira issue key, e.g. MAB-24",
                     "required": True,
+                    "autocomplete": True,
                 }
             ],
         },
@@ -66,6 +67,7 @@ def build_discord_guild_commands() -> list[dict]:
                     "name": "target",
                     "description": "Issue key or run ID",
                     "required": True,
+                    "autocomplete": True,
                 }
             ],
         },
@@ -82,6 +84,7 @@ def build_discord_guild_commands() -> list[dict]:
                     "name": "issue_key",
                     "description": "Jira issue key",
                     "required": True,
+                    "autocomplete": True,
                 }
             ],
         },
@@ -89,6 +92,13 @@ def build_discord_guild_commands() -> list[dict]:
             "name": "ask",
             "description": "Ask a question about board status/issues",
             "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "issue_key",
+                    "description": "Optional issue key to scope the answer",
+                    "required": False,
+                    "autocomplete": True,
+                },
                 {
                     "type": 3,  # STRING
                     "name": "question",
