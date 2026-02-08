@@ -8,17 +8,33 @@ import os
 import secrets
 from uuid import uuid4
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.routes_discord import (
+    _project_filter_jql,
+    _search_jira_issues_for_tenant,
+    execute_discord_command,
+)
+from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.discord_notifications import send_tenant_discord_message
+from orchestrator.core.reviewer import ReviewAgentGate
+from orchestrator.core.runs import (
+    RUN_STATUS_BLOCKED,
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_FAILED,
+    enqueue_run,
+)
 from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
-from orchestrator.storage.models import Tenant
+from orchestrator.storage.models import Run, Tenant
+from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 
 router = APIRouter(tags=["jira-webhook"])
 
@@ -29,6 +45,9 @@ HTTP_413_TOO_LARGE = getattr(
     "HTTP_413_CONTENT_TOO_LARGE",
     status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
 )
+GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
+DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
+SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry"}
 
 
 def _max_webhook_body_bytes() -> int:
@@ -140,6 +159,45 @@ def _extract_issue_payload(
     return issue_key, normalized_labels, status_name, status_category_key, summary, description
 
 
+def _extract_jira_comment_text(payload: dict) -> str | None:
+    comment = payload.get("comment")
+    if not isinstance(comment, dict):
+        return None
+    body = comment.get("body")
+    if isinstance(body, str):
+        text = body.strip()
+        return text or None
+    if isinstance(body, dict):
+        text = _adf_to_text(body).strip()
+        return text or None
+    return None
+
+
+def _parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None]:
+    comment_text = _extract_jira_comment_text(payload)
+    if not comment_text:
+        return None, None
+
+    first_non_empty_line = ""
+    for raw_line in comment_text.splitlines():
+        candidate = raw_line.strip()
+        if candidate:
+            first_non_empty_line = candidate
+            break
+    if not first_non_empty_line:
+        return None, None
+    if not first_non_empty_line.lower().startswith("/mb"):
+        return None, None
+
+    parts = [part for part in first_non_empty_line.split(" ") if part]
+    if len(parts) != 2:
+        return None, "invalid_comment_command"
+    command_name = parts[1].strip().lower()
+    if command_name not in SUPPORTED_JIRA_COMMENT_COMMANDS:
+        return None, "invalid_comment_command"
+    return command_name, None
+
+
 def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
     changelog = payload.get("changelog")
     if not isinstance(changelog, dict):
@@ -163,6 +221,8 @@ def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
         return normalized_from_status, normalized_to_status
 
     return None, None
+
+
 def _extract_webhook_token(request: Request) -> str | None:
     webhook_token = request.headers.get("X-Webhook-Token")
     if webhook_token:
@@ -188,6 +248,290 @@ def _extract_delivery_id(request: Request) -> str | None:
             if normalized:
                 return normalized
     return None
+
+
+def _resolve_discord_interactions_public_key(
+    *,
+    session: Session,
+    settings,
+) -> bytes:  # noqa: ANN001
+    raw_public_key = resolve_secret_ref(
+        session,
+        secret_ref=DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF,
+        encryption_key=settings.secrets_encryption_key,
+    ).strip()
+    if not raw_public_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Discord interactions public key is missing. "
+                f"Set managed secret '{DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF}'."
+            ),
+        )
+
+    try:
+        public_key_bytes = bytes.fromhex(raw_public_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Discord interactions public key must be a hex-encoded Ed25519 public key",
+        ) from exc
+
+    if len(public_key_bytes) != 32:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Discord interactions public key must be 32 bytes (64 hex chars)",
+        )
+    return public_key_bytes
+
+
+def _validate_discord_interaction_signature(
+    *,
+    request: Request,
+    payload_bytes: bytes,
+    public_key: bytes,
+) -> None:
+    signature_hex = (request.headers.get("X-Signature-Ed25519") or "").strip()
+    timestamp = (request.headers.get("X-Signature-Timestamp") or "").strip()
+    if not signature_hex or not timestamp:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Discord interaction signature headers",
+        )
+
+    try:
+        signature = bytes.fromhex(signature_hex)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Discord interaction signature",
+        ) from exc
+
+    message = timestamp.encode("utf-8") + payload_bytes
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
+    except InvalidSignature as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Discord interaction signature",
+        ) from exc
+
+
+def _discord_interaction_response(*, content: str, ephemeral: bool = True) -> JSONResponse:
+    response_data = {"content": content}
+    if ephemeral:
+        response_data["flags"] = 64
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"type": 4, "data": response_data},
+    )
+
+
+def _discord_autocomplete_response(*, choices: list[dict]) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"type": 8, "data": {"choices": choices[:25]}},
+    )
+
+
+def _find_tenant_for_discord_channel(
+    *,
+    session: Session,
+    channel_id: str,
+) -> Tenant | None:
+    tenants = session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
+    matches: list[Tenant] = []
+    for tenant in tenants:
+        discord_channel_id = str((tenant.discord_config or {}).get("channel_id") or "").strip()
+        if discord_channel_id and discord_channel_id == channel_id:
+            matches.append(tenant)
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _flatten_discord_option_values(options: object) -> list[str]:
+    if not isinstance(options, list):
+        return []
+    flattened: list[str] = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_type = option.get("type")
+        if option_type in {1, 2}:  # SUB_COMMAND / SUB_COMMAND_GROUP
+            nested_name = option.get("name")
+            if isinstance(nested_name, str) and nested_name.strip():
+                flattened.append(nested_name.strip())
+            flattened.extend(_flatten_discord_option_values(option.get("options")))
+            continue
+        value = option.get("value")
+        if value is None:
+            continue
+        flattened.append(str(value))
+    return flattened
+
+
+def _find_focused_discord_option(options: object) -> tuple[str, str] | None:
+    if not isinstance(options, list):
+        return None
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_type = option.get("type")
+        if option_type in {1, 2}:  # SUB_COMMAND / SUB_COMMAND_GROUP
+            focused = _find_focused_discord_option(option.get("options"))
+            if focused is not None:
+                return focused
+            continue
+        if option.get("focused") is True:
+            name = str(option.get("name") or "").strip()
+            value = str(option.get("value") or "").strip()
+            if name:
+                return name, value
+    return None
+
+
+def _discord_option_value(options: object, *, name: str) -> str | None:
+    if not isinstance(options, list):
+        return None
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_type = option.get("type")
+        if option_type in {1, 2}:  # SUB_COMMAND / SUB_COMMAND_GROUP
+            nested = _discord_option_value(option.get("options"), name=name)
+            if nested is not None:
+                return nested
+            continue
+        option_name = str(option.get("name") or "").strip()
+        if option_name != name:
+            continue
+        value = option.get("value")
+        if value is None:
+            return None
+        return str(value).strip()
+    return None
+
+
+def _discord_issue_autocomplete_choices(
+    *,
+    session: Session,
+    tenant: Tenant,
+    current_value: str,
+) -> list[dict]:
+    project_jql = _project_filter_jql(tenant)
+    normalized = current_value.strip().upper()
+    if normalized:
+        jql = f'{project_jql} AND key ~ "{normalized}*" ORDER BY updated DESC'
+    else:
+        jql = f"{project_jql} ORDER BY updated DESC"
+    issues = _search_jira_issues_for_tenant(
+        session=session,
+        tenant=tenant,
+        jql=jql,
+        max_results=25,
+    )
+
+    choices: list[dict] = []
+    seen_keys: set[str] = set()
+    for issue in issues:
+        if issue.key in seen_keys:
+            continue
+        seen_keys.add(issue.key)
+        summary = (issue.summary or "").strip()
+        display = f"{issue.key} — {summary}" if summary else issue.key
+        choices.append({"name": display[:100], "value": issue.key[:100]})
+    return choices
+
+
+def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction data")
+
+    command_name = data.get("name")
+    if not isinstance(command_name, str) or not command_name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction command name")
+
+    channel_id = payload.get("channel_id")
+    if not isinstance(channel_id, str) or not channel_id.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction channel_id")
+
+    user_id: str | None = None
+    member = payload.get("member")
+    if isinstance(member, dict):
+        member_user = member.get("user")
+        if isinstance(member_user, dict):
+            raw_user_id = member_user.get("id")
+            if isinstance(raw_user_id, str) and raw_user_id.strip():
+                user_id = raw_user_id.strip()
+    if user_id is None:
+        direct_user = payload.get("user")
+        if isinstance(direct_user, dict):
+            raw_user_id = direct_user.get("id")
+            if isinstance(raw_user_id, str) and raw_user_id.strip():
+                user_id = raw_user_id.strip()
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction user_id")
+
+    normalized_command = command_name.strip().lower()
+    options = data.get("options")
+    command_text = f"!{normalized_command}"
+    if normalized_command == "ask":
+        issue_key = _discord_option_value(options, name="issue_key")
+        question = _discord_option_value(options, name="question")
+        if issue_key:
+            command_text = f"{command_text} @{issue_key}"
+        if question:
+            command_text = f"{command_text} {question}"
+    elif normalized_command == "run":
+        issue_key = _discord_option_value(options, name="issue_key")
+        if issue_key:
+            command_text = f"{command_text} {issue_key}"
+    elif normalized_command == "link":
+        issue_key = _discord_option_value(options, name="issue_key")
+        if issue_key:
+            command_text = f"{command_text} {issue_key}"
+    elif normalized_command == "retry":
+        target = _discord_option_value(options, name="target")
+        if target:
+            command_text = f"{command_text} {target}"
+    elif normalized_command == "issues":
+        subcommands = options if isinstance(options, list) else []
+        for option in subcommands:
+            if not isinstance(option, dict):
+                continue
+            if option.get("type") != 1:
+                continue
+            subcommand_name = str(option.get("name") or "").strip().lower()
+            if not subcommand_name:
+                continue
+            command_text = f"{command_text} {subcommand_name}"
+            spec = _discord_option_value(option.get("options"), name="spec")
+            if spec:
+                command_text = f"{command_text} {spec}"
+            break
+    elif normalized_command == "allowlist":
+        subcommands = options if isinstance(options, list) else []
+        for option in subcommands:
+            if not isinstance(option, dict):
+                continue
+            if option.get("type") != 1:
+                continue
+            subcommand_name = str(option.get("name") or "").strip().lower()
+            if not subcommand_name:
+                continue
+            command_text = f"{command_text} {subcommand_name}"
+            reason = _discord_option_value(option.get("options"), name="reason")
+            if reason:
+                command_text = f"{command_text} {reason}"
+            break
+    else:
+        option_values = _flatten_discord_option_values(options)
+        if option_values:
+            command_text = f"{command_text} {' '.join(option_values)}"
+
+    return user_id, channel_id.strip(), command_text
 
 
 def _validate_webhook_auth(
@@ -238,25 +582,13 @@ def _resolve_global_github_webhook_secret(
     session: Session,
     settings,
 ) -> str | None:  # noqa: ANN001
-    secret_ref = (os.environ.get("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF") or "").strip()
-    if not secret_ref:
-        return None
-
     secret_value = resolve_secret_ref(
         session,
-        secret_ref=secret_ref,
+        secret_ref=GLOBAL_GITHUB_WEBHOOK_SECRET_REF,
         encryption_key=settings.secrets_encryption_key,
     )
     if not secret_value:
-        logger.error(
-            "github_webhook_auth_misconfigured request_id=%s secret_ref=%s",
-            request_id,
-            secret_ref,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="GitHub webhook authentication is misconfigured",
-        )
+        return None
     return secret_value
 
 
@@ -350,6 +682,46 @@ def _find_tenant_by_installation_id(session: Session, installation_id: str) -> T
     return None
 
 
+def _extract_repository_full_name(payload: dict) -> str | None:
+    repository = payload.get("repository")
+    if isinstance(repository, dict):
+        full_name = repository.get("full_name")
+        if isinstance(full_name, str) and full_name.strip():
+            return full_name.strip()
+    return None
+
+
+def _extract_pull_request_targets(payload: dict) -> list[tuple[int, bool]]:
+    targets: list[tuple[int, bool]] = []
+    seen: set[int] = set()
+
+    pull_request = payload.get("pull_request")
+    if isinstance(pull_request, dict):
+        number = pull_request.get("number")
+        body = pull_request.get("body")
+        review_summary_present = isinstance(body, str) and bool(body.strip())
+        if isinstance(number, int) and number > 0 and number not in seen:
+            targets.append((number, review_summary_present))
+            seen.add(number)
+
+    for container_key in ("check_suite", "check_run"):
+        container = payload.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        pull_requests = container.get("pull_requests")
+        if not isinstance(pull_requests, list):
+            continue
+        for item in pull_requests:
+            if not isinstance(item, dict):
+                continue
+            number = item.get("number")
+            if isinstance(number, int) and number > 0 and number not in seen:
+                targets.append((number, True))
+                seen.add(number)
+
+    return targets
+
+
 @router.post("/jira/webhook/{tenant_id}")
 async def ingest_jira_webhook(
     tenant_id: str,
@@ -390,14 +762,32 @@ async def ingest_jira_webhook(
     issue_key, labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
         _extract_issue_payload(payload)
     )
+    comment_command, comment_command_error = _parse_jira_comment_command(payload)
     delivery_id = _extract_delivery_id(request)
     logger.info(
-        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
+        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s comment_command=%s comment_command_error=%s",
         request_id,
         tenant_id,
         issue_key,
         delivery_id,
+        comment_command,
+        comment_command_error,
     )
+
+    if comment_command_error:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=invalid_comment_command",
+            request_id,
+            tenant_id,
+            issue_key,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "invalid_comment_command",
+        }
 
     configured_ready_statuses = tenant.jira_config.get("ready_statuses")
     if isinstance(configured_ready_statuses, list):
@@ -465,7 +855,11 @@ async def ingest_jira_webhook(
 
     from_status, to_status = _extract_status_transition(payload)
     trigger_reason = "ready_status_recheck"
-    if (
+    if comment_command == "run":
+        trigger_reason = "comment_command_run"
+    elif comment_command == "retry":
+        trigger_reason = "comment_command_retry"
+    elif (
         to_status is not None
         and to_status.casefold() in normalized_ready_statuses
         and from_status is not None
@@ -483,12 +877,43 @@ async def ingest_jira_webhook(
         to_status,
     )
 
+    retry_source_run = None
+    resolved_issue_description = issue_description
+    if comment_command == "retry":
+        retryable_statuses = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
+        retry_source_run = session.execute(
+            select(Run)
+            .where(
+                Run.tenant_id == tenant_id,
+                Run.issue_key == issue_key,
+                Run.status.in_(retryable_statuses),
+            )
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if retry_source_run is None:
+            logger.info(
+                "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=no_retryable_run",
+                request_id,
+                tenant_id,
+                issue_key,
+            )
+            return {
+                "request_id": request_id,
+                "tenant_id": tenant_id,
+                "issue_key": issue_key,
+                "enqueued": False,
+                "reason": "no_retryable_run",
+                "trigger_reason": trigger_reason,
+            }
+        resolved_issue_description = retry_source_run.issue_description
+
     enqueue_result = enqueue_run(
         session,
         tenant_id=tenant_id,
         issue_key=issue_key,
         issue_summary=issue_summary,
-        issue_description=issue_description,
+        issue_description=resolved_issue_description,
         delivery_id=delivery_id,
         max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
     )
@@ -509,6 +934,7 @@ async def ingest_jira_webhook(
             "reason": enqueue_result.reason,
             "run_id": enqueue_result.run.run_id,
             "trigger_reason": trigger_reason,
+            "command": comment_command,
         }
     logger.info(
         "jira_webhook_enqueued request_id=%s tenant_id=%s issue_key=%s run_id=%s",
@@ -525,7 +951,170 @@ async def ingest_jira_webhook(
         "enqueued": True,
         "run_id": enqueue_result.run.run_id,
         "trigger_reason": trigger_reason,
+        "command": comment_command,
     }
+
+
+@router.post("/discord/interactions")
+async def ingest_discord_interaction(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    settings = get_settings()
+    request_id = request.headers.get("X-Request-Id") or str(uuid4())
+
+    payload, payload_bytes = await _read_json_payload(request, request_id=request_id, source="discord")
+    public_key = _resolve_discord_interactions_public_key(session=session, settings=settings)
+    _validate_discord_interaction_signature(
+        request=request,
+        payload_bytes=payload_bytes,
+        public_key=public_key,
+    )
+
+    interaction_type = payload.get("type")
+    if interaction_type == 1:  # PING
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"type": 1})
+
+    if interaction_type == 4:  # APPLICATION_COMMAND_AUTOCOMPLETE
+        channel_id = payload.get("channel_id")
+        if not isinstance(channel_id, str) or not channel_id.strip():
+            return _discord_autocomplete_response(choices=[])
+        tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id.strip())
+        if tenant is None:
+            return _discord_autocomplete_response(choices=[])
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return _discord_autocomplete_response(choices=[])
+        command_name = str(data.get("name") or "").strip().lower()
+        focused = _find_focused_discord_option(data.get("options"))
+        if focused is None:
+            return _discord_autocomplete_response(choices=[])
+        focused_name, focused_value = focused
+        supports_issue_autocomplete = (
+            (command_name in {"run", "link"} and focused_name == "issue_key")
+            or (command_name in {"retry"} and focused_name == "target")
+            or (command_name in {"ask"} and focused_name == "issue_key")
+        )
+        if not supports_issue_autocomplete:
+            return _discord_autocomplete_response(choices=[])
+        try:
+            choices = _discord_issue_autocomplete_choices(
+                session=session,
+                tenant=tenant,
+                current_value=focused_value,
+            )
+        except HTTPException:
+            choices = []
+        return _discord_autocomplete_response(choices=choices)
+
+    if interaction_type != 2:  # APPLICATION_COMMAND
+        return _discord_interaction_response(
+            content=f"Unsupported Discord interaction type '{interaction_type}'",
+            ephemeral=True,
+        )
+
+    try:
+        user_id, channel_id, command_text = _parse_discord_interaction_command(payload)
+    except HTTPException as exc:
+        return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
+
+    tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id)
+    if tenant is None:
+        return _discord_interaction_response(
+            content="No enabled tenant is configured for this Discord channel.",
+            ephemeral=True,
+        )
+
+    try:
+        command_response = execute_discord_command(
+            tenant_id=tenant.tenant_id,
+            payload=DiscordCommandRequest(
+                user_id=user_id,
+                command=command_text,
+                channel_id=channel_id,
+            ),
+            session=session,
+        )
+    except HTTPException as exc:
+        return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
+
+    return _discord_interaction_response(content=command_response.message, ephemeral=True)
+
+
+@router.post("/discord/webhook/{tenant_id}")
+async def ingest_discord_webhook(
+    tenant_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    settings = get_settings()
+    request_id = request.headers.get("X-Request-Id") or str(uuid4())
+    logger.info("discord_webhook_received request_id=%s tenant_id=%s", request_id, tenant_id)
+
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown tenant")
+    if not tenant.is_enabled:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "request_id": request_id,
+                "tenant_id": tenant_id,
+                "accepted": False,
+                "reason": "tenant_disabled",
+            },
+        )
+
+    discord_config = tenant.discord_config or {}
+    command_secret_ref = str(discord_config.get("command_secret_ref") or "").strip()
+    if command_secret_ref:
+        presented_token = _extract_webhook_token(request)
+        expected_token = resolve_secret_ref(
+            session,
+            secret_ref=command_secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        )
+        if not expected_token:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Discord command authentication is misconfigured",
+            )
+        if not presented_token or not secrets.compare_digest(presented_token, expected_token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Discord webhook token",
+            )
+
+    payload, _ = await _read_json_payload(request, request_id=request_id, source="discord")
+    user_id = payload.get("user_id")
+    command = payload.get("command")
+    channel_id = payload.get("channel_id")
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing user_id")
+    if not isinstance(command, str) or not command.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing command")
+    if channel_id is not None and not isinstance(channel_id, str):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid channel_id")
+
+    command_response = execute_discord_command(
+        tenant_id=tenant_id,
+        payload=DiscordCommandRequest(
+            user_id=user_id.strip(),
+            command=command.strip(),
+            channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
+        ),
+        session=session,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "accepted": True,
+            "result": command_response.model_dump(),
+        },
+    )
 
 
 @router.post("/github/webhook")
@@ -650,6 +1239,125 @@ async def ingest_github_webhook(
         normalized_action or "none",
         installation_id,
     )
+
+    review_events = {
+        "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "check_suite",
+        "check_run",
+    }
+    if github_event not in review_events:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": True,
+                "reason": "ignored_event",
+            },
+        )
+
+    repo_full_name = _extract_repository_full_name(payload)
+    pr_targets = _extract_pull_request_targets(payload)
+    if repo_full_name is None or not pr_targets:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": False,
+                "reason": "missing_pr_context",
+            },
+        )
+
+    def secret_lookup(secret_ref: str) -> str | None:
+        return resolve_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        )
+
+    try:
+        github_client = github_client_from_tenant_config(
+            tenant.github_config,
+            secret_lookup=secret_lookup,
+        )
+        reviewer_gate = ReviewAgentGate(github_client)
+    except ValueError as exc:
+        logger.warning(
+            "github_webhook_review_misconfigured request_id=%s tenant_id=%s error=%s",
+            request_id,
+            tenant.tenant_id,
+            exc,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": False,
+                "reason": "review_misconfigured",
+            },
+        )
+
+    signals: list[dict[str, object]] = []
+    for pr_number, review_summary_present in pr_targets:
+        try:
+            signal = reviewer_gate.evaluate_pr(
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                review_summary_present=review_summary_present,
+            )
+        except (GitHubApiError, ValueError) as exc:
+            logger.warning(
+                "github_webhook_review_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                request_id,
+                tenant.tenant_id,
+                pr_number,
+                exc,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "request_id": request_id,
+                    "delivery_id": delivery_id,
+                    "tenant_id": tenant.tenant_id,
+                    "event": github_event,
+                    "action": normalized_action,
+                    "accepted": False,
+                    "reason": "review_evaluation_failed",
+                },
+            )
+
+        send_result = send_tenant_discord_message(
+            session=session,
+            tenant=tenant,
+            message=signal.message,
+            settings=settings,
+            event="review_signal",
+        )
+        signals.append(
+            {
+                "pr_number": pr_number,
+                "ready": signal.ready,
+                "state": signal.state,
+                "policy_pack": signal.policy_pack,
+                "must_fix_findings": list(signal.must_fix_findings),
+                "discord_sent": send_result.sent,
+                "discord_reason": send_result.reason,
+            }
+        )
+
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content={
@@ -659,6 +1367,7 @@ async def ingest_github_webhook(
             "event": github_event,
             "action": normalized_action,
             "accepted": True,
-            "reason": "accepted_no_handler",
+            "reason": "review_processed",
+            "signals": signals,
         },
     )

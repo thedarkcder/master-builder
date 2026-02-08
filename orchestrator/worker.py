@@ -9,8 +9,11 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.codex_agents import CodexWorkflowAgents
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import evaluate_decision_gate
+from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
@@ -19,6 +22,7 @@ from orchestrator.core.signal_templates import (
     format_stage_jira_update,
 )
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
@@ -28,6 +32,7 @@ RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
+RUN_STATUS_CANCELLED = "cancelled"
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
@@ -85,6 +90,7 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
 
 
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
+    settings = get_settings()
     queued_runs = session.execute(
         select(Run).where(Run.status == RUN_STATUS_QUEUED).order_by(Run.created_at.asc())
     ).scalars().all()
@@ -136,6 +142,45 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         session.refresh(run)
         return run
     if decision_gate.triggered:
+        stage_update = {
+            "stage": "decision_gate_required",
+            "tenant_id": run.tenant_id,
+            "issue_key": run.issue_key,
+            "run_id": run.run_id,
+            "jira_message": format_stage_jira_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                stage="decision_gate_required",
+                jira_url=f"https://example.atlassian.net/browse/{run.issue_key}",
+                error=decision_gate.reason,
+                next_steps=decision_gate.questions,
+            ),
+            "discord_message": format_stage_discord_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                stage="decision_gate_required",
+                jira_url=f"https://example.atlassian.net/browse/{run.issue_key}",
+                error=decision_gate.reason,
+                next_steps=decision_gate.questions,
+            ),
+        }
+        send_result = send_tenant_discord_message(
+            session=session,
+            tenant=tenant,
+            message=stage_update["discord_message"],
+            settings=settings,
+            event="decision_gate_required",
+        )
+        if not send_result.sent:
+            logger.info(
+                "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
+                run.tenant_id,
+                run.run_id,
+                stage_update["stage"],
+                send_result.reason,
+            )
         run.status = RUN_STATUS_BLOCKED
         run.last_error = f"Decision Gate required: {decision_gate.reason}"
         run.plan = {
@@ -144,6 +189,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             "summary": [],
             "test_guidance": [],
             "pr_url": None,
+            "stage_updates": [stage_update],
             "decision_gate": decision_gate.to_payload(),
         }
         run.finished_at = datetime.now(timezone.utc)
@@ -174,7 +220,26 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         if run.issue_key
         else None
     )
-    stage_updates.append(
+
+    def append_stage_update(stage_update: dict[str, str]) -> None:
+        stage_updates.append(stage_update)
+        send_result = send_tenant_discord_message(
+            session=session,
+            tenant=tenant,
+            message=stage_update["discord_message"],
+            settings=settings,
+            event=stage_update["stage"],
+        )
+        if not send_result.sent:
+            logger.info(
+                "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
+                run.tenant_id,
+                run.run_id,
+                stage_update["stage"],
+                send_result.reason,
+            )
+
+    append_stage_update(
         {
             "stage": "lock_acquired",
             "tenant_id": run.tenant_id,
@@ -198,9 +263,24 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     )
 
     workflow_result = runner.run(workflow_request)
+    session.refresh(run)
+    if run.status == RUN_STATUS_CANCELLED:
+        run.plan = {
+            "succeeded": False,
+            "attempts": 0,
+            "summary": ["Run cancelled during execution"],
+            "test_guidance": [],
+            "pr_url": run.pr_url,
+            "stage_updates": stage_updates,
+        }
+        if run.finished_at is None:
+            run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(run)
+        return run
     plan_payload = workflow_result.to_plan_payload()
     if workflow_result.plan is not None:
-        stage_updates.append(
+        append_stage_update(
             {
                 "stage": "plan_posted",
                 "tenant_id": run.tenant_id,
@@ -223,7 +303,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             }
         )
     if workflow_result.pr_url:
-        stage_updates.append(
+        append_stage_update(
             {
                 "stage": "pr_opened",
                 "tenant_id": run.tenant_id,
@@ -253,7 +333,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             if workflow_result.diagnostics is not None
             else "Workflow failed without diagnostics"
         )
-        stage_updates.append(
+        append_stage_update(
             {
                 "stage": "run_failed",
                 "tenant_id": run.tenant_id,
@@ -305,9 +385,24 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     return run
 
 
+def _build_workflow_runner_for_session(*, session: Session) -> WorkflowRunner:
+    settings = get_settings()
+    runtime = build_codex_runtime(session=session, settings=settings)
+    agents = CodexWorkflowAgents(runtime=runtime)
+    return WorkflowRunner(agents)
+
+
+async def _wait_for_stop_or_timeout(*, stop_event: asyncio.Event, timeout_seconds: int) -> None:
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=float(timeout_seconds))
+    except TimeoutError:
+        return
+
+
 async def run_worker() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    session_factory = create_session_factory()
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -316,7 +411,27 @@ async def run_worker() -> None:
         loop.add_signal_handler(sig, stop_event.set)
 
     logger.info("worker_started")
-    await stop_event.wait()
+    poll_interval_seconds = max(1, settings.worker_poll_interval_seconds)
+    while not stop_event.is_set():
+        with session_factory() as session:
+            try:
+                runner = _build_workflow_runner_for_session(session=session)
+            except CodexRuntimeError as exc:
+                logger.warning("worker_runtime_unavailable error=%s", exc)
+                await _wait_for_stop_or_timeout(
+                    stop_event=stop_event,
+                    timeout_seconds=poll_interval_seconds,
+                )
+                continue
+
+            processed = process_next_queued_run(session, runner)
+
+        if processed is None:
+            await _wait_for_stop_or_timeout(
+                stop_event=stop_event,
+                timeout_seconds=poll_interval_seconds,
+            )
+
     logger.info("worker_stopped")
 
 

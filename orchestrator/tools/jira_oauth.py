@@ -34,6 +34,15 @@ class JiraProject:
 
 
 @dataclass(frozen=True)
+class JiraWebhook:
+    webhook_id: str
+    name: str
+    url: str
+    jql_filter: str
+    events: list[str]
+
+
+@dataclass(frozen=True)
 class JiraIssuePreview:
     key: str
     summary: str
@@ -41,11 +50,31 @@ class JiraIssuePreview:
 
 
 @dataclass(frozen=True)
+class JiraIssueCreateInput:
+    summary: str
+    description: str
+    labels: list[str]
+    issue_type: str = "Task"
+
+
+@dataclass(frozen=True)
+class JiraIssueCreateResult:
+    key: str
+    issue_id: str
+
+
+@dataclass(frozen=True)
+class JiraIssueBulkCreateResult:
+    created: list[JiraIssueCreateResult]
+    errors: list[str]
+
+
+@dataclass(frozen=True)
 class JiraOAuthClientConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
-    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work")
+    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work", "offline_access")
 
 
 class JiraOAuthClient:
@@ -104,6 +133,29 @@ class JiraOAuthClient:
             return {}
         return json.loads(response_body)
 
+    def _post_json_with_access_token(self, url: str, *, access_token: str, payload: dict) -> dict | list:
+        body = json.dumps(payload).encode("utf-8")
+        request = Request(
+            url=url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                response_body = response.read().decode("utf-8")
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8")
+            raise JiraOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
+
+        if not response_body:
+            return {}
+        return json.loads(response_body)
+
     def _parse_tokens(self, payload: dict) -> JiraOAuthTokenSet:
         access_token = payload.get("access_token")
         refresh_token = payload.get("refresh_token")
@@ -113,7 +165,9 @@ class JiraOAuthClient:
         if not isinstance(access_token, str) or not access_token:
             raise JiraOAuthError("Jira OAuth response missing access_token")
         if not isinstance(refresh_token, str) or not refresh_token:
-            raise JiraOAuthError("Jira OAuth response missing refresh_token")
+            raise JiraOAuthError(
+                "Jira OAuth response missing refresh_token; ensure offline_access scope is enabled for the OAuth app"
+            )
         if not isinstance(expires_in, int):
             raise JiraOAuthError("Jira OAuth response missing expires_in")
         if not isinstance(scope_raw, str):
@@ -209,16 +263,14 @@ class JiraOAuthClient:
         max_results: int = 20,
     ) -> list[JiraIssuePreview]:
         bounded_max_results = max(1, min(max_results, 50))
-        query = urlencode(
-            {
+        payload = self._post_json_with_access_token(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql",
+            access_token=access_token,
+            payload={
                 "jql": jql,
                 "maxResults": bounded_max_results,
-                "fields": "summary,status",
-            }
-        )
-        payload = self._get_json(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search?{query}",
-            access_token=access_token,
+                "fields": ["summary", "status"],
+            },
         )
         issues = payload.get("issues") if isinstance(payload, dict) else None
         if not isinstance(issues, list):
@@ -245,3 +297,203 @@ class JiraOAuthClient:
 
             results.append(JiraIssuePreview(key=key, summary=summary, status=status_name))
         return results
+
+    def create_issues_bulk(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+        issues: list[JiraIssueCreateInput],
+    ) -> JiraIssueBulkCreateResult:
+        issue_updates = []
+        for issue in issues:
+            summary = issue.summary.strip()
+            if not summary:
+                continue
+            issue_updates.append(
+                {
+                    "fields": {
+                        "project": {"key": project_key},
+                        "issuetype": {"name": issue.issue_type or "Task"},
+                        "summary": summary,
+                        "description": _to_adf_description(issue.description),
+                        "labels": [label for label in issue.labels if label],
+                    }
+                }
+            )
+
+        if not issue_updates:
+            raise JiraOAuthError("No valid issue payloads were provided for Jira bulk create")
+
+        payload = self._post_json_with_access_token(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/bulk",
+            access_token=access_token,
+            payload={"issueUpdates": issue_updates},
+        )
+        created_raw = payload.get("issues") if isinstance(payload, dict) else None
+        errors_raw = payload.get("errors") if isinstance(payload, dict) else None
+        if not isinstance(created_raw, list):
+            created_raw = []
+        if not isinstance(errors_raw, list):
+            errors_raw = []
+
+        created: list[JiraIssueCreateResult] = []
+        for item in created_raw:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            issue_id = item.get("id")
+            if isinstance(key, str) and key and isinstance(issue_id, str) and issue_id:
+                created.append(JiraIssueCreateResult(key=key, issue_id=issue_id))
+
+        errors: list[str] = []
+        for item in errors_raw:
+            if not isinstance(item, dict):
+                continue
+            failed_element = item.get("failedElementNumber")
+            element_errors = item.get("elementErrors") if isinstance(item.get("elementErrors"), dict) else {}
+            error_messages = element_errors.get("errorMessages")
+            if isinstance(error_messages, list):
+                reason_text = "; ".join(str(part) for part in error_messages if str(part).strip()) or "Unknown error"
+            else:
+                reason_text = "Unknown error"
+            errors.append(f"Item {failed_element}: {reason_text}")
+
+        return JiraIssueBulkCreateResult(created=created, errors=errors)
+
+    def list_webhooks(self, *, access_token: str, cloud_id: str) -> list[JiraWebhook]:
+        payload = self._get_json(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
+            access_token=access_token,
+        )
+
+        if isinstance(payload, dict):
+            values = payload.get("values")
+            items = values if isinstance(values, list) else []
+        elif isinstance(payload, list):
+            items = payload
+        else:
+            items = []
+
+        webhooks: list[JiraWebhook] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            webhook_id = item.get("id")
+            name = item.get("name")
+            url = item.get("url")
+            jql_filter = item.get("jqlFilter")
+            events = item.get("events")
+            if not isinstance(webhook_id, (str, int)):
+                continue
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if not isinstance(url, str) or not url.strip():
+                continue
+            if not isinstance(jql_filter, str):
+                jql_filter = ""
+            if not isinstance(events, list):
+                events = []
+            normalized_events = sorted(
+                [str(event).strip() for event in events if str(event).strip()]
+            )
+            webhooks.append(
+                JiraWebhook(
+                    webhook_id=str(webhook_id),
+                    name=name.strip(),
+                    url=url.strip(),
+                    jql_filter=jql_filter.strip(),
+                    events=normalized_events,
+                )
+            )
+        return webhooks
+
+    def create_webhook(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        name: str,
+        url: str,
+        jql_filter: str,
+        events: list[str],
+    ) -> JiraWebhook:
+        payload = self._post_json_with_access_token(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
+            access_token=access_token,
+            payload={
+                "name": name,
+                "url": url,
+                "jqlFilter": jql_filter,
+                "events": sorted({event.strip() for event in events if event.strip()}),
+                "excludeBody": False,
+            },
+        )
+        webhook_id = None
+        if isinstance(payload, dict):
+            for key in ("id", "webhookId", "createdWebhookId"):
+                candidate = payload.get(key)
+                if isinstance(candidate, (str, int)):
+                    webhook_id = str(candidate)
+                    break
+        if webhook_id is None:
+            webhooks = self.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+            for existing in webhooks:
+                if (
+                    existing.name == name
+                    and existing.url == url
+                    and existing.jql_filter == jql_filter
+                    and sorted(existing.events) == sorted(events)
+                ):
+                    return existing
+            raise JiraOAuthError("Jira webhook create succeeded but webhook ID was not returned")
+
+        return JiraWebhook(
+            webhook_id=webhook_id,
+            name=name,
+            url=url,
+            jql_filter=jql_filter,
+            events=sorted({event.strip() for event in events if event.strip()}),
+        )
+
+    def ensure_webhook(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        name: str,
+        url: str,
+        jql_filter: str,
+        events: list[str],
+    ) -> JiraWebhook:
+        normalized_events = sorted({event.strip() for event in events if event.strip()})
+        webhooks = self.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+        for existing in webhooks:
+            if (
+                existing.name == name
+                and existing.url == url
+                and existing.jql_filter == jql_filter
+                and sorted(existing.events) == normalized_events
+            ):
+                return existing
+        return self.create_webhook(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            name=name,
+            url=url,
+            jql_filter=jql_filter,
+            events=normalized_events,
+        )
+
+
+def _to_adf_description(text: str) -> dict:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        lines = ["No description provided"]
+    paragraphs = [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in lines]
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": paragraphs,
+    }
