@@ -6,6 +6,7 @@ from orchestrator.api.routes_discord import router as discord_router
 from orchestrator.api.routes_runs import router as runs_router
 from orchestrator.api.routes_webhook import router as webhook_router
 from orchestrator.core.config import get_settings
+from orchestrator.core.discord_commands_sync import sync_discord_guild_commands
 from orchestrator.core.logging import configure_logging
 
 
@@ -26,6 +27,11 @@ def create_app() -> FastAPI:
     app.include_router(discord_router)
     app.include_router(runs_router)
     app.include_router(webhook_router)
+
+    @app.on_event("startup")
+    def _startup_discord_command_sync() -> None:
+        # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
+        sync_discord_guild_commands(settings=settings)
 
     @app.get("/health")
     def health() -> dict[str, str]:

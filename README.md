@@ -310,6 +310,8 @@ Notes:
 - Server ID and channel ID are different values.
 - Native interactions endpoint is `POST /discord/interactions`.
 - Internal command API endpoint is `POST /discord/command/{tenant_id}`.
+- Slash commands are auto-synced to the configured guild on API startup (best-effort).
+- Command set includes `/ask` for board questions (`!ask` in internal command format).
 - Automatic channel create/reuse requires `Manage Channels` permission.
 8. Inspect repo bootstrap state:
    - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
