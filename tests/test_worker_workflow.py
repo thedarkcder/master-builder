@@ -226,3 +226,5 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertIn("decision_gate", processed.plan)
             self.assertTrue(processed.plan["decision_gate"]["triggered"])
+            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual([entry["stage"] for entry in stage_updates], ["decision_gate_required"])
