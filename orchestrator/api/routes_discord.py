@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -10,7 +11,11 @@ from sqlalchemy.orm import Session
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.codex_agents import answer_board_question_with_codex, plan_seed_issues_with_codex
+from orchestrator.core.codex_agents import (
+    answer_board_question_with_codex,
+    plan_discord_ask_intent_with_codex,
+    plan_seed_issues_with_codex,
+)
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import (
@@ -37,6 +42,7 @@ REQUEST_PERMISSION_LABELS = {
     "seed_issues": "issue seeding (!issues seed)",
     "all_sensitive": "all sensitive commands",
 }
+MAX_PENDING_ASK_ACTIONS = 50
 
 
 def _normalize_status_name(value: str) -> str:
@@ -321,6 +327,141 @@ def _build_seed_issue_description(*, objective: str, acceptance_criteria: list[s
     return "\n".join(lines)
 
 
+def _collect_ask_context(
+    *,
+    session: Session,
+    tenant: Tenant,
+    question: str,
+    scoped_issue_key: str | None = None,
+) -> tuple[str | None, str | None, list[dict], dict[str, int]]:
+    project_jql = _project_filter_jql(tenant)
+    if scoped_issue_key:
+        normalized_issue_key = scoped_issue_key.strip().upper()
+        jira_issues = _search_jira_issues_for_tenant(
+            session=session,
+            tenant=tenant,
+            jql=f'{project_jql} AND key = "{normalized_issue_key}"',
+            max_results=1,
+        )
+        if not jira_issues:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Issue {normalized_issue_key} was not found for this tenant",
+            )
+    else:
+        normalized_issue_key = None
+
+    lowered = question.strip().lower()
+    status_queries = {
+        "blocked": "Blocked",
+        "in progress": "In Progress",
+        "to do": "To Do",
+        "testing": "Testing",
+        "done": "Done",
+        "ready to release": "READY TO RELEASE",
+    }
+    requested_status = None
+    for needle, status_name in status_queries.items():
+        if needle in lowered:
+            requested_status = status_name
+            break
+
+    if normalized_issue_key is None and requested_status:
+        jira_issues = _search_jira_issues_for_tenant(
+            session=session,
+            tenant=tenant,
+            jql=f'{project_jql} AND status = "{requested_status}" ORDER BY updated DESC',
+            max_results=30,
+        )
+    elif normalized_issue_key is None:
+        jira_issues = _search_jira_issues_for_tenant(
+            session=session,
+            tenant=tenant,
+            jql=f"{project_jql} ORDER BY updated DESC",
+            max_results=60,
+        )
+
+    issues = [
+        {
+            "key": issue.key,
+            "summary": issue.summary,
+            "status": issue.status,
+        }
+        for issue in jira_issues
+    ]
+    status_counts: dict[str, int] = {}
+    for issue in issues:
+        issue_status = issue["status"]
+        status_counts[issue_status] = status_counts.get(issue_status, 0) + 1
+
+    return normalized_issue_key, requested_status, issues, status_counts
+
+
+def _store_pending_ask_action(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str | None,
+    question: str,
+    summary: str,
+    proposed_command: str,
+) -> dict:
+    discord_config = dict(tenant.discord_config or {})
+    raw_pending = discord_config.get("pending_ask_actions")
+    pending = [entry for entry in raw_pending if isinstance(entry, dict)] if isinstance(raw_pending, list) else []
+    request_id = uuid4().hex
+    created_at = datetime.now(timezone.utc).isoformat()
+    pending.append(
+        {
+            "request_id": request_id,
+            "user_id": user_id.strip(),
+            "channel_id": channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
+            "question": question.strip(),
+            "summary": summary.strip(),
+            "proposed_command": proposed_command.strip(),
+            "created_at": created_at,
+        }
+    )
+    discord_config["pending_ask_actions"] = pending[-MAX_PENDING_ASK_ACTIONS:]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return {
+        "request_id": request_id,
+        "created_at": created_at,
+    }
+
+
+def consume_pending_ask_action(
+    *,
+    session: Session,
+    tenant: Tenant,
+    request_id: str,
+) -> dict | None:
+    normalized_request_id = request_id.strip()
+    if not normalized_request_id:
+        return None
+    discord_config = dict(tenant.discord_config or {})
+    raw_pending = discord_config.get("pending_ask_actions")
+    pending = [entry for entry in raw_pending if isinstance(entry, dict)] if isinstance(raw_pending, list) else []
+    matched: dict | None = None
+    kept: list[dict] = []
+    for entry in pending:
+        entry_id = str(entry.get("request_id") or "").strip()
+        if matched is None and entry_id == normalized_request_id:
+            matched = entry
+            continue
+        kept.append(entry)
+    if matched is None:
+        return None
+    discord_config["pending_ask_actions"] = kept
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return matched
+
+
 def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown: str) -> tuple[str, dict]:
     project_keys = _tenant_project_keys(tenant)
     if not project_keys:
@@ -436,65 +577,12 @@ def _ask_board_message(
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str, dict]:
-    project_jql = _project_filter_jql(tenant)
-    if scoped_issue_key:
-        normalized_issue_key = scoped_issue_key.strip().upper()
-        jira_issues = _search_jira_issues_for_tenant(
-            session=session,
-            tenant=tenant,
-            jql=f'{project_jql} AND key = "{normalized_issue_key}"',
-            max_results=1,
-        )
-        if not jira_issues:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Issue {normalized_issue_key} was not found for this tenant",
-            )
-    else:
-        normalized_issue_key = None
-
-    lowered = question.strip().lower()
-    status_queries = {
-        "blocked": "Blocked",
-        "in progress": "In Progress",
-        "to do": "To Do",
-        "testing": "Testing",
-        "done": "Done",
-        "ready to release": "READY TO RELEASE",
-    }
-    requested_status = None
-    for needle, status_name in status_queries.items():
-        if needle in lowered:
-            requested_status = status_name
-            break
-
-    if normalized_issue_key is None and requested_status:
-        jira_issues = _search_jira_issues_for_tenant(
-            session=session,
-            tenant=tenant,
-            jql=f'{project_jql} AND status = "{requested_status}" ORDER BY updated DESC',
-            max_results=30,
-        )
-    elif normalized_issue_key is None:
-        jira_issues = _search_jira_issues_for_tenant(
-            session=session,
-            tenant=tenant,
-            jql=f"{project_jql} ORDER BY updated DESC",
-            max_results=60,
-        )
-
-    issues = [
-        {
-            "key": issue.key,
-            "summary": issue.summary,
-            "status": issue.status,
-        }
-        for issue in jira_issues
-    ]
-    status_counts: dict[str, int] = {}
-    for issue in issues:
-        issue_status = issue["status"]
-        status_counts[issue_status] = status_counts.get(issue_status, 0) + 1
+    normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
+        session=session,
+        tenant=tenant,
+        question=question,
+        scoped_issue_key=scoped_issue_key,
+    )
 
     settings = get_settings()
     runtime = build_codex_runtime(session=session, settings=settings)
@@ -531,6 +619,7 @@ def execute_discord_command(
     session: Session = Depends(get_session),
     *,
     defer_seed_issues: bool = False,
+    require_ask_confirmation: bool = False,
 ) -> DiscordCommandResponse:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
@@ -677,6 +766,83 @@ def execute_discord_command(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
             )
+        if require_ask_confirmation:
+            normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
+                session=session,
+                tenant=tenant,
+                question=question,
+                scoped_issue_key=scoped_issue_key,
+            )
+            settings = get_settings()
+            runtime = build_codex_runtime(session=session, settings=settings)
+            try:
+                intent_payload = plan_discord_ask_intent_with_codex(
+                    runtime=runtime,
+                    question=question,
+                    project_keys=[
+                        str(key).strip().upper()
+                        for key in tenant.jira_config.get("project_keys", [])
+                        if str(key).strip()
+                    ],
+                    issues=issues,
+                    status_counts=status_counts,
+                )
+            except CodexRuntimeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Codex board assistant is unavailable: {exc}",
+                ) from exc
+
+            mode = str(intent_payload.get("mode") or "").strip().lower()
+            summary = str(intent_payload.get("summary") or "").strip()
+            proposed_command = str(intent_payload.get("command") or "").strip()
+            if mode == "command" and proposed_command.startswith("!") and not proposed_command.lower().startswith("!ask"):
+                pending = _store_pending_ask_action(
+                    session=session,
+                    tenant=tenant,
+                    user_id=payload.user_id.strip(),
+                    channel_id=payload.channel_id,
+                    question=question,
+                    summary=summary or "Proposed operational action from /ask",
+                    proposed_command=proposed_command,
+                )
+                confirmation_message = summary or "I can run this action for you after approval."
+                return DiscordCommandResponse(
+                    ok=True,
+                    command=command_name,
+                    message=confirmation_message,
+                    data={
+                        "requires_confirmation": True,
+                        "request_id": pending["request_id"],
+                        "proposed_command": proposed_command,
+                        "summary": confirmation_message,
+                    },
+                )
+
+            message = answer_board_question_with_codex(
+                runtime=runtime,
+                question=question,
+                project_keys=[
+                    str(key).strip().upper()
+                    for key in tenant.jira_config.get("project_keys", [])
+                    if str(key).strip()
+                ],
+                issues=issues,
+                status_counts=status_counts,
+            )
+            return DiscordCommandResponse(
+                ok=True,
+                command=command_name,
+                message=message,
+                data={
+                    "issue_key": normalized_issue_key,
+                    "status": requested_status,
+                    "status_counts": status_counts,
+                    "issues": issues,
+                    "question": question,
+                },
+            )
+
         message, data = _ask_board_message(
             session=session,
             tenant=tenant,

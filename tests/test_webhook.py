@@ -455,6 +455,35 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["data"]["flags"], 64)
         create_task_mock.assert_called_once()
 
+    def test_discord_component_interactions_are_deferred_and_processed_async(self) -> None:
+        payload = {
+            "type": 3,
+            "application_id": "discord-app-1",
+            "token": "interaction-token-1",
+            "channel_id": "discord-channel-1",
+            "data": {"custom_id": "ask.approve.0123456789abcdef0123456789abcdef"},
+            "member": {"user": {"id": "discord-user-1"}},
+        }
+        fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
+
+        def _capture_and_close(coro):
+            coro.close()
+            return MagicMock(name="discord-component-task")
+
+        with (
+            patch("orchestrator.api.routes_webhook._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes_webhook._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes_webhook._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch("orchestrator.api.routes_webhook.asyncio.create_task", side_effect=_capture_and_close) as create_task_mock,
+        ):
+            response = self.client.post("/discord/interactions", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["type"], 5)
+        self.assertEqual(body["data"]["flags"], 64)
+        create_task_mock.assert_called_once()
+
     def test_discord_followup_formats_issue_and_pr_references_as_hyperlinks(self) -> None:
         with self.session_factory() as session:
             tenant = session.execute(

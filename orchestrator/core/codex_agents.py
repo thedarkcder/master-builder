@@ -179,6 +179,37 @@ def answer_board_question_with_codex(
     return message
 
 
+def plan_discord_ask_intent_with_codex(
+    *,
+    runtime: CodexRuntime,
+    question: str,
+    project_keys: list[str],
+    issues: list[dict],
+    status_counts: dict[str, int],
+) -> dict:
+    payload = runtime.run_json(
+        system_prompt=(
+            "You route Discord /ask requests for an engineering orchestration bot. "
+            "Return strict JSON only with keys: mode, summary, command. "
+            "mode must be either 'answer' or 'command'. "
+            "If mode='command', command must be a single supported command string that starts with '!' "
+            "and uses one of: !status, !runs, !run <ISSUE_KEY>, !retry <ISSUE_KEY|RUN_ID>, "
+            "!cancel <RUN_ID>, !link <ISSUE_KEY>, !issues seed <markdown spec>. "
+            "If mode='answer', leave command empty."
+        ),
+        user_prompt=(
+            f"Question: {question}\n"
+            f"Projects: {json.dumps(project_keys)}\n"
+            f"Status counts: {json.dumps(status_counts)}\n"
+            f"Issues (sample): {json.dumps(issues[:40])}\n"
+            "Choose command mode only when the user is clearly requesting an operational action."
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return an ask-intent JSON object")
+    return payload
+
+
 def plan_seed_issues_with_codex(
     *,
     runtime: CodexRuntime,

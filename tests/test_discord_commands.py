@@ -8,6 +8,8 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
+from orchestrator.api.routes_discord import execute_discord_command
+from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -223,6 +225,45 @@ class DiscordCommandApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !ask @ISSUE-123", response.json()["detail"])
+
+    def test_ask_command_requires_confirmation_when_intent_is_action(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.routes_discord._collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch(
+                "orchestrator.api.routes_discord.build_codex_runtime",
+            ),
+            patch(
+                "orchestrator.api.routes_discord.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "command", "summary": "Queue the issue run now", "command": "!run TP-20"},
+            ),
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask please run TP-20",
+                ),
+                session=session,
+                require_ask_confirmation=True,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "ask")
+        self.assertIsInstance(command_response.data, dict)
+        self.assertTrue(command_response.data["requires_confirmation"])
+        self.assertEqual(command_response.data["proposed_command"], "!run TP-20")
+        self.assertTrue(command_response.data["request_id"])
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            pending = tenant.discord_config.get("pending_ask_actions", [])
+            self.assertEqual(len(pending), 1)
 
     def test_issues_seed_requires_spec(self) -> None:
         response = self.client.post(
