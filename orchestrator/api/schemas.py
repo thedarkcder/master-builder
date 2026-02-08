@@ -63,6 +63,8 @@ class DiscordConfig(BaseModel):
     channel_id: str | None = None
     channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
+    allowed_user_ids: list[str] = Field(default_factory=list)
+    allowlist_requests: list[dict] = Field(default_factory=list)
 
 
 class TenantCreate(BaseModel):
@@ -214,6 +216,21 @@ class DiscordCommandResponse(BaseModel):
     command: str
     message: str
     data: dict | None = None
+
+
+class DiscordAllowlistRequestRead(BaseModel):
+    user_id: str
+    requested_at: str
+    channel_id: str | None = None
+    reason: str | None = None
+    permissions: list[str] = Field(default_factory=list)
+
+
+class DiscordAllowlistApprovalResult(BaseModel):
+    ok: bool
+    details: str
+    user_id: str
+    notified: bool
 
 
 class AdminLoginRequest(BaseModel):
