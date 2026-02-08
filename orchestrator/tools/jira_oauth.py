@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 
 class JiraOAuthError(RuntimeError):
@@ -427,6 +429,63 @@ class JiraOAuthClient:
             access_token=access_token,
             payload={"webhookIds": webhook_ids},
         )
+
+    def upload_issue_attachment(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        filename: str,
+        content: bytes,
+        content_type: str | None = None,
+    ) -> list[dict]:
+        normalized_issue = issue_id_or_key.strip()
+        normalized_filename = filename.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for attachment upload")
+        if not normalized_filename:
+            raise JiraOAuthError("Missing attachment filename")
+        if not content:
+            raise JiraOAuthError("Attachment payload is empty")
+
+        boundary = f"--------------------------{uuid4().hex}"
+        payload = BytesIO()
+        payload.write(f"--{boundary}\r\n".encode("utf-8"))
+        payload.write(
+            f'Content-Disposition: form-data; name="file"; filename="{normalized_filename}"\r\n'.encode("utf-8")
+        )
+        payload.write(f"Content-Type: {(content_type or 'application/octet-stream').strip()}\r\n\r\n".encode("utf-8"))
+        payload.write(content)
+        payload.write(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+
+        request = Request(
+            url=(
+                f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
+                f"{quote(normalized_issue, safe='')}/attachments"
+            ),
+            data=payload.getvalue(),
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "X-Atlassian-Token": "no-check",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                response_body = response.read().decode("utf-8")
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8")
+            raise JiraOAuthError(f"Jira attachment upload failed ({exc.code}): {error_body}") from exc
+
+        if not response_body:
+            return []
+        parsed = json.loads(response_body)
+        if not isinstance(parsed, list):
+            raise JiraOAuthError("Jira attachment upload response was not a list")
+        return [item for item in parsed if isinstance(item, dict)]
 
 
 def _to_adf_description(text: str) -> dict:

@@ -8,13 +8,13 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
-from orchestrator.api.routes_discord import execute_discord_command
+from orchestrator.api.routes_discord import _build_seed_issue_description, _create_discord_bug_issue, execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, Tenant
-from orchestrator.tools.jira_oauth import JiraIssuePreview
+from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssuePreview
 
 
 class DiscordCommandApiTests(unittest.TestCase):
@@ -428,6 +428,88 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["command"], "issues")
         self.assertIn("TP-1", response.json()["message"])
+
+    def test_seed_issue_description_uses_bold_sections_and_omits_labels_section(self) -> None:
+        description = _build_seed_issue_description(
+            objective="Ship feature",
+            scope_in=["API endpoint"],
+            scope_out=["Mobile app changes"],
+            acceptance_criteria=["Endpoint returns 200"],
+        )
+        self.assertIn("**Objective**", description)
+        self.assertIn("**Scope In**", description)
+        self.assertIn("**Scope Out**", description)
+        self.assertIn("**Acceptance Criteria**", description)
+        self.assertIn("**Good To Do Checklist**", description)
+        self.assertNotIn("Tags", description)
+        self.assertNotIn("Labels", description)
+
+    def test_bug_creation_uploads_discord_attachments_to_jira_issue(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            jira_config = dict(tenant.jira_config)
+            jira_config["connection_id"] = "conn-1"
+            tenant.jira_config = jira_config
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="conn-1",
+                    account_id="acct-1",
+                    account_email="dev@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://master-builder.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted="enc",
+                    refresh_token_encrypted="enc",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.upload_calls: list[dict] = []
+
+            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                return JiraIssueBulkCreateResult(
+                    created=[JiraIssueCreateResult(key="TP-901", issue_id="901")],
+                    errors=[],
+                )
+
+            def upload_issue_attachment(self, **kwargs: object) -> list[dict]:  # noqa: ANN003
+                self.upload_calls.append(dict(kwargs))
+                return [{"id": "att-1"}]
+
+        fake_client = _FakeClient()
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=fake_client),
+            patch(
+                "orchestrator.api.routes_discord._download_discord_attachment",
+                return_value=(b"image-bytes", "image/png"),
+            ),
+        ):
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            message, data = _create_discord_bug_issue(
+                session=session,
+                tenant=tenant,
+                summary="Login fails",
+                details="See screenshot",
+                reporter_user_id="u-viewer",
+                channel_id="discord-channel-1",
+                related_issue_key=None,
+                attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+            )
+
+        self.assertIn("Attached 1/1 file(s)", message)
+        self.assertEqual(data["uploaded_attachment_count"], 1)
+        self.assertEqual(len(fake_client.upload_calls), 1)
+        self.assertEqual(fake_client.upload_calls[0]["issue_id_or_key"], "TP-901")
 
     def test_request_creates_pending_request(self) -> None:
         response = self.client.post(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -367,28 +369,45 @@ def _build_seed_issue_description(
     scope_in: list[str],
     scope_out: list[str],
     acceptance_criteria: list[str],
-    tags: list[str],
 ) -> str:
-    lines = ["Objective", objective.strip() or "No objective provided", "", "Scope In"]
+    lines = [
+        "**Objective**",
+        f"- {objective.strip() or 'No objective provided'}",
+        "",
+        "**Scope In**",
+    ]
     if scope_in:
         lines.extend(f"- {item}" for item in scope_in)
     else:
         lines.append("- Not specified")
-    lines.extend(["", "Scope Out"])
+    lines.extend(["", "**Scope Out**"])
     if scope_out:
         lines.extend(f"- {item}" for item in scope_out)
     else:
         lines.append("- Not specified")
-    lines.extend(["", "Acceptance Criteria"])
+    lines.extend(["", "**Acceptance Criteria**"])
     if acceptance_criteria:
         lines.extend(f"- {criterion}" for criterion in acceptance_criteria)
     else:
         lines.append("- Criteria were not provided")
-    lines.extend(["", "Tags"])
-    if tags:
-        lines.extend(f"- {tag}" for tag in tags)
-    else:
-        lines.append("- Not specified")
+    lines.extend(
+        [
+            "",
+            "**Good To Do Checklist**",
+            "- [ ] Objective is clear",
+            "- [ ] Scope is explicit (in/out)",
+            "- [ ] Acceptance criteria are testable",
+            "- [ ] How-to-test is defined",
+            "- [ ] MVP vs scale-ready is decided",
+            "",
+            "**Decision Gate Triggers**",
+            "- [ ] Requirements are ambiguous",
+            "- [ ] Design choice impacts NFRs/reliability/cost/security",
+            "",
+            "**Notes / Links**",
+            "- Reported via Discord issue seeding flow",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -444,6 +463,63 @@ def _build_discord_bug_description(
             else:
                 lines.append(f"- [{filename}]({url})")
     return "\n".join(lines)
+
+
+def _download_discord_attachment(*, url: str) -> tuple[bytes, str | None]:
+    request = Request(
+        url=url,
+        headers={"User-Agent": "MasterBuilderDiscordBugUploader/1.0"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            payload = response.read()
+            content_type = response.headers.get("Content-Type")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise JiraOAuthError(f"HTTP {exc.code} downloading attachment: {body}") from exc
+    except URLError as exc:
+        raise JiraOAuthError(f"Failed to download attachment: {exc.reason}") from exc
+
+    if not payload:
+        raise JiraOAuthError("Downloaded attachment was empty")
+    return payload, content_type.strip() if isinstance(content_type, str) and content_type.strip() else None
+
+
+def _upload_discord_attachments_to_jira(
+    *,
+    client,
+    access_token: str,
+    cloud_id: str,
+    issue_key: str,
+    attachments: list[dict[str, str]],
+) -> tuple[int, list[str]]:
+    if not attachments:
+        return 0, []
+
+    uploaded_count = 0
+    warnings: list[str] = []
+    for attachment in attachments:
+        filename = str(attachment.get("filename") or "").strip() or "attachment"
+        url = str(attachment.get("url") or "").strip()
+        if not url:
+            warnings.append(f"{filename}: missing URL")
+            continue
+        try:
+            content, downloaded_content_type = _download_discord_attachment(url=url)
+            content_type = str(attachment.get("content_type") or "").strip() or downloaded_content_type
+            client.upload_issue_attachment(
+                access_token=access_token,
+                cloud_id=cloud_id,
+                issue_id_or_key=issue_key,
+                filename=filename,
+                content=content,
+                content_type=content_type,
+            )
+            uploaded_count += 1
+        except (JiraOAuthError, ValueError) as exc:
+            warnings.append(f"{filename}: {exc}")
+    return uploaded_count, warnings
 
 
 def _create_discord_bug_issue(
@@ -515,14 +591,25 @@ def _create_discord_bug_issue(
         )
 
     created_issue = create_result.created[0]
+    uploaded_count, upload_warnings = _upload_discord_attachments_to_jira(
+        client=client,
+        access_token=access_token,
+        cloud_id=connection.cloud_id,
+        issue_key=created_issue.key,
+        attachments=attachments,
+    )
     browse_base_url = str(connection.site_url or "").strip().rstrip("/")
     issue_url = f"{browse_base_url}/browse/{created_issue.key}" if browse_base_url else None
     if issue_url:
         message = f"Bug logged: [{created_issue.key}]({issue_url})"
     else:
         message = f"Bug logged: {created_issue.key}"
+    if attachments:
+        message = f"{message}. Attached {uploaded_count}/{len(attachments)} file(s) to Jira."
     if create_result.errors:
         message = f"{message} (warnings: {'; '.join(create_result.errors)})"
+    if upload_warnings:
+        message = f"{message} (attachment warnings: {'; '.join(upload_warnings)})"
     return (
         message,
         {
@@ -530,6 +617,8 @@ def _create_discord_bug_issue(
             "created_issue_links": [issue_url] if issue_url else [],
             "issue_type": "Bug",
             "project_key": project_key,
+            "uploaded_attachment_count": uploaded_count,
+            "attachment_warnings": upload_warnings,
         },
     )
 
@@ -806,7 +895,6 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
                     scope_in=scope_in,
                     scope_out=scope_out,
                     acceptance_criteria=acceptance,
-                    tags=tags,
                 ),
                 labels=labels,
                 issue_type=_parse_seed_issue_type(item.get("issue_type")),
