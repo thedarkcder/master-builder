@@ -188,6 +188,27 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
         self.assertEqual(second.json()["trigger_reason"], "ready_status_recheck")
 
+    def test_webhook_comment_run_command_enqueues(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-224", labels=["agent:ready"])
+        payload["comment"] = {"body": "/mb run"}
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+        self.assertEqual(response.json()["trigger_reason"], "comment_command_run")
+        self.assertEqual(response.json()["command"], "run")
+
+    def test_webhook_invalid_comment_command_is_noop(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-225", labels=["agent:ready"])
+        payload["comment"] = {"body": "/mb deploy"}
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "invalid_comment_command")
+
     def test_webhook_marks_transition_into_ready_status(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
         payload["changelog"] = {
