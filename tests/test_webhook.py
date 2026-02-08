@@ -13,7 +13,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
-from orchestrator.api.routes_webhook import _build_command_followup_message, _run_discord_command_followup
+from orchestrator.api.routes_webhook import (
+    _build_command_followup_message,
+    _find_tenant_for_discord_channel,
+    _run_discord_command_followup,
+)
 from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -676,3 +680,17 @@ class JiraWebhookTests(unittest.TestCase):
         ask_thread_send_mock.assert_called_once()
         thread_send_mock.assert_not_called()
         interaction_send_mock.assert_not_called()
+
+    def test_find_tenant_for_discord_channel_matches_registered_thread_channel(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["channel_id"] = "discord-channel-1"
+            discord_config["ask_thread_channel_ids"] = ["discord-thread-123"]
+            tenant.discord_config = discord_config
+            session.commit()
+
+            matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-thread-123")
+            self.assertIsNotNone(matched)
+            self.assertEqual(matched.tenant_id, "tenant-webhook")

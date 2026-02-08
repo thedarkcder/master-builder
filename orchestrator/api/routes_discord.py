@@ -158,13 +158,28 @@ def _assert_sensitive_command_permission(*, tenant: Tenant, command_name: str, u
 def _assert_channel_scope(*, tenant: Tenant, channel_id: str | None) -> None:
     if not channel_id:
         return
-    discord_config = tenant.discord_config or {}
-    configured_channel_id = str(discord_config.get("channel_id") or "").strip()
-    if configured_channel_id and configured_channel_id != channel_id:
+    allowed_channel_ids = _tenant_allowed_channel_ids(tenant)
+    if allowed_channel_ids and channel_id not in allowed_channel_ids:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Command channel does not match tenant Discord channel",
         )
+
+
+def _tenant_allowed_channel_ids(tenant: Tenant) -> set[str]:
+    discord_config = tenant.discord_config or {}
+    allowed: set[str] = set()
+    configured_channel_id = str(discord_config.get("channel_id") or "").strip()
+    if configured_channel_id:
+        allowed.add(configured_channel_id)
+
+    raw_thread_ids = discord_config.get("ask_thread_channel_ids")
+    if isinstance(raw_thread_ids, list):
+        for value in raw_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                allowed.add(normalized)
+    return allowed
 
 
 def _format_elapsed_seconds(*, started_at: datetime | None, created_at: datetime | None) -> int:

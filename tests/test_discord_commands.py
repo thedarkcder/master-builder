@@ -136,6 +136,30 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("allowlisted", response.json()["detail"])
 
+    def test_thread_channel_is_allowed_when_registered_for_tenant(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["ask_thread_channel_ids"] = ["discord-thread-1"]
+            tenant.discord_config = discord_config
+            session.commit()
+
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-thread-1", "command": "!help"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+
+    def test_non_registered_channel_is_rejected(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-other-1", "command": "!help"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("does not match", response.json()["detail"])
+
     def test_cancel_marks_run_as_cancelled(self) -> None:
         self._queue_run(run_id="run-cancel-me", issue_key="TP-12", status="queued")
 
