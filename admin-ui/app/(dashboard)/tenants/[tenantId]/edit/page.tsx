@@ -10,11 +10,14 @@ import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  approveDiscordAllowlistRequest,
   disconnectJira,
   getTenant,
   getJiraWebhookDiagnostics,
+  listDiscordAllowlistRequests,
   previewReadyGate,
   provisionJiraWebhook,
+  type DiscordAllowlistRequestRecord,
   type ReadyGatePreviewRecord,
   type JiraWebhookDiagnosticsRecord,
   startJiraConnect,
@@ -40,6 +43,8 @@ export default function EditTenantPage() {
   const [readyPreview, setReadyPreview] = useState<ReadyGatePreviewRecord | null>(null);
   const [jiraWebhook, setJiraWebhook] = useState<JiraWebhookDiagnosticsRecord | null>(null);
   const [jiraWebhookBusy, setJiraWebhookBusy] = useState(false);
+  const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
+  const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
 
   async function loadJiraWebhookDiagnostics() {
     if (!credentials) {
@@ -63,6 +68,8 @@ export default function EditTenantPage() {
       setTenant(payload);
       setStatusLine(`Loaded ${payload.tenant_id}.`);
       await loadJiraWebhookDiagnostics();
+      const requests = await listDiscordAllowlistRequests(credentials, params.tenantId);
+      setAllowlistRequests(requests);
     } catch (error) {
       setStatusLine(`Failed to load tenant: ${(error as Error).message}`);
     } finally {
@@ -204,6 +211,22 @@ export default function EditTenantPage() {
     }
   }
 
+  async function handleApproveAllowlistRequest(userId: string) {
+    if (!credentials) {
+      return;
+    }
+    setAllowlistBusyUserId(userId);
+    try {
+      const result = await approveDiscordAllowlistRequest(credentials, params.tenantId, userId);
+      setStatusLine(result.details);
+      await loadTenant();
+    } catch (error) {
+      setStatusLine(`Unable to approve allowlist request: ${(error as Error).message}`);
+    } finally {
+      setAllowlistBusyUserId(null);
+    }
+  }
+
   if (loading) {
     return <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">Loading tenant configuration...</p>;
   }
@@ -223,6 +246,9 @@ export default function EditTenantPage() {
       </Card>
     );
   }
+
+  const githubInstalled = Boolean(tenant.github.installation_id && tenant.github.installation_id.trim());
+  const githubButtonLabel = githubInstalled ? "Reconnect GitHub App" : "Install GitHub App";
 
   return (
     <Card>
@@ -245,7 +271,7 @@ export default function EditTenantPage() {
             </Button>
             <Button variant="outline" onClick={() => void connectGitHubApp()}>
               <Link2 className="mr-2 h-4 w-4" />
-              Install GitHub App
+              {githubButtonLabel}
             </Button>
             <Button variant="secondary" onClick={() => void runHealthChecks()}>
               Run Health Checks
@@ -305,6 +331,46 @@ export default function EditTenantPage() {
                 Disconnect Jira
               </Button>
             </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Discord Access Requests</CardTitle>
+            <CardDescription>Approve pending /request submissions from Discord users for this tenant.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {allowlistRequests.length === 0 ? (
+              <p className="text-muted-foreground">No pending requests.</p>
+            ) : (
+              <ul className="space-y-2">
+                {allowlistRequests.map((request) => (
+                  <li key={request.user_id} className="rounded-md border p-3">
+                    <p>
+                      <strong>User:</strong> {request.user_id}
+                    </p>
+                    <p>
+                      <strong>Requested at:</strong> {request.requested_at}
+                    </p>
+                    <p>
+                      <strong>Reason:</strong> {request.reason ?? "-"}
+                    </p>
+                    <p>
+                      <strong>Channel:</strong> {request.channel_id ?? "-"}
+                    </p>
+                    <div className="mt-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={allowlistBusyUserId === request.user_id}
+                        onClick={() => void handleApproveAllowlistRequest(request.user_id)}
+                      >
+                        {allowlistBusyUserId === request.user_id ? "Approving..." : "Approve"}
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </CardContent>
         </Card>
         <TenantForm mode="edit" initialValues={recordToFormValues(tenant)} onSubmit={handleSave} submitting={saving} />

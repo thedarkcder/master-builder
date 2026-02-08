@@ -16,6 +16,8 @@ from orchestrator.api.schemas import (
     AdminIdentityResponse,
     AdminLoginRequest,
     AdminLoginResponse,
+    DiscordAllowlistApprovalResult,
+    DiscordAllowlistRequestRead,
     GitHubRepositoryRead,
     GitHubInstallStart,
     IntegrationTestResult,
@@ -54,6 +56,7 @@ from orchestrator.core.github_install_state import create_install_state_token, p
 from orchestrator.core.security import require_admin, validate_admin_credentials
 from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
@@ -251,6 +254,62 @@ def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dic
         if key in existing:
             merged[key] = existing.get(key)
     return merged
+
+
+def _parse_discord_allowlist_requests(discord_config: dict | None) -> list[DiscordAllowlistRequestRead]:
+    if not isinstance(discord_config, dict):
+        return []
+    raw = discord_config.get("allowlist_requests")
+    if not isinstance(raw, list):
+        return []
+    normalized: list[DiscordAllowlistRequestRead] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        user_id = str(item.get("user_id") or "").strip()
+        if not user_id:
+            continue
+        permissions_raw = item.get("permissions")
+        permissions = (
+            [str(value).strip() for value in permissions_raw if str(value).strip()]
+            if isinstance(permissions_raw, list)
+            else []
+        )
+        normalized.append(
+            DiscordAllowlistRequestRead(
+                user_id=user_id,
+                requested_at=str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
+                channel_id=str(item.get("channel_id") or "").strip() or None,
+                reason=str(item.get("reason") or "").strip() or None,
+                permissions=permissions,
+            )
+        )
+    normalized.sort(key=lambda item: item.requested_at, reverse=True)
+    return normalized
+
+
+def _notify_discord_allowlist_approved(
+    *,
+    session: Session,
+    settings,
+    user_id: str,
+) -> bool:  # noqa: ANN001
+    bot_token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not bot_token_ref:
+        return False
+    bot_token = resolve_secret_ref(
+        session,
+        secret_ref=bot_token_ref,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if not bot_token:
+        return False
+    client = DiscordApiClient(bot_token=bot_token)
+    client.send_direct_message(
+        user_id=user_id,
+        content="Your allowlist request has been approved. You can now run sensitive commands for this tenant.",
+    )
+    return True
 
 
 def _jira_webhook_callback_url(*, settings, tenant_id: str) -> str:  # noqa: ANN001
@@ -731,6 +790,91 @@ def disconnect_tenant_jira(
         action="disconnect",
         details=details,
         webhook_ids=[],
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/discord/allowlist-requests",
+    response_model=list[DiscordAllowlistRequestRead],
+)
+def list_discord_allowlist_requests(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[DiscordAllowlistRequestRead]:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    return _parse_discord_allowlist_requests(tenant.discord_config)
+
+
+@router.post(
+    "/tenants/{tenant_id}/discord/allowlist-requests/{user_id}/approve",
+    response_model=DiscordAllowlistApprovalResult,
+)
+def approve_discord_allowlist_request(
+    tenant_id: str,
+    user_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> DiscordAllowlistApprovalResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    normalized_user_id = user_id.strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Discord user ID is required")
+
+    discord_config = dict(tenant.discord_config or {})
+    existing_requests = _parse_discord_allowlist_requests(discord_config)
+    matching_request = next((item for item in existing_requests if item.user_id == normalized_user_id), None)
+    if matching_request is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allowlist request not found")
+
+    allowed_user_ids_raw = discord_config.get("allowed_user_ids")
+    allowed_user_ids = (
+        [str(value).strip() for value in allowed_user_ids_raw if str(value).strip()]
+        if isinstance(allowed_user_ids_raw, list)
+        else []
+    )
+    if normalized_user_id not in allowed_user_ids:
+        allowed_user_ids.append(normalized_user_id)
+    discord_config["allowed_user_ids"] = allowed_user_ids
+    discord_config["allowlist_requests"] = [
+        item.model_dump()
+        for item in existing_requests
+        if item.user_id != normalized_user_id
+    ]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+    settings = get_settings()
+    notified = False
+    notify_error: str | None = None
+    try:
+        notified = _notify_discord_allowlist_approved(
+            session=session,
+            settings=settings,
+            user_id=normalized_user_id,
+        )
+    except (DiscordApiError, ValueError) as exc:
+        notify_error = str(exc)
+
+    details = f"Approved allowlist request for {normalized_user_id}."
+    if notified:
+        details = f"{details} Sent Discord DM confirmation."
+    elif notify_error:
+        details = f"{details} DM notification failed: {notify_error}"
+    else:
+        details = f"{details} DM notification skipped (bot token unavailable)."
+
+    return DiscordAllowlistApprovalResult(
+        ok=True,
+        details=details,
+        user_id=normalized_user_id,
+        notified=notified,
     )
 
 
