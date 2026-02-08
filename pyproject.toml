@@ -30,7 +30,7 @@ dev = [
   "ruff>=0.6.0",
 ]
 codex_assets = [
-  "master-builder-codex-assets==0.1.4",
+  "master-builder-codex-assets==0.1.5",
 ]
 
 [tool.pytest.ini_options]
