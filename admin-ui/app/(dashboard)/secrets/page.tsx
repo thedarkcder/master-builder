@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RefreshCw, Save, SearchCheck } from "lucide-react";
+import { Pencil, RefreshCw, Save, SearchCheck, Trash2 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
+  deleteManagedSecret,
   listManagedSecrets,
   resolveManagedSecret,
   upsertManagedSecret,
@@ -33,6 +35,7 @@ export default function SecretsPage() {
   const [statusLine, setStatusLine] = useState("Store secrets by reference; values are encrypted at rest.");
   const [secretRef, setSecretRef] = useState("");
   const [secretValue, setSecretValue] = useState("");
+  const [editingSecretRef, setEditingSecretRef] = useState<string | null>(null);
 
   async function refresh(): Promise<void> {
     if (!credentials) {
@@ -66,8 +69,11 @@ export default function SecretsPage() {
     setSaving(true);
     try {
       const saved = await upsertManagedSecret(credentials, secretRef.trim(), secretValue);
+      const wasEditing = editingSecretRef === saved.secret_ref;
+      setSecretRef("");
       setSecretValue("");
-      setStatusLine(`Saved ${saved.secret_ref} (${saved.source}).`);
+      setEditingSecretRef(null);
+      setStatusLine(`${wasEditing ? "Updated" : "Saved"} ${saved.secret_ref} (${saved.source}).`);
       await refresh();
     } catch (error) {
       setStatusLine(`Save failed: ${(error as Error).message}`);
@@ -98,6 +104,46 @@ export default function SecretsPage() {
     }
   }
 
+  async function removeSecret(secretRefToDelete: string) {
+    if (!credentials) {
+      return;
+    }
+    if (!window.confirm(`Delete secret '${secretRefToDelete}'? This cannot be undone.`)) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await deleteManagedSecret(credentials, secretRefToDelete);
+      setStatusLine(`Deleted ${secretRefToDelete}.`);
+      if (secretRef === secretRefToDelete) {
+        setSecretRef("");
+      }
+      if (editingSecretRef === secretRefToDelete) {
+        setEditingSecretRef(null);
+        setSecretValue("");
+      }
+      await refresh();
+    } catch (error) {
+      setStatusLine(`Delete failed: ${(error as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function startEditingSecret(secretRefToEdit: string) {
+    setSecretRef(secretRefToEdit);
+    setSecretValue("");
+    setEditingSecretRef(secretRefToEdit);
+    setStatusLine(`Editing ${secretRefToEdit}. Enter a new value to replace the stored secret.`);
+  }
+
+  function cancelEditingSecret() {
+    setEditingSecretRef(null);
+    setSecretRef("");
+    setSecretValue("");
+    setStatusLine("Edit cancelled.");
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -112,23 +158,31 @@ export default function SecretsPage() {
           <Input
             value={secretRef}
             onChange={(event) => setSecretRef(event.target.value)}
-            placeholder="MB_GH_APP_ID or secret/jira-client-id"
           />
-          <Input
+          <Textarea
             value={secretValue}
             onChange={(event) => setSecretValue(event.target.value)}
-            placeholder="Secret value"
-            type="password"
+            className="min-h-[88px] font-mono text-xs"
           />
           <Button onClick={() => void saveSecret()} disabled={saving}>
             <Save className="mr-2 h-4 w-4" />
-            Save
+            {editingSecretRef ? "Update" : "Save"}
           </Button>
           <Button variant="outline" onClick={() => void checkResolution()} disabled={saving}>
             <SearchCheck className="mr-2 h-4 w-4" />
             Resolve
           </Button>
         </div>
+        {editingSecretRef ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>
+              Editing <strong>{editingSecretRef}</strong>. Existing value is never shown.
+            </span>
+            <Button type="button" variant="ghost" size="sm" onClick={cancelEditingSecret} disabled={saving}>
+              Cancel
+            </Button>
+          </div>
+        ) : null}
 
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">{statusLine}</p>
@@ -145,12 +199,13 @@ export default function SecretsPage() {
                 <th className="px-3 py-2 font-medium">Secret Ref</th>
                 <th className="px-3 py-2 font-medium">Source</th>
                 <th className="px-3 py-2 font-medium">Updated</th>
+                <th className="px-3 py-2 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td className="px-3 py-3 text-muted-foreground" colSpan={3}>
+                  <td className="px-3 py-3 text-muted-foreground" colSpan={4}>
                     No managed secrets stored yet.
                   </td>
                 </tr>
@@ -160,12 +215,39 @@ export default function SecretsPage() {
                     <td className="px-3 py-2 font-mono text-xs">{item.secret_ref}</td>
                     <td className="px-3 py-2">{item.source}</td>
                     <td className="px-3 py-2">{formatTimestamp(item.updated_at)}</td>
+                    <td className="px-3 py-2">
+                      {item.source === "managed" ? (
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => startEditingSecret(item.secret_ref)}
+                            disabled={saving}
+                          >
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void removeSecret(item.secret_ref)}
+                            disabled={saving}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </Button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
+
       </CardContent>
     </Card>
   );

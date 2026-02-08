@@ -21,20 +21,21 @@ export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@
 export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
 export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
-export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
 export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.1
+export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
+export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
+export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
 PY
 )
 
-export SECRET_JIRA_CLIENT_ID=your-atlassian-oauth-client-id
-export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
+# Store OAuth secret values via managed secrets API/UI, not shell exports:
+# - secret ref JIRA_OAUTH_CLIENT_ID -> Jira OAuth client id
+# - secret ref JIRA_OAUTH_CLIENT_SECRET -> Jira OAuth client secret
 
 # Optional extra Python index for pinned codex assets wheel
 # Example local package service (docker-compose):
@@ -48,6 +49,12 @@ export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
 If required assets are missing or the version mismatches, tenant create/update returns `503`.
 
 The orchestrator runtime loads codex assets from local `.codex` when present (including Docker image builds in this repo), and can fall back to the packaged `master-builder-codex-assets` dependency path where configured.
+
+Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
+For containers, run one-time login and keep the shared Codex auth volume:
+```bash
+docker compose run --rm worker codex login --device-auth
+```
 
 ## Codex assets package publishing
 Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.
@@ -185,7 +192,7 @@ Start API:
 uvicorn orchestrator.api.main:app --reload --port 4000
 ```
 
-Start worker:
+Start worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
 ```bash
 python -m orchestrator worker
 ```
@@ -212,6 +219,7 @@ UI sections:
 ## Docker
 Build and run API + worker + Postgres + package service + optional admin UI + tailscale sidecar:
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
@@ -256,16 +264,70 @@ If your admin UI is hosted on Vercel, use this Funnel URL for API callbacks only
 1. Create a tenant via `POST /api/admin/tenants`.
 2. Connect Jira from the wizard (`Connect Jira`) and select `project_keys`.
 3. Connect GitHub integration from the wizard (`Install GitHub App`) so `installation_id` is saved automatically.
-4. Configure allowed repositories under `repos.allowlist`.
+4. Set tenant repository under `repos.github_repository`.
 5. Validate connections:
    - `POST /api/admin/tenants/{tenant_id}/test-jira`
    - `POST /api/admin/tenants/{tenant_id}/test-github`
-6. Inspect repo bootstrap state:
+
+## Discord app setup
+Configure one Discord app (bot) and install it into your server. The same app can be reused across tenants.
+
+1. Create app + bot
+   - Open Discord Developer Portal: `https://discord.com/developers/applications`
+   - Create a new application
+   - Go to `Bot` and click `Add Bot`
+   - Copy and store bot token securely (do not commit it)
+
+2. Enable intents
+   - In `Bot` settings, enable:
+     - `SERVER MEMBERS INTENT`
+     - `MESSAGE CONTENT INTENT` (required for prefix commands like `!status`)
+
+3. Configure OAuth install
+   - In `OAuth2 > URL Generator`:
+     - Scopes: `bot` (and `applications.commands` if you later add slash commands)
+     - Bot permissions:
+       - `View Channels`
+       - `Send Messages`
+       - `Read Message History`
+       - `Manage Channels` (required for automatic tenant channel create/reuse)
+   - Open generated invite URL and install bot into your target Discord server
+
+4. Capture IDs (Developer Mode must be enabled in Discord client)
+   - Server ID (`guild_id`): right-click server -> `Copy Server ID`
+   - User ID for command allowlist: right-click user -> `Copy User ID`
+
+5. Configure backend globals
+   - Set `ORCHESTRATOR_DISCORD_GUILD_ID` to your server ID, or store it in Secrets Manager as `DISCORD_GUILD_ID`.
+   - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_NAME_TEMPLATE` (default `tenant-{tenant_id}`).
+   - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID` to place channels under a category.
+   - Store bot token in Secrets Manager under `DISCORD_BOT_TOKEN` (or change `ORCHESTRATOR_DISCORD_BOT_TOKEN_SECRET_REF`).
+   - Store Discord interactions public key in Secrets Manager under `DISCORD_INTERACTIONS_PUBLIC_KEY`.
+
+6. Configure Discord Interactions callback
+   - In Discord Developer Portal -> your app -> `General Information` copy `Public Key`.
+   - Save it as managed secret `DISCORD_INTERACTIONS_PUBLIC_KEY`.
+   - In Discord Developer Portal -> `Interactions Endpoint URL`, set:
+     - `https://<your-api-domain>/discord/interactions`
+
+7. Configure tenant in admin UI
+   - Enable Discord settings for tenant.
+   - Set `notify_events` checkboxes.
+   - Save tenant: backend auto-creates/reuses tenant channel and stores `channel_id`.
+
+Notes:
+- Server ID and channel ID are different values.
+- Native interactions endpoint is `POST /discord/interactions`.
+- Internal command API endpoint is `POST /discord/command/{tenant_id}`.
+- Slash commands are auto-synced to the configured guild on API startup (best-effort).
+- Command set includes `/ask` for board questions (`!ask` in internal command format).
+- Automatic channel create/reuse requires `Manage Channels` permission.
+8. Inspect repo bootstrap state:
    - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
 
 ## GitHub App setup
 The service uses one server-managed GitHub App for all tenants:
-- `ORCHESTRATOR_GITHUB_APP_SLUG`
+- secret ref `GITHUB_APP_SLUG` (GitHub App slug)
 - `ORCHESTRATOR_GITHUB_APP_ID_REF` (defaults to `secret/app-id`)
 - `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF` (defaults to `secret/private-key`)
 

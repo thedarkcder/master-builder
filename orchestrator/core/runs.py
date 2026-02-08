@@ -15,9 +15,15 @@ RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
+RUN_STATUS_CANCELLED = "cancelled"
 
 ACTIVE_RUN_STATUSES = {RUN_STATUS_QUEUED, RUN_STATUS_RUNNING}
-TERMINAL_RUN_STATUSES = {RUN_STATUS_SUCCEEDED, RUN_STATUS_FAILED, RUN_STATUS_BLOCKED}
+TERMINAL_RUN_STATUSES = {
+    RUN_STATUS_SUCCEEDED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_BLOCKED,
+    RUN_STATUS_CANCELLED,
+}
 
 
 class RunStateTransitionError(ValueError):
@@ -247,6 +253,40 @@ def mark_run_terminal(
     now = _now()
     run.status = terminal_status
     run.last_error = last_error
+    if run.started_at is None:
+        run.started_at = now
+    run.finished_at = now
+
+    session.execute(
+        delete(RunLock).where(
+            RunLock.tenant_id == run.tenant_id,
+            RunLock.issue_key == run.issue_key,
+            RunLock.run_id == run.run_id,
+        )
+    )
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def cancel_run(
+    session: Session,
+    *,
+    run_id: str,
+    cancelled_by: str,
+) -> Run:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise RunStateTransitionError(f"Run not found: {run_id}")
+
+    if run.status in TERMINAL_RUN_STATUSES:
+        raise RunStateTransitionError(
+            f"Cannot cancel run {run_id} from terminal status {run.status}"
+        )
+
+    now = _now()
+    run.status = RUN_STATUS_CANCELLED
+    run.last_error = f"Cancelled by {cancelled_by}"
     if run.started_at is None:
         run.started_at = now
     run.finished_at = now

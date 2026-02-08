@@ -16,7 +16,9 @@ concurrency:
 jobs:
   detect:
     name: Detect SAST languages
-    runs-on: ubuntu-latest
+    runs-on: 
+        - self-hosted
+        - Linux
     outputs:
       codeql_languages: ${{ steps.detect.outputs.codeql_languages }}
       is_python: ${{ steps.detect.outputs.is_python }}

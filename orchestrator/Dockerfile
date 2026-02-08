@@ -15,6 +15,11 @@ COPY pyproject.toml README.md ./
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends nodejs npm ripgrep && \
+    npm install -g @openai/codex@latest && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN python -m pip install --upgrade pip && \
     test -n "$PIP_EXTRA_INDEX_URL" && \
     PIP_TRUSTED_HOST="$(echo "$PIP_EXTRA_INDEX_URL" | sed -E 's#^[a-zA-Z]+://([^/@]+@)?([^/:]+).*#\2#')" && \

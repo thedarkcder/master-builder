@@ -3,6 +3,8 @@ name: jira-feature-flow
 description: Use when the task is to implement or update a feature tied to a Jira issue. Fetch the Jira issue, implement changes, comment progress, and transition the issue to the correct workflow state (Done/Blocked/Testing).
 ---
 
+> For backlog seeding/issue creation-sync work (non-execution), use `codex-jira-backlog` instead of this skill.
+
 ## Preflight dependency check (MANDATORY)
 Before starting work, verify:
 - Issue status indicates it is ready to work on.

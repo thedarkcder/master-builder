@@ -12,7 +12,7 @@ from orchestrator.storage.models import Tenant
 from orchestrator.tools.git_ops import (
     GitWorkspaceManager,
     build_branch_name,
-    enforce_repo_allowlist,
+    enforce_repo_match,
 )
 
 
@@ -21,12 +21,12 @@ def _run(cmd: list[str], *, cwd: Path) -> None:
 
 
 class GitOpsTests(unittest.TestCase):
-    def test_allowlist_normalizes_repo_urls(self) -> None:
-        allowlist = ["https://github.com/example/repo"]
-        enforce_repo_allowlist("git@github.com:Example/Repo.git", allowlist)
+    def test_repo_match_normalizes_repo_urls(self) -> None:
+        github_repository = "https://github.com/example/repo"
+        enforce_repo_match("git@github.com:Example/Repo.git", github_repository)
 
         with self.assertRaises(PermissionError):
-            enforce_repo_allowlist("https://github.com/example/other-repo", allowlist)
+            enforce_repo_match("https://github.com/example/other-repo", github_repository)
 
     def test_build_branch_name_uses_expected_template(self) -> None:
         branch = build_branch_name("MAB-8", "GitHub App auth, git isolation, and PR creation")
@@ -59,7 +59,7 @@ class GitOpsTests(unittest.TestCase):
             )
             manager.clone_repo(
                 repo_url=str(source_repo),
-                allowlist=[str(source_repo)],
+                github_repository=str(source_repo),
                 workspace=workspace,
             )
 
@@ -141,10 +141,7 @@ class GitOpsTests(unittest.TestCase):
                             "installation_id": "12345",
                         },
                         repos_config={
-                            "allowlist": ["https://github.com/example/repo"],
-                            "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
-                            "mapping_rules_by_component": {},
-                            "fallback_repo": None,
+                            "github_repository": "https://github.com/example/repo",
                         },
                         policy_config={
                             "allow_jira_transitions": False,
@@ -191,7 +188,7 @@ class GitOpsTests(unittest.TestCase):
             context = manager.load_preflight_codex_context(repo_dir=target_repo)
             self.assertIn("Never add or expose secrets", context["policy"])
 
-    def test_push_branch_blocks_repo_not_in_allowlist(self) -> None:
+    def test_push_branch_blocks_repo_not_matching_tenant_repository(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             source_repo = root / "source-repo"
@@ -217,7 +214,7 @@ class GitOpsTests(unittest.TestCase):
             )
             manager.clone_repo(
                 repo_url=str(source_repo),
-                allowlist=[str(source_repo)],
+                github_repository=str(source_repo),
                 workspace=workspace,
             )
             _run(["git", "config", "user.email", "agent@example.test"], cwd=workspace.repo_dir)
@@ -238,5 +235,5 @@ class GitOpsTests(unittest.TestCase):
                 manager.push_branch(
                     repo_dir=workspace.repo_dir,
                     branch_name=branch_name,
-                    allowlist=["https://github.com/example/other-repo"],
+                    github_repository="https://github.com/example/other-repo",
                 )
