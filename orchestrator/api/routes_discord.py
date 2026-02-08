@@ -363,6 +363,90 @@ def _normalize_seed_issue_scope(raw_scope: object) -> list[str]:
     return [str(item).strip() for item in raw_scope if str(item).strip()]
 
 
+def _normalize_seed_issue_key(raw_issue_key: object) -> str | None:
+    normalized = str(raw_issue_key or "").strip().upper()
+    if ISSUE_KEY_PATTERN.match(normalized):
+        return normalized
+    return None
+
+
+def _seed_text_is_missing(value: str) -> bool:
+    normalized = value.strip().lower()
+    if not normalized:
+        return True
+    if normalized in {"tbd", "unknown", "n/a", "na", "none", "todo", "decide later"}:
+        return True
+    if "to be determined" in normalized:
+        return True
+    if "???" in normalized:
+        return True
+    return False
+
+
+def _collect_seed_issue_questions(*, issue_summary: str, objective: str, scope_in: list[str], scope_out: list[str], acceptance: list[str]) -> list[str]:
+    questions: list[str] = []
+    title = issue_summary.strip() or "this issue"
+    if _seed_text_is_missing(objective):
+        questions.append(f"For '{title}', what is the objective in one sentence?")
+    if not scope_in:
+        questions.append(f"For '{title}', what is explicitly in scope?")
+    if not scope_out:
+        questions.append(f"For '{title}', what is explicitly out of scope?")
+    if not acceptance:
+        questions.append(f"For '{title}', list acceptance criteria (at least 1 testable outcome).")
+    return questions
+
+
+def _normalized_summary_key(summary: str) -> str:
+    return " ".join(part for part in re.split(r"[^a-z0-9]+", summary.lower()) if part)
+
+
+def _summary_similarity(left: str, right: str) -> float:
+    left_tokens = {token for token in re.split(r"[^a-z0-9]+", left.lower()) if token}
+    right_tokens = {token for token in re.split(r"[^a-z0-9]+", right.lower()) if token}
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = left_tokens.intersection(right_tokens)
+    union = left_tokens.union(right_tokens)
+    return len(intersection) / max(1, len(union))
+
+
+def _select_seed_match(
+    *,
+    existing_issues: list[JiraIssuePreview],
+    summary: str,
+    requested_issue_key: str | None,
+    matched_issue_keys: set[str],
+) -> JiraIssuePreview | None:
+    if requested_issue_key:
+        for issue in existing_issues:
+            if issue.key == requested_issue_key and issue.key not in matched_issue_keys:
+                return issue
+
+    normalized_target = _normalized_summary_key(summary)
+    if not normalized_target:
+        return None
+
+    for issue in existing_issues:
+        if issue.key in matched_issue_keys:
+            continue
+        if _normalized_summary_key(issue.summary) == normalized_target:
+            return issue
+
+    best_issue: JiraIssuePreview | None = None
+    best_score = 0.0
+    for issue in existing_issues:
+        if issue.key in matched_issue_keys:
+            continue
+        score = _summary_similarity(summary, issue.summary)
+        if score > best_score:
+            best_score = score
+            best_issue = issue
+    if best_issue is not None and best_score >= 0.66:
+        return best_issue
+    return None
+
+
 def _build_seed_issue_description(
     *,
     objective: str,
@@ -866,7 +950,17 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
     if not isinstance(raw_issues, list):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return issue drafts")
 
+    clarification_questions: list[str] = []
+    question_set: set[str] = set()
+    raw_questions = plan_payload.get("questions")
+    if isinstance(raw_questions, list):
+        for raw_question in raw_questions:
+            question = str(raw_question).strip()
+            if question and question not in question_set:
+                question_set.add(question)
+                clarification_questions.append(question)
     issue_inputs: list[JiraIssueCreateInput] = []
+    issue_requested_keys: list[str | None] = []
     for item in raw_issues[:12]:
         if not isinstance(item, dict):
             continue
@@ -880,6 +974,7 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
             if isinstance(acceptance_raw, list)
             else []
         )
+        requested_issue_key = _normalize_seed_issue_key(item.get("issue_key"))
         tags = _normalize_seed_issue_tags(item.get("tags"))
         labels = _normalize_seed_issue_labels(item.get("labels"))
         for tag in tags:
@@ -887,6 +982,17 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
                 labels.append(tag)
         if not summary:
             continue
+        draft_questions = _collect_seed_issue_questions(
+            issue_summary=summary,
+            objective=objective,
+            scope_in=scope_in,
+            scope_out=scope_out,
+            acceptance=acceptance,
+        )
+        for question in draft_questions:
+            if question not in question_set:
+                question_set.add(question)
+                clarification_questions.append(question)
         issue_inputs.append(
             JiraIssueCreateInput(
                 summary=summary[:90],
@@ -900,9 +1006,22 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
                 issue_type=_parse_seed_issue_type(item.get("issue_type")),
             )
         )
+        issue_requested_keys.append(requested_issue_key)
 
     if not issue_inputs:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid issue drafts")
+
+    if clarification_questions:
+        prompt = "\n".join(f"{idx}. {question}" for idx, question in enumerate(clarification_questions, start=1))
+        return (
+            "I need a bit more detail before I can seed/update Jira issues. Reply with answers and run `!issues seed` again.\n"
+            f"{prompt}",
+            {
+                "requires_input": True,
+                "questions": clarification_questions,
+                "project_key": project_key,
+            },
+        )
 
     connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
     if not connection_id:
@@ -923,41 +1042,88 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
             settings=settings,
         )
         client = _jira_oauth_client(session=session, settings=settings)
-        create_result = client.create_issues_bulk(
+        existing_issues = client.search_issues_by_jql(
             access_token=access_token,
             cloud_id=connection.cloud_id,
-            project_key=project_key,
-            issues=issue_inputs,
+            jql=f'project = "{project_key}" ORDER BY updated DESC',
+            max_results=100,
+        )
+        matched_issue_keys: set[str] = set()
+        to_create: list[JiraIssueCreateInput] = []
+        updated_issue_keys: list[str] = []
+
+        for idx, issue_input in enumerate(issue_inputs):
+            requested_issue_key = issue_requested_keys[idx] if idx < len(issue_requested_keys) else None
+            matched = _select_seed_match(
+                existing_issues=existing_issues,
+                summary=issue_input.summary,
+                requested_issue_key=requested_issue_key,
+                matched_issue_keys=matched_issue_keys,
+            )
+            if matched is None:
+                to_create.append(issue_input)
+                continue
+            matched_issue_keys.add(matched.key)
+            client.update_issue_fields(
+                access_token=access_token,
+                cloud_id=connection.cloud_id,
+                issue_id_or_key=matched.key,
+                summary=issue_input.summary,
+                description=issue_input.description,
+                labels=issue_input.labels,
+            )
+            updated_issue_keys.append(matched.key)
+
+        create_result = (
+            client.create_issues_bulk(
+                access_token=access_token,
+                cloud_id=connection.cloud_id,
+                project_key=project_key,
+                issues=to_create,
+            )
+            if to_create
+            else None
         )
     except (ValueError, JiraOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to create Jira issues: {exc}",
+            detail=f"Failed to seed Jira issues: {exc}",
         ) from exc
 
-    created_keys = [issue.key for issue in create_result.created]
-    if not created_keys:
+    created_keys = [issue.key for issue in create_result.created] if create_result else []
+    create_errors = create_result.errors if create_result else []
+    if not created_keys and not updated_issue_keys:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Jira bulk create returned no issues: {'; '.join(create_result.errors) or 'unknown error'}",
+            detail=f"Jira seed upsert produced no changes: {'; '.join(create_errors) or 'unknown error'}",
         )
     browse_base_url = str(connection.site_url or "").strip().rstrip("/")
-    if browse_base_url:
-        created_links = [f"[{issue_key}]({browse_base_url}/browse/{issue_key})" for issue_key in created_keys]
-        message = f"Seeded {len(created_keys)} issue(s): {', '.join(created_links)}"
-    else:
-        message = f"Seeded {len(created_keys)} issue(s): {', '.join(created_keys)}"
-    if create_result.errors:
-        message = f"{message} (partial errors: {'; '.join(create_result.errors)})"
+    def _fmt_keys(keys: list[str]) -> str:
+        if not keys:
+            return "none"
+        if not browse_base_url:
+            return ", ".join(keys)
+        return ", ".join(f"[{key}]({browse_base_url}/browse/{key})" for key in keys)
+
+    message = (
+        f"Issue upsert complete. Updated {len(updated_issue_keys)}: {_fmt_keys(updated_issue_keys)}. "
+        f"Created {len(created_keys)}: {_fmt_keys(created_keys)}."
+    )
+    if create_errors:
+        message = f"{message} (partial errors: {'; '.join(create_errors)})"
     return (
         message,
         {
             "project_key": project_key,
+            "updated_issue_keys": updated_issue_keys,
+            "updated_issue_links": [
+                f"{browse_base_url}/browse/{issue_key}" for issue_key in updated_issue_keys if browse_base_url
+            ],
             "created_issue_keys": created_keys,
             "created_issue_links": [
                 f"{browse_base_url}/browse/{issue_key}" for issue_key in created_keys if browse_base_url
             ],
-            "errors": create_result.errors,
+            "errors": create_errors,
         },
     )
 
