@@ -39,27 +39,6 @@ function parseMultiLine(value: string): string[] {
     .filter(Boolean);
 }
 
-function parseRules(value: string): Record<string, string> {
-  return parseMultiLine(value).reduce<Record<string, string>>((acc, line) => {
-    const separator = line.indexOf("=");
-    if (separator <= 0) {
-      return acc;
-    }
-    const key = line.slice(0, separator).trim();
-    const url = line.slice(separator + 1).trim();
-    if (key && url) {
-      acc[key] = url;
-    }
-    return acc;
-  }, {});
-}
-
-export function formatRules(rules: Record<string, string>): string {
-  return Object.entries(rules)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
-}
-
 export function defaultTenantFormValues(): TenantFormValues {
   return {
     tenantId: "",
@@ -82,10 +61,7 @@ export function defaultTenantFormValues(): TenantFormValues {
       installation_id: null
     },
     repos: {
-      allowlist: [],
-      mapping_rules_by_project_key: {},
-      mapping_rules_by_component: {},
-      fallback_repo: null
+      github_repository: null
     },
     policy: {
       allow_jira_transitions: false,
@@ -99,8 +75,6 @@ export function defaultTenantFormValues(): TenantFormValues {
     },
     discordEnabled: false,
     discord: {
-      channel_id: null,
-      channel_name_template: "proj-{tenant_id}",
       notify_events: []
     }
   };
@@ -118,8 +92,6 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
     discordEnabled: Boolean(record.discord),
     discord:
       record.discord ?? {
-        channel_id: null,
-        channel_name_template: "proj-{tenant_id}",
         notify_events: []
       }
   };
@@ -128,22 +100,16 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
 export type TenantFormTextFields = {
   projectKeysText: string;
   readyStatusesText: string;
-  allowlistText: string;
+  githubRepositoryText: string;
   policyAllowedCommandsText: string;
-  notifyEventsText: string;
-  mappingByProjectText: string;
-  mappingByComponentText: string;
 };
 
 export function formValuesToTextFields(values: TenantFormValues): TenantFormTextFields {
   return {
     projectKeysText: joinCsv(values.jira.project_keys),
     readyStatusesText: joinCsv(values.jira.ready_statuses),
-    allowlistText: values.repos.allowlist.join("\n"),
-    policyAllowedCommandsText: values.policy.allowed_commands.join("\n"),
-    notifyEventsText: values.discord.notify_events.join("\n"),
-    mappingByProjectText: formatRules(values.repos.mapping_rules_by_project_key),
-    mappingByComponentText: formatRules(values.repos.mapping_rules_by_component)
+    githubRepositoryText: values.repos.github_repository ?? "",
+    policyAllowedCommandsText: values.policy.allowed_commands.join("\n")
   };
 }
 
@@ -151,13 +117,16 @@ export function toCreatePayload(
   values: TenantFormValues,
   textFields: TenantFormTextFields
 ): TenantCreatePayload {
+  const githubRepository = textFields.githubRepositoryText.trim();
+  const projectKeys = splitCsv(textFields.projectKeysText);
+
   return {
     name: values.name.trim(),
     is_enabled: values.isEnabled,
     jira: {
       ...values.jira,
       connection_id: values.jira.connection_id?.trim() || null,
-      project_keys: splitCsv(textFields.projectKeysText),
+      project_keys: projectKeys,
       ready_statuses: splitCsv(textFields.readyStatusesText),
       ready_jql: values.jira.ready_jql?.trim() || null,
       ready_label: values.jira.ready_label.trim(),
@@ -173,11 +142,7 @@ export function toCreatePayload(
       installation_id: values.github.installation_id?.trim() || null
     },
     repos: {
-      ...values.repos,
-      allowlist: parseMultiLine(textFields.allowlistText),
-      mapping_rules_by_project_key: parseRules(textFields.mappingByProjectText),
-      mapping_rules_by_component: parseRules(textFields.mappingByComponentText),
-      fallback_repo: values.repos.fallback_repo?.trim() || null
+      github_repository: githubRepository || null
     },
     policy: {
       ...values.policy,
@@ -188,9 +153,9 @@ export function toCreatePayload(
     },
     discord: values.discordEnabled
       ? {
-          channel_id: values.discord.channel_id?.trim() || null,
-          channel_name_template: values.discord.channel_name_template.trim() || "proj-{tenant_id}",
-          notify_events: parseMultiLine(textFields.notifyEventsText)
+          notify_events: values.discord.notify_events
+            .map((value) => value.trim())
+            .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index)
         }
       : null
   };

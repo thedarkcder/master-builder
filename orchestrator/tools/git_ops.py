@@ -15,7 +15,7 @@ from orchestrator.tools.bootstrap import (
     ensure_codex_bootstrap_state,
     load_codex_preflight_context,
 )
-from orchestrator.tools.repo_allowlist import enforce_repo_allowlist as _enforce_repo_allowlist
+from orchestrator.tools.repo_allowlist import enforce_repo_match as _enforce_repo_match
 
 
 class GitOperationError(RuntimeError):
@@ -31,8 +31,8 @@ def _slugify(text: str, *, max_length: int = 48) -> str:
     return cleaned[:max_length].rstrip("-")
 
 
-def enforce_repo_allowlist(repo_url: str, allowlist: list[str]) -> None:
-    _enforce_repo_allowlist(repo_url, allowlist)
+def enforce_repo_match(repo_url: str, github_repository: str) -> None:
+    _enforce_repo_match(repo_url, github_repository)
 
 
 def build_branch_name(issue_key: str, summary: str) -> str:
@@ -56,8 +56,8 @@ class GitWorkspaceManager:
         workspace.mkdir(parents=True, exist_ok=True)
         return WorkspacePaths(workspace_dir=workspace, repo_dir=workspace / "repo")
 
-    def clone_repo(self, *, repo_url: str, allowlist: list[str], workspace: WorkspacePaths) -> None:
-        enforce_repo_allowlist(repo_url, allowlist)
+    def clone_repo(self, *, repo_url: str, github_repository: str, workspace: WorkspacePaths) -> None:
+        enforce_repo_match(repo_url, github_repository)
         self._run_git(
             ["clone", "--depth", "1", repo_url, str(workspace.repo_dir)],
             cwd=workspace.workspace_dir,
@@ -74,11 +74,11 @@ class GitWorkspaceManager:
         sha = self._run_git(["rev-parse", "HEAD"], cwd=repo_dir).strip()
         return sha
 
-    def push_branch(self, *, repo_dir: Path, branch_name: str, allowlist: list[str]) -> None:
+    def push_branch(self, *, repo_dir: Path, branch_name: str, github_repository: str) -> None:
         remote_url = self._run_git(["config", "--get", "remote.origin.url"], cwd=repo_dir).strip()
         if not remote_url:
             raise GitOperationError("Git remote.origin.url is missing for workspace")
-        _enforce_repo_allowlist(remote_url, allowlist)
+        _enforce_repo_match(remote_url, github_repository)
         self._run_git(["push", "-u", "origin", branch_name], cwd=repo_dir)
 
     def bootstrap_ci_if_missing(self, *, repo_dir: Path, template_repo_root: Path | None = None) -> WorkflowBootstrapResult:
