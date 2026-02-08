@@ -158,6 +158,10 @@ def build_discord_guild_commands() -> list[dict]:
                 }
             ],
         },
+        {
+            "name": "reply",
+            "type": 3,  # MESSAGE
+        },
     ]
 
 

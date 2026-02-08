@@ -57,6 +57,7 @@ DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry"}
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")
+ASK_REPLY_MODAL_CUSTOM_ID_PATTERN = re.compile(r"^ask\.reply\.([0-9]{15,25})$")
 
 
 def _max_webhook_body_bytes() -> int:
@@ -552,6 +553,79 @@ def _parse_ask_confirmation_custom_id(custom_id: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2)
 
 
+def _parse_ask_reply_modal_custom_id(custom_id: str) -> str | None:
+    match = ASK_REPLY_MODAL_CUSTOM_ID_PATTERN.match(custom_id.strip())
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _discord_interaction_modal_response(
+    *,
+    custom_id: str,
+    title: str,
+    text_input_custom_id: str,
+    text_input_label: str,
+    placeholder: str,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "type": 9,
+            "data": {
+                "custom_id": custom_id,
+                "title": title[:45],
+                "components": [
+                    {
+                        "type": 1,
+                        "components": [
+                            {
+                                "type": 4,
+                                "custom_id": text_input_custom_id,
+                                "label": text_input_label[:45],
+                                "style": 2,
+                                "min_length": 1,
+                                "max_length": 1800,
+                                "required": True,
+                                "placeholder": placeholder[:100],
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+
+def _discord_modal_text_value(payload: dict, *, custom_id: str) -> str | None:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    rows = data.get("components")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        components = row.get("components")
+        if not isinstance(components, list):
+            continue
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            if component.get("type") != 4:
+                continue
+            component_custom_id = str(component.get("custom_id") or "").strip()
+            if component_custom_id != custom_id:
+                continue
+            value = component.get("value")
+            if value is None:
+                return None
+            normalized = str(value).strip()
+            return normalized or None
+    return None
+
+
 def _ask_confirmation_components(request_id: str) -> list[dict]:
     return [
         {
@@ -879,6 +953,8 @@ def _send_discord_interaction_followup(
     content: str,
     ephemeral: bool = False,
     components: list[dict] | None = None,
+    reply_to_message_id: str | None = None,
+    channel_id: str | None = None,
 ) -> None:
     normalized_app_id = application_id.strip()
     normalized_token = interaction_token.strip()
@@ -890,6 +966,12 @@ def _send_discord_interaction_followup(
         payload["flags"] = 64
     if components:
         payload["components"] = components
+    if reply_to_message_id and channel_id:
+        payload["message_reference"] = {
+            "message_id": reply_to_message_id,
+            "channel_id": channel_id,
+            "fail_if_not_exists": False,
+        }
     request = UrlRequest(
         url=f"https://discord.com/api/v10/webhooks/{normalized_app_id}/{normalized_token}",
         data=json.dumps(payload).encode("utf-8"),
@@ -916,6 +998,7 @@ async def _run_discord_command_followup(
     command_text: str,
     application_id: str,
     interaction_token: str,
+    reply_to_message_id: str | None = None,
 ) -> None:
     session_factory = create_session_factory()
     content = f"<@{user_id}> Command failed due to an internal error."
@@ -980,6 +1063,8 @@ async def _run_discord_command_followup(
             content=content,
             ephemeral=False,
             components=components,
+            reply_to_message_id=reply_to_message_id,
+            channel_id=channel_id,
         )
     except Exception:  # pragma: no cover - defensive logging path
         logger.exception(
@@ -1478,10 +1563,105 @@ async def ingest_discord_interaction(
         )
         return _discord_interaction_deferred_response(ephemeral=True)
 
+    if interaction_type == 5:  # MODAL_SUBMIT
+        channel_id = payload.get("channel_id")
+        if not isinstance(channel_id, str) or not channel_id.strip():
+            return _discord_interaction_response(content="Missing interaction channel_id", ephemeral=True)
+        tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id.strip())
+        if tenant is None:
+            return _discord_interaction_response(
+                content="No enabled tenant is configured for this Discord channel.",
+                ephemeral=True,
+            )
+
+        application_id = str(payload.get("application_id") or "").strip()
+        interaction_token = str(payload.get("token") or "").strip()
+        if not application_id or not interaction_token:
+            return _discord_interaction_response(
+                content="Missing Discord interaction context for deferred response.",
+                ephemeral=True,
+            )
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return _discord_interaction_response(content="Missing modal interaction data", ephemeral=True)
+        reply_to_message_id = _parse_ask_reply_modal_custom_id(str(data.get("custom_id") or "").strip())
+        if not reply_to_message_id:
+            return _discord_interaction_response(content="Unsupported modal interaction.", ephemeral=True)
+
+        question = _discord_modal_text_value(payload, custom_id="question")
+        if not question:
+            return _discord_interaction_response(content="Please provide a follow-up question.", ephemeral=True)
+
+        user_id = None
+        member = payload.get("member")
+        if isinstance(member, dict):
+            member_user = member.get("user")
+            if isinstance(member_user, dict):
+                raw_user_id = member_user.get("id")
+                if isinstance(raw_user_id, str) and raw_user_id.strip():
+                    user_id = raw_user_id.strip()
+        if user_id is None:
+            direct_user = payload.get("user")
+            if isinstance(direct_user, dict):
+                raw_user_id = direct_user.get("id")
+                if isinstance(raw_user_id, str) and raw_user_id.strip():
+                    user_id = raw_user_id.strip()
+        if user_id is None:
+            return _discord_interaction_response(content="Missing interaction user_id", ephemeral=True)
+
+        asyncio.create_task(
+            _run_discord_command_followup(
+                tenant_id=tenant.tenant_id,
+                user_id=user_id,
+                channel_id=channel_id.strip(),
+                command_text=f"!ask {question}",
+                application_id=application_id,
+                interaction_token=interaction_token,
+                reply_to_message_id=reply_to_message_id,
+            )
+        )
+        return _discord_interaction_deferred_response(ephemeral=True)
+
     if interaction_type != 2:  # APPLICATION_COMMAND
         return _discord_interaction_response(
             content=f"Unsupported Discord interaction type '{interaction_type}'",
             ephemeral=True,
+        )
+
+    data = payload.get("data")
+    if isinstance(data, dict) and str(data.get("name") or "").strip().lower() == "reply":
+        if data.get("type") != 3:
+            return _discord_interaction_response(
+                content="Reply is a message command. Use it from the message actions menu.",
+                ephemeral=True,
+            )
+        target_message_id = str(data.get("target_id") or "").strip()
+        resolved = data.get("resolved")
+        resolved_message = None
+        if isinstance(resolved, dict):
+            resolved_messages = resolved.get("messages")
+            if isinstance(resolved_messages, dict):
+                resolved_message = resolved_messages.get(target_message_id)
+        if not target_message_id:
+            return _discord_interaction_response(content="Reply target message was not provided.", ephemeral=True)
+
+        application_id = str(payload.get("application_id") or "").strip()
+        if isinstance(resolved_message, dict) and application_id:
+            author = resolved_message.get("author")
+            author_id = str(author.get("id") or "").strip() if isinstance(author, dict) else ""
+            if author_id and author_id != application_id:
+                return _discord_interaction_response(
+                    content="Use Reply on a Master Builder message.",
+                    ephemeral=True,
+                )
+
+        return _discord_interaction_modal_response(
+            custom_id=f"ask.reply.{target_message_id}",
+            title="Reply to Master Builder",
+            text_input_custom_id="question",
+            text_input_label="What should I do next?",
+            placeholder="Ask a follow-up question or request the next action.",
         )
 
     try:
