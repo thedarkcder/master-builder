@@ -1,0 +1,69 @@
+import unittest
+from unittest.mock import patch
+
+from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
+
+
+class JiraWebhookRegistrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = JiraOAuthClient(
+            JiraOAuthClientConfig(
+                client_id="client-id",
+                client_secret="client-secret",
+                redirect_uri="https://example.test/callback",
+            )
+        )
+
+    def test_register_webhook_accepts_created_webhook_id_list(self) -> None:
+        with patch.object(self.client, "_request_json", return_value={"createdWebhookId": [1001]}):
+            result = self.client.register_webhook(
+                access_token="token",
+                cloud_id="cloud",
+                callback_url="https://example.test/jira/webhook/tenant-a",
+                jql_filter='project = "MAB"',
+                events=["jira:issue_created"],
+            )
+        self.assertEqual(result, [1001])
+
+    def test_register_webhook_accepts_single_created_webhook_id(self) -> None:
+        with patch.object(self.client, "_request_json", return_value={"createdWebhookId": 1002}):
+            result = self.client.register_webhook(
+                access_token="token",
+                cloud_id="cloud",
+                callback_url="https://example.test/jira/webhook/tenant-a",
+                jql_filter='project = "MAB"',
+                events=["jira:issue_created"],
+            )
+        self.assertEqual(result, [1002])
+
+    def test_register_webhook_accepts_nested_registration_result(self) -> None:
+        payload = {
+            "webhookRegistrationResult": [
+                {"createdWebhookId": [2001]},
+                {"createdWebhookId": "2002"},
+            ]
+        }
+        with patch.object(self.client, "_request_json", return_value=payload):
+            result = self.client.register_webhook(
+                access_token="token",
+                cloud_id="cloud",
+                callback_url="https://example.test/jira/webhook/tenant-a",
+                jql_filter='project = "MAB"',
+                events=["jira:issue_created"],
+            )
+        self.assertEqual(result, [2001, 2002])
+
+    def test_register_webhook_raises_when_no_ids_returned(self) -> None:
+        with patch.object(self.client, "_request_json", return_value={"failedWebhookRegistration": []}):
+            with self.assertRaisesRegex(JiraOAuthError, "did not return any webhook IDs"):
+                self.client.register_webhook(
+                    access_token="token",
+                    cloud_id="cloud",
+                    callback_url="https://example.test/jira/webhook/tenant-a",
+                    jql_filter='project = "MAB"',
+                    events=["jira:issue_created"],
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

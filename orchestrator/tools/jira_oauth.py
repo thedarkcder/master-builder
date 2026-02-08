@@ -386,16 +386,7 @@ class JiraOAuthClient:
                 ],
             },
         )
-        webhook_ids = payload.get("createdWebhookId") if isinstance(payload, dict) else None
-        if not isinstance(webhook_ids, list):
-            raise JiraOAuthError("Webhook registration response missing createdWebhookId list")
-
-        normalized_ids: list[int] = []
-        for webhook_id in webhook_ids:
-            if isinstance(webhook_id, int):
-                normalized_ids.append(webhook_id)
-            elif isinstance(webhook_id, str) and webhook_id.isdigit():
-                normalized_ids.append(int(webhook_id))
+        normalized_ids = _extract_created_webhook_ids(payload)
         if not normalized_ids:
             raise JiraOAuthError("Webhook registration did not return any webhook IDs")
         return normalized_ids
@@ -427,3 +418,30 @@ def _to_adf_description(text: str) -> dict:
         "version": 1,
         "content": paragraphs,
     }
+
+
+def _extract_created_webhook_ids(payload: dict | list) -> list[int]:
+    candidates: list[object] = []
+    if isinstance(payload, dict):
+        candidates.extend([payload.get("createdWebhookId"), payload.get("createdWebhookIds")])
+        registration_results = payload.get("webhookRegistrationResult")
+        if isinstance(registration_results, list):
+            for item in registration_results:
+                if isinstance(item, dict):
+                    candidates.extend([item.get("createdWebhookId"), item.get("createdWebhookIds")])
+
+    normalized_ids: list[int] = []
+    for candidate in candidates:
+        if isinstance(candidate, int):
+            normalized_ids.append(candidate)
+            continue
+        if isinstance(candidate, str) and candidate.isdigit():
+            normalized_ids.append(int(candidate))
+            continue
+        if isinstance(candidate, list):
+            for item in candidate:
+                if isinstance(item, int):
+                    normalized_ids.append(item)
+                elif isinstance(item, str) and item.isdigit():
+                    normalized_ids.append(int(item))
+    return normalized_ids
