@@ -389,21 +389,14 @@ def _jira_webhook_callback_url(*, settings, tenant_id: str) -> str:  # noqa: ANN
 
 
 def _jira_webhook_filter_jql(jira_config: dict) -> str:
-    raw_ready_jql = jira_config.get("ready_jql")
-    if isinstance(raw_ready_jql, str) and raw_ready_jql.strip():
-        return raw_ready_jql.strip()
-
     project_keys = jira_config.get("project_keys")
     if not isinstance(project_keys, list) or not project_keys:
         raise ValueError("Missing Jira project_keys")
-    ready_statuses = jira_config.get("ready_statuses")
-    if isinstance(ready_statuses, list):
-        normalized = [str(value).strip() for value in ready_statuses if str(value).strip()]
-    else:
-        normalized = []
-    if not normalized:
-        normalized = ["Ready for Agent"]
-    return _default_ready_jql(project_keys=project_keys, ready_statuses=normalized)
+    quoted_projects = ", ".join(f"\"{str(key).strip()}\"" for key in project_keys if str(key).strip())
+    if not quoted_projects:
+        raise ValueError("Missing Jira project_keys")
+    # Keep webhook subscriptions broad so events are always delivered; runtime status gates decide executability.
+    return f"project in ({quoted_projects}) ORDER BY updated DESC"
 
 
 def _delete_jira_webhooks(
