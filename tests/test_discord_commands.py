@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
+from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
@@ -335,6 +336,70 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(second.ok)
         self.assertEqual(collect_calls[0], "TP-77")
         self.assertEqual(collect_calls[1], "TP-77")
+
+    def test_ask_follow_up_drops_deleted_history_issue_key(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["ask_history"] = [
+                {
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-1",
+                    "question": "What changed?",
+                    "answer": "Previous answer",
+                    "issue_key": "TP-404",
+                    "status": None,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
+            tenant.discord_config = discord_config
+            session.commit()
+
+        def _collect_stub(*, scoped_issue_key, **_kwargs):  # type: ignore[no-untyped-def]
+            if scoped_issue_key == "TP-404":
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Issue TP-404 was not found for this tenant",
+                )
+            return (
+                None,
+                None,
+                [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
+                {"To Do": 1},
+            )
+
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.routes_discord.build_codex_runtime"),
+            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Recovered answer"),
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask what changed since last update?",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.message, "Recovered answer")
+        self.assertIsNone(command_response.data["issue_key"])
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            history_entries = [
+                entry
+                for entry in (tenant.discord_config or {}).get("ask_history", [])
+                if entry.get("user_id") == "u-viewer" and entry.get("channel_id") == "discord-channel-1"
+            ]
+        self.assertFalse(
+            any(str(entry.get("issue_key") or "").strip().upper() == "TP-404" for entry in history_entries)
+        )
 
     def test_plain_text_is_treated_as_implicit_ask_when_enabled(self) -> None:
         with (
