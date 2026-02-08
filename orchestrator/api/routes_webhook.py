@@ -14,11 +14,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.routes_discord import execute_discord_command
+from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
+from orchestrator.core.discord_notifications import send_tenant_discord_message
+from orchestrator.core.reviewer import ReviewAgentGate
 from orchestrator.core.runs import enqueue_run
 from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
 from orchestrator.storage.models import Tenant
+from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 
 router = APIRouter(tags=["jira-webhook"])
 
@@ -339,6 +344,46 @@ def _find_tenant_by_installation_id(session: Session, installation_id: str) -> T
     return None
 
 
+def _extract_repository_full_name(payload: dict) -> str | None:
+    repository = payload.get("repository")
+    if isinstance(repository, dict):
+        full_name = repository.get("full_name")
+        if isinstance(full_name, str) and full_name.strip():
+            return full_name.strip()
+    return None
+
+
+def _extract_pull_request_targets(payload: dict) -> list[tuple[int, bool]]:
+    targets: list[tuple[int, bool]] = []
+    seen: set[int] = set()
+
+    pull_request = payload.get("pull_request")
+    if isinstance(pull_request, dict):
+        number = pull_request.get("number")
+        body = pull_request.get("body")
+        review_summary_present = isinstance(body, str) and bool(body.strip())
+        if isinstance(number, int) and number > 0 and number not in seen:
+            targets.append((number, review_summary_present))
+            seen.add(number)
+
+    for container_key in ("check_suite", "check_run"):
+        container = payload.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        pull_requests = container.get("pull_requests")
+        if not isinstance(pull_requests, list):
+            continue
+        for item in pull_requests:
+            if not isinstance(item, dict):
+                continue
+            number = item.get("number")
+            if isinstance(number, int) and number > 0 and number not in seen:
+                targets.append((number, True))
+                seen.add(number)
+
+    return targets
+
+
 @router.post("/jira/webhook/{tenant_id}")
 async def ingest_jira_webhook(
     tenant_id: str,
@@ -517,6 +562,81 @@ async def ingest_jira_webhook(
     }
 
 
+@router.post("/discord/webhook/{tenant_id}")
+async def ingest_discord_webhook(
+    tenant_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    settings = get_settings()
+    request_id = request.headers.get("X-Request-Id") or str(uuid4())
+    logger.info("discord_webhook_received request_id=%s tenant_id=%s", request_id, tenant_id)
+
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown tenant")
+    if not tenant.is_enabled:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "request_id": request_id,
+                "tenant_id": tenant_id,
+                "accepted": False,
+                "reason": "tenant_disabled",
+            },
+        )
+
+    discord_config = tenant.discord_config or {}
+    command_secret_ref = str(discord_config.get("command_secret_ref") or "").strip()
+    if command_secret_ref:
+        presented_token = _extract_webhook_token(request)
+        expected_token = resolve_secret_ref(
+            session,
+            secret_ref=command_secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        )
+        if not expected_token:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Discord command authentication is misconfigured",
+            )
+        if not presented_token or not secrets.compare_digest(presented_token, expected_token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Discord webhook token",
+            )
+
+    payload, _ = await _read_json_payload(request, request_id=request_id, source="discord")
+    user_id = payload.get("user_id")
+    command = payload.get("command")
+    channel_id = payload.get("channel_id")
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing user_id")
+    if not isinstance(command, str) or not command.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing command")
+    if channel_id is not None and not isinstance(channel_id, str):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid channel_id")
+
+    command_response = execute_discord_command(
+        tenant_id=tenant_id,
+        payload=DiscordCommandRequest(
+            user_id=user_id.strip(),
+            command=command.strip(),
+            channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
+        ),
+        session=session,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "accepted": True,
+            "result": command_response.model_dump(),
+        },
+    )
+
+
 @router.post("/github/webhook")
 async def ingest_github_webhook(
     request: Request,
@@ -639,6 +759,124 @@ async def ingest_github_webhook(
         normalized_action or "none",
         installation_id,
     )
+
+    review_events = {
+        "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "check_suite",
+        "check_run",
+    }
+    if github_event not in review_events:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": True,
+                "reason": "ignored_event",
+            },
+        )
+
+    repo_full_name = _extract_repository_full_name(payload)
+    pr_targets = _extract_pull_request_targets(payload)
+    if repo_full_name is None or not pr_targets:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": False,
+                "reason": "missing_pr_context",
+            },
+        )
+
+    def secret_lookup(secret_ref: str) -> str | None:
+        return resolve_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        )
+
+    try:
+        github_client = github_client_from_tenant_config(
+            tenant.github_config,
+            secret_lookup=secret_lookup,
+        )
+        reviewer_gate = ReviewAgentGate(github_client)
+    except ValueError as exc:
+        logger.warning(
+            "github_webhook_review_misconfigured request_id=%s tenant_id=%s error=%s",
+            request_id,
+            tenant.tenant_id,
+            exc,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": False,
+                "reason": "review_misconfigured",
+            },
+        )
+
+    signals: list[dict[str, object]] = []
+    for pr_number, review_summary_present in pr_targets:
+        try:
+            signal = reviewer_gate.evaluate_pr(
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                review_summary_present=review_summary_present,
+            )
+        except (GitHubApiError, ValueError) as exc:
+            logger.warning(
+                "github_webhook_review_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                request_id,
+                tenant.tenant_id,
+                pr_number,
+                exc,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "request_id": request_id,
+                    "delivery_id": delivery_id,
+                    "tenant_id": tenant.tenant_id,
+                    "event": github_event,
+                    "action": normalized_action,
+                    "accepted": False,
+                    "reason": "review_evaluation_failed",
+                },
+            )
+
+        send_result = send_tenant_discord_message(
+            session=session,
+            tenant=tenant,
+            message=signal.message,
+            settings=settings,
+        )
+        signals.append(
+            {
+                "pr_number": pr_number,
+                "ready": signal.ready,
+                "state": signal.state,
+                "policy_pack": signal.policy_pack,
+                "must_fix_findings": list(signal.must_fix_findings),
+                "discord_sent": send_result.sent,
+                "discord_reason": send_result.reason,
+            }
+        )
+
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content={
@@ -648,6 +886,7 @@ async def ingest_github_webhook(
             "event": github_event,
             "action": normalized_action,
             "accepted": True,
-            "reason": "accepted_no_handler",
+            "reason": "review_processed",
+            "signals": signals,
         },
     )

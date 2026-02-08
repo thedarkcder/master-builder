@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import evaluate_decision_gate
+from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
@@ -86,6 +87,7 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
 
 
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
+    settings = get_settings()
     queued_runs = session.execute(
         select(Run).where(Run.status == RUN_STATUS_QUEUED).order_by(Run.created_at.asc())
     ).scalars().all()
@@ -175,7 +177,25 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         if run.issue_key
         else None
     )
-    stage_updates.append(
+
+    def append_stage_update(stage_update: dict[str, str]) -> None:
+        stage_updates.append(stage_update)
+        send_result = send_tenant_discord_message(
+            session=session,
+            tenant=tenant,
+            message=stage_update["discord_message"],
+            settings=settings,
+        )
+        if not send_result.sent:
+            logger.info(
+                "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
+                run.tenant_id,
+                run.run_id,
+                stage_update["stage"],
+                send_result.reason,
+            )
+
+    append_stage_update(
         {
             "stage": "lock_acquired",
             "tenant_id": run.tenant_id,
@@ -216,7 +236,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         return run
     plan_payload = workflow_result.to_plan_payload()
     if workflow_result.plan is not None:
-        stage_updates.append(
+        append_stage_update(
             {
                 "stage": "plan_posted",
                 "tenant_id": run.tenant_id,
@@ -239,7 +259,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             }
         )
     if workflow_result.pr_url:
-        stage_updates.append(
+        append_stage_update(
             {
                 "stage": "pr_opened",
                 "tenant_id": run.tenant_id,
@@ -269,7 +289,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             if workflow_result.diagnostics is not None
             else "Workflow failed without diagnostics"
         )
-        stage_updates.append(
+        append_stage_update(
             {
                 "stage": "run_failed",
                 "tenant_id": run.tenant_id,
