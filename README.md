@@ -24,6 +24,9 @@ export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
 export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.1
+export ORCHESTRATOR_CODEX_API_KEY_SECRET_REF=OPENAI_API_KEY
+export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
+export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
@@ -33,6 +36,7 @@ PY
 # Store OAuth secret values via managed secrets API/UI, not shell exports:
 # - secret ref JIRA_OAUTH_CLIENT_ID -> Jira OAuth client id
 # - secret ref JIRA_OAUTH_CLIENT_SECRET -> Jira OAuth client secret
+# - secret ref OPENAI_API_KEY -> OpenAI API key for worker Codex execution and Discord /ask
 
 # Optional extra Python index for pinned codex assets wheel
 # Example local package service (docker-compose):
@@ -183,7 +187,7 @@ Start API:
 uvicorn orchestrator.api.main:app --reload --port 4000
 ```
 
-Start worker:
+Start worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
 ```bash
 python -m orchestrator worker
 ```

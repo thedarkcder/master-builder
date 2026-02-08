@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
+from orchestrator.core.codex_agents import answer_board_question_with_codex
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
@@ -240,47 +242,58 @@ def _ask_board_message(*, session: Session, tenant: Tenant, question: str) -> tu
             break
 
     if requested_status:
-        issues = _search_jira_issues_for_tenant(
+        jira_issues = _search_jira_issues_for_tenant(
             session=session,
             tenant=tenant,
             jql=f'{project_jql} AND status = "{requested_status}" ORDER BY updated DESC',
-            max_results=15,
+            max_results=30,
         )
-        if not issues:
-            return (
-                f"No issues found in status '{requested_status}' for configured projects.",
-                {"status": requested_status, "issues": []},
-            )
-        preview = ", ".join(issue.key for issue in issues[:8])
-        return (
-            f"{len(issues)} issue(s) in '{requested_status}': {preview}",
-            {
-                "status": requested_status,
-                "issues": [{"key": issue.key, "summary": issue.summary} for issue in issues],
-            },
+    else:
+        jira_issues = _search_jira_issues_for_tenant(
+            session=session,
+            tenant=tenant,
+            jql=f"{project_jql} ORDER BY updated DESC",
+            max_results=60,
         )
 
-    issues = _search_jira_issues_for_tenant(
-        session=session,
-        tenant=tenant,
-        jql=f"{project_jql} ORDER BY updated DESC",
-        max_results=50,
-    )
-    if not issues:
-        return ("No issues found for configured projects.", {"issues": [], "status_counts": {}})
-
+    issues = [
+        {
+            "key": issue.key,
+            "summary": issue.summary,
+            "status": issue.status,
+        }
+        for issue in jira_issues
+    ]
     status_counts: dict[str, int] = {}
     for issue in issues:
-        status_counts[issue.status] = status_counts.get(issue.status, 0) + 1
-    counts_text = ", ".join(f"{status_name}: {count}" for status_name, count in sorted(status_counts.items()))
-    recent = ", ".join(issue.key for issue in issues[:8])
-    message = f"Board snapshot (sample): {counts_text}. Recent issues: {recent}"
-    data = {
-        "status_counts": status_counts,
-        "issues": [{"key": issue.key, "summary": issue.summary, "status": issue.status} for issue in issues],
-        "question": question,
-    }
-    return message, data
+        issue_status = issue["status"]
+        status_counts[issue_status] = status_counts.get(issue_status, 0) + 1
+
+    settings = get_settings()
+    runtime = build_codex_runtime(session=session, settings=settings)
+    try:
+        message = answer_board_question_with_codex(
+            runtime=runtime,
+            question=question,
+            project_keys=[str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()],
+            issues=issues,
+            status_counts=status_counts,
+        )
+    except CodexRuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Codex board assistant is unavailable: {exc}",
+        ) from exc
+
+    return (
+        message,
+        {
+            "status": requested_status,
+            "status_counts": status_counts,
+            "issues": issues,
+            "question": question,
+        },
+    )
 
 
 @router.post("/discord/command/{tenant_id}", response_model=DiscordCommandResponse)
