@@ -44,6 +44,8 @@ class SignalTemplateTests(unittest.TestCase):
         self.assertIn("MAB-17", discord_message)
         self.assertIn("run-123", discord_message)
         self.assertIn("pr_opened", discord_message)
+        self.assertIn("[MAB-17](https://example.atlassian.net/browse/MAB-17)", discord_message)
+        self.assertIn("[Open PR](https://github.com/example/repo/pull/5)", discord_message)
         self.assertIn("run_failed", jira_message)
         self.assertIn("test stage failed", jira_message)
         self.assertIn("Investigate CI logs", jira_message)
@@ -62,6 +64,8 @@ class SignalTemplateTests(unittest.TestCase):
 
         self.assertIn("✅ PR Ready", message)
         self.assertIn("Jira:", message)
+        self.assertIn("[Open PR](https://github.com/example/repo/pull/1)", message)
+        self.assertIn("[Open issue](https://example.atlassian.net/browse/MAB-1)", message)
         self.assertLessEqual(message.count("\n- "), 8)  # changed(3) + risk(2) + q(2) + next action(1)
         self.assertIn("1) t1", message)
         self.assertIn("3) t3", message)
