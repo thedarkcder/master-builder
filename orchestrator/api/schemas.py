@@ -209,6 +209,8 @@ class DiscordCommandRequest(BaseModel):
     user_id: str = Field(min_length=1)
     command: str = Field(min_length=2)
     channel_id: str | None = None
+    command_params: dict[str, str] | None = None
+    attachments: list[dict[str, str]] = Field(default_factory=list)
 
 
 class DiscordCommandResponse(BaseModel):

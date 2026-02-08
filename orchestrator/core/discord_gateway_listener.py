@@ -209,6 +209,25 @@ class DiscordGatewayListener:
         content = str(payload.get("content") or "").strip()
         if not content or content.startswith("/"):
             return
+        raw_attachments = payload.get("attachments")
+        attachments: list[dict[str, str]] = []
+        if isinstance(raw_attachments, list):
+            for item in raw_attachments:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    continue
+                attachments.append(
+                    {
+                        "id": str(item.get("id") or "").strip(),
+                        "url": url,
+                        "filename": str(item.get("filename") or "").strip(),
+                        "content_type": str(item.get("content_type") or "").strip(),
+                        "size": str(item.get("size") or "").strip(),
+                    }
+                )
+        attachments = attachments[:5]
 
         with self._session_factory() as session:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
@@ -224,6 +243,7 @@ class DiscordGatewayListener:
                         user_id=user_id,
                         channel_id=channel_id,
                         command=content,
+                        attachments=attachments,
                     ),
                     session=session,
                     require_ask_confirmation=True,

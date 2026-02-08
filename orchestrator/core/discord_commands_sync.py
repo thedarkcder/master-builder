@@ -108,6 +108,49 @@ def build_discord_guild_commands() -> list[dict]:
             ],
         },
         {
+            "name": "bug",
+            "description": "Create a Jira bug from Discord context",
+            "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "summary",
+                    "description": "Short bug summary",
+                    "required": True,
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "details",
+                    "description": "Repro/context details",
+                    "required": False,
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "issue_key",
+                    "description": "Optional related Jira issue key",
+                    "required": False,
+                    "autocomplete": True,
+                },
+                {
+                    "type": 11,  # ATTACHMENT
+                    "name": "attachment_1",
+                    "description": "Optional screenshot/log attachment",
+                    "required": False,
+                },
+                {
+                    "type": 11,  # ATTACHMENT
+                    "name": "attachment_2",
+                    "description": "Optional screenshot/log attachment",
+                    "required": False,
+                },
+                {
+                    "type": 11,  # ATTACHMENT
+                    "name": "attachment_3",
+                    "description": "Optional screenshot/log attachment",
+                    "required": False,
+                },
+            ],
+        },
+        {
             "name": "issues",
             "description": "Seed Jira issues from markdown spec",
             "options": [
