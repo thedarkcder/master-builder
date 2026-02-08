@@ -293,17 +293,25 @@ Configure one Discord app (bot) and install it into your server. The same app ca
    - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_NAME_TEMPLATE` (default `tenant-{tenant_id}`).
    - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID` to place channels under a category.
    - Store bot token in Secrets Manager under `DISCORD_BOT_TOKEN` (or change `ORCHESTRATOR_DISCORD_BOT_TOKEN_SECRET_REF`).
+   - Store Discord interactions public key in Secrets Manager under `DISCORD_INTERACTIONS_PUBLIC_KEY`.
 
-6. Configure tenant in admin UI
+6. Configure Discord Interactions callback
+   - In Discord Developer Portal -> your app -> `General Information` copy `Public Key`.
+   - Save it as managed secret `DISCORD_INTERACTIONS_PUBLIC_KEY`.
+   - In Discord Developer Portal -> `Interactions Endpoint URL`, set:
+     - `https://<your-api-domain>/discord/interactions`
+
+7. Configure tenant in admin UI
    - Enable Discord settings for tenant.
    - Set `notify_events` checkboxes.
    - Save tenant: backend auto-creates/reuses tenant channel and stores `channel_id`.
 
 Notes:
 - Server ID and channel ID are different values.
-- Current backend command endpoint is `POST /discord/command/{tenant_id}`.
+- Native interactions endpoint is `POST /discord/interactions`.
+- Internal command API endpoint is `POST /discord/command/{tenant_id}`.
 - Automatic channel create/reuse requires `Manage Channels` permission.
-6. Inspect repo bootstrap state:
+8. Inspect repo bootstrap state:
    - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
 
 ## GitHub App setup
