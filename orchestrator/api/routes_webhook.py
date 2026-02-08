@@ -1073,6 +1073,7 @@ async def ingest_github_webhook(
             tenant=tenant,
             message=signal.message,
             settings=settings,
+            event="review_signal",
         )
         signals.append(
             {

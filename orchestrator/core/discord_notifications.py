@@ -20,15 +20,32 @@ class DiscordSendResult:
     channel_id: str | None = None
 
 
+def _event_enabled_for_tenant(*, tenant: Tenant, event: str | None) -> bool:
+    if event is None:
+        return True
+    normalized = event.strip()
+    if not normalized:
+        return True
+    discord_config = tenant.discord_config or {}
+    configured_events = discord_config.get("notify_events")
+    if not isinstance(configured_events, list):
+        return False
+    normalized_events = {str(value).strip() for value in configured_events if str(value).strip()}
+    return normalized in normalized_events
+
+
 def send_tenant_discord_message(
     *,
     session: Session,
     tenant: Tenant,
     message: str,
     settings: Settings,
+    event: str | None = None,
 ) -> DiscordSendResult:
     if not message.strip():
         return DiscordSendResult(sent=False, reason="empty_message")
+    if not _event_enabled_for_tenant(tenant=tenant, event=event):
+        return DiscordSendResult(sent=False, reason=f"event_disabled:{event or 'unknown'}")
 
     discord_config = tenant.discord_config or {}
     channel_id = str(discord_config.get("channel_id") or "").strip()
