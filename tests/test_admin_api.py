@@ -392,6 +392,18 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 422)
 
+    def test_create_tenant_allows_missing_repository_during_onboarding(self) -> None:
+        payload = self._tenant_payload()
+        payload["repos"]["github_repository"] = None
+
+        response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.json()["repos"]["github_repository"])
+
     def test_create_tenant_blocks_when_codex_assets_invalid(self) -> None:
         payload = self._tenant_payload()
         with patch(

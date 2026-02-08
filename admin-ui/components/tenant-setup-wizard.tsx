@@ -52,6 +52,21 @@ type WizardDraft = {
   selectedRepoUrl: string;
 };
 
+function readWizardDraft(): Partial<WizardDraft> | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.sessionStorage.getItem(WIZARD_DRAFT_KEY);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw) as Partial<WizardDraft>;
+  } catch {
+    return null;
+  }
+}
+
 function persistWizardDraft(draft: WizardDraft): void {
   if (typeof window === "undefined") {
     return;
@@ -93,14 +108,35 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [values, setValues] = useState<TenantFormValues>(defaultTenantFormValues());
-  const [textFields, setTextFields] = useState<TenantFormTextFields>(formValuesToTextFields(defaultTenantFormValues()));
+  const [values, setValues] = useState<TenantFormValues>(() => {
+    const draft = readWizardDraft();
+    if (draft?.values) {
+      return draft.values as TenantFormValues;
+    }
+    return defaultTenantFormValues();
+  });
+  const [textFields, setTextFields] = useState<TenantFormTextFields>(() => {
+    const draft = readWizardDraft();
+    if (draft?.textFields) {
+      return draft.textFields as TenantFormTextFields;
+    }
+    if (draft?.values) {
+      return formValuesToTextFields(draft.values as TenantFormValues);
+    }
+    return formValuesToTextFields(defaultTenantFormValues());
+  });
   const [statusLine, setStatusLine] = useState("Start with tenant basics.");
   const [saving, setSaving] = useState(false);
-  const [createdTenantId, setCreatedTenantId] = useState("");
+  const [createdTenantId, setCreatedTenantId] = useState(() => {
+    const draft = readWizardDraft();
+    return typeof draft?.createdTenantId === "string" ? draft.createdTenantId : "";
+  });
 
   const [installationRepos, setInstallationRepos] = useState<GitHubRepositoryRecord[]>([]);
-  const [selectedRepoUrl, setSelectedRepoUrl] = useState("");
+  const [selectedRepoUrl, setSelectedRepoUrl] = useState(() => {
+    const draft = readWizardDraft();
+    return typeof draft?.selectedRepoUrl === "string" ? draft.selectedRepoUrl : "";
+  });
   const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
 
   const stepIndex = STEP_ORDER.findIndex((step) => step.key === stepKey);
@@ -137,30 +173,6 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
   }, [stepKey, textFields.githubRepositoryText, textFields.projectKeysText, values]);
 
   const canAdvance = advanceValidationError === null;
-
-  useEffect(() => {
-    try {
-      const raw = window.sessionStorage.getItem(WIZARD_DRAFT_KEY);
-      if (!raw) {
-        return;
-      }
-      const parsed = JSON.parse(raw) as Partial<WizardDraft>;
-      if (parsed.values) {
-        setValues(parsed.values as TenantFormValues);
-      }
-      if (parsed.textFields) {
-        setTextFields(parsed.textFields as TenantFormTextFields);
-      }
-      if (typeof parsed.createdTenantId === "string") {
-        setCreatedTenantId(parsed.createdTenantId);
-      }
-      if (typeof parsed.selectedRepoUrl === "string") {
-        setSelectedRepoUrl(parsed.selectedRepoUrl);
-      }
-    } catch {
-      // ignore invalid local wizard draft
-    }
-  }, []);
 
   useEffect(() => {
     const draft: WizardDraft = {

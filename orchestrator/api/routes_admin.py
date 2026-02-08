@@ -149,13 +149,7 @@ def _normalize_repos_config(raw_repos_config: dict | None) -> dict:
 
 
 def _build_repos_config(payload_repos: dict) -> dict:
-    repos_config = _normalize_repos_config(payload_repos)
-    if not repos_config["github_repository"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="github_repository is required",
-        )
-    return repos_config
+    return _normalize_repos_config(payload_repos)
 
 
 def _render_discord_channel_name(*, template: str, tenant_id: str) -> str:
