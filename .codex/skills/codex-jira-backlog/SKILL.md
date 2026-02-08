@@ -36,13 +36,16 @@ description: Use when creating, seeding, deduplicating, or maintaining Jira back
 - For each item include Jira key + action (`created` or `updated`) + missing capability notes.
 
 ## Required description structure
-- Objective
-- Scope (in / out)
-- Acceptance Criteria
-- Tags / labels
-- Good To Do checklist
-- Decision Gate triggers
-- Notes / Links
+- Use Markdown with **bold section titles** and `-` list bullets.
+- **Objective**
+- **Scope In**
+- **Scope Out**
+- **Acceptance Criteria**
+- **Good To Do checklist**
+- **Decision Gate triggers**
+- **Notes / Links**
+- Do **not** put tags/labels inside the description body.
+- Put labels only in Jira issue metadata (`labels` field).
 
 ## Guardrails
 - Always dedupe before creating.
@@ -50,3 +53,4 @@ description: Use when creating, seeding, deduplicating, or maintaining Jira back
 - Do not force repo-specific labels unless explicitly requested.
 - Do not hardcode project keys; use runtime tenant project keys only.
 - Keep Jira comments concise and operational.
+- Description formatting is mandatory: bold section headers + list bullets for readability and consistency.
