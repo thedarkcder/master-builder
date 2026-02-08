@@ -59,6 +59,7 @@ SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry"}
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")
 ASK_REPLY_MODAL_CUSTOM_ID_PATTERN = re.compile(r"^ask\.reply\.([0-9]{15,25})$")
+ASK_REPLY_OPEN_CUSTOM_ID = "ask.reply.open"
 
 
 def _max_webhook_body_bytes() -> int:
@@ -649,6 +650,22 @@ def _ask_confirmation_components(request_id: str) -> list[dict]:
     ]
 
 
+def _ask_reply_components() -> list[dict]:
+    return [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 1,
+                    "label": "Reply",
+                    "custom_id": ASK_REPLY_OPEN_CUSTOM_ID,
+                }
+            ],
+        }
+    ]
+
+
 def _validate_webhook_auth(
     tenant: Tenant,
     request: Request,
@@ -999,6 +1016,7 @@ def _send_discord_thread_followup(
     channel_id: str,
     reply_to_message_id: str,
     content: str,
+    components: list[dict] | None = None,
 ) -> None:  # noqa: ANN001
     token_ref = settings.discord_bot_token_secret_ref.strip()
     if not token_ref:
@@ -1017,7 +1035,47 @@ def _send_discord_thread_followup(
         message_id=reply_to_message_id,
         thread_name=thread_name[:100],
     )
-    client.post_message(channel_id=thread_channel_id, content=content)
+    client.post_message(channel_id=thread_channel_id, content=content, components=components)
+
+
+def _send_discord_ask_response_with_thread(
+    *,
+    session: Session,
+    settings,
+    tenant: Tenant,
+    channel_id: str,
+    user_id: str,
+    content: str,
+) -> None:  # noqa: ANN001
+    token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not token_ref:
+        raise RuntimeError("Discord bot token secret ref is not configured")
+    bot_token = resolve_secret_ref(
+        session,
+        secret_ref=token_ref,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if not bot_token:
+        raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
+    client = DiscordApiClient(bot_token=bot_token)
+    posted = client.post_message(
+        channel_id=channel_id,
+        content=content,
+        components=_ask_reply_components(),
+    )
+    posted_message_id = str(posted.get("id") or "").strip()
+    if not posted_message_id:
+        raise RuntimeError("Discord message post succeeded but response did not include message ID")
+    thread_name = f"{tenant.tenant_id}-ask-{posted_message_id[-6:]}".replace(" ", "-")
+    thread_channel_id = client.create_thread_from_message(
+        channel_id=channel_id,
+        message_id=posted_message_id,
+        name=thread_name[:100],
+    )
+    client.post_message(
+        channel_id=thread_channel_id,
+        content=f"<@{user_id}> Continue here with follow-up questions.",
+    )
 
 
 async def _run_discord_command_followup(
@@ -1072,6 +1130,24 @@ async def _run_discord_command_followup(
                             user_id=user_id,
                             command_response=command_response,
                         )
+                        if command_response.command == "ask" and not reply_to_message_id:
+                            try:
+                                _send_discord_ask_response_with_thread(
+                                    session=session,
+                                    settings=settings,
+                                    tenant=tenant,
+                                    channel_id=channel_id,
+                                    user_id=user_id,
+                                    content=content,
+                                )
+                                sent_to_thread = True
+                            except (DiscordApiError, RuntimeError, ValueError):
+                                logger.exception(
+                                    "discord_ask_thread_send_failed tenant_id=%s user_id=%s",
+                                    tenant_id,
+                                    user_id,
+                                )
+                                components = _ask_reply_components()
                 except HTTPException as exc:
                     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                     content = f"<@{user_id}> Command failed: {detail}"
@@ -1082,7 +1158,7 @@ async def _run_discord_command_followup(
                         user_id,
                     )
                     content = f"<@{user_id}> Command failed due to an internal error."
-                if reply_to_message_id:
+                if reply_to_message_id and not sent_to_thread:
                     try:
                         _send_discord_thread_followup(
                             session=session,
@@ -1091,6 +1167,7 @@ async def _run_discord_command_followup(
                             channel_id=channel_id,
                             reply_to_message_id=reply_to_message_id,
                             content=content,
+                            components=components,
                         )
                         sent_to_thread = True
                     except (DiscordApiError, RuntimeError, ValueError):
@@ -1580,6 +1657,22 @@ async def ingest_discord_interaction(
         if not isinstance(component_data, dict):
             return _discord_interaction_response(content="Missing component interaction data", ephemeral=True)
         custom_id = str(component_data.get("custom_id") or "").strip()
+        if custom_id == ASK_REPLY_OPEN_CUSTOM_ID:
+            message = payload.get("message")
+            message_id = str(message.get("id") or "").strip() if isinstance(message, dict) else ""
+            if not message_id:
+                return _discord_interaction_response(
+                    content="Unable to open reply form because message context is missing.",
+                    ephemeral=True,
+                )
+            return _discord_interaction_modal_response(
+                custom_id=f"ask.reply.{message_id}",
+                title="Reply to Master Builder",
+                text_input_custom_id="question",
+                text_input_label="What should I do next?",
+                placeholder="Ask a follow-up question or request the next action.",
+            )
+
         parsed_custom_id = _parse_ask_confirmation_custom_id(custom_id)
         if parsed_custom_id is None:
             return _discord_interaction_response(content="Unsupported interaction action", ephemeral=True)

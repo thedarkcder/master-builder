@@ -97,17 +97,20 @@ class DiscordApiClient:
         normalized_parent = created_parent if isinstance(created_parent, str) and created_parent.strip() else None
         return DiscordTextChannel(channel_id=channel_id, name=created_name, parent_id=normalized_parent)
 
-    def post_message(self, *, channel_id: str, content: str) -> dict:
+    def post_message(self, *, channel_id: str, content: str, components: list[dict] | None = None) -> dict:
         normalized_channel_id = channel_id.strip()
         normalized_content = content.strip()
         if not normalized_channel_id:
             raise ValueError("Discord channel ID cannot be empty")
         if not normalized_content:
             raise ValueError("Discord message content cannot be empty")
+        payload: dict[str, object] = {"content": normalized_content}
+        if components:
+            payload["components"] = components
         data = self._request_json(
             method="POST",
             path=f"/channels/{normalized_channel_id}/messages",
-            payload={"content": normalized_content},
+            payload=payload,
         )
         if not isinstance(data, dict):
             raise DiscordApiError("Discord create message response was not an object")
