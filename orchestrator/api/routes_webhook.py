@@ -24,6 +24,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.routes_discord import (
     _project_filter_jql,
     _search_jira_issues_for_tenant,
+    consume_pending_ask_action,
     execute_discord_command,
 )
 from orchestrator.api.schemas import DiscordCommandRequest
@@ -55,6 +56,7 @@ GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry"}
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")
 
 
 def _max_webhook_body_bytes() -> int:
@@ -543,6 +545,35 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
     return user_id, channel_id.strip(), command_text
 
 
+def _parse_ask_confirmation_custom_id(custom_id: str) -> tuple[str, str] | None:
+    match = ASK_CONFIRM_CUSTOM_ID_PATTERN.match(custom_id.strip())
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _ask_confirmation_components(request_id: str) -> list[dict]:
+    return [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 3,
+                    "label": "Approve",
+                    "custom_id": f"ask.approve.{request_id}",
+                },
+                {
+                    "type": 2,
+                    "style": 4,
+                    "label": "Reject",
+                    "custom_id": f"ask.reject.{request_id}",
+                },
+            ],
+        }
+    ]
+
+
 def _validate_webhook_auth(
     tenant: Tenant,
     request: Request,
@@ -847,6 +878,7 @@ def _send_discord_interaction_followup(
     interaction_token: str,
     content: str,
     ephemeral: bool = False,
+    components: list[dict] | None = None,
 ) -> None:
     normalized_app_id = application_id.strip()
     normalized_token = interaction_token.strip()
@@ -856,6 +888,8 @@ def _send_discord_interaction_followup(
     payload: dict[str, object] = {"content": normalized_content}
     if ephemeral:
         payload["flags"] = 64
+    if components:
+        payload["components"] = components
     request = UrlRequest(
         url=f"https://discord.com/api/v10/webhooks/{normalized_app_id}/{normalized_token}",
         data=json.dumps(payload).encode("utf-8"),
@@ -885,6 +919,7 @@ async def _run_discord_command_followup(
 ) -> None:
     session_factory = create_session_factory()
     content = f"<@{user_id}> Command failed due to an internal error."
+    components: list[dict] | None = None
     try:
         with session_factory() as session:
             tenant = session.get(Tenant, tenant_id)
@@ -901,13 +936,27 @@ async def _run_discord_command_followup(
                         ),
                         session=session,
                         defer_seed_issues=False,
+                        require_ask_confirmation=True,
                     )
-                    content = _build_command_followup_message(
-                        session=session,
-                        tenant=tenant,
-                        user_id=user_id,
-                        command_response=command_response,
-                    )
+                    data = command_response.data if isinstance(command_response.data, dict) else {}
+                    requires_confirmation = bool(data.get("requires_confirmation")) and command_response.command == "ask"
+                    if requires_confirmation:
+                        request_id = str(data.get("request_id") or "").strip()
+                        proposed_command = str(data.get("proposed_command") or "").strip()
+                        summary = str(data.get("summary") or command_response.message or "").strip()
+                        if request_id and proposed_command:
+                            lines = [f"<@{user_id}> {summary}", "", f"Proposed action: `{proposed_command}`", "Approve this action?"]
+                            content = "\n".join(lines)
+                            components = _ask_confirmation_components(request_id)
+                        else:
+                            content = f"<@{user_id}> Command failed: ask confirmation payload was incomplete."
+                    else:
+                        content = _build_command_followup_message(
+                            session=session,
+                            tenant=tenant,
+                            user_id=user_id,
+                            command_response=command_response,
+                        )
                 except HTTPException as exc:
                     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                     content = f"<@{user_id}> Command failed: {detail}"
@@ -930,10 +979,101 @@ async def _run_discord_command_followup(
             interaction_token=interaction_token,
             content=content,
             ephemeral=False,
+            components=components,
         )
     except Exception:  # pragma: no cover - defensive logging path
         logger.exception(
             "discord_command_followup_send_failed tenant_id=%s user_id=%s",
+            tenant_id,
+            user_id,
+        )
+
+
+async def _run_discord_ask_confirmation_followup(
+    *,
+    tenant_id: str,
+    user_id: str,
+    channel_id: str,
+    decision: str,
+    request_id: str,
+    application_id: str,
+    interaction_token: str,
+) -> None:
+    session_factory = create_session_factory()
+    content = f"<@{user_id}> Failed to process ask confirmation."
+    try:
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            if tenant is None or not tenant.is_enabled:
+                content = f"<@{user_id}> Ask confirmation failed: tenant is unavailable."
+            else:
+                pending = consume_pending_ask_action(
+                    session=session,
+                    tenant=tenant,
+                    request_id=request_id,
+                )
+                if pending is None:
+                    content = f"<@{user_id}> This ask approval request is no longer available."
+                else:
+                    pending_user_id = str(pending.get("user_id") or "").strip()
+                    pending_channel_id = str(pending.get("channel_id") or "").strip()
+                    if pending_user_id and pending_user_id != user_id:
+                        content = f"<@{user_id}> Only the original requester can approve or reject this action."
+                    elif pending_channel_id and pending_channel_id != channel_id:
+                        content = f"<@{user_id}> This ask approval is tied to a different channel."
+                    elif decision == "reject":
+                        content = f"<@{user_id}> Action rejected. No changes were made."
+                    else:
+                        proposed_command = str(pending.get("proposed_command") or "").strip()
+                        if not proposed_command:
+                            content = f"<@{user_id}> Ask approval failed: missing proposed command."
+                        elif proposed_command.lower().startswith("!ask"):
+                            content = f"<@{user_id}> Ask approval failed: recursive ask actions are not allowed."
+                        else:
+                            try:
+                                command_response = execute_discord_command(
+                                    tenant_id=tenant_id,
+                                    payload=DiscordCommandRequest(
+                                        user_id=user_id,
+                                        command=proposed_command,
+                                        channel_id=channel_id,
+                                    ),
+                                    session=session,
+                                    defer_seed_issues=False,
+                                    require_ask_confirmation=False,
+                                )
+                                content = _build_command_followup_message(
+                                    session=session,
+                                    tenant=tenant,
+                                    user_id=user_id,
+                                    command_response=command_response,
+                                )
+                            except HTTPException as exc:
+                                detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                                content = f"<@{user_id}> Approved action failed: {detail}"
+                            except Exception:  # pragma: no cover - defensive path
+                                logger.exception(
+                                    "discord_ask_approval_execute_failed tenant_id=%s user_id=%s",
+                                    tenant_id,
+                                    user_id,
+                                )
+                                content = f"<@{user_id}> Approved action failed due to an internal error."
+    except Exception:  # pragma: no cover - defensive logging path
+        logger.exception(
+            "discord_ask_approval_runtime_failed tenant_id=%s user_id=%s",
+            tenant_id,
+            user_id,
+        )
+    try:
+        _send_discord_interaction_followup(
+            application_id=application_id,
+            interaction_token=interaction_token,
+            content=content,
+            ephemeral=False,
+        )
+    except Exception:  # pragma: no cover - defensive logging path
+        logger.exception(
+            "discord_ask_approval_send_failed tenant_id=%s user_id=%s",
             tenant_id,
             user_id,
         )
@@ -1279,6 +1419,64 @@ async def ingest_discord_interaction(
         except HTTPException:
             choices = []
         return _discord_autocomplete_response(choices=choices)
+
+    if interaction_type == 3:  # MESSAGE_COMPONENT
+        channel_id = payload.get("channel_id")
+        if not isinstance(channel_id, str) or not channel_id.strip():
+            return _discord_interaction_response(content="Missing interaction channel_id", ephemeral=True)
+        tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id.strip())
+        if tenant is None:
+            return _discord_interaction_response(
+                content="No enabled tenant is configured for this Discord channel.",
+                ephemeral=True,
+            )
+
+        application_id = str(payload.get("application_id") or "").strip()
+        interaction_token = str(payload.get("token") or "").strip()
+        if not application_id or not interaction_token:
+            return _discord_interaction_response(
+                content="Missing Discord interaction context for deferred response.",
+                ephemeral=True,
+            )
+
+        component_data = payload.get("data")
+        if not isinstance(component_data, dict):
+            return _discord_interaction_response(content="Missing component interaction data", ephemeral=True)
+        custom_id = str(component_data.get("custom_id") or "").strip()
+        parsed_custom_id = _parse_ask_confirmation_custom_id(custom_id)
+        if parsed_custom_id is None:
+            return _discord_interaction_response(content="Unsupported interaction action", ephemeral=True)
+        decision, request_id = parsed_custom_id
+
+        user_id = None
+        member = payload.get("member")
+        if isinstance(member, dict):
+            member_user = member.get("user")
+            if isinstance(member_user, dict):
+                raw_user_id = member_user.get("id")
+                if isinstance(raw_user_id, str) and raw_user_id.strip():
+                    user_id = raw_user_id.strip()
+        if user_id is None:
+            direct_user = payload.get("user")
+            if isinstance(direct_user, dict):
+                raw_user_id = direct_user.get("id")
+                if isinstance(raw_user_id, str) and raw_user_id.strip():
+                    user_id = raw_user_id.strip()
+        if user_id is None:
+            return _discord_interaction_response(content="Missing interaction user_id", ephemeral=True)
+
+        asyncio.create_task(
+            _run_discord_ask_confirmation_followup(
+                tenant_id=tenant.tenant_id,
+                user_id=user_id,
+                channel_id=channel_id.strip(),
+                decision=decision,
+                request_id=request_id,
+                application_id=application_id,
+                interaction_token=interaction_token,
+            )
+        )
+        return _discord_interaction_deferred_response(ephemeral=True)
 
     if interaction_type != 2:  # APPLICATION_COMMAND
         return _discord_interaction_response(
