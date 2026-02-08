@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-
-from sqlalchemy.orm import Session
+from typing import TYPE_CHECKING
 
 from orchestrator.core.config import Settings
-from orchestrator.core.secret_manager import resolve_secret_ref
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 class CodexRuntimeError(RuntimeError):
@@ -22,6 +26,7 @@ class CodexRuntime:
     model: str
     timeout_seconds: int
     max_output_tokens: int
+    command: str
     _request: Callable[[str, str], str]
 
     def run_text(self, *, system_prompt: str, user_prompt: str) -> str:
@@ -68,7 +73,7 @@ def _extract_json_payload(content: str) -> object:
 
 def build_codex_runtime(
     *,
-    session: Session,
+    session: Session | None = None,
     settings: Settings,
     request_override: Callable[[str, str], str] | None = None,
 ) -> CodexRuntime:
@@ -77,47 +82,68 @@ def build_codex_runtime(
             model=settings.codex_model,
             timeout_seconds=settings.codex_timeout_seconds,
             max_output_tokens=settings.codex_max_output_tokens,
+            command="override",
             _request=request_override,
         )
 
-    secret_ref = settings.codex_api_key_secret_ref.strip()
-    if not secret_ref:
-        raise CodexRuntimeError("Codex API key secret ref is not configured")
-
-    api_key = (
-        resolve_secret_ref(
-            session,
-            secret_ref=secret_ref,
-            encryption_key=settings.secrets_encryption_key,
-        )
-        or ""
-    ).strip()
-    if not api_key:
-        raise CodexRuntimeError(f"Missing Codex API key for secret ref '{secret_ref}'")
-
-    try:
-        from openai import OpenAI
-    except ModuleNotFoundError as exc:  # pragma: no cover - import safety for packaging
+    codex_command = (settings.codex_cli_command or "").strip()
+    if not codex_command:
+        raise CodexRuntimeError("Codex CLI command is not configured")
+    if shutil.which(codex_command) is None:
         raise CodexRuntimeError(
-            "OpenAI SDK is not installed in this environment (missing dependency 'openai')"
-        ) from exc
-
-    client = OpenAI(api_key=api_key, timeout=float(settings.codex_timeout_seconds))
+            f"Codex CLI command '{codex_command}' was not found in PATH"
+        )
 
     def _request(system_prompt: str, user_prompt: str) -> str:
-        response = client.responses.create(
-            model=settings.codex_model,
-            max_output_tokens=settings.codex_max_output_tokens,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+        combined_prompt = (
+            "You are the Codex orchestration runtime. "
+            "Follow the system instructions exactly and return only the required output.\n\n"
+            f"## System instructions\n{system_prompt}\n\n"
+            f"## User request\n{user_prompt}"
         )
-        return (response.output_text or "").strip()
+        with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", suffix=".txt") as output_file:
+            process = subprocess.run(
+                [
+                    codex_command,
+                    "exec",
+                    "--skip-git-repo-check",
+                    "--color",
+                    "never",
+                    "--model",
+                    settings.codex_model,
+                    "--output-last-message",
+                    output_file.name,
+                    "-",
+                ],
+                input=combined_prompt,
+                text=True,
+                capture_output=True,
+                timeout=float(settings.codex_timeout_seconds),
+                check=False,
+            )
+            if process.returncode != 0:
+                stderr = (process.stderr or "").strip()
+                if "login" in stderr.lower() or "auth" in stderr.lower():
+                    raise CodexRuntimeError(
+                        "Codex CLI is not authenticated. "
+                        "Run `docker compose run --rm worker codex login --device-auth`."
+                    )
+                raise CodexRuntimeError(
+                    f"Codex CLI command failed (exit={process.returncode}): {stderr or 'no stderr'}"
+                )
+            output_file.seek(0)
+            output = output_file.read().strip()
+            if output:
+                return output
+            stdout = (process.stdout or "").strip()
+            if stdout:
+                return stdout
+            raise CodexRuntimeError("Codex CLI returned empty output")
 
     return CodexRuntime(
         model=settings.codex_model,
         timeout_seconds=settings.codex_timeout_seconds,
         max_output_tokens=settings.codex_max_output_tokens,
+        command=codex_command,
         _request=_request,
     )

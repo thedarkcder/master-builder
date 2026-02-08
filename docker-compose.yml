@@ -66,6 +66,8 @@ services:
         condition: service_healthy
       packages:
         condition: service_healthy
+    volumes:
+      - codex-home:/root/.codex
         
   worker:
     build:
@@ -90,6 +92,8 @@ services:
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.1}
     command: ["sh", "-c", "python -m orchestrator migrate && python -m orchestrator worker"]
+    volumes:
+      - codex-home:/root/.codex
 
   admin-ui:
     build:
@@ -133,7 +137,7 @@ services:
       RUNNER_NAME_PREFIX: master-builder-linux
       LABELS: self-hosted,linux,non-macos
       RUNNER_WORKDIR: /tmp/runner/work
-      DISABLE_AUTO_UPDATE: "false"
+      DISABLE_AUTO_UPDATE: "true"
       RUNNER_TOKEN: ${GHA_RUNNER_TOKEN:-}
     volumes:
       - runner-data:/runner
@@ -144,3 +148,4 @@ volumes:
   packages-data:
   tailscale-state:
   runner-data:
+  codex-home:

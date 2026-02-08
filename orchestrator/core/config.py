@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     discord_channel_name_template: str = "tenant-{tenant_id}"
     discord_channel_category_id: str = ""
     discord_bot_token_secret_ref: str = "DISCORD_BOT_TOKEN"
-    codex_api_key_secret_ref: str = "OPENAI_API_KEY"
+    codex_cli_command: str = "codex"
     codex_model: str = "gpt-5-codex"
     codex_timeout_seconds: int = 120
     codex_max_output_tokens: int = 1800
