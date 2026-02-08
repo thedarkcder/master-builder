@@ -20,9 +20,7 @@ concurrency:
 jobs:
   detect:
     name: Detect codex assets version bump
-    runs-on:
-      - self-hosted
-      - Linux
+    runs-on: self-hosted
     outputs:
       should_publish: ${{ steps.detect.outputs.should_publish }}
       assets_version: ${{ steps.detect.outputs.assets_version }}

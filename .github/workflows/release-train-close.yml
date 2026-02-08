@@ -27,9 +27,7 @@ concurrency:
 jobs:
   close-released-issues:
     if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true'
-    runs-on:
-      - self-hosted
-      - Linux
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
         with:
