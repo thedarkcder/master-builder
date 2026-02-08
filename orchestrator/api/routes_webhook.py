@@ -364,12 +364,26 @@ def _find_tenant_for_discord_channel(
     tenants = session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
     matches: list[Tenant] = []
     for tenant in tenants:
-        discord_channel_id = str((tenant.discord_config or {}).get("channel_id") or "").strip()
-        if discord_channel_id and discord_channel_id == channel_id:
+        if channel_id in _tenant_discord_channel_ids(tenant):
             matches.append(tenant)
     if len(matches) != 1:
         return None
     return matches[0]
+
+
+def _tenant_discord_channel_ids(tenant: Tenant) -> set[str]:
+    discord_config = tenant.discord_config or {}
+    channel_ids: set[str] = set()
+    configured_channel_id = str(discord_config.get("channel_id") or "").strip()
+    if configured_channel_id:
+        channel_ids.add(configured_channel_id)
+    raw_thread_ids = discord_config.get("ask_thread_channel_ids")
+    if isinstance(raw_thread_ids, list):
+        for value in raw_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
+    return channel_ids
 
 
 def _flatten_discord_option_values(options: object) -> list[str]:
@@ -1072,6 +1086,19 @@ def _send_discord_ask_response_with_thread(
         message_id=posted_message_id,
         name=thread_name[:100],
     )
+    discord_config = dict(tenant.discord_config or {})
+    raw_thread_ids = discord_config.get("ask_thread_channel_ids")
+    thread_ids = (
+        [str(value).strip() for value in raw_thread_ids if str(value).strip()]
+        if isinstance(raw_thread_ids, list)
+        else []
+    )
+    if thread_channel_id not in thread_ids:
+        thread_ids.append(thread_channel_id)
+    discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
     client.post_message(
         channel_id=thread_channel_id,
         content=f"<@{user_id}> Continue here with follow-up questions.",

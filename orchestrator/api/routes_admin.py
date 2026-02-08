@@ -63,6 +63,12 @@ from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 JIRA_WEBHOOK_EVENTS = ["jira:issue_created", "jira:issue_updated"]
+DISCORD_INTERNAL_CONFIG_KEYS = {
+    "allowlist_requests",
+    "pending_ask_actions",
+    "ask_history",
+    "ask_thread_channel_ids",
+}
 
 
 @router.post("/auth/login", response_model=AdminLoginResponse)
@@ -137,6 +143,19 @@ def _with_managed_github_refs(raw_github_config: dict) -> dict:
     github_config["app_id_ref"] = settings.github_app_id_ref
     github_config["private_key_ref"] = settings.github_private_key_ref
     return github_config
+
+
+def _with_preserved_discord_system_fields(*, existing: dict, proposed: dict | None) -> dict | None:
+    if proposed is None:
+        return None
+    merged = dict(proposed)
+    for key in DISCORD_INTERNAL_CONFIG_KEYS:
+        if key in merged:
+            continue
+        value = existing.get(key)
+        if value is not None:
+            merged[key] = value
+    return merged
 
 
 def _validate_codex_assets_for_tenant_init() -> None:
@@ -1097,7 +1116,10 @@ def create_tenant(
         github_config=_with_managed_github_refs(payload.github.model_dump()),
         repos_config=payload.repos.model_dump(),
         policy_config=payload.policy.model_dump(),
-        discord_config=payload.discord.model_dump() if payload.discord else None,
+        discord_config=_with_preserved_discord_system_fields(
+            existing={},
+            proposed=payload.discord.model_dump() if payload.discord else None,
+        ),
         created_at=now,
         updated_at=now,
     )
@@ -1141,7 +1163,10 @@ def update_tenant(
     tenant.github_config = _with_managed_github_refs(payload.github.model_dump())
     tenant.repos_config = payload.repos.model_dump()
     tenant.policy_config = payload.policy.model_dump()
-    tenant.discord_config = payload.discord.model_dump() if payload.discord else None
+    tenant.discord_config = _with_preserved_discord_system_fields(
+        existing=dict(tenant.discord_config or {}),
+        proposed=payload.discord.model_dump() if payload.discord else None,
+    )
     tenant.updated_at = datetime.now(timezone.utc)
 
     session.commit()
