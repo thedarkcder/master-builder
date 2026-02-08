@@ -485,6 +485,31 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["data"]["flags"], 64)
         create_task_mock.assert_called_once()
 
+    def test_discord_reply_button_component_returns_modal(self) -> None:
+        payload = {
+            "type": 3,
+            "application_id": "discord-app-1",
+            "token": "interaction-token-1",
+            "channel_id": "discord-channel-1",
+            "data": {"custom_id": "ask.reply.open"},
+            "message": {"id": "123456789012345678"},
+            "member": {"user": {"id": "discord-user-1"}},
+        }
+        fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
+
+        with (
+            patch("orchestrator.api.routes_webhook._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes_webhook._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes_webhook._find_tenant_for_discord_channel", return_value=fake_tenant),
+        ):
+            response = self.client.post("/discord/interactions", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["type"], 9)
+        self.assertEqual(body["data"]["custom_id"], "ask.reply.123456789012345678")
+        self.assertEqual(body["data"]["components"][0]["components"][0]["custom_id"], "question")
+
     def test_discord_reply_message_command_returns_modal(self) -> None:
         payload = {
             "type": 2,
@@ -620,4 +645,34 @@ class JiraWebhookTests(unittest.TestCase):
             )
 
         thread_send_mock.assert_called_once()
+        interaction_send_mock.assert_not_called()
+
+    def test_discord_ask_followup_creates_new_thread_for_initial_response(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.routes_webhook.execute_discord_command",
+                return_value=DiscordCommandResponse(
+                    ok=True,
+                    command="ask",
+                    message="Done.",
+                    data={"issue_key": "TP-324"},
+                ),
+            ),
+            patch("orchestrator.api.routes_webhook._send_discord_ask_response_with_thread") as ask_thread_send_mock,
+            patch("orchestrator.api.routes_webhook._send_discord_thread_followup") as thread_send_mock,
+            patch("orchestrator.api.routes_webhook._send_discord_interaction_followup") as interaction_send_mock,
+        ):
+            asyncio.run(
+                _run_discord_command_followup(
+                    tenant_id="tenant-webhook",
+                    user_id="discord-user-1",
+                    channel_id="discord-channel-1",
+                    command_text="!ask Can you fix it?",
+                    application_id="discord-app-1",
+                    interaction_token="interaction-token-1",
+                )
+            )
+
+        ask_thread_send_mock.assert_called_once()
+        thread_send_mock.assert_not_called()
         interaction_send_mock.assert_not_called()
