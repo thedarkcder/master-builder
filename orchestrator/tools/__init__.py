@@ -35,6 +35,7 @@ from orchestrator.tools.jira_oauth import (
     JiraOAuthTokenSet,
     JiraProject,
 )
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError, DiscordTextChannel
 
 __all__ = [
     "WorkflowBootstrapResult",
@@ -64,4 +65,7 @@ __all__ = [
     "JiraOAuthResource",
     "JiraOAuthTokenSet",
     "JiraProject",
+    "DiscordApiClient",
+    "DiscordApiError",
+    "DiscordTextChannel",
 ]

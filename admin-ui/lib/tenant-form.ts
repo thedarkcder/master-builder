@@ -75,8 +75,6 @@ export function defaultTenantFormValues(): TenantFormValues {
     },
     discordEnabled: false,
     discord: {
-      channel_id: null,
-      channel_name_template: "proj-{tenant_id}",
       notify_events: []
     }
   };
@@ -94,8 +92,6 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
     discordEnabled: Boolean(record.discord),
     discord:
       record.discord ?? {
-        channel_id: null,
-        channel_name_template: "proj-{tenant_id}",
         notify_events: []
       }
   };
@@ -157,8 +153,6 @@ export function toCreatePayload(
     },
     discord: values.discordEnabled
       ? {
-          channel_id: values.discord.channel_id?.trim() || null,
-          channel_name_template: values.discord.channel_name_template.trim() || "proj-{tenant_id}",
           notify_events: values.discord.notify_events
             .map((value) => value.trim())
             .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index)

@@ -32,9 +32,10 @@ export type PolicyConfig = {
 };
 
 export type DiscordConfig = {
-  channel_id: string | null;
-  channel_name_template: string;
+  channel_id?: string | null;
   notify_events: string[];
+  allowed_user_ids?: string[];
+  command_secret_ref?: string | null;
 };
 
 export type TenantCreatePayload = {

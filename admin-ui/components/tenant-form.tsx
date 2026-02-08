@@ -417,7 +417,9 @@ export function TenantForm({
       <Card>
         <CardHeader>
           <CardTitle>Discord (optional)</CardTitle>
-          <CardDescription>Notification channel defaults for this tenant.</CardDescription>
+          <CardDescription>
+            Notification events for this tenant. Channel binding is managed automatically by the backend.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <Toggle
@@ -428,32 +430,6 @@ export function TenantForm({
 
           {values.discordEnabled ? (
             <>
-              <div className="space-y-2">
-                <FieldLabel>Channel ID (optional)</FieldLabel>
-                <Input
-                  value={values.discord.channel_id ?? ""}
-                  onChange={(event) =>
-                    setValues((prev) => ({
-                      ...prev,
-                      discord: { ...prev.discord, channel_id: event.target.value || null }
-                    }))
-                  }
-                  placeholder="123456789012345"
-                />
-              </div>
-              <div className="space-y-2">
-                <FieldLabel>Channel name template</FieldLabel>
-                <Input
-                  value={values.discord.channel_name_template}
-                  onChange={(event) =>
-                    setValues((prev) => ({
-                      ...prev,
-                      discord: { ...prev.discord, channel_name_template: event.target.value }
-                    }))
-                  }
-                  placeholder="proj-{tenant_id}"
-                />
-              </div>
               <div className="space-y-2">
                 <FieldLabel>Notify events</FieldLabel>
                 <div className="space-y-2 rounded-md border p-3">

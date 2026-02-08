@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     jira_oauth_state_secret: str = "local-dev-change-me"
     secrets_encryption_key: str = ""
     required_codex_assets_version: str = ""
+    discord_guild_id: str = ""
+    discord_channel_name_template: str = "tenant-{tenant_id}"
+    discord_channel_category_id: str = ""
+    discord_bot_token_secret_ref: str = "DISCORD_BOT_TOKEN"
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",
