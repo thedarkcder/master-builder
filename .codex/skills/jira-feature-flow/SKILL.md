@@ -20,13 +20,13 @@ If dependencies or blockers are found:
 
 ### Dependency signals to check
 - Jira issue links (blocks / is blocked by / relates to)
-- Mentions in the description or acceptance criteria (e.g. "after ABC-122")
+- Mentions in the description or acceptance criteria (e.g. "after <OTHER_ISSUE_KEY>")
 - Comments indicating sequencing or pending decisions
 - Required contracts, schemas, or APIs not yet implemented
 
 
 ## Inputs (must obtain or ask for)
-- ISSUE_KEY (e.g. ABC-123)
+- ISSUE_KEY (for example `<PROJECT_KEY>-<NUMBER>`)
 - Desired outcome: Done | Blocked | Testing
 - If "Done": PR/branch info (or commit) and any release notes
 

@@ -11,6 +11,11 @@ This repo is worked on by automated agents and humans. Agents must follow this g
   - `.codex/POLICY.md`
   - `.codex/ENGINEERING_STANDARDS.md`
   - `.codex/policy_pack.*.json` (the most relevant one for this repo)
+- Resolve runtime context from tenant/system state before making Jira/GitHub decisions:
+  - `tenant_id`
+  - `jira.project_keys`
+  - `github_repository`
+  - current execution mode (`pm` | `dev` | `test`)
 - Validate the Jira ticket is “Good To Do”.
   - If not, trigger Decision Gate and stop.
 
@@ -22,6 +27,11 @@ This repo is worked on by automated agents and humans. Agents must follow this g
 - Dependencies/risks explicitly called out
 
 If GTD is incomplete, stop early, request clarification, and mark blocked.
+
+### Runtime context hard rule
+- Never hardcode Jira project keys, issue prefixes, or repository URLs in execution logic.
+- Project/repo selection must come from runtime tenant context.
+- If runtime context is missing, stop and request/derive it explicitly.
 
 ## 3) Running locally (fill in for this repo)
 > Update these commands to match this repo. If unsure, search existing package files and CI config.
@@ -55,6 +65,17 @@ If GTD is incomplete, stop early, request clarification, and mark blocked.
 - Keep diffs minimal; avoid unrelated refactors.
 - Prefer explicit state machines/events over time-based waits.
 - No placeholders unless explicitly approved and tracked.
+
+## 6.1) Mode handling (`pm` / `dev` / `test`)
+- `pm` mode:
+  - Clarify scope, objective, acceptance criteria, risks, and dependencies.
+  - Trigger Decision Gate when ambiguity or NFR trade-offs exist.
+- `dev` mode:
+  - Implement only accepted scope.
+  - Keep changes small and aligned to acceptance criteria.
+- `test` mode:
+  - Run targeted + relevant full suite.
+  - Report exact commands and outcomes before claiming completion.
 
 ## 7) If blocked
 - If requirements are unclear or design trade-offs matter:
