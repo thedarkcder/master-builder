@@ -177,3 +177,32 @@ def answer_board_question_with_codex(
     if not message:
         raise CodexRuntimeError("Codex did not return an ask/board message")
     return message
+
+
+def plan_seed_issues_with_codex(
+    *,
+    runtime: CodexRuntime,
+    prompt_markdown: str,
+    allowed_project_keys: list[str],
+) -> dict:
+    payload = runtime.run_json(
+        system_prompt=(
+            "You split product specs into Jira issue drafts. "
+            "Return strict JSON only with keys: project_key (string), issues (array). "
+            "Each issue item must include: summary (string), objective (string), "
+            "acceptance_criteria (array of strings), labels (array of strings)."
+        ),
+        user_prompt=(
+            f"Allowed Jira project keys: {json.dumps(allowed_project_keys)}\n"
+            f"Markdown spec:\n{prompt_markdown}\n\n"
+            "Rules:\n"
+            "- Create 1-12 concrete implementation issues.\n"
+            "- Keep each summary under 90 characters.\n"
+            "- Choose project_key from allowed keys only.\n"
+            "- Add useful labels (lowercase, kebab-case).\n"
+            "- acceptance_criteria entries should be testable outcomes.\n"
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return an issue-seeding JSON object")
+    return payload
