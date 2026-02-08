@@ -4,14 +4,17 @@ import hmac
 import hashlib
 import unittest
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
+from orchestrator.core.discord_notifications import DiscordSendResult
 from orchestrator.storage.db import reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
+from orchestrator.tools.github_app import PullRequestDetails, PullRequestFileChange, WorkflowCheckSuite
 
 
 class JiraWebhookTests(unittest.TestCase):
@@ -52,6 +55,7 @@ class JiraWebhookTests(unittest.TestCase):
         github_installation_id: str = "12345",
         is_enabled: bool = True,
         max_concurrent_runs: int = 2,
+        discord_config: dict | None = None,
     ) -> None:
         payload = {
             "name": tenant_id,
@@ -85,7 +89,7 @@ class JiraWebhookTests(unittest.TestCase):
                 "allowed_commands": [],
                 "require_agents_md": False,
             },
-            "discord": None,
+            "discord": discord_config,
         }
         response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
         self.assertEqual(response.status_code, 201)
@@ -287,9 +291,9 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertTrue(response.json()["accepted"])
+        self.assertFalse(response.json()["accepted"])
         self.assertEqual(response.json()["tenant_id"], "tenant-webhook")
-        self.assertEqual(response.json()["reason"], "accepted_no_handler")
+        self.assertEqual(response.json()["reason"], "missing_pr_context")
 
     def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(self) -> None:
         os.environ["GITHUB_WEBHOOK_SECRET"] = self.github_webhook_secret_value
@@ -333,8 +337,8 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertTrue(response.json()["accepted"])
-        self.assertEqual(response.json()["reason"], "accepted_no_handler")
+        self.assertFalse(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "missing_pr_context")
 
     def test_github_webhook_enforces_payload_size_limit(self) -> None:
         os.environ["ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES"] = "20"
@@ -396,4 +400,92 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 202)
+        self.assertFalse(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "missing_pr_context")
+
+    def test_discord_webhook_executes_help_command(self) -> None:
+        self._create_tenant(
+            "tenant-discord",
+            discord_config={
+                "channel_id": "discord-channel-1",
+                "notify_events": [],
+                "allowed_user_ids": [],
+                "command_secret_ref": None,
+            },
+        )
+        response = self.client.post(
+            "/discord/webhook/tenant-discord",
+            json={"user_id": "u-1", "channel_id": "discord-channel-1", "command": "!help"},
+        )
+        self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["accepted"])
+        self.assertEqual(response.json()["result"]["command"], "help")
+
+    def test_discord_webhook_requires_valid_command_token(self) -> None:
+        self._create_tenant(
+            "tenant-discord-auth",
+            discord_config={
+                "channel_id": "discord-channel-1",
+                "notify_events": [],
+                "allowed_user_ids": [],
+                "command_secret_ref": self.webhook_secret_env,
+            },
+        )
+        unauthenticated = self.client.post(
+            "/discord/webhook/tenant-discord-auth",
+            json={"user_id": "u-1", "channel_id": "discord-channel-1", "command": "!help"},
+        )
+        authenticated = self.client.post(
+            "/discord/webhook/tenant-discord-auth",
+            json={"user_id": "u-1", "channel_id": "discord-channel-1", "command": "!help"},
+            headers={"X-Webhook-Token": self.webhook_secret_value},
+        )
+        self.assertEqual(unauthenticated.status_code, 401)
+        self.assertEqual(authenticated.status_code, 200)
+
+    def test_github_webhook_processes_review_and_posts_signal(self) -> None:
+        class _FakeGitHubClient:
+            def get_pull_request_details(self, *, repo_full_name: str, pr_number: int):  # noqa: ANN001
+                return PullRequestDetails(
+                    number=pr_number,
+                    html_url=f"https://github.com/{repo_full_name}/pull/{pr_number}",
+                    head_sha="abc123",
+                )
+
+            def list_check_suites(self, *, repo_full_name: str, ref: str):  # noqa: ANN001
+                return [
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ]
+
+            def list_pull_request_files(self, *, repo_full_name: str, pr_number: int):  # noqa: ANN001
+                return [PullRequestFileChange(filename="orchestrator/api/routes_webhook.py", patch="+ok")]
+
+        with (
+            patch(
+                "orchestrator.api.routes_webhook.github_client_from_tenant_config",
+                return_value=_FakeGitHubClient(),
+            ),
+            patch(
+                "orchestrator.api.routes_webhook.send_tenant_discord_message",
+                return_value=DiscordSendResult(sent=True, reason="sent", channel_id="discord-channel-1"),
+            ),
+        ):
+            response = self.client.post(
+                "/github/webhook",
+                json={
+                    "action": "opened",
+                    "installation": {"id": 12345},
+                    "repository": {"full_name": "example/repo"},
+                    "pull_request": {"number": 44, "body": "Summary present"},
+                },
+                headers={
+                    "X-GitHub-Event": "pull_request",
+                    "X-GitHub-Delivery": "gh-delivery-99",
+                },
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "review_processed")
+        self.assertEqual(response.json()["signals"][0]["state"], "ready")
