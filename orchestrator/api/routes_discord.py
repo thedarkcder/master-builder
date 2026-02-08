@@ -25,7 +25,7 @@ from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError
 router = APIRouter(tags=["discord"])
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote"}
-PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link"}
+PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 
@@ -140,6 +140,46 @@ def _fetch_jira_issue_preview(
     return issues[0]
 
 
+def _search_jira_issues_for_tenant(
+    *,
+    session: Session,
+    tenant: Tenant,
+    jql: str,
+    max_results: int = 20,
+) -> list[JiraIssuePreview]:
+    settings = get_settings()
+    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Jira OAuth connection is not linked for this tenant",
+        )
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configured Jira connection was not found",
+        )
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        return client.search_issues_by_jql(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            jql=jql,
+            max_results=max_results,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to query Jira board: {exc}",
+        ) from exc
+
+
 def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
     executable_statuses = ["To Do"]
     configured_ready_statuses = tenant.jira_config.get("ready_statuses")
@@ -161,7 +201,7 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
 def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
-        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>"
+        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>"
     )
 
 
@@ -170,6 +210,77 @@ def _command_policy_message() -> str:
         "Policy: no secrets in output, no sleep-based synchronization, tests required for behavior "
         "changes, and Decision Gate required when requirements are ambiguous."
     )
+
+
+def _project_filter_jql(tenant: Tenant) -> str:
+    keys = [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
+    if not keys:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
+    if len(keys) == 1:
+        return f'project = "{keys[0]}"'
+    joined = ", ".join(f'"{key}"' for key in keys)
+    return f"project in ({joined})"
+
+
+def _ask_board_message(*, session: Session, tenant: Tenant, question: str) -> tuple[str, dict]:
+    project_jql = _project_filter_jql(tenant)
+    lowered = question.strip().lower()
+    status_queries = {
+        "blocked": "Blocked",
+        "in progress": "In Progress",
+        "to do": "To Do",
+        "testing": "Testing",
+        "done": "Done",
+        "ready to release": "READY TO RELEASE",
+    }
+    requested_status = None
+    for needle, status_name in status_queries.items():
+        if needle in lowered:
+            requested_status = status_name
+            break
+
+    if requested_status:
+        issues = _search_jira_issues_for_tenant(
+            session=session,
+            tenant=tenant,
+            jql=f'{project_jql} AND status = "{requested_status}" ORDER BY updated DESC',
+            max_results=15,
+        )
+        if not issues:
+            return (
+                f"No issues found in status '{requested_status}' for configured projects.",
+                {"status": requested_status, "issues": []},
+            )
+        preview = ", ".join(issue.key for issue in issues[:8])
+        return (
+            f"{len(issues)} issue(s) in '{requested_status}': {preview}",
+            {
+                "status": requested_status,
+                "issues": [{"key": issue.key, "summary": issue.summary} for issue in issues],
+            },
+        )
+
+    issues = _search_jira_issues_for_tenant(
+        session=session,
+        tenant=tenant,
+        jql=f"{project_jql} ORDER BY updated DESC",
+        max_results=50,
+    )
+    if not issues:
+        return ("No issues found for configured projects.", {"issues": [], "status_counts": {}})
+
+    status_counts: dict[str, int] = {}
+    for issue in issues:
+        status_counts[issue.status] = status_counts.get(issue.status, 0) + 1
+    counts_text = ", ".join(f"{status_name}: {count}" for status_name, count in sorted(status_counts.items()))
+    recent = ", ".join(issue.key for issue in issues[:8])
+    message = f"Board snapshot (sample): {counts_text}. Recent issues: {recent}"
+    data = {
+        "status_counts": status_counts,
+        "issues": [{"key": issue.key, "summary": issue.summary, "status": issue.status} for issue in issues],
+        "question": question,
+    }
+    return message, data
 
 
 @router.post("/discord/command/{tenant_id}", response_model=DiscordCommandResponse)
@@ -297,6 +408,21 @@ def execute_discord_command(
                 "jira_url": jira_link,
                 "pr_url": latest_pr.pr_url if latest_pr else None,
             },
+        )
+
+    if command_name == "ask":
+        if not arguments:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !ask <question about board>",
+            )
+        question = " ".join(arguments).strip()
+        message, data = _ask_board_message(session=session, tenant=tenant, question=question)
+        return DiscordCommandResponse(
+            ok=True,
+            command=command_name,
+            message=message,
+            data=data,
         )
 
     if command_name == "run":

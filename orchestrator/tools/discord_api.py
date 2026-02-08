@@ -125,3 +125,34 @@ class DiscordApiClient:
             if channel.name == name and same_parent:
                 return channel
         return self.create_text_channel(guild_id=guild_id, name=name, parent_id=parent_id)
+
+    def get_application_id(self) -> str:
+        payload = self._request_json(method="GET", path="/oauth2/applications/@me")
+        if not isinstance(payload, dict):
+            raise DiscordApiError("Discord application metadata response was not an object")
+        app_id = payload.get("id")
+        if not isinstance(app_id, str) or not app_id.strip():
+            raise DiscordApiError("Discord application metadata response missing id")
+        return app_id.strip()
+
+    def overwrite_guild_commands(
+        self,
+        *,
+        application_id: str,
+        guild_id: str,
+        commands: list[dict],
+    ) -> list[dict]:
+        normalized_app_id = application_id.strip()
+        normalized_guild_id = guild_id.strip()
+        if not normalized_app_id:
+            raise ValueError("Discord application ID cannot be empty")
+        if not normalized_guild_id:
+            raise ValueError("Discord guild ID cannot be empty")
+        payload = self._request_json(
+            method="PUT",
+            path=f"/applications/{normalized_app_id}/guilds/{normalized_guild_id}/commands",
+            payload=commands,
+        )
+        if not isinstance(payload, list):
+            raise DiscordApiError("Discord overwrite commands response was not a list")
+        return [item for item in payload if isinstance(item, dict)]

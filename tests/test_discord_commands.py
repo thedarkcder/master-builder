@@ -170,3 +170,29 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-30")
+
+    def test_ask_command_requires_question(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!ask"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !ask", response.json()["detail"])
+
+    def test_ask_command_returns_board_answer(self) -> None:
+        with patch(
+            "orchestrator.api.routes_discord._ask_board_message",
+            return_value=("Board snapshot", {"status_counts": {"To Do": 2}}),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-1",
+                    "command": "!ask what is on the board",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["message"], "Board snapshot")
+        self.assertEqual(response.json()["data"]["status_counts"]["To Do"], 2)
