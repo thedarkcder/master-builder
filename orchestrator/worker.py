@@ -9,6 +9,8 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.codex_agents import CodexWorkflowAgents
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import evaluate_decision_gate
 from orchestrator.core.discord_notifications import send_tenant_discord_message
@@ -20,6 +22,7 @@ from orchestrator.core.signal_templates import (
     format_stage_jira_update,
 )
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
@@ -341,9 +344,24 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     return run
 
 
+def _build_workflow_runner_for_session(*, session: Session) -> WorkflowRunner:
+    settings = get_settings()
+    runtime = build_codex_runtime(session=session, settings=settings)
+    agents = CodexWorkflowAgents(runtime=runtime)
+    return WorkflowRunner(agents)
+
+
+async def _wait_for_stop_or_timeout(*, stop_event: asyncio.Event, timeout_seconds: int) -> None:
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=float(timeout_seconds))
+    except TimeoutError:
+        return
+
+
 async def run_worker() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    session_factory = create_session_factory()
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -352,7 +370,27 @@ async def run_worker() -> None:
         loop.add_signal_handler(sig, stop_event.set)
 
     logger.info("worker_started")
-    await stop_event.wait()
+    poll_interval_seconds = max(1, settings.worker_poll_interval_seconds)
+    while not stop_event.is_set():
+        with session_factory() as session:
+            try:
+                runner = _build_workflow_runner_for_session(session=session)
+            except CodexRuntimeError as exc:
+                logger.warning("worker_runtime_unavailable error=%s", exc)
+                await _wait_for_stop_or_timeout(
+                    stop_event=stop_event,
+                    timeout_seconds=poll_interval_seconds,
+                )
+                continue
+
+            processed = process_next_queued_run(session, runner)
+
+        if processed is None:
+            await _wait_for_stop_or_timeout(
+                stop_event=stop_event,
+                timeout_seconds=poll_interval_seconds,
+            )
+
     logger.info("worker_stopped")
 
 
