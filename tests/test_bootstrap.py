@@ -115,10 +115,7 @@ class CodexBootstrapTests(unittest.TestCase):
                             "installation_id": "12345",
                         },
                         repos_config={
-                            "allowlist": ["https://github.com/example/repo"],
-                            "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
-                            "mapping_rules_by_component": {},
-                            "fallback_repo": None,
+                            "github_repository": "https://github.com/example/repo",
                         },
                         policy_config={
                             "allow_jira_transitions": False,

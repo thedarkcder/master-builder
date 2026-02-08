@@ -17,6 +17,7 @@ class JiraConfig(BaseModel):
     blocked_label: str = Field(default="agent:blocked", min_length=1)
     done_label: str | None = None
     webhook_secret_ref: str | None = None
+    webhook_provisioning: dict | None = None
 
 
 class GithubConfig(BaseModel):
@@ -26,10 +27,7 @@ class GithubConfig(BaseModel):
 
 
 class ReposConfig(BaseModel):
-    allowlist: list[str] = Field(default_factory=list)
-    mapping_rules_by_project_key: dict[str, str] = Field(default_factory=dict)
-    mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
-    fallback_repo: str | None = None
+    github_repository: str | None = None
 
 
 class PolicyConfig(BaseModel):
@@ -55,8 +53,9 @@ class PolicyConfig(BaseModel):
 
 class DiscordConfig(BaseModel):
     channel_id: str | None = None
-    channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
+    allowed_user_ids: list[str] = Field(default_factory=list)
+    command_secret_ref: str | None = None
 
 
 class TenantCreate(BaseModel):
@@ -67,6 +66,21 @@ class TenantCreate(BaseModel):
     repos: ReposConfig
     policy: PolicyConfig
     discord: DiscordConfig | None = None
+
+
+class AdminLoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class AdminLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class AdminSessionRead(BaseModel):
+    username: str
 
 
 class TenantUpdate(BaseModel):
@@ -95,6 +109,28 @@ class TenantRead(BaseModel):
 class IntegrationTestResult(BaseModel):
     ok: bool
     details: str
+
+
+class JiraWebhookProvisionResult(BaseModel):
+    ok: bool
+    details: str
+    webhook_id: str | None = None
+    webhook_url: str
+    jql: str
+
+
+class DiscordAllowlistRequestRead(BaseModel):
+    user_id: str
+    requested_at: datetime
+    channel_id: str | None = None
+    reason: str | None = None
+
+
+class DiscordAllowlistApprovalResult(BaseModel):
+    ok: bool
+    details: str
+    user_id: str
+    notified: bool
 
 
 class GitHubInstallStart(BaseModel):
@@ -174,3 +210,16 @@ class RunRead(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class DiscordCommandRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    command: str = Field(min_length=2)
+    channel_id: str | None = None
+
+
+class DiscordCommandResponse(BaseModel):
+    ok: bool
+    command: str
+    message: str
+    data: dict | None = None
