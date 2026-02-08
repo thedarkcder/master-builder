@@ -102,8 +102,7 @@ class AdminApiTests(unittest.TestCase):
                 "require_agents_md": False,
             },
             "discord": {
-                "channel_id": None,
-                "channel_name_template": "proj-{tenant_id}",
+                "channel_id": "discord-channel-1",
                 "notify_events": ["run_started"],
             },
         }

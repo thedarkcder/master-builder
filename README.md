@@ -286,19 +286,23 @@ Configure one Discord app (bot) and install it into your server. The same app ca
 
 4. Capture IDs (Developer Mode must be enabled in Discord client)
    - Server ID (`guild_id`): right-click server -> `Copy Server ID`
-   - Channel ID (`channel_id`): right-click channel -> `Copy Channel ID`
    - User ID for command allowlist: right-click user -> `Copy User ID`
 
-5. Configure tenant in admin UI
-   - Enable Discord settings for tenant
-   - Set `channel_id` (current command endpoint checks channel scope against this value)
-   - Set `allowed_user_ids` for sensitive commands (`!run`, `!cancel`, `!retry`)
-   - Set `notify_events` checkboxes
+5. Configure backend globals
+   - Set `ORCHESTRATOR_DISCORD_GUILD_ID` to your server ID.
+   - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_NAME_TEMPLATE` (default `tenant-{tenant_id}`).
+   - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID` to place channels under a category.
+   - Store bot token in Secrets Manager under `DISCORD_BOT_TOKEN` (or change `ORCHESTRATOR_DISCORD_BOT_TOKEN_SECRET_REF`).
+
+6. Configure tenant in admin UI
+   - Enable Discord settings for tenant.
+   - Set `notify_events` checkboxes.
+   - Save tenant: backend auto-creates/reuses tenant channel and stores `channel_id`.
 
 Notes:
 - Server ID and channel ID are different values.
 - Current backend command endpoint is `POST /discord/command/{tenant_id}`.
-- Automatic channel create/reuse requires bot runtime wiring and `Manage Channels` permission.
+- Automatic channel create/reuse requires `Manage Channels` permission.
 6. Inspect repo bootstrap state:
    - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
 

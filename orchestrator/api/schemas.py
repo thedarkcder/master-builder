@@ -52,7 +52,6 @@ class PolicyConfig(BaseModel):
 
 class DiscordConfig(BaseModel):
     channel_id: str | None = None
-    channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
     allowed_user_ids: list[str] = Field(default_factory=list)
     command_secret_ref: str | None = None

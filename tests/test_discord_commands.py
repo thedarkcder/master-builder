@@ -65,7 +65,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                 },
                 "discord": {
                     "channel_id": "discord-channel-1",
-                    "channel_name_template": "proj-{tenant_id}",
                     "notify_events": ["run_started"],
                     "allowed_user_ids": ["u-admin"],
                     "command_secret_ref": None,

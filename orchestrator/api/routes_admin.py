@@ -53,6 +53,7 @@ from orchestrator.core.security import require_admin, validate_admin_credentials
 from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -155,6 +156,88 @@ def _build_repos_config(payload_repos: dict) -> dict:
             detail="github_repository is required",
         )
     return repos_config
+
+
+def _render_discord_channel_name(*, template: str, tenant_id: str) -> str:
+    try:
+        rendered = template.format(tenant_id=tenant_id)
+    except KeyError as exc:
+        raise ValueError("Discord channel template may only reference {tenant_id}") from exc
+
+    normalized = re.sub(r"[^a-z0-9-_]+", "-", rendered.strip().lower())
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
+    if not normalized:
+        raise ValueError("Discord channel template produced an empty channel name")
+    return normalized[:100]
+
+
+def _resolve_discord_config(
+    *,
+    session: Session,
+    tenant_id: str,
+    payload_discord: dict | None,
+    existing_discord: dict | None = None,
+) -> dict | None:
+    if payload_discord is None:
+        return None
+
+    settings = get_settings()
+    discord_config = dict(payload_discord)
+    configured_channel_id = str(discord_config.get("channel_id") or "").strip()
+    if not configured_channel_id and isinstance(existing_discord, dict):
+        configured_channel_id = str(existing_discord.get("channel_id") or "").strip()
+
+    if configured_channel_id:
+        discord_config["channel_id"] = configured_channel_id
+        return discord_config
+
+    guild_id = settings.discord_guild_id.strip()
+    if not guild_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ORCHESTRATOR_DISCORD_GUILD_ID is required when Discord is enabled",
+        )
+
+    token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not token_ref:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ORCHESTRATOR_DISCORD_BOT_TOKEN_SECRET_REF must be configured",
+        )
+    bot_token = resolve_secret_ref(
+        session,
+        secret_ref=token_ref,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if not bot_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Missing Discord bot token secret '{token_ref}'",
+        )
+
+    try:
+        channel_name = _render_discord_channel_name(
+            template=settings.discord_channel_name_template,
+            tenant_id=tenant_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    category_id = settings.discord_channel_category_id.strip() or None
+    client = DiscordApiClient(bot_token=bot_token)
+    try:
+        channel = client.ensure_text_channel(
+            guild_id=guild_id,
+            name=channel_name,
+            parent_id=category_id,
+        )
+    except DiscordApiError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to provision Discord channel: {exc}",
+        ) from exc
+    discord_config["channel_id"] = channel.channel_id
+    return discord_config
 
 
 def _validate_codex_assets_for_tenant_init() -> None:
@@ -530,6 +613,12 @@ def create_tenant(
     _validate_codex_assets_for_tenant_init()
     tenant_id = _allocate_tenant_id(session, name=payload.name)
     now = datetime.now(timezone.utc)
+    discord_config = _resolve_discord_config(
+        session=session,
+        tenant_id=tenant_id,
+        payload_discord=payload.discord.model_dump() if payload.discord else None,
+    )
+
     tenant = Tenant(
         tenant_id=tenant_id,
         name=payload.name,
@@ -538,7 +627,7 @@ def create_tenant(
         github_config=_with_managed_github_refs(payload.github.model_dump()),
         repos_config=_build_repos_config(payload.repos.model_dump()),
         policy_config=payload.policy.model_dump(),
-        discord_config=payload.discord.model_dump() if payload.discord else None,
+        discord_config=discord_config,
         created_at=now,
         updated_at=now,
     )
@@ -579,7 +668,12 @@ def update_tenant(
     tenant.github_config = _with_managed_github_refs(payload.github.model_dump())
     tenant.repos_config = _build_repos_config(payload.repos.model_dump())
     tenant.policy_config = payload.policy.model_dump()
-    tenant.discord_config = payload.discord.model_dump() if payload.discord else None
+    tenant.discord_config = _resolve_discord_config(
+        session=session,
+        tenant_id=tenant_id,
+        payload_discord=payload.discord.model_dump() if payload.discord else None,
+        existing_discord=tenant.discord_config,
+    )
     tenant.updated_at = datetime.now(timezone.utc)
 
     session.commit()
