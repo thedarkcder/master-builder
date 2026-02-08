@@ -449,6 +449,54 @@ def _discord_option_value(options: object, *, name: str) -> str | None:
     return None
 
 
+def _discord_option_attachment_ids(options: object) -> list[str]:
+    if not isinstance(options, list):
+        return []
+    attachment_ids: list[str] = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_type = option.get("type")
+        if option_type in {1, 2}:  # SUB_COMMAND / SUB_COMMAND_GROUP
+            attachment_ids.extend(_discord_option_attachment_ids(option.get("options")))
+            continue
+        if option_type != 11:  # ATTACHMENT
+            continue
+        value = str(option.get("value") or "").strip()
+        if value:
+            attachment_ids.append(value)
+    return attachment_ids
+
+
+def _discord_resolved_attachments(*, data: dict, attachment_ids: list[str]) -> list[dict[str, str]]:
+    if not attachment_ids:
+        return []
+    resolved = data.get("resolved")
+    if not isinstance(resolved, dict):
+        return []
+    resolved_attachments = resolved.get("attachments")
+    if not isinstance(resolved_attachments, dict):
+        return []
+    normalized: list[dict[str, str]] = []
+    for attachment_id in attachment_ids:
+        item = resolved_attachments.get(attachment_id)
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        normalized.append(
+            {
+                "id": str(item.get("id") or "").strip() or attachment_id,
+                "url": url,
+                "filename": str(item.get("filename") or "").strip(),
+                "content_type": str(item.get("content_type") or "").strip(),
+                "size": str(item.get("size") or "").strip(),
+            }
+        )
+    return normalized[:5]
+
+
 def _discord_issue_autocomplete_choices(
     *,
     session: Session,
@@ -480,7 +528,7 @@ def _discord_issue_autocomplete_choices(
     return choices
 
 
-def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
+def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, dict[str, str] | None, list[dict[str, str]]]:
     data = payload.get("data")
     if not isinstance(data, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction data")
@@ -513,6 +561,8 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
     normalized_command = command_name.strip().lower()
     options = data.get("options")
     command_text = f"!{normalized_command}"
+    command_params: dict[str, str] | None = None
+    attachments: list[dict[str, str]] = []
     if normalized_command == "ask":
         issue_key = _discord_option_value(options, name="issue_key")
         question = _discord_option_value(options, name="question")
@@ -554,12 +604,26 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
             command_text = f"{command_text} {permission}"
         if reason:
             command_text = f"{command_text} {reason}"
+    elif normalized_command == "bug":
+        summary = _discord_option_value(options, name="summary")
+        details = _discord_option_value(options, name="details")
+        issue_key = _discord_option_value(options, name="issue_key")
+        attachment_ids = _discord_option_attachment_ids(options)
+        attachments = _discord_resolved_attachments(data=data, attachment_ids=attachment_ids)
+        command_params = {}
+        if summary:
+            command_params["summary"] = summary
+            command_text = f"{command_text} {summary}"
+        if details:
+            command_params["details"] = details
+        if issue_key:
+            command_params["issue_key"] = issue_key
     else:
         option_values = _flatten_discord_option_values(options)
         if option_values:
             command_text = f"{command_text} {' '.join(option_values)}"
 
-    return user_id, channel_id.strip(), command_text
+    return user_id, channel_id.strip(), command_text, command_params, attachments
 
 
 def _parse_ask_confirmation_custom_id(custom_id: str) -> tuple[str, str] | None:
@@ -885,6 +949,8 @@ def _build_command_followup_message(
     response_message = str(command_response.message or "").strip()
     if command_name == "issues" and created_issue_keys:
         lines[0] = f"{lines[0]} Issue seeding completed."
+    elif command_name == "bug" and created_issue_keys:
+        lines[0] = f"{lines[0]} Bug logged."
     elif command_name == "link":
         lines[0] = f"{lines[0]} Here are the links."
     elif command_name in {"run", "retry"}:
@@ -1114,6 +1180,8 @@ async def _run_discord_command_followup(
     application_id: str,
     interaction_token: str,
     reply_to_message_id: str | None = None,
+    command_params: dict[str, str] | None = None,
+    attachments: list[dict[str, str]] | None = None,
 ) -> None:
     session_factory = create_session_factory()
     settings = get_settings()
@@ -1133,6 +1201,8 @@ async def _run_discord_command_followup(
                             user_id=user_id,
                             command=command_text,
                             channel_id=channel_id,
+                            command_params=command_params,
+                            attachments=attachments or [],
                         ),
                         session=session,
                         defer_seed_issues=False,
@@ -1837,7 +1907,7 @@ async def ingest_discord_interaction(
         )
 
     try:
-        user_id, channel_id, command_text = _parse_discord_interaction_command(payload)
+        user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload)
     except HTTPException as exc:
         return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
 
@@ -1864,6 +1934,8 @@ async def ingest_discord_interaction(
             command_text=command_text,
             application_id=application_id,
             interaction_token=interaction_token,
+            command_params=command_params,
+            attachments=attachments,
         )
     )
     return _discord_interaction_deferred_response(ephemeral=True)

@@ -362,6 +362,54 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !issues seed", response.json()["detail"])
 
+    def test_bug_command_requires_summary(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!bug"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !bug", response.json()["detail"])
+
+    def test_bug_command_creates_jira_bug_from_params_and_attachments(self) -> None:
+        with patch(
+            "orchestrator.api.routes_discord._create_discord_bug_issue",
+            return_value=(
+                "Bug logged: [TP-501](https://example.atlassian.net/browse/TP-501)",
+                {"created_issue_keys": ["TP-501"]},
+            ),
+        ) as create_bug_mock:
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-1",
+                    "command": "!bug",
+                    "command_params": {
+                        "summary": "Login fails on mobile",
+                        "details": "Tap login, spinner loops forever.",
+                        "issue_key": "TP-77",
+                    },
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "filename": "screenshot.png",
+                            "url": "https://cdn.discordapp.com/attachments/1.png",
+                            "content_type": "image/png",
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["command"], "bug")
+        self.assertIn("TP-501", response.json()["message"])
+        create_bug_mock.assert_called_once()
+        kwargs = create_bug_mock.call_args.kwargs
+        self.assertEqual(kwargs["summary"], "Login fails on mobile")
+        self.assertEqual(kwargs["related_issue_key"], "TP-77")
+        self.assertEqual(kwargs["attachments"][0]["filename"], "screenshot.png")
+
     def test_issues_seed_calls_codex_seed_flow(self) -> None:
         with patch(
             "orchestrator.api.routes_discord._seed_issues_with_codex",

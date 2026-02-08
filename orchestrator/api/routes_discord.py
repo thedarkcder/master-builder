@@ -33,7 +33,7 @@ from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview
 router = APIRouter(tags=["discord"])
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
-PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "request"}
+PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "request", "bug"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
@@ -298,7 +298,7 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
 def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
-        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>, "
+        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>, !bug <summary> [details], "
         "!issues seed <markdown spec>, !request <run_controls|seed_issues|all_sensitive> [reason]"
     )
 
@@ -390,6 +390,148 @@ def _build_seed_issue_description(
     else:
         lines.append("- Not specified")
     return "\n".join(lines)
+
+
+def _normalize_discord_attachments(raw_attachments: object) -> list[dict[str, str]]:
+    if not isinstance(raw_attachments, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    for item in raw_attachments:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        filename = str(item.get("filename") or "").strip() or "attachment"
+        content_type = str(item.get("content_type") or "").strip()
+        normalized.append(
+            {
+                "url": url,
+                "filename": filename,
+                "content_type": content_type,
+            }
+        )
+    return normalized[:5]
+
+
+def _build_discord_bug_description(
+    *,
+    summary: str,
+    details: str,
+    reporter_user_id: str,
+    channel_id: str | None,
+    related_issue_key: str | None,
+    attachments: list[dict[str, str]],
+) -> str:
+    lines = [
+        "Reported via Discord",
+        f"- Reporter: {reporter_user_id}",
+        f"- Channel: {channel_id or 'unknown'}",
+        f"- Reported at: {datetime.now(timezone.utc).isoformat()}",
+    ]
+    if related_issue_key:
+        lines.append(f"- Related issue: {related_issue_key}")
+    lines.extend(["", "Summary", summary.strip(), "", "Context"])
+    lines.append(details.strip() or "No additional context provided.")
+    if attachments:
+        lines.extend(["", "Attachments"])
+        for attachment in attachments:
+            filename = attachment.get("filename") or "attachment"
+            url = attachment.get("url") or ""
+            content_type = attachment.get("content_type") or ""
+            if content_type:
+                lines.append(f"- [{filename}]({url}) ({content_type})")
+            else:
+                lines.append(f"- [{filename}]({url})")
+    return "\n".join(lines)
+
+
+def _create_discord_bug_issue(
+    *,
+    session: Session,
+    tenant: Tenant,
+    summary: str,
+    details: str,
+    reporter_user_id: str,
+    channel_id: str | None,
+    related_issue_key: str | None,
+    attachments: list[dict[str, str]],
+) -> tuple[str, dict]:
+    project_keys = _tenant_project_keys(tenant)
+    if not project_keys:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
+    project_key = project_keys[0]
+    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Jira OAuth connection is not linked for this tenant",
+        )
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configured Jira connection was not found",
+        )
+
+    description = _build_discord_bug_description(
+        summary=summary,
+        details=details,
+        reporter_user_id=reporter_user_id,
+        channel_id=channel_id,
+        related_issue_key=related_issue_key,
+        attachments=attachments,
+    )
+    issue_input = JiraIssueCreateInput(
+        summary=summary.strip()[:90],
+        description=description,
+        labels=["discord-bug", "from-discord"],
+        issue_type="Bug",
+    )
+    settings = get_settings()
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        create_result = client.create_issues_bulk(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            project_key=project_key,
+            issues=[issue_input],
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to create Jira bug: {exc}",
+        ) from exc
+
+    if not create_result.created:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Jira bug create returned no issues: {'; '.join(create_result.errors) or 'unknown error'}",
+        )
+
+    created_issue = create_result.created[0]
+    browse_base_url = str(connection.site_url or "").strip().rstrip("/")
+    issue_url = f"{browse_base_url}/browse/{created_issue.key}" if browse_base_url else None
+    if issue_url:
+        message = f"Bug logged: [{created_issue.key}]({issue_url})"
+    else:
+        message = f"Bug logged: {created_issue.key}"
+    if create_result.errors:
+        message = f"{message} (warnings: {'; '.join(create_result.errors)})"
+    return (
+        message,
+        {
+            "created_issue_keys": [created_issue.key],
+            "created_issue_links": [issue_url] if issue_url else [],
+            "issue_type": "Bug",
+            "project_key": project_key,
+        },
+    )
 
 
 def _collect_ask_context(
@@ -1073,6 +1215,44 @@ def execute_discord_command(
             channel_id=normalized_channel_id,
             question=question,
             scoped_issue_key=scoped_issue_key,
+        )
+        return DiscordCommandResponse(
+            ok=True,
+            command=command_name,
+            message=message,
+            data=data,
+        )
+
+    if command_name == "bug":
+        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
+        summary = str(command_params.get("summary") or "").strip()
+        details = str(command_params.get("details") or "").strip()
+        related_issue_key_raw = str(command_params.get("issue_key") or "").strip().upper()
+        related_issue_key = related_issue_key_raw if ISSUE_KEY_PATTERN.match(related_issue_key_raw) else None
+        if not summary:
+            raw_body = " ".join(arguments).strip()
+            if " -- " in raw_body:
+                summary, details_tail = raw_body.split(" -- ", 1)
+                summary = summary.strip()
+                if not details:
+                    details = details_tail.strip()
+            else:
+                summary = raw_body
+        if not summary:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !bug <summary> [-- details]",
+            )
+        attachments = _normalize_discord_attachments(payload.attachments)
+        message, data = _create_discord_bug_issue(
+            session=session,
+            tenant=tenant,
+            summary=summary,
+            details=details,
+            reporter_user_id=payload.user_id.strip(),
+            channel_id=payload.channel_id,
+            related_issue_key=related_issue_key,
+            attachments=attachments,
         )
         return DiscordCommandResponse(
             ok=True,

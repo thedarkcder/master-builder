@@ -16,6 +16,7 @@ from orchestrator.api.main import create_app
 from orchestrator.api.routes_webhook import (
     _build_command_followup_message,
     _find_tenant_for_discord_channel,
+    _parse_discord_interaction_command,
     _run_discord_command_followup,
 )
 from orchestrator.api.schemas import DiscordCommandResponse
@@ -488,6 +489,41 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["data"]["flags"], 64)
         create_task_mock.assert_called_once()
+
+    def test_parse_discord_bug_interaction_includes_params_and_attachments(self) -> None:
+        payload = {
+            "type": 2,
+            "channel_id": "discord-channel-1",
+            "member": {"user": {"id": "discord-user-1"}},
+            "data": {
+                "name": "bug",
+                "options": [
+                    {"type": 3, "name": "summary", "value": "Login fails"},
+                    {"type": 3, "name": "details", "value": "Spinner never stops"},
+                    {"type": 3, "name": "issue_key", "value": "TP-11"},
+                    {"type": 11, "name": "attachment_1", "value": "att-1"},
+                ],
+                "resolved": {
+                    "attachments": {
+                        "att-1": {
+                            "id": "att-1",
+                            "url": "https://cdn.discordapp.com/attachments/att-1.png",
+                            "filename": "att-1.png",
+                            "content_type": "image/png",
+                        }
+                    }
+                },
+            },
+        }
+
+        user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload)
+        self.assertEqual(user_id, "discord-user-1")
+        self.assertEqual(channel_id, "discord-channel-1")
+        self.assertEqual(command_text, "!bug Login fails")
+        self.assertEqual(command_params["summary"], "Login fails")
+        self.assertEqual(command_params["details"], "Spinner never stops")
+        self.assertEqual(command_params["issue_key"], "TP-11")
+        self.assertEqual(attachments[0]["filename"], "att-1.png")
 
     def test_discord_reply_button_component_returns_modal(self) -> None:
         payload = {
