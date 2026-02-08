@@ -104,6 +104,29 @@ class JiraOAuthClient:
             return {}
         return json.loads(response_body)
 
+    def _post_json_with_access_token(self, url: str, *, access_token: str, payload: dict) -> dict | list:
+        body = json.dumps(payload).encode("utf-8")
+        request = Request(
+            url=url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                response_body = response.read().decode("utf-8")
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8")
+            raise JiraOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
+
+        if not response_body:
+            return {}
+        return json.loads(response_body)
+
     def _parse_tokens(self, payload: dict) -> JiraOAuthTokenSet:
         access_token = payload.get("access_token")
         refresh_token = payload.get("refresh_token")
@@ -211,16 +234,14 @@ class JiraOAuthClient:
         max_results: int = 20,
     ) -> list[JiraIssuePreview]:
         bounded_max_results = max(1, min(max_results, 50))
-        query = urlencode(
-            {
+        payload = self._post_json_with_access_token(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql",
+            access_token=access_token,
+            payload={
                 "jql": jql,
                 "maxResults": bounded_max_results,
-                "fields": "summary,status",
-            }
-        )
-        payload = self._get_json(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search?{query}",
-            access_token=access_token,
+                "fields": ["summary", "status"],
+            },
         )
         issues = payload.get("issues") if isinstance(payload, dict) else None
         if not isinstance(issues, list):
