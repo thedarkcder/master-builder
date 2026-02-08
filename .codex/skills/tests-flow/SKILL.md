@@ -33,18 +33,37 @@ Run the correct test suite for the repo, interpret failures, and fix determinist
 1) Identify the correct test command:
    - Prefer `.codex/policy_pack.*.json` -> `test_commands`
    - Else prefer repo scripts (`package.json`, `pom.xml`, CI config)
-2) Run tests locally.
-3) If failures:
+2) Define impacted surface:
+   - List changed modules/packages/apps from the diff.
+   - Map each changed area to at least one targeted test command.
+3) Run both categories:
+   - Targeted tests for changed behavior.
+   - Relevant full suite for the stack/repo (from policy pack or CI command).
+4) If failures:
    - Capture the minimal relevant output (no secrets).
    - Fix root cause (not by adding sleeps).
    - Re-run tests until green.
-4) Ensure new/changed behavior has tests.
+5) Ensure new/changed behavior has tests.
+
+### Hard execution gate (non-optional)
+- Do not commit if any required targeted test command failed, was skipped, or was not run.
+- Do not open/update PR if the relevant full suite failed, was skipped, or was not run.
+- Do not report "tests passed" unless both targeted and relevant full suite are green.
+- If tests cannot run (env/tooling blocker), stop, mark blocked, and report exact blocker.
 
 ### Rules
 - No time-based synchronization to fix flakiness.
 - Use condition-based waits, mocks, fake timers, or state machines.
 - Keep changes minimal.
 
-### Output
-- Record test command used.
-- Summarize what failed and what changed.
+### Required report output (must be explicit)
+- Commands run:
+  - Targeted: `<exact command(s)>`
+  - Full suite: `<exact command(s)>`
+- Results:
+  - Targeted: pass/fail + key counts (or "no tests found" with reason)
+  - Full suite: pass/fail + key counts
+- Coverage statement:
+  - Which changed behavior each targeted command validates
+- If blocked:
+  - Exact blocker, attempted commands, and what is needed to unblock

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { GitHubRepositoryRecord, TenantCreatePayload, TenantUpdatePayload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -102,6 +102,12 @@ export function TenantForm({
   const [values, setValues] = useState<TenantFormValues>(initialValues ?? defaultTenantFormValues());
   const [error, setError] = useState("");
   const [textFields, setTextFields] = useState(() => formValuesToTextFields(initialValues ?? defaultTenantFormValues()));
+
+  useEffect(() => {
+    const nextValues = initialValues ?? defaultTenantFormValues();
+    setValues(nextValues);
+    setTextFields(formValuesToTextFields(nextValues));
+  }, [initialValues]);
 
   const submitLabel = mode === "create" ? "Create Tenant" : "Save Tenant";
 

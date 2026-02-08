@@ -17,7 +17,12 @@ class JiraConfig(BaseModel):
     blocked_label: str = Field(default="agent:blocked", min_length=1)
     done_label: str | None = None
     webhook_secret_ref: str | None = None
-    webhook_provisioning: dict | None = None
+    managed_webhook_ids: list[int] = Field(default_factory=list)
+    webhook_last_provisioned_at: str | None = None
+    webhook_last_error: str | None = None
+    webhook_last_received_at: str | None = None
+    webhook_last_delivery_id: str | None = None
+    webhook_last_issue_key: str | None = None
 
 
 class GithubConfig(BaseModel):
@@ -27,7 +32,10 @@ class GithubConfig(BaseModel):
 
 
 class ReposConfig(BaseModel):
-    github_repository: str | None = None
+    allowlist: list[str] = Field(default_factory=list)
+    mapping_rules_by_project_key: dict[str, str] = Field(default_factory=dict)
+    mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
+    fallback_repo: str | None = None
 
 
 class PolicyConfig(BaseModel):
@@ -53,9 +61,10 @@ class PolicyConfig(BaseModel):
 
 class DiscordConfig(BaseModel):
     channel_id: str | None = None
+    channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
     allowed_user_ids: list[str] = Field(default_factory=list)
-    command_secret_ref: str | None = None
+    allowlist_requests: list[dict] = Field(default_factory=list)
 
 
 class TenantCreate(BaseModel):
@@ -66,21 +75,6 @@ class TenantCreate(BaseModel):
     repos: ReposConfig
     policy: PolicyConfig
     discord: DiscordConfig | None = None
-
-
-class AdminLoginRequest(BaseModel):
-    username: str = Field(min_length=1)
-    password: str = Field(min_length=1)
-
-
-class AdminLoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
-
-
-class AdminSessionRead(BaseModel):
-    username: str
 
 
 class TenantUpdate(BaseModel):
@@ -111,28 +105,6 @@ class IntegrationTestResult(BaseModel):
     details: str
 
 
-class JiraWebhookProvisionResult(BaseModel):
-    ok: bool
-    details: str
-    webhook_id: str | None = None
-    webhook_url: str
-    jql: str
-
-
-class DiscordAllowlistRequestRead(BaseModel):
-    user_id: str
-    requested_at: datetime
-    channel_id: str | None = None
-    reason: str | None = None
-
-
-class DiscordAllowlistApprovalResult(BaseModel):
-    ok: bool
-    details: str
-    user_id: str
-    notified: bool
-
-
 class GitHubInstallStart(BaseModel):
     install_url: str
     expires_at: datetime
@@ -146,6 +118,27 @@ class JiraConnectStart(BaseModel):
 class JiraProjectRead(BaseModel):
     key: str
     name: str
+
+
+class JiraWebhookActionResult(BaseModel):
+    ok: bool
+    action: str
+    details: str
+    webhook_ids: list[int] = Field(default_factory=list)
+
+
+class JiraWebhookDiagnosticsRead(BaseModel):
+    tenant_id: str
+    connected: bool
+    webhook_url: str
+    managed_webhook_ids: list[int] = Field(default_factory=list)
+    last_provisioned_at: str | None = None
+    last_received_at: str | None = None
+    last_delivery_id: str | None = None
+    last_issue_key: str | None = None
+    last_error: str | None = None
+    recent_delivery_window_minutes: int
+    recent_delivery_ok: bool
 
 
 class ReadyIssuePreviewRead(BaseModel):
@@ -216,6 +209,8 @@ class DiscordCommandRequest(BaseModel):
     user_id: str = Field(min_length=1)
     command: str = Field(min_length=2)
     channel_id: str | None = None
+    command_params: dict[str, str] | None = None
+    attachments: list[dict[str, str]] = Field(default_factory=list)
 
 
 class DiscordCommandResponse(BaseModel):
@@ -223,3 +218,33 @@ class DiscordCommandResponse(BaseModel):
     command: str
     message: str
     data: dict | None = None
+
+
+class DiscordAllowlistRequestRead(BaseModel):
+    user_id: str
+    requested_at: str
+    channel_id: str | None = None
+    reason: str | None = None
+    permissions: list[str] = Field(default_factory=list)
+
+
+class DiscordAllowlistApprovalResult(BaseModel):
+    ok: bool
+    details: str
+    user_id: str
+    notified: bool
+
+
+class AdminLoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class AdminLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class AdminIdentityResponse(BaseModel):
+    username: str

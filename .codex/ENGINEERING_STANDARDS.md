@@ -106,6 +106,25 @@ A PR should be blocked if it contains:
 - unclear “how to test”
 - changes that imply major NFR impact without Decision Gate discussion
 
+## 7.1) Mandatory test execution gate (pre-commit and pre-PR)
+
+Before commit:
+- Run targeted tests that cover changed behavior.
+- If targeted tests fail/skip/not-run: stop and do not commit.
+
+Before PR open/update:
+- Run the relevant full suite for the affected repo/service.
+- If full suite fails/skip/not-run: stop and do not open/update PR.
+
+Required evidence in PR/Jira update:
+- Exact targeted command(s) and exact full-suite command(s).
+- Pass/fail outcome for each command.
+- Short mapping: changed behavior -> targeted test command.
+
+Hard rule:
+- “Partial tests passed” is not an acceptable completion state.
+- If environment/tooling prevents full execution, mark blocked and state the blocker explicitly.
+
 ## 8) Output formatting (signal-only)
 
 Discord “PR Ready” message:
@@ -122,3 +141,38 @@ Jira final comment:
 - how to test (commands + steps)
 - notes (rollout/migrations/monitoring)
 - follow-ups created (Backlog)
+
+## 9) Universal UX principles
+
+Apply these to all UI/UX work by default:
+
+### Consistent structure
+- Maintain uniform layouts.
+- Similar tasks should follow the same structural pattern, whether modular steps or single cohesive flows.
+
+### Clear navigation
+- Ensure users always know where they are.
+- Use clear headings, breadcrumbs, or step indicators.
+
+### Predictable feedback
+- Alerts, errors, or confirmations should always appear in a consistent spot (for example top-right toast or top banner).
+
+### Responsive design
+- On all screen sizes, layouts adapt.
+- On mobile, components should use full width or stack vertically.
+
+### Consistent spacing and typographic hierarchy
+- Use consistent spacing scales and clear typography for hierarchy.
+
+### Accessible interactions
+- All interactions must be keyboard-accessible, with clear focus states.
+
+### Context retention
+- Multi-step flows must retain input and context across steps.
+- No resets.
+
+### Guided user flow
+- Guide users with clear next steps or progress indicators.
+
+### Full-width for data-dense interfaces
+- For admin dashboards or data-heavy screens, always use full-width layouts to maximize space and clarity.

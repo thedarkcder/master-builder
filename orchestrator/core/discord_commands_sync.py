@@ -94,17 +94,60 @@ def build_discord_guild_commands() -> list[dict]:
             "options": [
                 {
                     "type": 3,  # STRING
+                    "name": "question",
+                    "description": "Question about board status, blockers, or priorities",
+                    "required": True,
+                },
+                {
+                    "type": 3,  # STRING
                     "name": "issue_key",
                     "description": "Optional issue key to scope the answer",
                     "required": False,
                     "autocomplete": True,
                 },
+            ],
+        },
+        {
+            "name": "bug",
+            "description": "Create a Jira bug from Discord context",
+            "options": [
                 {
                     "type": 3,  # STRING
-                    "name": "question",
-                    "description": "Question about board status, blockers, or priorities",
+                    "name": "summary",
+                    "description": "Short bug summary",
                     "required": True,
-                }
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "details",
+                    "description": "Repro/context details",
+                    "required": False,
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "issue_key",
+                    "description": "Optional related Jira issue key",
+                    "required": False,
+                    "autocomplete": True,
+                },
+                {
+                    "type": 11,  # ATTACHMENT
+                    "name": "attachment_1",
+                    "description": "Optional screenshot/log attachment",
+                    "required": False,
+                },
+                {
+                    "type": 11,  # ATTACHMENT
+                    "name": "attachment_2",
+                    "description": "Optional screenshot/log attachment",
+                    "required": False,
+                },
+                {
+                    "type": 11,  # ATTACHMENT
+                    "name": "attachment_3",
+                    "description": "Optional screenshot/log attachment",
+                    "required": False,
+                },
             ],
         },
         {
@@ -127,23 +170,40 @@ def build_discord_guild_commands() -> list[dict]:
             ],
         },
         {
-            "name": "allowlist",
-            "description": "Request allowlist access for sensitive commands",
+            "name": "request",
+            "description": "Request allowlist access for a permission set",
             "options": [
                 {
-                    "type": 1,  # SUB_COMMAND
-                    "name": "request",
-                    "description": "Create or refresh your access request",
-                    "options": [
+                    "type": 3,  # STRING
+                    "name": "permission",
+                    "description": "Permission set to request",
+                    "required": True,
+                    "choices": [
                         {
-                            "type": 3,  # STRING
-                            "name": "reason",
-                            "description": "Optional reason for access request",
-                            "required": False,
-                        }
+                            "name": "Run controls (!run, !cancel, !retry)",
+                            "value": "run_controls",
+                        },
+                        {
+                            "name": "Issue seeding (!issues seed)",
+                            "value": "seed_issues",
+                        },
+                        {
+                            "name": "All sensitive commands",
+                            "value": "all_sensitive",
+                        },
                     ],
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "reason",
+                    "description": "Optional reason for access request",
+                    "required": False,
                 }
             ],
+        },
+        {
+            "name": "reply",
+            "type": 3,  # MESSAGE
         },
     ]
 
