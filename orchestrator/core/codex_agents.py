@@ -19,18 +19,21 @@ class CodexWorkflowAgents:
     def pm(self, request: WorkflowRequest) -> PmPlan:
         payload = self._runtime.run_json(
             system_prompt=(
-                "You are the PM agent in an orchestrated software workflow. "
+                "You are the PM stage agent in an orchestrated software workflow. "
+                "Honor the enforcement context already supplied by the runtime. "
                 "Return strict JSON only with keys: plan_steps, acceptance_criteria, risks."
             ),
             user_prompt=(
+                "Stage: pm\n"
+                f"Tenant ID: {request.tenant_id}\n"
+                f"Run ID: {request.run_id}\n"
                 f"Issue key: {request.issue_key}\n"
                 f"Summary: {request.issue_summary}\n"
                 f"Description:\n{request.issue_description}\n\n"
-                "Constraints:\n"
-                "- Keep plan concise and executable.\n"
-                "- plan_steps must be 3-8 concrete steps.\n"
-                "- acceptance_criteria must map to observable outcomes.\n"
-                "- risks should include technical and rollout risks when relevant.\n"
+                "Output contract:\n"
+                "- plan_steps: array of concrete execution steps.\n"
+                "- acceptance_criteria: array of observable outcomes.\n"
+                "- risks: array of risks.\n"
             ),
         )
         return PmPlan(
@@ -51,16 +54,22 @@ class CodexWorkflowAgents:
     ) -> DevResult:
         payload = self._runtime.run_json(
             system_prompt=(
-                "You are the Dev agent. Return strict JSON only with keys: change_summary, pr_url. "
+                "You are the Dev stage agent. Honor the enforcement context already supplied by the runtime. "
+                "Return strict JSON only with keys: change_summary, pr_url. "
                 "If no PR exists yet set pr_url to null."
             ),
             user_prompt=(
+                "Stage: dev\n"
+                f"Tenant ID: {request.tenant_id}\n"
+                f"Run ID: {request.run_id}\n"
                 f"Issue key: {request.issue_key}\n"
                 f"Attempt: {attempt}\n"
                 f"Feedback from prior stage: {feedback or 'none'}\n"
                 f"Plan: {json.dumps(plan.plan_steps)}\n"
                 f"Acceptance criteria: {json.dumps(plan.acceptance_criteria)}\n"
-                "Respond with what was implemented this attempt."
+                "Output contract:\n"
+                "- change_summary: array of implemented changes this attempt.\n"
+                "- pr_url: PR URL string or null.\n"
             ),
         )
         pr_url_raw = payload.get("pr_url")
@@ -79,16 +88,23 @@ class CodexWorkflowAgents:
     ) -> TestResult:
         payload = self._runtime.run_json(
             system_prompt=(
-                "You are the Test agent. Return strict JSON only with keys: "
+                "You are the Test stage agent. Honor the enforcement context already supplied by the runtime. "
+                "Return strict JSON only with keys: "
                 "passed (boolean), guidance (array of strings), feedback (string|null)."
             ),
             user_prompt=(
+                "Stage: test\n"
+                f"Tenant ID: {request.tenant_id}\n"
+                f"Run ID: {request.run_id}\n"
                 f"Issue key: {request.issue_key}\n"
                 f"Attempt: {attempt}\n"
                 f"Dev summary: {json.dumps(dev_result.change_summary)}\n"
                 f"PR URL: {dev_result.pr_url or 'none'}\n"
                 f"Suggested test commands: {json.dumps(request.suggested_test_commands)}\n"
-                "Evaluate whether the implementation is ready for review."
+                "Output contract:\n"
+                "- passed: boolean readiness signal.\n"
+                "- guidance: array of concrete validation actions.\n"
+                "- feedback: blocking reason string or null.\n"
             ),
         )
 
@@ -111,10 +127,14 @@ class CodexWorkflowAgents:
     ) -> ReviewResult:
         payload = self._runtime.run_json(
             system_prompt=(
-                "You are the Review agent. Return strict JSON only with keys: "
+                "You are the Review stage agent. Honor the enforcement context already supplied by the runtime. "
+                "Return strict JSON only with keys: "
                 "approved (boolean), summary (array of strings), feedback (string|null), pr_url (string|null)."
             ),
             user_prompt=(
+                "Stage: review\n"
+                f"Tenant ID: {request.tenant_id}\n"
+                f"Run ID: {request.run_id}\n"
                 f"Issue key: {request.issue_key}\n"
                 f"Attempt: {attempt}\n"
                 f"Plan steps: {json.dumps(plan.plan_steps)}\n"
@@ -124,7 +144,11 @@ class CodexWorkflowAgents:
                 f"Test guidance: {json.dumps(test_result.guidance)}\n"
                 f"Test feedback: {test_result.feedback or 'none'}\n"
                 f"PR URL: {dev_result.pr_url or 'none'}\n"
-                "Approve only if change quality is sufficient and test result is acceptable."
+                "Output contract:\n"
+                "- approved: boolean decision.\n"
+                "- summary: array of review findings/outcome notes.\n"
+                "- feedback: blocking feedback string or null.\n"
+                "- pr_url: PR URL string or null.\n"
             ),
         )
 
@@ -164,10 +188,12 @@ def answer_board_question_with_codex(
     payload = runtime.run_json(
         system_prompt=(
             "You answer Discord board questions for an engineering team. "
+            "Honor the enforcement context already supplied by the runtime. "
             "Return strict JSON only with key 'message' (string). "
             "Be concise: max 5 lines, no markdown tables."
         ),
         user_prompt=(
+            "Stage: discord-ask-answer\n"
             f"Question: {question}\n"
             f"Projects: {json.dumps(project_keys)}\n"
             f"Status counts: {json.dumps(status_counts)}\n"
@@ -195,6 +221,7 @@ def plan_discord_ask_intent_with_codex(
     payload = runtime.run_json(
         system_prompt=(
             "You route Discord /ask requests for an engineering orchestration bot. "
+            "Honor the enforcement context already supplied by the runtime. "
             "Return strict JSON only with keys: mode, summary, command. "
             "mode must be either 'answer' or 'command'. "
             "If mode='command', command must be a single supported command string that starts with '!' "
@@ -203,6 +230,7 @@ def plan_discord_ask_intent_with_codex(
             "If mode='answer', leave command empty."
         ),
         user_prompt=(
+            "Stage: discord-ask-intent\n"
             f"Question: {question}\n"
             f"Projects: {json.dumps(project_keys)}\n"
             f"Status counts: {json.dumps(status_counts)}\n"
@@ -225,6 +253,7 @@ def plan_seed_issues_with_codex(
     payload = runtime.run_json(
         system_prompt=(
             "You split product specs into Jira issue drafts. "
+            "Honor the enforcement context already supplied by the runtime. "
             "Return strict JSON only with keys: project_key (string), issues (array). "
             "Each issue item must include: summary (string), objective (string), "
             "scope_in (array of strings), scope_out (array of strings), "
@@ -232,17 +261,14 @@ def plan_seed_issues_with_codex(
             "labels (array of strings), issue_type (string)."
         ),
         user_prompt=(
+            "Stage: discord-issues-seed\n"
             f"Allowed Jira project keys: {json.dumps(allowed_project_keys)}\n"
             f"Markdown spec:\n{prompt_markdown}\n\n"
-            "Rules:\n"
-            "- Create 1-12 concrete implementation issues.\n"
-            "- Keep each summary under 90 characters.\n"
-            "- Choose project_key from allowed keys only.\n"
-            "- Add useful labels (lowercase, kebab-case).\n"
-            "- tags are capability/workstream tags (lowercase, kebab-case).\n"
-            "- scope_in and scope_out must be explicit and non-empty.\n"
-            "- acceptance_criteria entries should be testable outcomes.\n"
-            "- issue_type should be one of Task, Bug, Story.\n"
+            "Output contract:\n"
+            "- issues must be implementation-ready and concrete.\n"
+            "- project_key must be one of allowed_project_keys.\n"
+            "- tags/labels should be short normalized tokens when present.\n"
+            "- issue_type should be Task, Bug, or Story.\n"
         ),
     )
     if not isinstance(payload, dict):
