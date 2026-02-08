@@ -54,6 +54,8 @@ class DiscordConfig(BaseModel):
     channel_id: str | None = None
     channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
+    allowed_user_ids: list[str] = Field(default_factory=list)
+    command_secret_ref: str | None = None
 
 
 class TenantCreate(BaseModel):
@@ -186,3 +188,16 @@ class RunRead(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class DiscordCommandRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    command: str = Field(min_length=2)
+    channel_id: str | None = None
+
+
+class DiscordCommandResponse(BaseModel):
+    ok: bool
+    command: str
+    message: str
+    data: dict | None = None

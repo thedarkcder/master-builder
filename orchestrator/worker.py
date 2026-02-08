@@ -28,6 +28,7 @@ RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
+RUN_STATUS_CANCELLED = "cancelled"
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
@@ -198,6 +199,21 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     )
 
     workflow_result = runner.run(workflow_request)
+    session.refresh(run)
+    if run.status == RUN_STATUS_CANCELLED:
+        run.plan = {
+            "succeeded": False,
+            "attempts": 0,
+            "summary": ["Run cancelled during execution"],
+            "test_guidance": [],
+            "pr_url": run.pr_url,
+            "stage_updates": stage_updates,
+        }
+        if run.finished_at is None:
+            run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(run)
+        return run
     plan_payload = workflow_result.to_plan_payload()
     if workflow_result.plan is not None:
         stage_updates.append(
