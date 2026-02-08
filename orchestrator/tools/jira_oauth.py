@@ -4,6 +4,7 @@ import json
 from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -45,7 +46,7 @@ class JiraIssuePreview:
 @dataclass(frozen=True)
 class JiraIssueCreateInput:
     summary: str
-    description: str
+    description: str | dict[str, Any]
     labels: list[str]
     issue_type: str = "Task"
 
@@ -413,7 +414,7 @@ class JiraOAuthClient:
         cloud_id: str,
         issue_id_or_key: str,
         summary: str,
-        description: str,
+        description: str | dict[str, Any],
         labels: list[str],
     ) -> None:
         normalized_issue = issue_id_or_key.strip()
@@ -559,7 +560,16 @@ class JiraOAuthClient:
         return [item for item in parsed if isinstance(item, dict)]
 
 
-def _to_adf_description(text: str) -> dict:
+def _to_adf_description(text: str | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(text, dict):
+        if text.get("type") == "doc" and isinstance(text.get("content"), list):
+            return text
+        text = ""
+    elif text is None:
+        text = ""
+    elif not isinstance(text, str):
+        text = str(text)
+
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         lines = ["No description provided"]

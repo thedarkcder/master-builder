@@ -6,6 +6,7 @@ from orchestrator.tools.jira_oauth import (
     JiraIssueCreateInput,
     JiraOAuthClient,
     JiraOAuthClientConfig,
+    _to_adf_description,
 )
 
 
@@ -177,6 +178,20 @@ class JiraOAuthTests(unittest.TestCase):
             )
         self.assertEqual(result.created, [])
         self.assertEqual(result.errors, ["Item 0: issuetype: Specify a valid issue type"])
+
+    def test_to_adf_description_returns_adf_doc_unchanged(self) -> None:
+        adf_doc = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "heading",
+                    "attrs": {"level": 3},
+                    "content": [{"type": "text", "text": "Objective"}],
+                }
+            ],
+        }
+        self.assertEqual(_to_adf_description(adf_doc), adf_doc)
 
 
 if __name__ == "__main__":
