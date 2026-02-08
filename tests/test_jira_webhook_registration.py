@@ -64,6 +64,21 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
                     events=["jira:issue_created"],
                 )
 
+    def test_list_webhooks_returns_values_array(self) -> None:
+        payload = {
+            "values": [
+                {"id": 1001, "url": "https://example.test/jira/webhook/a"},
+                {"id": "1002", "url": "https://example.test/jira/webhook/b"},
+            ]
+        }
+        with patch.object(self.client, "_request_json", return_value=payload):
+            result = self.client.list_webhooks(
+                access_token="token",
+                cloud_id="cloud",
+            )
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["id"], 1001)
+
 
 if __name__ == "__main__":
     unittest.main()
