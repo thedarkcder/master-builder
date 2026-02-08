@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
+    AdminIdentityResponse,
+    AdminLoginRequest,
+    AdminLoginResponse,
     GitHubRepositoryRead,
     GitHubInstallStart,
     IntegrationTestResult,
@@ -32,6 +35,7 @@ from orchestrator.api.schemas import (
     TenantRead,
     TenantUpdate,
 )
+from orchestrator.core.admin_tokens import create_admin_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
 from orchestrator.core.secret_manager import (
@@ -47,8 +51,8 @@ from orchestrator.core.jira_oauth_state import (
 )
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
-from orchestrator.core.security import require_admin
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.core.security import require_admin, validate_admin_credentials
+from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
@@ -56,6 +60,25 @@ from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 JIRA_WEBHOOK_EVENTS = ["jira:issue_created", "jira:issue_updated"]
+
+
+@router.post("/auth/login", response_model=AdminLoginResponse)
+def admin_login(payload: AdminLoginRequest) -> AdminLoginResponse:
+    if not validate_admin_credentials(username=payload.username, password=payload.password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
+
+    settings = get_settings()
+    token, expires_in = create_admin_access_token(
+        username=settings.admin_username,
+        secret=settings.admin_token_secret,
+        ttl_seconds=settings.admin_token_ttl_seconds,
+    )
+    return AdminLoginResponse(access_token=token, expires_in=expires_in)
+
+
+@router.get("/auth/me", response_model=AdminIdentityResponse)
+def admin_me(username: str = Depends(require_admin)) -> AdminIdentityResponse:
+    return AdminIdentityResponse(username=username)
 
 
 def _tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -448,6 +471,21 @@ def resolve_secret(
         source=metadata.source,
         resolved=bool(resolved_value),
     )
+
+
+@router.delete("/secrets/{secret_ref:path}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_secret(
+    secret_ref: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> Response:
+    normalized_ref = normalize_secret_ref(secret_ref)
+    row = session.get(ManagedSecret, normalized_ref)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found")
+    session.delete(row)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/jira/connect/start", response_model=JiraConnectStart)
