@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import secrets
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -232,6 +233,23 @@ def _validate_webhook_auth(
         )
 
 
+def _record_jira_webhook_receipt(
+    *,
+    session: Session,
+    tenant: Tenant,
+    delivery_id: str | None,
+    issue_key: str,
+) -> None:
+    jira_config = dict(tenant.jira_config)
+    jira_config["webhook_last_received_at"] = datetime.now(timezone.utc).isoformat()
+    jira_config["webhook_last_issue_key"] = issue_key
+    if delivery_id:
+        jira_config["webhook_last_delivery_id"] = delivery_id
+    tenant.jira_config = jira_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+
 def _resolve_global_github_webhook_secret(
     *,
     request_id: str,
@@ -391,6 +409,12 @@ async def ingest_jira_webhook(
         _extract_issue_payload(payload)
     )
     delivery_id = _extract_delivery_id(request)
+    _record_jira_webhook_receipt(
+        session=session,
+        tenant=tenant,
+        delivery_id=delivery_id,
+        issue_key=issue_key,
+    )
     logger.info(
         "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
         request_id,

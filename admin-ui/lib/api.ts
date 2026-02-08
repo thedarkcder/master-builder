@@ -85,6 +85,27 @@ export type JiraProjectRecord = {
   name: string;
 };
 
+export type JiraWebhookActionResult = {
+  ok: boolean;
+  action: string;
+  details: string;
+  webhook_ids: number[];
+};
+
+export type JiraWebhookDiagnosticsRecord = {
+  tenant_id: string;
+  connected: boolean;
+  webhook_url: string;
+  managed_webhook_ids: number[];
+  last_provisioned_at: string | null;
+  last_received_at: string | null;
+  last_delivery_id: string | null;
+  last_issue_key: string | null;
+  last_error: string | null;
+  recent_delivery_window_minutes: number;
+  recent_delivery_ok: boolean;
+};
+
 export type ReadyIssuePreviewRecord = {
   key: string;
   summary: string;
@@ -247,6 +268,51 @@ export function listJiraProjects(
   return request<JiraProjectRecord[]>(
     credentials,
     `/api/admin/jira/connections/${encodeURIComponent(connectionId)}/projects`
+  );
+}
+
+export function getJiraWebhookDiagnostics(
+  credentials: Credentials,
+  tenantId: string,
+  withinMinutes = 60
+): Promise<JiraWebhookDiagnosticsRecord> {
+  const query = new URLSearchParams({ within_minutes: String(withinMinutes) });
+  return request<JiraWebhookDiagnosticsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/diagnostics?${query.toString()}`
+  );
+}
+
+export function provisionJiraWebhook(
+  credentials: Credentials,
+  tenantId: string
+): Promise<JiraWebhookActionResult> {
+  return request<JiraWebhookActionResult>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/provision`,
+    { method: "POST" }
+  );
+}
+
+export function resetJiraWebhook(
+  credentials: Credentials,
+  tenantId: string
+): Promise<JiraWebhookActionResult> {
+  return request<JiraWebhookActionResult>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/reset`,
+    { method: "POST" }
+  );
+}
+
+export function disconnectJira(
+  credentials: Credentials,
+  tenantId: string
+): Promise<JiraWebhookActionResult> {
+  return request<JiraWebhookActionResult>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/disconnect`,
+    { method: "POST" }
   );
 }
 

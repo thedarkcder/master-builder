@@ -172,6 +172,21 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
         self.assertEqual(second.json()["trigger_reason"], "ready_status_recheck")
 
+    def test_webhook_records_last_delivery_metadata(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-777", labels=["agent:ready"])
+        headers = {"X-Atlassian-Webhook-Identifier": "delivery-meta-1"}
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-webhook", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        jira_config = tenant_response.json()["jira"]
+        self.assertEqual(jira_config["webhook_last_delivery_id"], "delivery-meta-1")
+        self.assertEqual(jira_config["webhook_last_issue_key"], "TP-777")
+        self.assertIsNotNone(jira_config["webhook_last_received_at"])
+
     def test_webhook_marks_transition_into_ready_status(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
         payload["changelog"] = {

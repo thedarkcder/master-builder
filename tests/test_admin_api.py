@@ -597,6 +597,83 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(tenant_response.status_code, 200)
         self.assertTrue(tenant_response.json()["jira"]["connection_id"])
 
+    def test_jira_webhook_lifecycle_endpoints(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        deleted_batches: list[list[int]] = []
+
+        class _FakeJiraClient:
+            def __init__(self) -> None:
+                self._register_count = 0
+
+            def register_webhook(  # noqa: ANN001
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                callback_url: str,
+                jql_filter: str,
+                events: list[str],
+            ) -> list[int]:
+                self._register_count += 1
+                if self._register_count == 1:
+                    return [10101]
+                return [20202]
+
+            def delete_webhooks(self, *, access_token: str, cloud_id: str, webhook_ids: list[int]) -> None:  # noqa: ANN001
+                deleted_batches.append(list(webhook_ids))
+
+        fake_client = _FakeJiraClient()
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+        ):
+            provision = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                auth=("admin", "secret"),
+            )
+            self.assertEqual(provision.status_code, 200)
+            self.assertTrue(provision.json()["ok"])
+            self.assertEqual(provision.json()["webhook_ids"], [10101])
+
+            diagnostics = self.client.get(
+                "/api/admin/tenants/tenant-a/jira/webhooks/diagnostics",
+                auth=("admin", "secret"),
+            )
+            self.assertEqual(diagnostics.status_code, 200)
+            self.assertEqual(diagnostics.json()["managed_webhook_ids"], [10101])
+            self.assertFalse(diagnostics.json()["recent_delivery_ok"])
+
+            reset = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                auth=("admin", "secret"),
+            )
+            self.assertEqual(reset.status_code, 200)
+            self.assertTrue(reset.json()["ok"])
+            self.assertEqual(reset.json()["action"], "reset")
+            self.assertEqual(reset.json()["webhook_ids"], [20202])
+            self.assertEqual(deleted_batches, [[10101]])
+
+            disconnect = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/disconnect",
+                auth=("admin", "secret"),
+            )
+            self.assertEqual(disconnect.status_code, 200)
+            self.assertTrue(disconnect.json()["ok"])
+            self.assertEqual(disconnect.json()["action"], "disconnect")
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertIsNone(tenant_response.json()["jira"]["connection_id"])
+        self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

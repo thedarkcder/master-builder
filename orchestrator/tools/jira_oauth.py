@@ -45,7 +45,7 @@ class JiraOAuthClientConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
-    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work")
+    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work", "manage:jira-webhook")
 
 
 class JiraOAuthClient:
@@ -93,6 +93,38 @@ class JiraOAuthClient:
                 "Authorization": f"Bearer {access_token}",
             },
             method="GET",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                response_body = response.read().decode("utf-8")
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8")
+            raise JiraOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
+        if not response_body:
+            return {}
+        return json.loads(response_body)
+
+    def _request_json(
+        self,
+        *,
+        method: str,
+        url: str,
+        access_token: str,
+        payload: dict | None = None,
+    ) -> dict | list:
+        data: bytes | None = None
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+
+        request = Request(
+            url=url,
+            data=data,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            method=method,
         )
         try:
             with urlopen(request, timeout=30) as response:
@@ -217,7 +249,7 @@ class JiraOAuthClient:
             }
         )
         payload = self._get_json(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search?{query}",
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql?{query}",
             access_token=access_token,
         )
         issues = payload.get("issues") if isinstance(payload, dict) else None
@@ -245,3 +277,56 @@ class JiraOAuthClient:
 
             results.append(JiraIssuePreview(key=key, summary=summary, status=status_name))
         return results
+
+    def register_webhook(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        callback_url: str,
+        jql_filter: str,
+        events: list[str],
+    ) -> list[int]:
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
+            access_token=access_token,
+            payload={
+                "url": callback_url,
+                "webhooks": [
+                    {
+                        "jqlFilter": jql_filter,
+                        "events": events,
+                    }
+                ],
+            },
+        )
+        webhook_ids = payload.get("createdWebhookId") if isinstance(payload, dict) else None
+        if not isinstance(webhook_ids, list):
+            raise JiraOAuthError("Webhook registration response missing createdWebhookId list")
+
+        normalized_ids: list[int] = []
+        for webhook_id in webhook_ids:
+            if isinstance(webhook_id, int):
+                normalized_ids.append(webhook_id)
+            elif isinstance(webhook_id, str) and webhook_id.isdigit():
+                normalized_ids.append(int(webhook_id))
+        if not normalized_ids:
+            raise JiraOAuthError("Webhook registration did not return any webhook IDs")
+        return normalized_ids
+
+    def delete_webhooks(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        webhook_ids: list[int],
+    ) -> None:
+        if not webhook_ids:
+            return
+        query = "&".join(f"webhookIds={webhook_id}" for webhook_id in webhook_ids)
+        self._request_json(
+            method="DELETE",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook?{query}",
+            access_token=access_token,
+        )
