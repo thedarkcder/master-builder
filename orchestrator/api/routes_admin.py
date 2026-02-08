@@ -16,10 +16,13 @@ from orchestrator.api.schemas import (
     AdminLoginRequest,
     AdminLoginResponse,
     AdminSessionRead,
+    DiscordAllowlistApprovalResult,
+    DiscordAllowlistRequestRead,
     GitHubRepositoryRead,
     GitHubInstallStart,
     IntegrationTestResult,
     JiraConnectStart,
+    JiraWebhookProvisionResult,
     ReadyGatePreviewRead,
     ReadyIssuePreviewRead,
     JiraProjectRead,
@@ -62,6 +65,11 @@ GITHUB_APP_ID_SECRET_REF = "GITHUB_APP_ID"
 GITHUB_APP_PRIVATE_KEY_SECRET_REF = "GITHUB_APP_PRIVATE_KEY"
 JIRA_OAUTH_CLIENT_ID_SECRET_REF = "JIRA_OAUTH_CLIENT_ID"
 JIRA_OAUTH_CLIENT_SECRET_SECRET_REF = "JIRA_OAUTH_CLIENT_SECRET"
+JIRA_WEBHOOK_EVENTS = (
+    "jira:issue_created",
+    "jira:issue_updated",
+    "comment_created",
+)
 
 
 @router.post("/auth/login", response_model=AdminLoginResponse)
@@ -152,6 +160,40 @@ def _build_repos_config(payload_repos: dict) -> dict:
     return _normalize_repos_config(payload_repos)
 
 
+def _build_jira_config(payload_jira: dict, *, existing_jira: dict | None = None) -> dict:
+    jira_config = dict(payload_jira)
+    if existing_jira:
+        existing_provisioning = existing_jira.get("webhook_provisioning")
+        incoming_provisioning = jira_config.get("webhook_provisioning")
+        if not incoming_provisioning and isinstance(existing_provisioning, dict):
+            jira_config["webhook_provisioning"] = existing_provisioning
+    return jira_config
+
+
+def _tenant_allowlist_requests(tenant: Tenant) -> list[dict]:
+    discord_config = tenant.discord_config or {}
+    raw_requests = discord_config.get("allowlist_requests")
+    if not isinstance(raw_requests, list):
+        return []
+    normalized: list[dict] = []
+    for item in raw_requests:
+        if not isinstance(item, dict):
+            continue
+        user_id = str(item.get("user_id") or "").strip()
+        requested_at = str(item.get("requested_at") or "").strip()
+        if not user_id or not requested_at:
+            continue
+        normalized.append(
+            {
+                "user_id": user_id,
+                "requested_at": requested_at,
+                "channel_id": str(item.get("channel_id") or "").strip() or None,
+                "reason": str(item.get("reason") or "").strip() or None,
+            }
+        )
+    return normalized
+
+
 def _render_discord_channel_name(*, template: str, tenant_id: str) -> str:
     try:
         rendered = template.format(tenant_id=tenant_id)
@@ -177,6 +219,10 @@ def _resolve_discord_config(
 
     settings = get_settings()
     discord_config = dict(payload_discord)
+    if isinstance(existing_discord, dict):
+        existing_requests = existing_discord.get("allowlist_requests")
+        if "allowlist_requests" not in discord_config and isinstance(existing_requests, list):
+            discord_config["allowlist_requests"] = existing_requests
     configured_channel_id = str(discord_config.get("channel_id") or "").strip()
     if not configured_channel_id and isinstance(existing_discord, dict):
         configured_channel_id = str(existing_discord.get("channel_id") or "").strip()
@@ -330,6 +376,100 @@ def _default_ready_jql(*, project_keys: list[str], ready_statuses: list[str]) ->
     quoted_projects = ", ".join(f"\"{key}\"" for key in project_keys)
     quoted_statuses = ", ".join(f"\"{status}\"" for status in ready_statuses)
     return f"project in ({quoted_projects}) AND status in ({quoted_statuses}) ORDER BY updated DESC"
+
+
+def _default_webhook_jql(*, project_keys: list[str]) -> str:
+    quoted_projects = ", ".join(f"\"{key}\"" for key in project_keys)
+    return f"project in ({quoted_projects})"
+
+
+def _provision_jira_webhook_for_tenant(
+    *,
+    session: Session,
+    tenant: Tenant,
+    connection: JiraOAuthConnection,
+    settings,  # noqa: ANN001
+) -> JiraWebhookProvisionResult:
+    project_keys = [str(key).strip() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
+    if not project_keys:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot provision Jira webhooks without jira.project_keys",
+        )
+
+    now = datetime.now(timezone.utc)
+    webhook_url = f"{settings.public_api_base_url.rstrip('/')}/jira/webhook/{quote(tenant.tenant_id, safe='')}"
+    jql = _default_webhook_jql(project_keys=project_keys)
+    webhook_name = f"master-builder-{tenant.tenant_id}-jira-webhook"
+
+    jira_config = dict(tenant.jira_config)
+    provisioning_state = {
+        "webhook_url": webhook_url,
+        "jql": jql,
+        "attempted_at": now.isoformat(),
+    }
+
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        webhook = client.ensure_webhook(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            name=webhook_name,
+            url=webhook_url,
+            jql_filter=jql,
+            events=list(JIRA_WEBHOOK_EVENTS),
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        provisioning_state["ok"] = False
+        provisioning_state["error"] = str(exc)
+        jira_config["webhook_provisioning"] = provisioning_state
+        tenant.jira_config = jira_config
+        tenant.updated_at = now
+        return JiraWebhookProvisionResult(
+            ok=False,
+            details=f"Jira webhook provisioning failed: {exc}",
+            webhook_url=webhook_url,
+            jql=jql,
+        )
+
+    provisioning_state.update(
+        {
+            "ok": True,
+            "webhook_id": webhook.webhook_id,
+            "error": None,
+            "synced_at": now.isoformat(),
+            "events": list(JIRA_WEBHOOK_EVENTS),
+        }
+    )
+    jira_config["webhook_provisioning"] = provisioning_state
+    tenant.jira_config = jira_config
+    tenant.updated_at = now
+    return JiraWebhookProvisionResult(
+        ok=True,
+        details="Jira webhook is configured for this tenant",
+        webhook_id=webhook.webhook_id,
+        webhook_url=webhook_url,
+        jql=jql,
+    )
+
+
+def _resolve_discord_bot_token(*, session: Session, settings) -> str:  # noqa: ANN001
+    token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not token_ref:
+        raise ValueError("ORCHESTRATOR_DISCORD_BOT_TOKEN_SECRET_REF must be configured")
+    token = resolve_secret_ref(
+        session,
+        secret_ref=token_ref,
+        encryption_key=settings.secrets_encryption_key,
+    ).strip()
+    if not token:
+        raise ValueError(f"Missing Discord bot token secret '{token_ref}'")
+    return token
 
 
 @router.get("/secrets", response_model=list[ManagedSecretRead])
@@ -487,7 +627,8 @@ def jira_connect_callback(
     session.add(connection)
     session.flush()
 
-    if state.return_to == "edit" and state.tenant_id:
+    webhook_result: JiraWebhookProvisionResult | None = None
+    if state.tenant_id:
         tenant = session.get(Tenant, state.tenant_id)
         if tenant is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
@@ -495,13 +636,23 @@ def jira_connect_callback(
         jira_config["connection_id"] = connection.connection_id
         tenant.jira_config = jira_config
         tenant.updated_at = now
+        webhook_result = _provision_jira_webhook_for_tenant(
+            session=session,
+            tenant=tenant,
+            connection=connection,
+            settings=settings,
+        )
 
     session.commit()
 
     if state.return_to == "edit" and state.tenant_id:
+        webhook_status = "success"
+        if webhook_result and not webhook_result.ok:
+            webhook_status = "failed"
         redirect_url = (
             f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(state.tenant_id, safe='')}/edit"
             f"?jira_oauth=success&jira_connection_id={quote(connection.connection_id, safe='')}"
+            f"&jira_webhook={webhook_status}"
         )
     else:
         redirect_url = (
@@ -530,6 +681,123 @@ def list_jira_projects_for_connection(
     client = _jira_oauth_client(session=session, settings=settings)
     projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
     return [JiraProjectRead(key=project.key, name=project.name) for project in projects]
+
+
+@router.post("/tenants/{tenant_id}/jira/webhooks/provision", response_model=JiraWebhookProvisionResult)
+def provision_tenant_jira_webhooks(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> JiraWebhookProvisionResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    connection_id = tenant.jira_config.get("connection_id")
+    if not isinstance(connection_id, str) or not connection_id.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Jira OAuth connection is not linked")
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Configured Jira connection was not found")
+
+    result = _provision_jira_webhook_for_tenant(
+        session=session,
+        tenant=tenant,
+        connection=connection,
+        settings=get_settings(),
+    )
+    session.commit()
+    return result
+
+
+@router.get("/tenants/{tenant_id}/discord/allowlist-requests", response_model=list[DiscordAllowlistRequestRead])
+def list_tenant_discord_allowlist_requests(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[DiscordAllowlistRequestRead]:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    requests = _tenant_allowlist_requests(tenant)
+    parsed_requests: list[DiscordAllowlistRequestRead] = []
+    for entry in requests:
+        try:
+            requested_at = datetime.fromisoformat(str(entry["requested_at"]))
+        except ValueError:
+            continue
+        parsed_requests.append(
+            DiscordAllowlistRequestRead(
+                user_id=str(entry["user_id"]),
+                requested_at=requested_at,
+                channel_id=entry.get("channel_id"),
+                reason=entry.get("reason"),
+            )
+        )
+    parsed_requests.sort(key=lambda item: item.requested_at, reverse=True)
+    return parsed_requests
+
+
+@router.post(
+    "/tenants/{tenant_id}/discord/allowlist-requests/{user_id}/approve",
+    response_model=DiscordAllowlistApprovalResult,
+)
+def approve_tenant_discord_allowlist_request(
+    tenant_id: str,
+    user_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> DiscordAllowlistApprovalResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    discord_config = dict(tenant.discord_config or {})
+    requests = _tenant_allowlist_requests(tenant)
+    normalized_user_id = user_id.strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Discord user ID is required")
+    if not any(request["user_id"] == normalized_user_id for request in requests):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allowlist request not found")
+
+    raw_allowlist = discord_config.get("allowed_user_ids")
+    allowlist = [str(value).strip() for value in raw_allowlist if str(value).strip()] if isinstance(raw_allowlist, list) else []
+    if normalized_user_id not in allowlist:
+        allowlist.append(normalized_user_id)
+    discord_config["allowed_user_ids"] = allowlist
+    discord_config["allowlist_requests"] = [
+        request for request in requests if request.get("user_id") != normalized_user_id
+    ]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+    settings = get_settings()
+    try:
+        bot_token = _resolve_discord_bot_token(session=session, settings=settings)
+        discord_client = DiscordApiClient(bot_token=bot_token)
+        discord_client.send_direct_message(
+            user_id=normalized_user_id,
+            content=(
+                f"You are now approved for sensitive Discord commands on tenant '{tenant_id}'. "
+                "You can now run !run, !retry, !cancel, and !issues."
+            ),
+        )
+    except (ValueError, DiscordApiError) as exc:
+        return DiscordAllowlistApprovalResult(
+            ok=True,
+            details=f"Approved user but failed to send DM notification: {exc}",
+            user_id=normalized_user_id,
+            notified=False,
+        )
+
+    return DiscordAllowlistApprovalResult(
+        ok=True,
+        details="Approved user and sent Discord DM notification",
+        user_id=normalized_user_id,
+        notified=True,
+    )
 
 
 @router.get("/tenants/{tenant_id}/ready-preview", response_model=ReadyGatePreviewRead)
@@ -628,7 +896,7 @@ def create_tenant(
         tenant_id=tenant_id,
         name=payload.name,
         is_enabled=payload.is_enabled,
-        jira_config=payload.jira.model_dump(),
+        jira_config=_build_jira_config(payload.jira.model_dump()),
         github_config=_with_managed_github_refs(payload.github.model_dump()),
         repos_config=_build_repos_config(payload.repos.model_dump()),
         policy_config=payload.policy.model_dump(),
@@ -669,7 +937,7 @@ def update_tenant(
 
     tenant.name = payload.name
     tenant.is_enabled = payload.is_enabled
-    tenant.jira_config = payload.jira.model_dump()
+    tenant.jira_config = _build_jira_config(payload.jira.model_dump(), existing_jira=tenant.jira_config)
     tenant.github_config = _with_managed_github_refs(payload.github.model_dump())
     tenant.repos_config = _build_repos_config(payload.repos.model_dump())
     tenant.policy_config = payload.policy.model_dump()

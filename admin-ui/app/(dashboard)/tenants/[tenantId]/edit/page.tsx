@@ -10,11 +10,14 @@ import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  approveDiscordAllowlistRequest,
   disconnectGitHub,
   disconnectJira,
   getTenant,
+  listDiscordAllowlistRequests,
   listGitHubRepositories,
   previewReadyGate,
+  type DiscordAllowlistRequestRecord,
   type ReadyGatePreviewRecord,
   type GitHubRepositoryRecord,
   startJiraConnect,
@@ -39,6 +42,9 @@ export default function EditTenantPage() {
   const [readyPreview, setReadyPreview] = useState<ReadyGatePreviewRecord | null>(null);
   const [repositoryOptions, setRepositoryOptions] = useState<GitHubRepositoryRecord[]>([]);
   const [repositoriesLoading, setRepositoriesLoading] = useState(false);
+  const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
+  const [allowlistLoading, setAllowlistLoading] = useState(false);
+  const [approvingUserId, setApprovingUserId] = useState<string | null>(null);
 
   async function loadRepositoryOptions(
     record: TenantRecord,
@@ -76,7 +82,10 @@ export default function EditTenantPage() {
     try {
       const payload = await getTenant(credentials, params.tenantId);
       setTenant(payload);
-      const repoStatus = await loadRepositoryOptions(payload);
+      const [repoStatus] = await Promise.all([
+        loadRepositoryOptions(payload),
+        loadAllowlistRequests(payload.tenant_id)
+      ]);
       setStatusLine(repoStatus ?? `Loaded ${payload.tenant_id}.`);
     } catch (error) {
       setStatusLine(`Failed to load tenant: ${(error as Error).message}`);
@@ -92,6 +101,21 @@ export default function EditTenantPage() {
     const repoStatus = await loadRepositoryOptions(tenant, { announceSuccess: true });
     if (repoStatus) {
       setStatusLine(repoStatus);
+    }
+  }
+
+  async function loadAllowlistRequests(tenantId: string): Promise<void> {
+    if (!credentials) {
+      return;
+    }
+    setAllowlistLoading(true);
+    try {
+      const requests = await listDiscordAllowlistRequests(credentials, tenantId);
+      setAllowlistRequests(requests);
+    } catch {
+      setAllowlistRequests([]);
+    } finally {
+      setAllowlistLoading(false);
     }
   }
 
@@ -118,7 +142,10 @@ export default function EditTenantPage() {
           return;
         }
         setTenant(payload);
-        const repoStatus = await loadRepositoryOptions(payload, { announceSuccess: true });
+        const [repoStatus] = await Promise.all([
+          loadRepositoryOptions(payload, { announceSuccess: true }),
+          loadAllowlistRequests(payload.tenant_id)
+        ]);
         if (cancelled) {
           return;
         }
@@ -143,7 +170,7 @@ export default function EditTenantPage() {
       try {
         const updated = await updateTenant(credentials, params.tenantId, payload);
         setTenant(updated);
-      await loadRepositoryOptions(updated);
+      await Promise.all([loadRepositoryOptions(updated), loadAllowlistRequests(updated.tenant_id)]);
         setStatusLine(`Saved ${updated.tenant_id}.`);
       } catch (error) {
         setStatusLine(`Save failed: ${(error as Error).message}`);
@@ -203,6 +230,7 @@ export default function EditTenantPage() {
       const updated = await disconnectGitHub(credentials, params.tenantId);
       setTenant(updated);
       setRepositoryOptions([]);
+      await loadAllowlistRequests(updated.tenant_id);
       setStatusLine("GitHub disconnected for this tenant.");
     } catch (error) {
       setStatusLine(`Unable to disconnect GitHub: ${(error as Error).message}`);
@@ -231,9 +259,26 @@ export default function EditTenantPage() {
     try {
       const updated = await disconnectJira(credentials, params.tenantId);
       setTenant(updated);
+      await loadAllowlistRequests(updated.tenant_id);
       setStatusLine("Jira disconnected for this tenant.");
     } catch (error) {
       setStatusLine(`Unable to disconnect Jira: ${(error as Error).message}`);
+    }
+  }
+
+  async function approveAllowlistRequest(userId: string) {
+    if (!credentials || !tenant) {
+      return;
+    }
+    setApprovingUserId(userId);
+    try {
+      const result = await approveDiscordAllowlistRequest(credentials, tenant.tenant_id, userId);
+      await loadAllowlistRequests(tenant.tenant_id);
+      setStatusLine(result.details);
+    } catch (error) {
+      setStatusLine(`Failed to approve allowlist request: ${(error as Error).message}`);
+    } finally {
+      setApprovingUserId(null);
     }
   }
 
@@ -363,6 +408,51 @@ export default function EditTenantPage() {
           repositoryOptions={repositoryOptions}
           repositoriesLoading={repositoriesLoading}
         />
+        <Card>
+          <CardHeader>
+            <CardTitle>Discord Access Requests</CardTitle>
+            <CardDescription>
+              Approve users who requested sensitive Discord command access for this tenant.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {allowlistLoading ? (
+              <p className="text-sm text-muted-foreground">Loading requests...</p>
+            ) : allowlistRequests.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No pending requests.</p>
+            ) : (
+              <div className="space-y-2">
+                {allowlistRequests.map((request) => (
+                  <div
+                    key={`${request.user_id}-${request.requested_at}`}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
+                  >
+                    <div className="space-y-1 text-sm">
+                      <p>
+                        <strong>User:</strong> {request.user_id}
+                      </p>
+                      <p className="text-muted-foreground">
+                        Requested {new Date(request.requested_at).toLocaleString()}
+                        {request.channel_id ? ` from channel ${request.channel_id}` : ""}
+                      </p>
+                      {request.reason ? (
+                        <p className="text-muted-foreground">
+                          <strong>Reason:</strong> {request.reason}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Button
+                      onClick={() => void approveAllowlistRequest(request.user_id)}
+                      disabled={approvingUserId === request.user_id}
+                    >
+                      {approvingUserId === request.user_id ? "Approving..." : "Approve"}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
         {readyPreview ? (
           <Card>
             <CardHeader>

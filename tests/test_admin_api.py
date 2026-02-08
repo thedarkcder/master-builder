@@ -14,7 +14,7 @@ from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection
+from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -631,6 +631,34 @@ class AdminApiTests(unittest.TestCase):
                     )()
                 ]
 
+            def ensure_webhook(self, **_: object):  # noqa: ANN003
+                return type(
+                    "Webhook",
+                    (),
+                    {"webhook_id": "1001"},
+                )()
+
+            def ensure_webhook(self, **_: object):  # noqa: ANN003
+                return type(
+                    "Webhook",
+                    (),
+                    {"webhook_id": "1001"},
+                )()
+
+            def ensure_webhook(self, **_: object):  # noqa: ANN003
+                return type(
+                    "Webhook",
+                    (),
+                    {"webhook_id": "1002"},
+                )()
+
+            def ensure_webhook(self, **_: object):  # noqa: ANN003
+                return type(
+                    "Webhook",
+                    (),
+                    {"webhook_id": "1001"},
+                )()
+
         with patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()):
             callback_response = self.client.get(
                 "/api/admin/jira/connect/callback",
@@ -691,6 +719,13 @@ class AdminApiTests(unittest.TestCase):
                     )()
                 ]
 
+            def ensure_webhook(self, **_: object):  # noqa: ANN003
+                return type(
+                    "Webhook",
+                    (),
+                    {"webhook_id": "1001"},
+                )()
+
         with patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()):
             callback_response = self.client.get(
                 "/api/admin/jira/connect/callback",
@@ -707,6 +742,167 @@ class AdminApiTests(unittest.TestCase):
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
         self.assertTrue(tenant_response.json()["jira"]["connection_id"])
+        self.assertEqual(tenant_response.json()["jira"]["webhook_provisioning"]["ok"], True)
+
+    def test_provision_tenant_jira_webhooks_success(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeClient:
+            def ensure_webhook(self, **_: object):  # noqa: ANN003
+                return type(
+                    "Webhook",
+                    (),
+                    {"webhook_id": "2002"},
+                )()
+
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["ok"], True)
+        self.assertEqual(body["webhook_id"], "2002")
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["jira"]["webhook_provisioning"]["webhook_id"], "2002")
+
+    def test_provision_tenant_jira_webhooks_permission_failure_is_persisted(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeClient:
+            def ensure_webhook(self, **_: object):  # noqa: ANN003
+                raise ValueError("Forbidden: missing Jira admin permission")
+
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["ok"], False)
+        self.assertIn("missing Jira admin permission", body["details"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["jira"]["webhook_provisioning"]["ok"], False)
+        self.assertIn(
+            "missing Jira admin permission",
+            tenant_response.json()["jira"]["webhook_provisioning"]["error"],
+        )
+
+    def test_list_discord_allowlist_requests_returns_pending_requests(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            self.assertIsNotNone(tenant)
+            tenant.discord_config = {
+                "channel_id": "discord-channel-1",
+                "notify_events": ["run_started"],
+                "allowlist_requests": [
+                    {
+                        "user_id": "discord-user-123",
+                        "requested_at": datetime.now(timezone.utc).isoformat(),
+                        "channel_id": "discord-channel-1",
+                        "reason": "Need run access",
+                    }
+                ],
+            }
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/tenants/tenant-a/discord/allowlist-requests",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["user_id"], "discord-user-123")
+        self.assertEqual(body[0]["reason"], "Need run access")
+
+    def test_approve_discord_allowlist_request_notifies_and_updates_tenant(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+
+        with session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            self.assertIsNotNone(tenant)
+            tenant.discord_config = {
+                "channel_id": "discord-channel-1",
+                "notify_events": ["run_started"],
+                "allowed_user_ids": [],
+                "allowlist_requests": [
+                    {
+                        "user_id": "discord-user-456",
+                        "requested_at": datetime.now(timezone.utc).isoformat(),
+                        "channel_id": "discord-channel-1",
+                        "reason": "Need sensitive commands",
+                    }
+                ],
+            }
+            session.commit()
+
+        seed_token_secret = self.client.put(
+            "/api/admin/secrets/DISCORD_BOT_TOKEN",
+            json={"value": "test-discord-bot-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(seed_token_secret.status_code, 200)
+
+        with patch("orchestrator.api.routes_admin.DiscordApiClient.send_direct_message", return_value={"id": "msg-1"}):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/discord/allowlist-requests/discord-user-456/approve",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertTrue(response.json()["notified"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        discord = tenant_response.json()["discord"]
+        self.assertIn("discord-user-456", discord.get("allowed_user_ids", []))
 
 
 if __name__ == "__main__":

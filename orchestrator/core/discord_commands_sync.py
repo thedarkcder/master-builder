@@ -126,6 +126,25 @@ def build_discord_guild_commands() -> list[dict]:
                 }
             ],
         },
+        {
+            "name": "allowlist",
+            "description": "Request allowlist access for sensitive commands",
+            "options": [
+                {
+                    "type": 1,  # SUB_COMMAND
+                    "name": "request",
+                    "description": "Create or refresh your access request",
+                    "options": [
+                        {
+                            "type": 3,  # STRING
+                            "name": "reason",
+                            "description": "Optional reason for access request",
+                            "required": False,
+                        }
+                    ],
+                }
+            ],
+        },
     ]
 
 

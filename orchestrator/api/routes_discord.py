@@ -28,7 +28,7 @@ from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview
 router = APIRouter(tags=["discord"])
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
-PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask"}
+PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "allowlist"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
@@ -64,6 +64,68 @@ def _tenant_allowlisted_user_ids(tenant: Tenant) -> set[str]:
         return set()
     normalized = {str(user_id).strip() for user_id in raw_allowlist if str(user_id).strip()}
     return normalized
+
+
+def _tenant_allowlist_requests(tenant: Tenant) -> list[dict]:
+    discord_config = tenant.discord_config or {}
+    raw_requests = discord_config.get("allowlist_requests")
+    if not isinstance(raw_requests, list):
+        return []
+    normalized: list[dict] = []
+    for item in raw_requests:
+        if not isinstance(item, dict):
+            continue
+        user_id = str(item.get("user_id") or "").strip()
+        if not user_id:
+            continue
+        normalized.append(
+            {
+                "user_id": user_id,
+                "requested_at": str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
+                "channel_id": str(item.get("channel_id") or "").strip() or None,
+                "reason": str(item.get("reason") or "").strip() or None,
+            }
+        )
+    return normalized
+
+
+def _create_allowlist_request(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str | None,
+    reason: str | None,
+) -> tuple[bool, str]:
+    allowlisted_ids = _tenant_allowlisted_user_ids(tenant)
+    if user_id in allowlisted_ids:
+        return False, "You are already allowlisted for sensitive commands."
+
+    requests = _tenant_allowlist_requests(tenant)
+    existing = next((entry for entry in requests if entry.get("user_id") == user_id), None)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if existing:
+        existing["requested_at"] = now_iso
+        existing["channel_id"] = channel_id
+        existing["reason"] = reason
+        message = "Allowlist request refreshed. An admin can approve it in the tenant page."
+    else:
+        requests.append(
+            {
+                "user_id": user_id,
+                "requested_at": now_iso,
+                "channel_id": channel_id,
+                "reason": reason,
+            }
+        )
+        message = "Allowlist request submitted. An admin can approve it in the tenant page."
+
+    discord_config = dict(tenant.discord_config or {})
+    discord_config["allowlist_requests"] = requests
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return True, message
 
 
 def _assert_sensitive_command_permission(*, tenant: Tenant, command_name: str, user_id: str) -> None:
@@ -206,7 +268,7 @@ def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
         "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>, "
-        "!issues seed <markdown spec>"
+        "!issues seed <markdown spec>, !allowlist request [reason]"
     )
 
 
@@ -640,6 +702,27 @@ def execute_discord_command(
             command=command_name,
             message=message,
             data=data,
+        )
+
+    if command_name == "allowlist":
+        if not arguments or arguments[0].strip().lower() != "request":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !allowlist request [reason]",
+            )
+        reason = " ".join(arguments[1:]).strip() or None
+        _, message = _create_allowlist_request(
+            session=session,
+            tenant=tenant,
+            user_id=payload.user_id.strip(),
+            channel_id=payload.channel_id.strip() if payload.channel_id else None,
+            reason=reason,
+        )
+        return DiscordCommandResponse(
+            ok=True,
+            command=command_name,
+            message=message,
+            data={"user_id": payload.user_id.strip(), "requested": True},
         )
 
     if command_name == "run":

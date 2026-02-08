@@ -34,6 +34,15 @@ class JiraProject:
 
 
 @dataclass(frozen=True)
+class JiraWebhook:
+    webhook_id: str
+    name: str
+    url: str
+    jql_filter: str
+    events: list[str]
+
+
+@dataclass(frozen=True)
 class JiraIssuePreview:
     key: str
     summary: str
@@ -352,6 +361,130 @@ class JiraOAuthClient:
             errors.append(f"Item {failed_element}: {reason_text}")
 
         return JiraIssueBulkCreateResult(created=created, errors=errors)
+
+    def list_webhooks(self, *, access_token: str, cloud_id: str) -> list[JiraWebhook]:
+        payload = self._get_json(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
+            access_token=access_token,
+        )
+
+        if isinstance(payload, dict):
+            values = payload.get("values")
+            items = values if isinstance(values, list) else []
+        elif isinstance(payload, list):
+            items = payload
+        else:
+            items = []
+
+        webhooks: list[JiraWebhook] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            webhook_id = item.get("id")
+            name = item.get("name")
+            url = item.get("url")
+            jql_filter = item.get("jqlFilter")
+            events = item.get("events")
+            if not isinstance(webhook_id, (str, int)):
+                continue
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if not isinstance(url, str) or not url.strip():
+                continue
+            if not isinstance(jql_filter, str):
+                jql_filter = ""
+            if not isinstance(events, list):
+                events = []
+            normalized_events = sorted(
+                [str(event).strip() for event in events if str(event).strip()]
+            )
+            webhooks.append(
+                JiraWebhook(
+                    webhook_id=str(webhook_id),
+                    name=name.strip(),
+                    url=url.strip(),
+                    jql_filter=jql_filter.strip(),
+                    events=normalized_events,
+                )
+            )
+        return webhooks
+
+    def create_webhook(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        name: str,
+        url: str,
+        jql_filter: str,
+        events: list[str],
+    ) -> JiraWebhook:
+        payload = self._post_json_with_access_token(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
+            access_token=access_token,
+            payload={
+                "name": name,
+                "url": url,
+                "jqlFilter": jql_filter,
+                "events": sorted({event.strip() for event in events if event.strip()}),
+                "excludeBody": False,
+            },
+        )
+        webhook_id = None
+        if isinstance(payload, dict):
+            for key in ("id", "webhookId", "createdWebhookId"):
+                candidate = payload.get(key)
+                if isinstance(candidate, (str, int)):
+                    webhook_id = str(candidate)
+                    break
+        if webhook_id is None:
+            webhooks = self.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+            for existing in webhooks:
+                if (
+                    existing.name == name
+                    and existing.url == url
+                    and existing.jql_filter == jql_filter
+                    and sorted(existing.events) == sorted(events)
+                ):
+                    return existing
+            raise JiraOAuthError("Jira webhook create succeeded but webhook ID was not returned")
+
+        return JiraWebhook(
+            webhook_id=webhook_id,
+            name=name,
+            url=url,
+            jql_filter=jql_filter,
+            events=sorted({event.strip() for event in events if event.strip()}),
+        )
+
+    def ensure_webhook(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        name: str,
+        url: str,
+        jql_filter: str,
+        events: list[str],
+    ) -> JiraWebhook:
+        normalized_events = sorted({event.strip() for event in events if event.strip()})
+        webhooks = self.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+        for existing in webhooks:
+            if (
+                existing.name == name
+                and existing.url == url
+                and existing.jql_filter == jql_filter
+                and sorted(existing.events) == normalized_events
+            ):
+                return existing
+        return self.create_webhook(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            name=name,
+            url=url,
+            jql_filter=jql_filter,
+            events=normalized_events,
+        )
 
 
 def _to_adf_description(text: str) -> dict:

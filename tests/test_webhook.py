@@ -14,8 +14,9 @@ from fastapi.testclient import TestClient
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord_notifications import DiscordSendResult
-from orchestrator.storage.db import reset_db_engine_cache
+from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
+from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssuePreview
 from orchestrator.tools.github_app import PullRequestDetails, PullRequestFileChange, WorkflowCheckSuite
 
@@ -45,6 +46,7 @@ class JiraWebhookTests(unittest.TestCase):
         run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
+        self.session_factory = create_session_factory(database_url=self.database_url)
         self.client.put(
             f"/api/admin/secrets/{self.discord_interactions_secret_ref}",
             json={"value": self.discord_public_key_hex},
@@ -586,6 +588,55 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["type"], 4)
         self.assertIn("Issue-scoped answer", response.json()["data"]["content"])
+
+    def test_discord_interactions_allowlist_request_creates_pending_request(self) -> None:
+        self._create_tenant(
+            "tenant-discord-allowlist-request",
+            discord_config={
+                "channel_id": "discord-channel-allowlist",
+                "notify_events": [],
+                "allowed_user_ids": [],
+                "command_secret_ref": None,
+            },
+        )
+        payload = {
+            "type": 2,
+            "channel_id": "discord-channel-allowlist",
+            "member": {"user": {"id": "discord-user-allow"}},
+            "data": {
+                "name": "allowlist",
+                "options": [
+                    {
+                        "type": 1,
+                        "name": "request",
+                        "options": [{"type": 3, "name": "reason", "value": "Need run access"}],
+                    }
+                ],
+            },
+        }
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        timestamp = "1700000004"
+        signature = self._sign_discord_interaction(payload_bytes=payload_bytes, timestamp=timestamp)
+
+        response = self.client.post(
+            "/discord/interactions",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-Signature-Ed25519": signature,
+                "X-Signature-Timestamp": timestamp,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], 4)
+        self.assertIn("Allowlist request", response.json()["data"]["content"])
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-discord-allowlist-request")
+            self.assertIsNotNone(tenant)
+            requests = tenant.discord_config.get("allowlist_requests", [])
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(requests[0]["user_id"], "discord-user-allow")
 
     def test_discord_webhook_executes_help_command(self) -> None:
         self._create_tenant(
