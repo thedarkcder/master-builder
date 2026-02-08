@@ -255,10 +255,50 @@ If your admin UI is hosted on Vercel, use this Funnel URL for API callbacks only
 1. Create a tenant via `POST /api/admin/tenants`.
 2. Connect Jira from the wizard (`Connect Jira`) and select `project_keys`.
 3. Connect GitHub integration from the wizard (`Install GitHub App`) so `installation_id` is saved automatically.
-4. Configure allowed repositories under `repos.allowlist`.
+4. Set tenant repository under `repos.github_repository`.
 5. Validate connections:
    - `POST /api/admin/tenants/{tenant_id}/test-jira`
    - `POST /api/admin/tenants/{tenant_id}/test-github`
+
+## Discord app setup
+Configure one Discord app (bot) and install it into your server. The same app can be reused across tenants.
+
+1. Create app + bot
+   - Open Discord Developer Portal: `https://discord.com/developers/applications`
+   - Create a new application
+   - Go to `Bot` and click `Add Bot`
+   - Copy and store bot token securely (do not commit it)
+
+2. Enable intents
+   - In `Bot` settings, enable:
+     - `SERVER MEMBERS INTENT`
+     - `MESSAGE CONTENT INTENT` (required for prefix commands like `!status`)
+
+3. Configure OAuth install
+   - In `OAuth2 > URL Generator`:
+     - Scopes: `bot` (and `applications.commands` if you later add slash commands)
+     - Bot permissions:
+       - `View Channels`
+       - `Send Messages`
+       - `Read Message History`
+       - `Manage Channels` (required for automatic tenant channel create/reuse)
+   - Open generated invite URL and install bot into your target Discord server
+
+4. Capture IDs (Developer Mode must be enabled in Discord client)
+   - Server ID (`guild_id`): right-click server -> `Copy Server ID`
+   - Channel ID (`channel_id`): right-click channel -> `Copy Channel ID`
+   - User ID for command allowlist: right-click user -> `Copy User ID`
+
+5. Configure tenant in admin UI
+   - Enable Discord settings for tenant
+   - Set `channel_id` (current command endpoint checks channel scope against this value)
+   - Set `allowed_user_ids` for sensitive commands (`!run`, `!cancel`, `!retry`)
+   - Set `notify_events` checkboxes
+
+Notes:
+- Server ID and channel ID are different values.
+- Current backend command endpoint is `POST /discord/command/{tenant_id}`.
+- Automatic channel create/reuse requires bot runtime wiring and `Manage Channels` permission.
 6. Inspect repo bootstrap state:
    - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
 
