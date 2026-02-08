@@ -41,11 +41,31 @@ class JiraIssuePreview:
 
 
 @dataclass(frozen=True)
+class JiraIssueCreateInput:
+    summary: str
+    description: str
+    labels: list[str]
+    issue_type: str = "Task"
+
+
+@dataclass(frozen=True)
+class JiraIssueCreateResult:
+    key: str
+    issue_id: str
+
+
+@dataclass(frozen=True)
+class JiraIssueBulkCreateResult:
+    created: list[JiraIssueCreateResult]
+    errors: list[str]
+
+
+@dataclass(frozen=True)
 class JiraOAuthClientConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
-    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work", "manage:jira-webhook")
+    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work", "offline_access", "manage:jira-webhook")
 
 
 class JiraOAuthClient:
@@ -278,6 +298,71 @@ class JiraOAuthClient:
             results.append(JiraIssuePreview(key=key, summary=summary, status=status_name))
         return results
 
+    def create_issues_bulk(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+        issues: list[JiraIssueCreateInput],
+    ) -> JiraIssueBulkCreateResult:
+        issue_updates = []
+        for issue in issues:
+            summary = issue.summary.strip()
+            if not summary:
+                continue
+            issue_updates.append(
+                {
+                    "fields": {
+                        "project": {"key": project_key},
+                        "issuetype": {"name": issue.issue_type or "Task"},
+                        "summary": summary,
+                        "description": _to_adf_description(issue.description),
+                        "labels": [label for label in issue.labels if label],
+                    }
+                }
+            )
+
+        if not issue_updates:
+            raise JiraOAuthError("No valid issue payloads were provided for Jira bulk create")
+
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/bulk",
+            access_token=access_token,
+            payload={"issueUpdates": issue_updates},
+        )
+        created_raw = payload.get("issues") if isinstance(payload, dict) else None
+        errors_raw = payload.get("errors") if isinstance(payload, dict) else None
+        if not isinstance(created_raw, list):
+            created_raw = []
+        if not isinstance(errors_raw, list):
+            errors_raw = []
+
+        created: list[JiraIssueCreateResult] = []
+        for item in created_raw:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            issue_id = item.get("id")
+            if isinstance(key, str) and key and isinstance(issue_id, str) and issue_id:
+                created.append(JiraIssueCreateResult(key=key, issue_id=issue_id))
+
+        errors: list[str] = []
+        for item in errors_raw:
+            if not isinstance(item, dict):
+                continue
+            failed_element = item.get("failedElementNumber")
+            element_errors = item.get("elementErrors") if isinstance(item.get("elementErrors"), dict) else {}
+            error_messages = element_errors.get("errorMessages")
+            if isinstance(error_messages, list):
+                reason_text = "; ".join(str(part) for part in error_messages if str(part).strip()) or "Unknown error"
+            else:
+                reason_text = "Unknown error"
+            errors.append(f"Item {failed_element}: {reason_text}")
+
+        return JiraIssueBulkCreateResult(created=created, errors=errors)
+
     def register_webhook(
         self,
         *,
@@ -330,3 +415,15 @@ class JiraOAuthClient:
             url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook?{query}",
             access_token=access_token,
         )
+
+
+def _to_adf_description(text: str) -> dict:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        lines = ["No description provided"]
+    paragraphs = [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in lines]
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": paragraphs,
+    }
