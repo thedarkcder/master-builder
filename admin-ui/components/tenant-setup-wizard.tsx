@@ -98,24 +98,38 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
 
   const stepIndex = STEP_ORDER.findIndex((step) => step.key === stepKey);
 
-  const canAdvance = useMemo(() => {
+  const advanceValidationError = useMemo(() => {
     if (!values.name.trim()) {
-      return false;
+      return "Tenant name is required.";
     }
     if (stepKey === "basics") {
-      return true;
+      return null;
     }
     if (stepKey === "jira") {
-      return Boolean(values.jira.connection_id?.trim() && textFields.projectKeysText.trim());
+      if (!values.jira.connection_id?.trim()) {
+        return "Connect Jira before continuing.";
+      }
+      if (!textFields.projectKeysText.trim()) {
+        return "Select at least one Jira project key before continuing.";
+      }
+      return null;
     }
     if (stepKey === "github") {
-      return Boolean(values.github.installation_id);
+      if (!values.github.installation_id) {
+        return "Install the GitHub App before continuing.";
+      }
+      return null;
     }
     if (stepKey === "repos") {
-      return Boolean(textFields.githubRepositoryText.trim());
+      if (!textFields.githubRepositoryText.trim()) {
+        return "Select a GitHub repository before continuing.";
+      }
+      return null;
     }
-    return true;
+    return null;
   }, [stepKey, textFields.githubRepositoryText, textFields.projectKeysText, values]);
+
+  const canAdvance = advanceValidationError === null;
 
   useEffect(() => {
     try {
@@ -314,8 +328,9 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
       if (selected) {
         setSelectedRepoUrl(selected.html_url);
       } else {
-        setSelectedRepoUrl("");
-        setTextFields((prev) => ({ ...prev, githubRepositoryText: "" }));
+        const defaultRepo = repositories[0]?.html_url ?? "";
+        setSelectedRepoUrl(defaultRepo);
+        setTextFields((prev) => ({ ...prev, githubRepositoryText: defaultRepo }));
       }
       setStatusLine(`Loaded ${repositories.length} repository option(s) from GitHub installation.`);
     } catch (error) {
@@ -360,8 +375,8 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
   }
 
   async function nextStep() {
-    if (!canAdvance) {
-      setStatusLine("Please complete required fields before continuing.");
+    if (advanceValidationError) {
+      setStatusLine(advanceValidationError);
       return;
     }
 
