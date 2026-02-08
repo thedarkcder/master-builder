@@ -437,6 +437,30 @@ class JiraOAuthClient:
             },
         )
 
+    def add_issue_comment(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        comment: str | dict[str, Any],
+    ) -> dict:
+        normalized_issue = issue_id_or_key.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for comment create")
+
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}/comment",
+            access_token=access_token,
+            payload={
+                "body": _to_adf_description(comment),
+            },
+        )
+        if not isinstance(payload, dict):
+            raise JiraOAuthError("Jira comment create response was not an object")
+        return payload
+
     def register_webhook(
         self,
         *,
