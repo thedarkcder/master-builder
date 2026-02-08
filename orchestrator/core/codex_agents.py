@@ -254,11 +254,12 @@ def plan_seed_issues_with_codex(
         system_prompt=(
             "You split product specs into Jira issue drafts. "
             "Honor the enforcement context already supplied by the runtime. "
-            "Return strict JSON only with keys: project_key (string), issues (array). "
+            "Return strict JSON only with keys: project_key (string), issues (array), questions (array). "
             "Each issue item must include: summary (string), objective (string), "
             "scope_in (array of strings), scope_out (array of strings), "
             "acceptance_criteria (array of strings), tags (array of strings), "
-            "labels (array of strings), issue_type (string)."
+            "labels (array of strings), issue_type (string), and optional issue_key (string). "
+            "questions should contain concise clarification questions only if required details are missing."
         ),
         user_prompt=(
             "Stage: discord-issues-seed\n"
@@ -269,6 +270,8 @@ def plan_seed_issues_with_codex(
             "- project_key must be one of allowed_project_keys.\n"
             "- tags/labels should be short normalized tokens when present.\n"
             "- issue_type should be Task, Bug, or Story.\n"
+            "- description content should be detailed enough for Objective, Scope In/Out, and Acceptance Criteria.\n"
+            "- when reseeding existing work, set issue_key if explicitly known from source context.\n"
         ),
     )
     if not isinstance(payload, dict):

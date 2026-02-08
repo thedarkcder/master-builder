@@ -365,6 +365,36 @@ class JiraOAuthClient:
 
         return JiraIssueBulkCreateResult(created=created, errors=errors)
 
+    def update_issue_fields(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+        description: str,
+        labels: list[str],
+    ) -> None:
+        normalized_issue = issue_id_or_key.strip()
+        normalized_summary = summary.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue update")
+        if not normalized_summary:
+            raise JiraOAuthError("Missing issue summary for issue update")
+
+        self._request_json(
+            method="PUT",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
+            access_token=access_token,
+            payload={
+                "fields": {
+                    "summary": normalized_summary,
+                    "description": _to_adf_description(description),
+                    "labels": [label for label in labels if label],
+                }
+            },
+        )
+
     def register_webhook(
         self,
         *,

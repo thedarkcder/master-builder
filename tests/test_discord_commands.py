@@ -8,7 +8,12 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
-from orchestrator.api.routes_discord import _build_seed_issue_description, _create_discord_bug_issue, execute_discord_command
+from orchestrator.api.routes_discord import (
+    _build_seed_issue_description,
+    _create_discord_bug_issue,
+    _seed_issues_with_codex,
+    execute_discord_command,
+)
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -428,6 +433,120 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["command"], "issues")
         self.assertIn("TP-1", response.json()["message"])
+
+    def test_seed_issues_requests_clarifications_when_required_fields_missing(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord.build_codex_runtime", return_value=object()),
+            patch(
+                "orchestrator.api.routes_discord.plan_seed_issues_with_codex",
+                return_value={
+                    "project_key": "TP",
+                    "questions": ["What is the rollout plan?"],
+                    "issues": [
+                        {
+                            "summary": "Create worker retries",
+                            "objective": "TBD",
+                            "scope_in": [],
+                            "scope_out": [],
+                            "acceptance_criteria": [],
+                            "labels": ["seeded"],
+                            "issue_type": "Task",
+                        }
+                    ],
+                },
+            ),
+        ):
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            message, data = _seed_issues_with_codex(
+                session=session,
+                tenant=tenant,
+                prompt_markdown="Seed issues from spec",
+            )
+
+        self.assertIn("need a bit more detail", message.lower())
+        self.assertTrue(data["requires_input"])
+        self.assertIn("What is the rollout plan?", data["questions"])
+        self.assertTrue(any("objective" in question.lower() for question in data["questions"]))
+
+    def test_seed_issues_updates_matching_existing_issue(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            jira_config = dict(tenant.jira_config)
+            jira_config["connection_id"] = "conn-seed-upsert"
+            tenant.jira_config = jira_config
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="conn-seed-upsert",
+                    account_id="acct-1",
+                    account_email="dev@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://master-builder.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted="enc",
+                    refresh_token_encrypted="enc",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.updated_issue_keys: list[str] = []
+                self.create_called = False
+
+            def search_issues_by_jql(self, **_: object) -> list[JiraIssuePreview]:  # noqa: ANN003
+                return [JiraIssuePreview(key="TP-111", summary="Create worker retries", status="To Do")]
+
+            def update_issue_fields(self, **kwargs: object) -> None:  # noqa: ANN003
+                self.updated_issue_keys.append(str(kwargs["issue_id_or_key"]))
+
+            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                self.create_called = True
+                return JiraIssueBulkCreateResult(created=[], errors=[])
+
+        fake_client = _FakeClient()
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord.build_codex_runtime", return_value=object()),
+            patch(
+                "orchestrator.api.routes_discord.plan_seed_issues_with_codex",
+                return_value={
+                    "project_key": "TP",
+                    "issues": [
+                        {
+                            "summary": "Create worker retries",
+                            "objective": "Improve reliability",
+                            "scope_in": ["Worker retry strategy"],
+                            "scope_out": ["UI changes"],
+                            "acceptance_criteria": ["Retries are bounded and observable"],
+                            "labels": ["seeded"],
+                            "issue_type": "Task",
+                        }
+                    ],
+                },
+            ),
+            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=fake_client),
+        ):
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            message, data = _seed_issues_with_codex(
+                session=session,
+                tenant=tenant,
+                prompt_markdown="Seed issues from spec",
+            )
+
+        self.assertIn("Updated 1", message)
+        self.assertEqual(data["updated_issue_keys"], ["TP-111"])
+        self.assertEqual(data["created_issue_keys"], [])
+        self.assertEqual(fake_client.updated_issue_keys, ["TP-111"])
+        self.assertFalse(fake_client.create_called)
 
     def test_seed_issue_description_uses_bold_sections_and_omits_labels_section(self) -> None:
         description = _build_seed_issue_description(
