@@ -193,9 +193,20 @@ def _resolve_discord_config(
 
     guild_id = settings.discord_guild_id.strip()
     if not guild_id:
+        guild_secret_ref = settings.discord_guild_id_secret_ref.strip()
+        if guild_secret_ref:
+            guild_id = resolve_secret_ref(
+                session,
+                secret_ref=guild_secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+            ).strip()
+    if not guild_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ORCHESTRATOR_DISCORD_GUILD_ID is required when Discord is enabled",
+            detail=(
+                "Discord guild ID is required when Discord is enabled "
+                "(set ORCHESTRATOR_DISCORD_GUILD_ID or managed secret DISCORD_GUILD_ID)"
+            ),
         )
 
     token_ref = settings.discord_bot_token_secret_ref.strip()

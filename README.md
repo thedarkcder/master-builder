@@ -289,7 +289,7 @@ Configure one Discord app (bot) and install it into your server. The same app ca
    - User ID for command allowlist: right-click user -> `Copy User ID`
 
 5. Configure backend globals
-   - Set `ORCHESTRATOR_DISCORD_GUILD_ID` to your server ID.
+   - Set `ORCHESTRATOR_DISCORD_GUILD_ID` to your server ID, or store it in Secrets Manager as `DISCORD_GUILD_ID`.
    - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_NAME_TEMPLATE` (default `tenant-{tenant_id}`).
    - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID` to place channels under a category.
    - Store bot token in Secrets Manager under `DISCORD_BOT_TOKEN` (or change `ORCHESTRATOR_DISCORD_BOT_TOKEN_SECRET_REF`).
