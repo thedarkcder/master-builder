@@ -196,3 +196,30 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["message"], "Board snapshot")
         self.assertEqual(response.json()["data"]["status_counts"]["To Do"], 2)
+
+    def test_issues_seed_requires_spec(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!issues seed"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !issues seed", response.json()["detail"])
+
+    def test_issues_seed_calls_codex_seed_flow(self) -> None:
+        with patch(
+            "orchestrator.api.routes_discord._seed_issues_with_codex",
+            return_value=("Seeded 2 issue(s): TP-1, TP-2", {"created_issue_keys": ["TP-1", "TP-2"]}),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!issues seed Build API and webhook tasks",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["command"], "issues")
+        self.assertIn("TP-1", response.json()["message"])

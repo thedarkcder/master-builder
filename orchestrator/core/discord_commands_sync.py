@@ -97,6 +97,25 @@ def build_discord_guild_commands() -> list[dict]:
                 }
             ],
         },
+        {
+            "name": "issues",
+            "description": "Seed Jira issues from markdown spec",
+            "options": [
+                {
+                    "type": 1,  # SUB_COMMAND
+                    "name": "seed",
+                    "description": "Split markdown into Jira task issues",
+                    "options": [
+                        {
+                            "type": 3,  # STRING
+                            "name": "spec",
+                            "description": "Markdown spec to split into tasks",
+                            "required": True,
+                        }
+                    ],
+                }
+            ],
+        },
     ]
 
 

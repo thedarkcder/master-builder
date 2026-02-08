@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.codex_agents import answer_board_question_with_codex
+from orchestrator.core.codex_agents import answer_board_question_with_codex, plan_seed_issues_with_codex
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import (
@@ -22,11 +22,11 @@ from orchestrator.core.runs import (
     enqueue_run,
 )
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant, WebhookDelivery
-from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
 
 router = APIRouter(tags=["discord"])
 
-SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote"}
+SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
 PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
@@ -203,7 +203,8 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
 def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
-        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>"
+        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>, "
+        "!issues seed <markdown spec>"
     )
 
 
@@ -222,6 +223,138 @@ def _project_filter_jql(tenant: Tenant) -> str:
         return f'project = "{keys[0]}"'
     joined = ", ".join(f'"{key}"' for key in keys)
     return f"project in ({joined})"
+
+
+def _tenant_project_keys(tenant: Tenant) -> list[str]:
+    return [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
+
+
+def _normalize_seed_issue_labels(raw_labels: object) -> list[str]:
+    if not isinstance(raw_labels, list):
+        return ["discord-seeded"]
+    normalized: list[str] = ["discord-seeded"]
+    for label in raw_labels:
+        text = str(label).strip().lower()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _build_seed_issue_description(*, objective: str, acceptance_criteria: list[str]) -> str:
+    lines = ["Objective", objective.strip() or "No objective provided", "", "Acceptance Criteria"]
+    if acceptance_criteria:
+        lines.extend(f"- {criterion}" for criterion in acceptance_criteria)
+    else:
+        lines.append("- Criteria were not provided")
+    return "\n".join(lines)
+
+
+def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown: str) -> tuple[str, dict]:
+    project_keys = _tenant_project_keys(tenant)
+    if not project_keys:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
+
+    settings = get_settings()
+    runtime = build_codex_runtime(session=session, settings=settings)
+    try:
+        plan_payload = plan_seed_issues_with_codex(
+            runtime=runtime,
+            prompt_markdown=prompt_markdown,
+            allowed_project_keys=project_keys,
+        )
+    except CodexRuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Codex issue seeding is unavailable: {exc}",
+        ) from exc
+
+    project_key = str(plan_payload.get("project_key") or project_keys[0]).strip().upper()
+    if project_key not in project_keys:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Codex selected unsupported Jira project key '{project_key}'",
+        )
+
+    raw_issues = plan_payload.get("issues")
+    if not isinstance(raw_issues, list):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return issue drafts")
+
+    issue_inputs: list[JiraIssueCreateInput] = []
+    for item in raw_issues[:12]:
+        if not isinstance(item, dict):
+            continue
+        summary = str(item.get("summary") or "").strip()
+        objective = str(item.get("objective") or "").strip()
+        acceptance_raw = item.get("acceptance_criteria")
+        acceptance = (
+            [str(entry).strip() for entry in acceptance_raw if str(entry).strip()]
+            if isinstance(acceptance_raw, list)
+            else []
+        )
+        if not summary:
+            continue
+        issue_inputs.append(
+            JiraIssueCreateInput(
+                summary=summary[:90],
+                description=_build_seed_issue_description(
+                    objective=objective,
+                    acceptance_criteria=acceptance,
+                ),
+                labels=_normalize_seed_issue_labels(item.get("labels")),
+            )
+        )
+
+    if not issue_inputs:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid issue drafts")
+
+    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Jira OAuth connection is not linked for this tenant",
+        )
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configured Jira connection was not found",
+        )
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        create_result = client.create_issues_bulk(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            project_key=project_key,
+            issues=issue_inputs,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to create Jira issues: {exc}",
+        ) from exc
+
+    created_keys = [issue.key for issue in create_result.created]
+    if not created_keys:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Jira bulk create returned no issues: {'; '.join(create_result.errors) or 'unknown error'}",
+        )
+    message = f"Seeded {len(created_keys)} issue(s): {', '.join(created_keys)}"
+    if create_result.errors:
+        message = f"{message} (partial errors: {'; '.join(create_result.errors)})"
+    return (
+        message,
+        {
+            "project_key": project_key,
+            "created_issue_keys": created_keys,
+            "errors": create_result.errors,
+        },
+    )
 
 
 def _ask_board_message(*, session: Session, tenant: Tenant, question: str) -> tuple[str, dict]:
@@ -431,6 +564,30 @@ def execute_discord_command(
             )
         question = " ".join(arguments).strip()
         message, data = _ask_board_message(session=session, tenant=tenant, question=question)
+        return DiscordCommandResponse(
+            ok=True,
+            command=command_name,
+            message=message,
+            data=data,
+        )
+
+    if command_name == "issues":
+        if len(arguments) < 2 or arguments[0].strip().lower() != "seed":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !issues seed <markdown spec>",
+            )
+        prompt_markdown = " ".join(arguments[1:]).strip()
+        if not prompt_markdown:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !issues seed <markdown spec>",
+            )
+        message, data = _seed_issues_with_codex(
+            session=session,
+            tenant=tenant,
+            prompt_markdown=prompt_markdown,
+        )
         return DiscordCommandResponse(
             ok=True,
             command=command_name,
