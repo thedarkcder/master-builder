@@ -251,13 +251,13 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["command"], "issues")
         self.assertIn("TP-1", response.json()["message"])
 
-    def test_allowlist_request_creates_pending_request(self) -> None:
+    def test_request_creates_pending_request(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
             json={
                 "user_id": "u-viewer",
                 "channel_id": "discord-channel-1",
-                "command": "!allowlist request Need run controls",
+                "command": "!request run_controls Need run controls",
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -270,15 +270,16 @@ class DiscordCommandApiTests(unittest.TestCase):
             requests = tenant.discord_config.get("allowlist_requests", [])
             self.assertEqual(len(requests), 1)
             self.assertEqual(requests[0]["user_id"], "u-viewer")
+            self.assertEqual(requests[0]["permissions"], ["run_controls"])
             self.assertEqual(requests[0]["reason"], "Need run controls")
 
-    def test_allowlist_request_for_allowlisted_user_returns_already_allowlisted(self) -> None:
+    def test_request_for_allowlisted_user_returns_already_allowlisted(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
             json={
                 "user_id": "u-admin",
                 "channel_id": "discord-channel-1",
-                "command": "!allowlist request Please add me",
+                "command": "!request run_controls Please add me",
             },
         )
         self.assertEqual(response.status_code, 200)

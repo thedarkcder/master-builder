@@ -127,21 +127,34 @@ def build_discord_guild_commands() -> list[dict]:
             ],
         },
         {
-            "name": "allowlist",
-            "description": "Request allowlist access for sensitive commands",
+            "name": "request",
+            "description": "Request allowlist access for a permission set",
             "options": [
                 {
-                    "type": 1,  # SUB_COMMAND
-                    "name": "request",
-                    "description": "Create or refresh your access request",
-                    "options": [
+                    "type": 3,  # STRING
+                    "name": "permission",
+                    "description": "Permission set to request",
+                    "required": True,
+                    "choices": [
                         {
-                            "type": 3,  # STRING
-                            "name": "reason",
-                            "description": "Optional reason for access request",
-                            "required": False,
-                        }
+                            "name": "Run controls (!run, !cancel, !retry)",
+                            "value": "run_controls",
+                        },
+                        {
+                            "name": "Issue seeding (!issues seed)",
+                            "value": "seed_issues",
+                        },
+                        {
+                            "name": "All sensitive commands",
+                            "value": "all_sensitive",
+                        },
                     ],
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "reason",
+                    "description": "Optional reason for access request",
+                    "required": False,
                 }
             ],
         },

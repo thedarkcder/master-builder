@@ -28,10 +28,15 @@ from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview
 router = APIRouter(tags=["discord"])
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
-PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "allowlist"}
+PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "request"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
+REQUEST_PERMISSION_LABELS = {
+    "run_controls": "run controls (!run, !cancel, !retry)",
+    "seed_issues": "issue seeding (!issues seed)",
+    "all_sensitive": "all sensitive commands",
+}
 
 
 def _normalize_status_name(value: str) -> str:
@@ -95,6 +100,7 @@ def _create_allowlist_request(
     tenant: Tenant,
     user_id: str,
     channel_id: str | None,
+    permissions: list[str],
     reason: str | None,
 ) -> tuple[bool, str]:
     allowlisted_ids = _tenant_allowlisted_user_ids(tenant)
@@ -107,6 +113,7 @@ def _create_allowlist_request(
     if existing:
         existing["requested_at"] = now_iso
         existing["channel_id"] = channel_id
+        existing["permissions"] = permissions
         existing["reason"] = reason
         message = "Allowlist request refreshed. An admin can approve it in the tenant page."
     else:
@@ -115,6 +122,7 @@ def _create_allowlist_request(
                 "user_id": user_id,
                 "requested_at": now_iso,
                 "channel_id": channel_id,
+                "permissions": permissions,
                 "reason": reason,
             }
         )
@@ -268,7 +276,7 @@ def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
         "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>, "
-        "!issues seed <markdown spec>, !allowlist request [reason]"
+        "!issues seed <markdown spec>, !request <run_controls|seed_issues|all_sensitive> [reason]"
     )
 
 
@@ -704,25 +712,34 @@ def execute_discord_command(
             data=data,
         )
 
-    if command_name == "allowlist":
-        if not arguments or arguments[0].strip().lower() != "request":
+    if command_name == "request":
+        if not arguments:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !allowlist request [reason]",
+                detail="Usage: !request <run_controls|seed_issues|all_sensitive> [reason]",
             )
+        permission = arguments[0].strip().lower()
         reason = " ".join(arguments[1:]).strip() or None
+        if permission not in REQUEST_PERMISSION_LABELS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Permission must be one of: run_controls, seed_issues, all_sensitive",
+            )
+
         _, message = _create_allowlist_request(
             session=session,
             tenant=tenant,
             user_id=payload.user_id.strip(),
             channel_id=payload.channel_id.strip() if payload.channel_id else None,
+            permissions=[permission],
             reason=reason,
         )
+        suffix = f" Requested permission: {REQUEST_PERMISSION_LABELS[permission]}."
         return DiscordCommandResponse(
             ok=True,
             command=command_name,
-            message=message,
-            data={"user_id": payload.user_id.strip(), "requested": True},
+            message=f"{message}{suffix}",
+            data={"user_id": payload.user_id.strip(), "requested": True, "permission": permission},
         )
 
     if command_name == "run":
