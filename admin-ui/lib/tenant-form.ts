@@ -106,7 +106,6 @@ export type TenantFormTextFields = {
   readyStatusesText: string;
   githubRepositoryText: string;
   policyAllowedCommandsText: string;
-  notifyEventsText: string;
 };
 
 export function formValuesToTextFields(values: TenantFormValues): TenantFormTextFields {
@@ -114,8 +113,7 @@ export function formValuesToTextFields(values: TenantFormValues): TenantFormText
     projectKeysText: joinCsv(values.jira.project_keys),
     readyStatusesText: joinCsv(values.jira.ready_statuses),
     githubRepositoryText: values.repos.github_repository ?? "",
-    policyAllowedCommandsText: values.policy.allowed_commands.join("\n"),
-    notifyEventsText: values.discord.notify_events.join("\n")
+    policyAllowedCommandsText: values.policy.allowed_commands.join("\n")
   };
 }
 
@@ -161,7 +159,9 @@ export function toCreatePayload(
       ? {
           channel_id: values.discord.channel_id?.trim() || null,
           channel_name_template: values.discord.channel_name_template.trim() || "proj-{tenant_id}",
-          notify_events: parseMultiLine(textFields.notifyEventsText)
+          notify_events: values.discord.notify_events
+            .map((value) => value.trim())
+            .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index)
         }
       : null
   };

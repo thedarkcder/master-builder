@@ -15,6 +15,29 @@ import {
   toUpdatePayload
 } from "@/lib/tenant-form";
 
+const DISCORD_NOTIFY_EVENT_OPTIONS = [
+  {
+    value: "lock_acquired",
+    label: "Run queued",
+    description: "Post when a run is accepted and lock is acquired."
+  },
+  {
+    value: "plan_posted",
+    label: "Plan posted",
+    description: "Post when the PM plan is produced for the run."
+  },
+  {
+    value: "pr_opened",
+    label: "PR opened",
+    description: "Post when a pull request is opened."
+  },
+  {
+    value: "run_failed",
+    label: "Run failed",
+    description: "Post when a run fails and needs intervention."
+  }
+] as const;
+
 type TenantFormProps = {
   submitting?: boolean;
   repositoryOptions?: GitHubRepositoryRecord[];
@@ -71,6 +94,19 @@ export function TenantForm({
   const [textFields, setTextFields] = useState(() => formValuesToTextFields(initialValues ?? defaultTenantFormValues()));
 
   const submitLabel = mode === "create" ? "Create Tenant" : "Save Tenant";
+
+  function toggleDiscordNotifyEvent(eventValue: string, enabled: boolean): void {
+    setValues((prev) => {
+      const current = prev.discord.notify_events;
+      const next = enabled
+        ? Array.from(new Set([...current, eventValue]))
+        : current.filter((value) => value !== eventValue);
+      return {
+        ...prev,
+        discord: { ...prev.discord, notify_events: next }
+      };
+    });
+  }
 
   const validation = useMemo(() => {
     if (!values.name.trim()) {
@@ -419,12 +455,23 @@ export function TenantForm({
                 />
               </div>
               <div className="space-y-2">
-                <FieldLabel>Notify events (one per line)</FieldLabel>
-                <Textarea
-                  value={textFields.notifyEventsText}
-                  onChange={(event) => setTextFields((prev) => ({ ...prev, notifyEventsText: event.target.value }))}
-                  placeholder="run.started"
-                />
+                <FieldLabel>Notify events</FieldLabel>
+                <div className="space-y-2 rounded-md border p-3">
+                  {DISCORD_NOTIFY_EVENT_OPTIONS.map((option) => (
+                    <label key={option.value} className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 rounded border-input"
+                        checked={values.discord.notify_events.includes(option.value)}
+                        onChange={(event) => toggleDiscordNotifyEvent(option.value, event.target.checked)}
+                      />
+                      <span>
+                        <span className="font-medium text-foreground">{option.label}</span>
+                        <span className="block text-xs text-muted-foreground">{option.description}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
               </div>
             </>
           ) : null}
