@@ -313,6 +313,25 @@ def _cleanup_unmanaged_jira_webhooks_for_connection(
     return len(stale_ids), f"Deleted {len(stale_ids)} unmanaged Jira webhook(s)."
 
 
+def _remove_managed_webhook_id_from_tenants(*, session: Session, webhook_id: int) -> int:
+    removed_count = 0
+    tenants = session.execute(select(Tenant)).scalars().all()
+    for tenant in tenants:
+        jira_config = tenant.jira_config
+        if not isinstance(jira_config, dict):
+            continue
+        managed_ids = _parse_managed_webhook_ids(jira_config)
+        if webhook_id not in managed_ids:
+            continue
+        updated_ids = [item for item in managed_ids if item != webhook_id]
+        updated_config = dict(jira_config)
+        updated_config["managed_webhook_ids"] = updated_ids
+        tenant.jira_config = updated_config
+        tenant.updated_at = datetime.now(timezone.utc)
+        removed_count += 1
+    return removed_count
+
+
 def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:
     merged = dict(proposed)
     for key in (
@@ -542,6 +561,34 @@ def _provision_jira_webhook(
                         deleted_count = len(current_tenant_ids)
                         cleanup_note = (
                             f"{cleanup_details} Deleted {deleted_count} existing tenant Jira webhook(s)."
+                        )
+                if deleted_count == 0:
+                    all_webhooks = client.list_webhooks(access_token=access_token, cloud_id=connection.cloud_id)
+                    rollover_id: int | None = None
+                    for item in all_webhooks:
+                        parsed = _parse_jira_webhook_id(item.get("id"))
+                        if parsed is not None:
+                            rollover_id = parsed
+                            break
+                    if rollover_id is not None:
+                        client.delete_webhooks(
+                            access_token=access_token,
+                            cloud_id=connection.cloud_id,
+                            webhook_ids=[rollover_id],
+                        )
+                        touched_tenants = _remove_managed_webhook_id_from_tenants(
+                            session=session,
+                            webhook_id=rollover_id,
+                        )
+                        deleted_count = 1
+                        tenant_note = (
+                            f" Removed stale managed reference from {touched_tenants} tenant(s)."
+                            if touched_tenants > 0
+                            else ""
+                        )
+                        cleanup_note = (
+                            f"{cleanup_details} Deleted 1 rollover Jira webhook ({rollover_id}) to free capacity."
+                            f"{tenant_note}"
                         )
                 if deleted_count > 0:
                     webhook_ids = client.register_webhook(

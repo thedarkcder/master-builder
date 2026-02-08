@@ -16,6 +16,7 @@ from orchestrator.api.main import create_app
 from orchestrator.api.routes_webhook import (
     _build_command_followup_message,
     _find_tenant_for_discord_channel,
+    _parse_jira_comment_command,
     _parse_discord_interaction_command,
     _run_discord_command_followup,
 )
@@ -23,7 +24,7 @@ from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Tenant
+from orchestrator.storage.models import Run, Tenant
 
 
 class JiraWebhookTests(unittest.TestCase):
@@ -231,6 +232,82 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "duplicate_delivery")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
+
+    def test_parse_jira_comment_command_supports_ask_with_inline_and_multiline_text(self) -> None:
+        inline_payload = {
+            "comment": {
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": "/mb ask What changed since last run?"}],
+                        }
+                    ],
+                }
+            }
+        }
+        command, argument, error = _parse_jira_comment_command(inline_payload)
+        self.assertEqual(command, "ask")
+        self.assertEqual(argument, "What changed since last run?")
+        self.assertIsNone(error)
+
+        multiline_payload = {
+            "comment": {
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "/mb ask"}]},
+                        {"type": "paragraph", "content": [{"type": "text", "text": "Can you explain the failure?"}]},
+                    ],
+                }
+            }
+        }
+        command, argument, error = _parse_jira_comment_command(multiline_payload)
+        self.assertEqual(command, "ask")
+        self.assertEqual(argument, "Can you explain the failure?")
+        self.assertIsNone(error)
+
+    def test_webhook_comment_command_ask_posts_reply_and_does_not_enqueue_run(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-901", status_name="To Do")
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-1"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "/mb ask Can you fix this?"}],
+                    }
+                ],
+            },
+        }
+        with (
+            patch(
+                "orchestrator.api.routes_webhook.execute_discord_command",
+                return_value=DiscordCommandResponse(ok=True, command="ask", message="I can fix this.", data=None),
+            ) as command_mock,
+            patch("orchestrator.api.routes_webhook._post_jira_comment", return_value=(True, None)) as post_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "comment_command_ask")
+        self.assertTrue(body["comment_posted"])
+        self.assertIsNone(body["comment_error"])
+        command_mock.assert_called_once()
+        post_mock.assert_called_once()
+
+        with self.session_factory() as session:
+            run = session.execute(
+                select(Run).where(Run.tenant_id == "tenant-webhook", Run.issue_key == "TP-901")
+            ).scalar_one_or_none()
+            self.assertIsNone(run)
 
     def test_webhook_respects_tenant_concurrency_limit(self) -> None:
         self._create_tenant("tenant-single", max_concurrent_runs=1)

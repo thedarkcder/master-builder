@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
 from orchestrator.api.routes_discord import (
     _project_filter_jql,
     _search_jira_issues_for_tenant,
@@ -43,6 +44,7 @@ from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
+from orchestrator.tools.jira_oauth import JiraOAuthError
 
 router = APIRouter(tags=["jira-webhook"])
 
@@ -55,7 +57,7 @@ HTTP_413_TOO_LARGE = getattr(
 )
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
-SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry"}
+SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "ask"}
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")
 ASK_REPLY_MODAL_CUSTOM_ID_PATTERN = re.compile(r"^ask\.reply\.([0-9]{15,25})$")
@@ -185,29 +187,96 @@ def _extract_jira_comment_text(payload: dict) -> str | None:
     return None
 
 
-def _parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None]:
+def _parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None, str | None]:
     comment_text = _extract_jira_comment_text(payload)
     if not comment_text:
-        return None, None
+        return None, None, None
 
     first_non_empty_line = ""
+    remaining_lines: list[str] = []
+    line_index = -1
     for raw_line in comment_text.splitlines():
+        line_index += 1
         candidate = raw_line.strip()
         if candidate:
             first_non_empty_line = candidate
+            remaining_lines = [line.strip() for line in comment_text.splitlines()[line_index + 1 :] if line.strip()]
             break
     if not first_non_empty_line:
-        return None, None
+        return None, None, None
     if not first_non_empty_line.lower().startswith("/mb"):
-        return None, None
+        return None, None, None
 
-    parts = [part for part in first_non_empty_line.split(" ") if part]
-    if len(parts) != 2:
-        return None, "invalid_comment_command"
-    command_name = parts[1].strip().lower()
+    command_payload = first_non_empty_line[3:].strip()
+    if not command_payload:
+        return None, None, "invalid_comment_command"
+
+    parts = [part for part in command_payload.split(" ") if part]
+    if not parts:
+        return None, None, "invalid_comment_command"
+
+    command_name = parts[0].strip().lower()
     if command_name not in SUPPORTED_JIRA_COMMENT_COMMANDS:
-        return None, "invalid_comment_command"
-    return command_name, None
+        return None, None, "invalid_comment_command"
+
+    if command_name in {"run", "retry"}:
+        if len(parts) != 1:
+            return None, None, "invalid_comment_command"
+        return command_name, None, None
+
+    if command_name == "ask":
+        inline_question = " ".join(parts[1:]).strip()
+        full_question = "\n".join(part for part in [inline_question, *remaining_lines] if part).strip()
+        if not full_question:
+            return None, None, "invalid_comment_command"
+        return command_name, full_question, None
+
+    return None, None, "invalid_comment_command"
+
+
+def _extract_jira_comment_author_account_id(payload: dict) -> str | None:
+    comment = payload.get("comment")
+    if not isinstance(comment, dict):
+        return None
+    author = comment.get("author")
+    if not isinstance(author, dict):
+        return None
+    account_id = author.get("accountId")
+    if isinstance(account_id, str) and account_id.strip():
+        return account_id.strip()
+    return None
+
+
+def _post_jira_comment(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+    comment: str,
+    settings,  # noqa: ANN001
+) -> tuple[bool, str | None]:
+    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        return False, "Tenant Jira connection is missing"
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        return False, "Tenant Jira connection was not found"
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        client.add_issue_comment(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            issue_id_or_key=issue_key,
+            comment=comment,
+        )
+        return True, None
+    except (JiraOAuthError, ValueError) as exc:
+        return False, str(exc)
 
 
 def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
@@ -1479,7 +1548,7 @@ async def ingest_jira_webhook(
     issue_key, labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
         _extract_issue_payload(payload)
     )
-    comment_command, comment_command_error = _parse_jira_comment_command(payload)
+    comment_command, comment_command_argument, comment_command_error = _parse_jira_comment_command(payload)
     delivery_id = _extract_delivery_id(request)
     _record_jira_webhook_receipt(
         session=session,
@@ -1510,6 +1579,52 @@ async def ingest_jira_webhook(
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "invalid_comment_command",
+        }
+
+    if comment_command == "ask":
+        question = (comment_command_argument or "").strip()
+        if not question:
+            return {
+                "request_id": request_id,
+                "tenant_id": tenant_id,
+                "issue_key": issue_key,
+                "enqueued": False,
+                "reason": "invalid_comment_command",
+            }
+        author_account_id = _extract_jira_comment_author_account_id(payload) or "jira-user"
+        try:
+            ask_response = execute_discord_command(
+                session=session,
+                tenant_id=tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id=author_account_id,
+                    channel_id=f"jira:{tenant_id}:{issue_key}",
+                    command=f"!ask @{issue_key} {question}",
+                ),
+            )
+            response_text = ask_response.message.strip()
+            if not response_text:
+                response_text = "I processed your question but returned no response text."
+        except HTTPException as exc:
+            response_text = f"Unable to process `/mb ask`: {exc.detail}"
+
+        posted, post_error = _post_jira_comment(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
+            comment=response_text,
+            settings=settings,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "comment_command_ask",
+            "command": comment_command,
+            "question": question,
+            "comment_posted": posted,
+            "comment_error": post_error,
         }
 
     configured_ready_statuses = tenant.jira_config.get("ready_statuses")
