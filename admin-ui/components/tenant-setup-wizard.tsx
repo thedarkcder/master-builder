@@ -52,6 +52,13 @@ type WizardDraft = {
   selectedRepoUrl: string;
 };
 
+function persistWizardDraft(draft: WizardDraft): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.sessionStorage.setItem(WIZARD_DRAFT_KEY, JSON.stringify(draft));
+}
+
 function previewTenantId(name: string): string {
   return name
     .trim()
@@ -162,7 +169,7 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
       createdTenantId,
       selectedRepoUrl
     };
-    window.sessionStorage.setItem(WIZARD_DRAFT_KEY, JSON.stringify(draft));
+    persistWizardDraft(draft);
   }, [values, textFields, createdTenantId, selectedRepoUrl]);
 
   useEffect(() => {
@@ -370,6 +377,12 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
   }
 
   function goToStep(index: number) {
+    persistWizardDraft({
+      values,
+      textFields,
+      createdTenantId,
+      selectedRepoUrl
+    });
     const next = STEP_ORDER[index];
     router.push(`/tenants/new/${next.key}`);
   }
