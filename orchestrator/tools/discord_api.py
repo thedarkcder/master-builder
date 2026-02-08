@@ -113,6 +113,26 @@ class DiscordApiClient:
             raise DiscordApiError("Discord create message response was not an object")
         return data
 
+    def create_dm_channel(self, *, user_id: str) -> str:
+        normalized_user_id = user_id.strip()
+        if not normalized_user_id:
+            raise ValueError("Discord user ID cannot be empty")
+        data = self._request_json(
+            method="POST",
+            path="/users/@me/channels",
+            payload={"recipient_id": normalized_user_id},
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord DM channel response was not an object")
+        channel_id = data.get("id")
+        if not isinstance(channel_id, str) or not channel_id.strip():
+            raise DiscordApiError("Discord DM channel response missing id")
+        return channel_id.strip()
+
+    def send_direct_message(self, *, user_id: str, content: str) -> dict:
+        channel_id = self.create_dm_channel(user_id=user_id)
+        return self.post_message(channel_id=channel_id, content=content)
+
     def ensure_text_channel(
         self,
         *,

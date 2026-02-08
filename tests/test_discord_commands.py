@@ -11,7 +11,7 @@ from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run
+from orchestrator.storage.models import Run, Tenant
 from orchestrator.tools.jira_oauth import JiraIssuePreview
 
 
@@ -250,3 +250,37 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["command"], "issues")
         self.assertIn("TP-1", response.json()["message"])
+
+    def test_allowlist_request_creates_pending_request(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-1",
+                "command": "!allowlist request Need run controls",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertIn("Allowlist request", response.json()["message"])
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            requests = tenant.discord_config.get("allowlist_requests", [])
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(requests[0]["user_id"], "u-viewer")
+            self.assertEqual(requests[0]["reason"], "Need run controls")
+
+    def test_allowlist_request_for_allowlisted_user_returns_already_allowlisted(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={
+                "user_id": "u-admin",
+                "channel_id": "discord-channel-1",
+                "command": "!allowlist request Please add me",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertIn("already allowlisted", response.json()["message"])

@@ -17,6 +17,7 @@ class JiraConfig(BaseModel):
     blocked_label: str = Field(default="agent:blocked", min_length=1)
     done_label: str | None = None
     webhook_secret_ref: str | None = None
+    webhook_provisioning: dict | None = None
 
 
 class GithubConfig(BaseModel):
@@ -108,6 +109,28 @@ class TenantRead(BaseModel):
 class IntegrationTestResult(BaseModel):
     ok: bool
     details: str
+
+
+class JiraWebhookProvisionResult(BaseModel):
+    ok: bool
+    details: str
+    webhook_id: str | None = None
+    webhook_url: str
+    jql: str
+
+
+class DiscordAllowlistRequestRead(BaseModel):
+    user_id: str
+    requested_at: datetime
+    channel_id: str | None = None
+    reason: str | None = None
+
+
+class DiscordAllowlistApprovalResult(BaseModel):
+    ok: bool
+    details: str
+    user_id: str
+    notified: bool
 
 
 class GitHubInstallStart(BaseModel):

@@ -123,6 +123,20 @@ export type ManagedSecretResolveResult = {
   resolved: boolean;
 };
 
+export type DiscordAllowlistRequestRecord = {
+  user_id: string;
+  requested_at: string;
+  channel_id: string | null;
+  reason: string | null;
+};
+
+export type DiscordAllowlistApprovalResult = {
+  ok: boolean;
+  details: string;
+  user_id: string;
+  notified: boolean;
+};
+
 export type Credentials = {
   apiBaseUrl: string;
   accessToken: string;
@@ -374,6 +388,30 @@ export function getRun(credentials: Credentials, runId: string): Promise<RunReco
 
 export function listManagedSecrets(credentials: Credentials): Promise<ManagedSecretRecord[]> {
   return request<ManagedSecretRecord[]>(credentials, "/api/admin/secrets");
+}
+
+export function listDiscordAllowlistRequests(
+  credentials: Credentials,
+  tenantId: string
+): Promise<DiscordAllowlistRequestRecord[]> {
+  return request<DiscordAllowlistRequestRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/allowlist-requests`
+  );
+}
+
+export function approveDiscordAllowlistRequest(
+  credentials: Credentials,
+  tenantId: string,
+  userId: string
+): Promise<DiscordAllowlistApprovalResult> {
+  return request<DiscordAllowlistApprovalResult>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/allowlist-requests/${encodeURIComponent(userId)}/approve`,
+    {
+      method: "POST"
+    }
+  );
 }
 
 export function upsertManagedSecret(
