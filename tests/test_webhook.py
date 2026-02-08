@@ -484,6 +484,90 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["data"]["flags"], 64)
         create_task_mock.assert_called_once()
 
+    def test_discord_reply_message_command_returns_modal(self) -> None:
+        payload = {
+            "type": 2,
+            "application_id": "discord-app-1",
+            "token": "interaction-token-1",
+            "channel_id": "discord-channel-1",
+            "data": {
+                "name": "reply",
+                "type": 3,
+                "target_id": "123456789012345678",
+                "resolved": {
+                    "messages": {
+                        "123456789012345678": {
+                            "id": "123456789012345678",
+                            "author": {"id": "discord-app-1"},
+                        }
+                    }
+                },
+            },
+            "member": {"user": {"id": "discord-user-1"}},
+        }
+
+        with (
+            patch("orchestrator.api.routes_webhook._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes_webhook._validate_discord_interaction_signature"),
+        ):
+            response = self.client.post("/discord/interactions", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["type"], 9)
+        self.assertEqual(body["data"]["custom_id"], "ask.reply.123456789012345678")
+        self.assertEqual(body["data"]["components"][0]["components"][0]["custom_id"], "question")
+
+    def test_discord_reply_modal_submit_is_deferred_and_processed_async(self) -> None:
+        payload = {
+            "type": 5,
+            "application_id": "discord-app-1",
+            "token": "interaction-token-1",
+            "channel_id": "discord-channel-1",
+            "data": {
+                "custom_id": "ask.reply.123456789012345678",
+                "components": [
+                    {
+                        "type": 1,
+                        "components": [
+                            {
+                                "type": 4,
+                                "custom_id": "question",
+                                "value": "What changed since the previous update?",
+                            }
+                        ],
+                    }
+                ],
+            },
+            "member": {"user": {"id": "discord-user-1"}},
+        }
+        fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
+        run_followup_mock = MagicMock()
+
+        with (
+            patch("orchestrator.api.routes_webhook._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes_webhook._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes_webhook._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch("orchestrator.api.routes_webhook._run_discord_command_followup", run_followup_mock),
+            patch("orchestrator.api.routes_webhook.asyncio.create_task", return_value=MagicMock()) as create_task_mock,
+        ):
+            response = self.client.post("/discord/interactions", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["type"], 5)
+        self.assertEqual(body["data"]["flags"], 64)
+        create_task_mock.assert_called_once()
+        run_followup_mock.assert_called_once_with(
+            tenant_id="tenant-webhook",
+            user_id="discord-user-1",
+            channel_id="discord-channel-1",
+            command_text="!ask What changed since the previous update?",
+            application_id="discord-app-1",
+            interaction_token="interaction-token-1",
+            reply_to_message_id="123456789012345678",
+        )
+
     def test_discord_followup_formats_issue_and_pr_references_as_hyperlinks(self) -> None:
         with self.session_factory() as session:
             tenant = session.execute(
