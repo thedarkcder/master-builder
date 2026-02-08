@@ -40,6 +40,11 @@ const DISCORD_NOTIFY_EVENT_OPTIONS = [
     value: "review_signal",
     label: "Review signal",
     description: "Post PR-ready or review-required signals from GitHub webhook events."
+  },
+  {
+    value: "decision_gate_required",
+    label: "Decision gate required",
+    description: "Post when a run is blocked pending PM/BA clarification."
   }
 ] as const;
 

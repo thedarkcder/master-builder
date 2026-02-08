@@ -142,6 +142,45 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         session.refresh(run)
         return run
     if decision_gate.triggered:
+        stage_update = {
+            "stage": "decision_gate_required",
+            "tenant_id": run.tenant_id,
+            "issue_key": run.issue_key,
+            "run_id": run.run_id,
+            "jira_message": format_stage_jira_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                stage="decision_gate_required",
+                jira_url=f"https://master-builder.atlassian.net/browse/{run.issue_key}",
+                error=decision_gate.reason,
+                next_steps=decision_gate.questions,
+            ),
+            "discord_message": format_stage_discord_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                stage="decision_gate_required",
+                jira_url=f"https://master-builder.atlassian.net/browse/{run.issue_key}",
+                error=decision_gate.reason,
+                next_steps=decision_gate.questions,
+            ),
+        }
+        send_result = send_tenant_discord_message(
+            session=session,
+            tenant=tenant,
+            message=stage_update["discord_message"],
+            settings=settings,
+            event="decision_gate_required",
+        )
+        if not send_result.sent:
+            logger.info(
+                "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
+                run.tenant_id,
+                run.run_id,
+                stage_update["stage"],
+                send_result.reason,
+            )
         run.status = RUN_STATUS_BLOCKED
         run.last_error = f"Decision Gate required: {decision_gate.reason}"
         run.plan = {
@@ -150,6 +189,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             "summary": [],
             "test_guidance": [],
             "pr_url": None,
+            "stage_updates": [stage_update],
             "decision_gate": decision_gate.to_payload(),
         }
         run.finished_at = datetime.now(timezone.utc)
