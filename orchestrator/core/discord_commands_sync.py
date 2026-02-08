@@ -94,17 +94,17 @@ def build_discord_guild_commands() -> list[dict]:
             "options": [
                 {
                     "type": 3,  # STRING
+                    "name": "question",
+                    "description": "Question about board status, blockers, or priorities",
+                    "required": True,
+                },
+                {
+                    "type": 3,  # STRING
                     "name": "issue_key",
                     "description": "Optional issue key to scope the answer",
                     "required": False,
                     "autocomplete": True,
                 },
-                {
-                    "type": 3,  # STRING
-                    "name": "question",
-                    "description": "Question about board status, blockers, or priorities",
-                    "required": True,
-                }
             ],
         },
         {

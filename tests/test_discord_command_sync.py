@@ -9,6 +9,7 @@ class DiscordCommandSyncTests(unittest.TestCase):
         command_names = {command.get("name") for command in commands}
         self.assertIn("ask", command_names)
         self.assertIn("issues", command_names)
+        self.assertIn("request", command_names)
 
         issues_command = next(command for command in commands if command.get("name") == "issues")
         options = issues_command.get("options")
@@ -19,6 +20,11 @@ class DiscordCommandSyncTests(unittest.TestCase):
         ask_command = next(command for command in commands if command.get("name") == "ask")
         ask_options = ask_command.get("options")
         self.assertIsInstance(ask_options, list)
+        self.assertGreaterEqual(len(ask_options), 2)
+        self.assertEqual(ask_options[0].get("name"), "question")
+        self.assertEqual(ask_options[0].get("required"), True)
+        self.assertEqual(ask_options[1].get("name"), "issue_key")
+        self.assertEqual(ask_options[1].get("required"), False)
         issue_key_option = next(option for option in ask_options if option.get("name") == "issue_key")
         self.assertEqual(issue_key_option.get("autocomplete"), True)
 
