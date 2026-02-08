@@ -265,6 +265,71 @@ class DiscordCommandApiTests(unittest.TestCase):
             pending = tenant.discord_config.get("pending_ask_actions", [])
             self.assertEqual(len(pending), 1)
 
+    def test_ask_follow_up_reuses_recent_scoped_issue_key(self) -> None:
+        collect_calls: list[str | None] = []
+
+        def _collect_stub(*, scoped_issue_key, **_kwargs):  # type: ignore[no-untyped-def]
+            collect_calls.append(scoped_issue_key)
+            return (
+                scoped_issue_key.strip().upper() if isinstance(scoped_issue_key, str) and scoped_issue_key.strip() else None,
+                None,
+                [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
+                {"To Do": 1},
+            )
+
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.routes_discord.build_codex_runtime"),
+            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer"),
+        ):
+            first = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask @TP-77 summarize status",
+                ),
+                session=session,
+            )
+            second = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask what changed since last update?",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(first.ok)
+        self.assertTrue(second.ok)
+        self.assertEqual(collect_calls[0], "TP-77")
+        self.assertEqual(collect_calls[1], "TP-77")
+
+    def test_plain_text_is_treated_as_implicit_ask_when_enabled(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.routes_discord._ask_board_message",
+                return_value=("Implicit ask answer", {"status_counts": {"Blocked": 1}}),
+            ),
+        ):
+            response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="what is blocked on this board?",
+                ),
+                session=session,
+                allow_plain_ask=True,
+            )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(response.command, "ask")
+        self.assertEqual(response.message, "Implicit ask answer")
+
     def test_issues_seed_requires_spec(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",

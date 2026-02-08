@@ -43,6 +43,8 @@ REQUEST_PERMISSION_LABELS = {
     "all_sensitive": "all sensitive commands",
 }
 MAX_PENDING_ASK_ACTIONS = 50
+MAX_ASK_HISTORY_ENTRIES = 80
+MAX_ASK_HISTORY_CONTEXT = 6
 
 
 def _normalize_status_name(value: str) -> str:
@@ -318,12 +320,60 @@ def _normalize_seed_issue_labels(raw_labels: object) -> list[str]:
     return normalized
 
 
-def _build_seed_issue_description(*, objective: str, acceptance_criteria: list[str]) -> str:
-    lines = ["Objective", objective.strip() or "No objective provided", "", "Acceptance Criteria"]
+def _normalize_seed_issue_tags(raw_tags: object) -> list[str]:
+    if not isinstance(raw_tags, list):
+        return []
+    normalized: list[str] = []
+    for tag in raw_tags:
+        text = str(tag).strip().lower()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _parse_seed_issue_type(raw_issue_type: object) -> str:
+    normalized = str(raw_issue_type or "").strip().lower()
+    if normalized == "bug":
+        return "Bug"
+    if normalized == "story":
+        return "Story"
+    return "Task"
+
+
+def _normalize_seed_issue_scope(raw_scope: object) -> list[str]:
+    if not isinstance(raw_scope, list):
+        return []
+    return [str(item).strip() for item in raw_scope if str(item).strip()]
+
+
+def _build_seed_issue_description(
+    *,
+    objective: str,
+    scope_in: list[str],
+    scope_out: list[str],
+    acceptance_criteria: list[str],
+    tags: list[str],
+) -> str:
+    lines = ["Objective", objective.strip() or "No objective provided", "", "Scope In"]
+    if scope_in:
+        lines.extend(f"- {item}" for item in scope_in)
+    else:
+        lines.append("- Not specified")
+    lines.extend(["", "Scope Out"])
+    if scope_out:
+        lines.extend(f"- {item}" for item in scope_out)
+    else:
+        lines.append("- Not specified")
+    lines.extend(["", "Acceptance Criteria"])
     if acceptance_criteria:
         lines.extend(f"- {criterion}" for criterion in acceptance_criteria)
     else:
         lines.append("- Criteria were not provided")
+    lines.extend(["", "Tags"])
+    if tags:
+        lines.extend(f"- {tag}" for tag in tags)
+    else:
+        lines.append("- Not specified")
     return "\n".join(lines)
 
 
@@ -462,6 +512,84 @@ def consume_pending_ask_action(
     return matched
 
 
+def _tenant_ask_history(tenant: Tenant) -> list[dict]:
+    discord_config = tenant.discord_config or {}
+    raw_history = discord_config.get("ask_history")
+    if not isinstance(raw_history, list):
+        return []
+    normalized: list[dict] = []
+    for entry in raw_history:
+        if not isinstance(entry, dict):
+            continue
+        user_id = str(entry.get("user_id") or "").strip()
+        channel_id = str(entry.get("channel_id") or "").strip()
+        question = str(entry.get("question") or "").strip()
+        answer = str(entry.get("answer") or "").strip()
+        if not user_id or not channel_id or not question or not answer:
+            continue
+        normalized.append(
+            {
+                "user_id": user_id,
+                "channel_id": channel_id,
+                "question": question,
+                "answer": answer,
+                "issue_key": str(entry.get("issue_key") or "").strip().upper() or None,
+                "status": str(entry.get("status") or "").strip() or None,
+                "created_at": str(entry.get("created_at") or "").strip()
+                or datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    return normalized
+
+
+def _recent_ask_history(
+    *,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str,
+    limit: int = MAX_ASK_HISTORY_CONTEXT,
+) -> list[dict]:
+    entries = _tenant_ask_history(tenant)
+    scoped = [
+        entry
+        for entry in entries
+        if entry.get("user_id") == user_id and entry.get("channel_id") == channel_id
+    ]
+    if not scoped:
+        return []
+    return scoped[-max(1, limit) :]
+
+
+def _store_ask_history_entry(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str,
+    question: str,
+    answer: str,
+    issue_key: str | None,
+    status_name: str | None,
+) -> None:
+    discord_config = dict(tenant.discord_config or {})
+    entries = _tenant_ask_history(tenant)
+    entries.append(
+        {
+            "user_id": user_id,
+            "channel_id": channel_id,
+            "question": question.strip(),
+            "answer": answer.strip(),
+            "issue_key": issue_key.strip().upper() if isinstance(issue_key, str) and issue_key.strip() else None,
+            "status": status_name.strip() if isinstance(status_name, str) and status_name.strip() else None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    discord_config["ask_history"] = entries[-MAX_ASK_HISTORY_ENTRIES:]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+
 def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown: str) -> tuple[str, dict]:
     project_keys = _tenant_project_keys(tenant)
     if not project_keys:
@@ -498,12 +626,19 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
             continue
         summary = str(item.get("summary") or "").strip()
         objective = str(item.get("objective") or "").strip()
+        scope_in = _normalize_seed_issue_scope(item.get("scope_in"))
+        scope_out = _normalize_seed_issue_scope(item.get("scope_out"))
         acceptance_raw = item.get("acceptance_criteria")
         acceptance = (
             [str(entry).strip() for entry in acceptance_raw if str(entry).strip()]
             if isinstance(acceptance_raw, list)
             else []
         )
+        tags = _normalize_seed_issue_tags(item.get("tags"))
+        labels = _normalize_seed_issue_labels(item.get("labels"))
+        for tag in tags:
+            if tag not in labels:
+                labels.append(tag)
         if not summary:
             continue
         issue_inputs.append(
@@ -511,9 +646,13 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
                 summary=summary[:90],
                 description=_build_seed_issue_description(
                     objective=objective,
+                    scope_in=scope_in,
+                    scope_out=scope_out,
                     acceptance_criteria=acceptance,
+                    tags=tags,
                 ),
-                labels=_normalize_seed_issue_labels(item.get("labels")),
+                labels=labels,
+                issue_type=_parse_seed_issue_type(item.get("issue_type")),
             )
         )
 
@@ -557,7 +696,12 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Jira bulk create returned no issues: {'; '.join(create_result.errors) or 'unknown error'}",
         )
-    message = f"Seeded {len(created_keys)} issue(s): {', '.join(created_keys)}"
+    browse_base_url = str(connection.site_url or "").strip().rstrip("/")
+    if browse_base_url:
+        created_links = [f"[{issue_key}]({browse_base_url}/browse/{issue_key})" for issue_key in created_keys]
+        message = f"Seeded {len(created_keys)} issue(s): {', '.join(created_links)}"
+    else:
+        message = f"Seeded {len(created_keys)} issue(s): {', '.join(created_keys)}"
     if create_result.errors:
         message = f"{message} (partial errors: {'; '.join(create_result.errors)})"
     return (
@@ -565,6 +709,9 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
         {
             "project_key": project_key,
             "created_issue_keys": created_keys,
+            "created_issue_links": [
+                f"{browse_base_url}/browse/{issue_key}" for issue_key in created_keys if browse_base_url
+            ],
             "errors": create_result.errors,
         },
     )
@@ -574,14 +721,30 @@ def _ask_board_message(
     *,
     session: Session,
     tenant: Tenant,
+    user_id: str,
+    channel_id: str,
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str, dict]:
+    history_context = _recent_ask_history(
+        tenant=tenant,
+        user_id=user_id,
+        channel_id=channel_id,
+        limit=MAX_ASK_HISTORY_CONTEXT,
+    )
+    resolved_scoped_issue_key = scoped_issue_key
+    if resolved_scoped_issue_key is None:
+        for entry in reversed(history_context):
+            issue_key = str(entry.get("issue_key") or "").strip().upper()
+            if issue_key:
+                resolved_scoped_issue_key = issue_key
+                break
+
     normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
         session=session,
         tenant=tenant,
         question=question,
-        scoped_issue_key=scoped_issue_key,
+        scoped_issue_key=resolved_scoped_issue_key,
     )
 
     settings = get_settings()
@@ -593,12 +756,24 @@ def _ask_board_message(
             project_keys=[str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()],
             issues=issues,
             status_counts=status_counts,
+            history=history_context,
         )
     except CodexRuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Codex board assistant is unavailable: {exc}",
         ) from exc
+
+    _store_ask_history_entry(
+        session=session,
+        tenant=tenant,
+        user_id=user_id,
+        channel_id=channel_id,
+        question=question,
+        answer=message,
+        issue_key=normalized_issue_key,
+        status_name=requested_status,
+    )
 
     return (
         message,
@@ -608,6 +783,7 @@ def _ask_board_message(
             "status_counts": status_counts,
             "issues": issues,
             "question": question,
+            "memory_entries_used": len(history_context),
         },
     )
 
@@ -620,6 +796,7 @@ def execute_discord_command(
     *,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
+    allow_plain_ask: bool = False,
 ) -> DiscordCommandResponse:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
@@ -628,7 +805,11 @@ def execute_discord_command(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant is disabled")
 
     _assert_channel_scope(tenant=tenant, channel_id=payload.channel_id)
-    command_name, arguments = _parse_command_text(payload.command)
+    raw_command = payload.command.strip()
+    command_text = raw_command
+    if allow_plain_ask and raw_command and not raw_command.startswith("!"):
+        command_text = f"!ask {raw_command}"
+    command_name, arguments = _parse_command_text(command_text)
     _assert_sensitive_command_permission(tenant=tenant, command_name=command_name, user_id=payload.user_id)
 
     if command_name == "help":
@@ -766,12 +947,27 @@ def execute_discord_command(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
             )
+        normalized_user_id = payload.user_id.strip()
+        normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
         if require_ask_confirmation:
+            history_context = _recent_ask_history(
+                tenant=tenant,
+                user_id=normalized_user_id,
+                channel_id=normalized_channel_id,
+                limit=MAX_ASK_HISTORY_CONTEXT,
+            )
+            resolved_scoped_issue_key = scoped_issue_key
+            if resolved_scoped_issue_key is None:
+                for entry in reversed(history_context):
+                    issue_key_from_history = str(entry.get("issue_key") or "").strip().upper()
+                    if issue_key_from_history:
+                        resolved_scoped_issue_key = issue_key_from_history
+                        break
             normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
                 session=session,
                 tenant=tenant,
                 question=question,
-                scoped_issue_key=scoped_issue_key,
+                scoped_issue_key=resolved_scoped_issue_key,
             )
             settings = get_settings()
             runtime = build_codex_runtime(session=session, settings=settings)
@@ -786,6 +982,7 @@ def execute_discord_command(
                     ],
                     issues=issues,
                     status_counts=status_counts,
+                    history=history_context,
                 )
             except CodexRuntimeError as exc:
                 raise HTTPException(
@@ -800,7 +997,7 @@ def execute_discord_command(
                 pending = _store_pending_ask_action(
                     session=session,
                     tenant=tenant,
-                    user_id=payload.user_id.strip(),
+                    user_id=normalized_user_id,
                     channel_id=payload.channel_id,
                     question=question,
                     summary=summary or "Proposed operational action from /ask",
@@ -829,6 +1026,17 @@ def execute_discord_command(
                 ],
                 issues=issues,
                 status_counts=status_counts,
+                history=history_context,
+            )
+            _store_ask_history_entry(
+                session=session,
+                tenant=tenant,
+                user_id=normalized_user_id,
+                channel_id=normalized_channel_id,
+                question=question,
+                answer=message,
+                issue_key=normalized_issue_key,
+                status_name=requested_status,
             )
             return DiscordCommandResponse(
                 ok=True,
@@ -846,6 +1054,8 @@ def execute_discord_command(
         message, data = _ask_board_message(
             session=session,
             tenant=tenant,
+            user_id=normalized_user_id,
+            channel_id=normalized_channel_id,
             question=question,
             scoped_issue_key=scoped_issue_key,
         )

@@ -158,7 +158,9 @@ def answer_board_question_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
+    history: list[dict] | None = None,
 ) -> str:
+    normalized_history = history or []
     payload = runtime.run_json(
         system_prompt=(
             "You answer Discord board questions for an engineering team. "
@@ -169,6 +171,7 @@ def answer_board_question_with_codex(
             f"Question: {question}\n"
             f"Projects: {json.dumps(project_keys)}\n"
             f"Status counts: {json.dumps(status_counts)}\n"
+            f"Recent conversation context: {json.dumps(normalized_history[:6])}\n"
             f"Issues (sample): {json.dumps(issues[:40])}\n"
             "Answer directly and include specific issue keys when helpful."
         ),
@@ -186,7 +189,9 @@ def plan_discord_ask_intent_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
+    history: list[dict] | None = None,
 ) -> dict:
+    normalized_history = history or []
     payload = runtime.run_json(
         system_prompt=(
             "You route Discord /ask requests for an engineering orchestration bot. "
@@ -201,6 +206,7 @@ def plan_discord_ask_intent_with_codex(
             f"Question: {question}\n"
             f"Projects: {json.dumps(project_keys)}\n"
             f"Status counts: {json.dumps(status_counts)}\n"
+            f"Recent conversation context: {json.dumps(normalized_history[:6])}\n"
             f"Issues (sample): {json.dumps(issues[:40])}\n"
             "Choose command mode only when the user is clearly requesting an operational action."
         ),
@@ -221,7 +227,9 @@ def plan_seed_issues_with_codex(
             "You split product specs into Jira issue drafts. "
             "Return strict JSON only with keys: project_key (string), issues (array). "
             "Each issue item must include: summary (string), objective (string), "
-            "acceptance_criteria (array of strings), labels (array of strings)."
+            "scope_in (array of strings), scope_out (array of strings), "
+            "acceptance_criteria (array of strings), tags (array of strings), "
+            "labels (array of strings), issue_type (string)."
         ),
         user_prompt=(
             f"Allowed Jira project keys: {json.dumps(allowed_project_keys)}\n"
@@ -231,7 +239,10 @@ def plan_seed_issues_with_codex(
             "- Keep each summary under 90 characters.\n"
             "- Choose project_key from allowed keys only.\n"
             "- Add useful labels (lowercase, kebab-case).\n"
+            "- tags are capability/workstream tags (lowercase, kebab-case).\n"
+            "- scope_in and scope_out must be explicit and non-empty.\n"
             "- acceptance_criteria entries should be testable outcomes.\n"
+            "- issue_type should be one of Task, Bug, Story.\n"
         ),
     )
     if not isinstance(payload, dict):

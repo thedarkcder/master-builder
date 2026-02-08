@@ -1580,6 +1580,7 @@ async def ingest_discord_webhook(
             channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
         ),
         session=session,
+        allow_plain_ask=True,
     )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
