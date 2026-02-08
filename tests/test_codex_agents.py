@@ -33,6 +33,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             model="gpt-5-codex",
             timeout_seconds=30,
             max_output_tokens=1200,
+            command="override",
             _request=_RuntimeQueue(
                 [
                     '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"]}',
@@ -60,6 +61,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             model="gpt-5-codex",
             timeout_seconds=30,
             max_output_tokens=1200,
+            command="override",
             _request=lambda _system, _user: '{"message":"2 blocked issues: MAB-1, MAB-2"}',
         )
 

@@ -247,6 +247,7 @@ export default function SecretsPage() {
             </tbody>
           </table>
         </div>
+
       </CardContent>
     </Card>
   );

@@ -24,7 +24,7 @@ export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
 export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.1
-export ORCHESTRATOR_CODEX_API_KEY_SECRET_REF=OPENAI_API_KEY
+export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
 export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
 export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
@@ -36,7 +36,6 @@ PY
 # Store OAuth secret values via managed secrets API/UI, not shell exports:
 # - secret ref JIRA_OAUTH_CLIENT_ID -> Jira OAuth client id
 # - secret ref JIRA_OAUTH_CLIENT_SECRET -> Jira OAuth client secret
-# - secret ref OPENAI_API_KEY -> OpenAI API key for worker Codex execution and Discord /ask
 
 # Optional extra Python index for pinned codex assets wheel
 # Example local package service (docker-compose):
@@ -50,6 +49,12 @@ PY
 If required assets are missing or the version mismatches, tenant create/update returns `503`.
 
 The orchestrator runtime loads codex assets from local `.codex` when present (including Docker image builds in this repo), and can fall back to the packaged `master-builder-codex-assets` dependency path where configured.
+
+Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
+For containers, run one-time login and keep the shared Codex auth volume:
+```bash
+docker compose run --rm worker codex login --device-auth
+```
 
 ## Codex assets package publishing
 Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.

@@ -267,6 +267,12 @@ export default function EditTenantPage() {
           </div>
           <div className="flex gap-2">
             <Button asChild variant="outline">
+              <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/webhooks`}>
+                <Link2 className="mr-2 h-4 w-4" />
+                Webhooks
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
               <Link href="/secrets">
                 <KeyRound className="mr-2 h-4 w-4" />
                 Manage Secrets
