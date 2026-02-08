@@ -512,21 +512,13 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
             if spec:
                 command_text = f"{command_text} {spec}"
             break
-    elif normalized_command == "allowlist":
-        subcommands = options if isinstance(options, list) else []
-        for option in subcommands:
-            if not isinstance(option, dict):
-                continue
-            if option.get("type") != 1:
-                continue
-            subcommand_name = str(option.get("name") or "").strip().lower()
-            if not subcommand_name:
-                continue
-            command_text = f"{command_text} {subcommand_name}"
-            reason = _discord_option_value(option.get("options"), name="reason")
-            if reason:
-                command_text = f"{command_text} {reason}"
-            break
+    elif normalized_command == "request":
+        permission = _discord_option_value(options, name="permission")
+        reason = _discord_option_value(options, name="reason")
+        if permission:
+            command_text = f"{command_text} {permission}"
+        if reason:
+            command_text = f"{command_text} {reason}"
     else:
         option_values = _flatten_discord_option_values(options)
         if option_values:
