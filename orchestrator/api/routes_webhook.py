@@ -25,10 +25,15 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.reviewer import ReviewAgentGate
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.runs import (
+    RUN_STATUS_BLOCKED,
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_FAILED,
+    enqueue_run,
+)
 from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
-from orchestrator.storage.models import Tenant
+from orchestrator.storage.models import Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 
 router = APIRouter(tags=["jira-webhook"])
@@ -42,6 +47,7 @@ HTTP_413_TOO_LARGE = getattr(
 )
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
+SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry"}
 
 
 def _max_webhook_body_bytes() -> int:
@@ -153,6 +159,45 @@ def _extract_issue_payload(
     return issue_key, normalized_labels, status_name, status_category_key, summary, description
 
 
+def _extract_jira_comment_text(payload: dict) -> str | None:
+    comment = payload.get("comment")
+    if not isinstance(comment, dict):
+        return None
+    body = comment.get("body")
+    if isinstance(body, str):
+        text = body.strip()
+        return text or None
+    if isinstance(body, dict):
+        text = _adf_to_text(body).strip()
+        return text or None
+    return None
+
+
+def _parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None]:
+    comment_text = _extract_jira_comment_text(payload)
+    if not comment_text:
+        return None, None
+
+    first_non_empty_line = ""
+    for raw_line in comment_text.splitlines():
+        candidate = raw_line.strip()
+        if candidate:
+            first_non_empty_line = candidate
+            break
+    if not first_non_empty_line:
+        return None, None
+    if not first_non_empty_line.lower().startswith("/mb"):
+        return None, None
+
+    parts = [part for part in first_non_empty_line.split(" ") if part]
+    if len(parts) != 2:
+        return None, "invalid_comment_command"
+    command_name = parts[1].strip().lower()
+    if command_name not in SUPPORTED_JIRA_COMMENT_COMMANDS:
+        return None, "invalid_comment_command"
+    return command_name, None
+
+
 def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
     changelog = payload.get("changelog")
     if not isinstance(changelog, dict):
@@ -176,6 +221,8 @@ def _extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
         return normalized_from_status, normalized_to_status
 
     return None, None
+
+
 def _extract_webhook_token(request: Request) -> str | None:
     webhook_token = request.headers.get("X-Webhook-Token")
     if webhook_token:
@@ -700,14 +747,32 @@ async def ingest_jira_webhook(
     issue_key, labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
         _extract_issue_payload(payload)
     )
+    comment_command, comment_command_error = _parse_jira_comment_command(payload)
     delivery_id = _extract_delivery_id(request)
     logger.info(
-        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s",
+        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s comment_command=%s comment_command_error=%s",
         request_id,
         tenant_id,
         issue_key,
         delivery_id,
+        comment_command,
+        comment_command_error,
     )
+
+    if comment_command_error:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=invalid_comment_command",
+            request_id,
+            tenant_id,
+            issue_key,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "invalid_comment_command",
+        }
 
     configured_ready_statuses = tenant.jira_config.get("ready_statuses")
     if isinstance(configured_ready_statuses, list):
@@ -775,7 +840,11 @@ async def ingest_jira_webhook(
 
     from_status, to_status = _extract_status_transition(payload)
     trigger_reason = "ready_status_recheck"
-    if (
+    if comment_command == "run":
+        trigger_reason = "comment_command_run"
+    elif comment_command == "retry":
+        trigger_reason = "comment_command_retry"
+    elif (
         to_status is not None
         and to_status.casefold() in normalized_ready_statuses
         and from_status is not None
@@ -793,12 +862,43 @@ async def ingest_jira_webhook(
         to_status,
     )
 
+    retry_source_run = None
+    resolved_issue_description = issue_description
+    if comment_command == "retry":
+        retryable_statuses = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
+        retry_source_run = session.execute(
+            select(Run)
+            .where(
+                Run.tenant_id == tenant_id,
+                Run.issue_key == issue_key,
+                Run.status.in_(retryable_statuses),
+            )
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if retry_source_run is None:
+            logger.info(
+                "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=no_retryable_run",
+                request_id,
+                tenant_id,
+                issue_key,
+            )
+            return {
+                "request_id": request_id,
+                "tenant_id": tenant_id,
+                "issue_key": issue_key,
+                "enqueued": False,
+                "reason": "no_retryable_run",
+                "trigger_reason": trigger_reason,
+            }
+        resolved_issue_description = retry_source_run.issue_description
+
     enqueue_result = enqueue_run(
         session,
         tenant_id=tenant_id,
         issue_key=issue_key,
         issue_summary=issue_summary,
-        issue_description=issue_description,
+        issue_description=resolved_issue_description,
         delivery_id=delivery_id,
         max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
     )
@@ -819,6 +919,7 @@ async def ingest_jira_webhook(
             "reason": enqueue_result.reason,
             "run_id": enqueue_result.run.run_id,
             "trigger_reason": trigger_reason,
+            "command": comment_command,
         }
     logger.info(
         "jira_webhook_enqueued request_id=%s tenant_id=%s issue_key=%s run_id=%s",
@@ -835,6 +936,7 @@ async def ingest_jira_webhook(
         "enqueued": True,
         "run_id": enqueue_result.run.run_id,
         "trigger_reason": trigger_reason,
+        "command": comment_command,
     }
 
 
