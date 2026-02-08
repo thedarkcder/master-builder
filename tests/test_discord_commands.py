@@ -8,11 +8,18 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
+from orchestrator.api.routes_discord import (
+    _build_seed_issue_description,
+    _create_discord_bug_issue,
+    _seed_issues_with_codex,
+    execute_discord_command,
+)
+from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, Tenant
-from orchestrator.tools.jira_oauth import JiraIssuePreview
+from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssuePreview
 
 
 class DiscordCommandApiTests(unittest.TestCase):
@@ -134,6 +141,30 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("allowlisted", response.json()["detail"])
 
+    def test_thread_channel_is_allowed_when_registered_for_tenant(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["ask_thread_channel_ids"] = ["discord-thread-1"]
+            tenant.discord_config = discord_config
+            session.commit()
+
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-thread-1", "command": "!help"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+
+    def test_non_registered_channel_is_rejected(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-other-1", "command": "!help"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("does not match", response.json()["detail"])
+
     def test_cancel_marks_run_as_cancelled(self) -> None:
         self._queue_run(run_id="run-cancel-me", issue_key="TP-12", status="queued")
 
@@ -224,6 +255,110 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !ask @ISSUE-123", response.json()["detail"])
 
+    def test_ask_command_requires_confirmation_when_intent_is_action(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.routes_discord._collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch(
+                "orchestrator.api.routes_discord.build_codex_runtime",
+            ),
+            patch(
+                "orchestrator.api.routes_discord.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "command", "summary": "Queue the issue run now", "command": "!run TP-20"},
+            ),
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask please run TP-20",
+                ),
+                session=session,
+                require_ask_confirmation=True,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "ask")
+        self.assertIsInstance(command_response.data, dict)
+        self.assertTrue(command_response.data["requires_confirmation"])
+        self.assertEqual(command_response.data["proposed_command"], "!run TP-20")
+        self.assertTrue(command_response.data["request_id"])
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            pending = tenant.discord_config.get("pending_ask_actions", [])
+            self.assertEqual(len(pending), 1)
+
+    def test_ask_follow_up_reuses_recent_scoped_issue_key(self) -> None:
+        collect_calls: list[str | None] = []
+
+        def _collect_stub(*, scoped_issue_key, **_kwargs):  # type: ignore[no-untyped-def]
+            collect_calls.append(scoped_issue_key)
+            return (
+                scoped_issue_key.strip().upper() if isinstance(scoped_issue_key, str) and scoped_issue_key.strip() else None,
+                None,
+                [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
+                {"To Do": 1},
+            )
+
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.routes_discord.build_codex_runtime"),
+            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer"),
+        ):
+            first = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask @TP-77 summarize status",
+                ),
+                session=session,
+            )
+            second = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask what changed since last update?",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(first.ok)
+        self.assertTrue(second.ok)
+        self.assertEqual(collect_calls[0], "TP-77")
+        self.assertEqual(collect_calls[1], "TP-77")
+
+    def test_plain_text_is_treated_as_implicit_ask_when_enabled(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.routes_discord._ask_board_message",
+                return_value=("Implicit ask answer", {"status_counts": {"Blocked": 1}}),
+            ),
+        ):
+            response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="what is blocked on this board?",
+                ),
+                session=session,
+                allow_plain_ask=True,
+            )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(response.command, "ask")
+        self.assertEqual(response.message, "Implicit ask answer")
+
     def test_issues_seed_requires_spec(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
@@ -231,6 +366,54 @@ class DiscordCommandApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !issues seed", response.json()["detail"])
+
+    def test_bug_command_requires_summary(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!bug"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !bug", response.json()["detail"])
+
+    def test_bug_command_creates_jira_bug_from_params_and_attachments(self) -> None:
+        with patch(
+            "orchestrator.api.routes_discord._create_discord_bug_issue",
+            return_value=(
+                "Bug logged: [TP-501](https://example.atlassian.net/browse/TP-501)",
+                {"created_issue_keys": ["TP-501"]},
+            ),
+        ) as create_bug_mock:
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-1",
+                    "command": "!bug",
+                    "command_params": {
+                        "summary": "Login fails on mobile",
+                        "details": "Tap login, spinner loops forever.",
+                        "issue_key": "TP-77",
+                    },
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "filename": "screenshot.png",
+                            "url": "https://cdn.discordapp.com/attachments/1.png",
+                            "content_type": "image/png",
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["command"], "bug")
+        self.assertIn("TP-501", response.json()["message"])
+        create_bug_mock.assert_called_once()
+        kwargs = create_bug_mock.call_args.kwargs
+        self.assertEqual(kwargs["summary"], "Login fails on mobile")
+        self.assertEqual(kwargs["related_issue_key"], "TP-77")
+        self.assertEqual(kwargs["attachments"][0]["filename"], "screenshot.png")
 
     def test_issues_seed_calls_codex_seed_flow(self) -> None:
         with patch(
@@ -251,13 +434,210 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["command"], "issues")
         self.assertIn("TP-1", response.json()["message"])
 
-    def test_allowlist_request_creates_pending_request(self) -> None:
+    def test_seed_issues_requests_clarifications_when_required_fields_missing(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord.build_codex_runtime", return_value=object()),
+            patch(
+                "orchestrator.api.routes_discord.plan_seed_issues_with_codex",
+                return_value={
+                    "project_key": "TP",
+                    "questions": ["What is the rollout plan?"],
+                    "issues": [
+                        {
+                            "summary": "Create worker retries",
+                            "objective": "TBD",
+                            "scope_in": [],
+                            "scope_out": [],
+                            "acceptance_criteria": [],
+                            "labels": ["seeded"],
+                            "issue_type": "Task",
+                        }
+                    ],
+                },
+            ),
+        ):
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            message, data = _seed_issues_with_codex(
+                session=session,
+                tenant=tenant,
+                prompt_markdown="Seed issues from spec",
+            )
+
+        self.assertIn("need a bit more detail", message.lower())
+        self.assertTrue(data["requires_input"])
+        self.assertIn("What is the rollout plan?", data["questions"])
+        self.assertTrue(any("objective" in question.lower() for question in data["questions"]))
+
+    def test_seed_issues_updates_matching_existing_issue(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            jira_config = dict(tenant.jira_config)
+            jira_config["connection_id"] = "conn-seed-upsert"
+            tenant.jira_config = jira_config
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="conn-seed-upsert",
+                    account_id="acct-1",
+                    account_email="dev@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://example.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted="enc",
+                    refresh_token_encrypted="enc",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.updated_issue_keys: list[str] = []
+                self.create_called = False
+
+            def search_issues_by_jql(self, **_: object) -> list[JiraIssuePreview]:  # noqa: ANN003
+                return [JiraIssuePreview(key="TP-111", summary="Create worker retries", status="To Do")]
+
+            def update_issue_fields(self, **kwargs: object) -> None:  # noqa: ANN003
+                self.updated_issue_keys.append(str(kwargs["issue_id_or_key"]))
+
+            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                self.create_called = True
+                return JiraIssueBulkCreateResult(created=[], errors=[])
+
+        fake_client = _FakeClient()
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord.build_codex_runtime", return_value=object()),
+            patch(
+                "orchestrator.api.routes_discord.plan_seed_issues_with_codex",
+                return_value={
+                    "project_key": "TP",
+                    "issues": [
+                        {
+                            "summary": "Create worker retries",
+                            "objective": "Improve reliability",
+                            "scope_in": ["Worker retry strategy"],
+                            "scope_out": ["UI changes"],
+                            "acceptance_criteria": ["Retries are bounded and observable"],
+                            "labels": ["seeded"],
+                            "issue_type": "Task",
+                        }
+                    ],
+                },
+            ),
+            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=fake_client),
+        ):
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            message, data = _seed_issues_with_codex(
+                session=session,
+                tenant=tenant,
+                prompt_markdown="Seed issues from spec",
+            )
+
+        self.assertIn("Updated 1", message)
+        self.assertEqual(data["updated_issue_keys"], ["TP-111"])
+        self.assertEqual(data["created_issue_keys"], [])
+        self.assertEqual(fake_client.updated_issue_keys, ["TP-111"])
+        self.assertFalse(fake_client.create_called)
+
+    def test_seed_issue_description_is_native_jira_adf(self) -> None:
+        description = _build_seed_issue_description(
+            objective="Ship feature",
+            scope_in=["API endpoint"],
+            scope_out=["Mobile app changes"],
+            acceptance_criteria=["Endpoint returns 200"],
+        )
+        self.assertEqual(description.get("type"), "doc")
+        content = description.get("content", [])
+        self.assertIsInstance(content, list)
+        self.assertEqual(content[0]["type"], "heading")
+        self.assertEqual(content[0]["content"][0]["text"], "Objective")
+        self.assertEqual(content[1]["type"], "bulletList")
+        first_bullet = content[1]["content"][0]["content"][0]["content"][0]["text"]
+        self.assertEqual(first_bullet, "Ship feature")
+
+    def test_bug_creation_uploads_discord_attachments_to_jira_issue(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            jira_config = dict(tenant.jira_config)
+            jira_config["connection_id"] = "conn-1"
+            tenant.jira_config = jira_config
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="conn-1",
+                    account_id="acct-1",
+                    account_email="dev@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://example.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted="enc",
+                    refresh_token_encrypted="enc",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.upload_calls: list[dict] = []
+
+            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                return JiraIssueBulkCreateResult(
+                    created=[JiraIssueCreateResult(key="TP-901", issue_id="901")],
+                    errors=[],
+                )
+
+            def upload_issue_attachment(self, **kwargs: object) -> list[dict]:  # noqa: ANN003
+                self.upload_calls.append(dict(kwargs))
+                return [{"id": "att-1"}]
+
+        fake_client = _FakeClient()
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=fake_client),
+            patch(
+                "orchestrator.api.routes_discord._download_discord_attachment",
+                return_value=(b"image-bytes", "image/png"),
+            ),
+        ):
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            message, data = _create_discord_bug_issue(
+                session=session,
+                tenant=tenant,
+                summary="Login fails",
+                details="See screenshot",
+                reporter_user_id="u-viewer",
+                channel_id="discord-channel-1",
+                related_issue_key=None,
+                attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+            )
+
+        self.assertIn("Attached 1/1 file(s)", message)
+        self.assertEqual(data["uploaded_attachment_count"], 1)
+        self.assertEqual(len(fake_client.upload_calls), 1)
+        self.assertEqual(fake_client.upload_calls[0]["issue_id_or_key"], "TP-901")
+
+    def test_request_creates_pending_request(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
             json={
                 "user_id": "u-viewer",
                 "channel_id": "discord-channel-1",
-                "command": "!allowlist request Need run controls",
+                "command": "!request run_controls Need run controls",
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -270,15 +650,16 @@ class DiscordCommandApiTests(unittest.TestCase):
             requests = tenant.discord_config.get("allowlist_requests", [])
             self.assertEqual(len(requests), 1)
             self.assertEqual(requests[0]["user_id"], "u-viewer")
+            self.assertEqual(requests[0]["permissions"], ["run_controls"])
             self.assertEqual(requests[0]["reason"], "Need run controls")
 
-    def test_allowlist_request_for_allowlisted_user_returns_already_allowlisted(self) -> None:
+    def test_request_for_allowlisted_user_returns_already_allowlisted(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
             json={
                 "user_id": "u-admin",
                 "channel_id": "discord-channel-1",
-                "command": "!allowlist request Please add me",
+                "command": "!request run_controls Please add me",
             },
         )
         self.assertEqual(response.status_code, 200)

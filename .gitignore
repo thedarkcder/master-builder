@@ -4,5 +4,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 *.db
+.env
+dist/
 .cloudflared/*.json
 !.cloudflared/config.yml

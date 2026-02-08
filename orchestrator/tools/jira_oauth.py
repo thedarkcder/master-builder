@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 
 class JiraOAuthError(RuntimeError):
@@ -34,15 +37,6 @@ class JiraProject:
 
 
 @dataclass(frozen=True)
-class JiraWebhook:
-    webhook_id: str
-    name: str
-    url: str
-    jql_filter: str
-    events: list[str]
-
-
-@dataclass(frozen=True)
 class JiraIssuePreview:
     key: str
     summary: str
@@ -52,7 +46,7 @@ class JiraIssuePreview:
 @dataclass(frozen=True)
 class JiraIssueCreateInput:
     summary: str
-    description: str
+    description: str | dict[str, Any]
     labels: list[str]
     issue_type: str = "Task"
 
@@ -74,7 +68,7 @@ class JiraOAuthClientConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
-    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work", "offline_access")
+    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work", "offline_access", "manage:jira-webhook")
 
 
 class JiraOAuthClient:
@@ -133,17 +127,27 @@ class JiraOAuthClient:
             return {}
         return json.loads(response_body)
 
-    def _post_json_with_access_token(self, url: str, *, access_token: str, payload: dict) -> dict | list:
-        body = json.dumps(payload).encode("utf-8")
+    def _request_json(
+        self,
+        *,
+        method: str,
+        url: str,
+        access_token: str,
+        payload: dict | None = None,
+    ) -> dict | list:
+        data: bytes | None = None
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+
         request = Request(
             url=url,
-            data=body,
+            data=data,
             headers={
-                "Content-Type": "application/json",
                 "Accept": "application/json",
                 "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
             },
-            method="POST",
+            method=method,
         )
         try:
             with urlopen(request, timeout=30) as response:
@@ -151,7 +155,6 @@ class JiraOAuthClient:
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8")
             raise JiraOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
-
         if not response_body:
             return {}
         return json.loads(response_body)
@@ -165,9 +168,7 @@ class JiraOAuthClient:
         if not isinstance(access_token, str) or not access_token:
             raise JiraOAuthError("Jira OAuth response missing access_token")
         if not isinstance(refresh_token, str) or not refresh_token:
-            raise JiraOAuthError(
-                "Jira OAuth response missing refresh_token; ensure offline_access scope is enabled for the OAuth app"
-            )
+            raise JiraOAuthError("Jira OAuth response missing refresh_token")
         if not isinstance(expires_in, int):
             raise JiraOAuthError("Jira OAuth response missing expires_in")
         if not isinstance(scope_raw, str):
@@ -263,14 +264,16 @@ class JiraOAuthClient:
         max_results: int = 20,
     ) -> list[JiraIssuePreview]:
         bounded_max_results = max(1, min(max_results, 50))
-        payload = self._post_json_with_access_token(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql",
-            access_token=access_token,
-            payload={
+        query = urlencode(
+            {
                 "jql": jql,
                 "maxResults": bounded_max_results,
-                "fields": ["summary", "status"],
-            },
+                "fields": "summary,status",
+            }
+        )
+        payload = self._get_json(
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql?{query}",
+            access_token=access_token,
         )
         issues = payload.get("issues") if isinstance(payload, dict) else None
         if not isinstance(issues, list):
@@ -306,16 +309,25 @@ class JiraOAuthClient:
         project_key: str,
         issues: list[JiraIssueCreateInput],
     ) -> JiraIssueBulkCreateResult:
+        available_issue_types = self._list_project_issue_types_for_create(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            project_key=project_key,
+        )
         issue_updates = []
         for issue in issues:
             summary = issue.summary.strip()
             if not summary:
                 continue
+            issue_type = _select_issue_type_name(
+                requested_issue_type=issue.issue_type,
+                available_issue_types=available_issue_types,
+            )
             issue_updates.append(
                 {
                     "fields": {
                         "project": {"key": project_key},
-                        "issuetype": {"name": issue.issue_type or "Task"},
+                        "issuetype": {"name": issue_type},
                         "summary": summary,
                         "description": _to_adf_description(issue.description),
                         "labels": [label for label in issue.labels if label],
@@ -326,8 +338,9 @@ class JiraOAuthClient:
         if not issue_updates:
             raise JiraOAuthError("No valid issue payloads were provided for Jira bulk create")
 
-        payload = self._post_json_with_access_token(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/bulk",
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/bulk",
             access_token=access_token,
             payload={"issueUpdates": issue_updates},
         )
@@ -354,140 +367,233 @@ class JiraOAuthClient:
             failed_element = item.get("failedElementNumber")
             element_errors = item.get("elementErrors") if isinstance(item.get("elementErrors"), dict) else {}
             error_messages = element_errors.get("errorMessages")
+            reason_parts: list[str] = []
             if isinstance(error_messages, list):
-                reason_text = "; ".join(str(part) for part in error_messages if str(part).strip()) or "Unknown error"
-            else:
-                reason_text = "Unknown error"
+                reason_parts.extend(str(part).strip() for part in error_messages if str(part).strip())
+            field_errors = element_errors.get("errors")
+            if isinstance(field_errors, dict):
+                for field_name, field_reason in field_errors.items():
+                    normalized_field_name = str(field_name).strip()
+                    normalized_field_reason = str(field_reason).strip()
+                    if normalized_field_name and normalized_field_reason:
+                        reason_parts.append(f"{normalized_field_name}: {normalized_field_reason}")
+            reason_text = "; ".join(reason_parts) or "Unknown error"
             errors.append(f"Item {failed_element}: {reason_text}")
 
         return JiraIssueBulkCreateResult(created=created, errors=errors)
 
-    def list_webhooks(self, *, access_token: str, cloud_id: str) -> list[JiraWebhook]:
-        payload = self._get_json(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
-            access_token=access_token,
-        )
-
-        if isinstance(payload, dict):
-            values = payload.get("values")
-            items = values if isinstance(values, list) else []
-        elif isinstance(payload, list):
-            items = payload
-        else:
-            items = []
-
-        webhooks: list[JiraWebhook] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            webhook_id = item.get("id")
-            name = item.get("name")
-            url = item.get("url")
-            jql_filter = item.get("jqlFilter")
-            events = item.get("events")
-            if not isinstance(webhook_id, (str, int)):
-                continue
-            if not isinstance(name, str) or not name.strip():
-                continue
-            if not isinstance(url, str) or not url.strip():
-                continue
-            if not isinstance(jql_filter, str):
-                jql_filter = ""
-            if not isinstance(events, list):
-                events = []
-            normalized_events = sorted(
-                [str(event).strip() for event in events if str(event).strip()]
-            )
-            webhooks.append(
-                JiraWebhook(
-                    webhook_id=str(webhook_id),
-                    name=name.strip(),
-                    url=url.strip(),
-                    jql_filter=jql_filter.strip(),
-                    events=normalized_events,
-                )
-            )
-        return webhooks
-
-    def create_webhook(
+    def _list_project_issue_types_for_create(
         self,
         *,
         access_token: str,
         cloud_id: str,
-        name: str,
-        url: str,
-        jql_filter: str,
-        events: list[str],
-    ) -> JiraWebhook:
-        payload = self._post_json_with_access_token(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
+        project_key: str,
+    ) -> list[str]:
+        normalized_project_key = project_key.strip().upper()
+        if not normalized_project_key:
+            return []
+
+        for endpoint in (
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/createmeta/{quote(normalized_project_key, safe='')}/issuetypes",
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/createmeta?projectKeys={quote(normalized_project_key, safe='')}&expand=projects.issuetypes",
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/{quote(normalized_project_key, safe='')}",
+        ):
+            try:
+                payload = self._get_json(endpoint, access_token=access_token)
+            except JiraOAuthError:
+                continue
+            parsed = _parse_issue_type_names_from_payload(payload)
+            if parsed:
+                return parsed
+        return []
+
+    def update_issue_fields(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+        description: str | dict[str, Any],
+        labels: list[str],
+    ) -> None:
+        normalized_issue = issue_id_or_key.strip()
+        normalized_summary = summary.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue update")
+        if not normalized_summary:
+            raise JiraOAuthError("Missing issue summary for issue update")
+
+        self._request_json(
+            method="PUT",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
             access_token=access_token,
             payload={
-                "name": name,
-                "url": url,
-                "jqlFilter": jql_filter,
-                "events": sorted({event.strip() for event in events if event.strip()}),
-                "excludeBody": False,
+                "fields": {
+                    "summary": normalized_summary,
+                    "description": _to_adf_description(description),
+                    "labels": [label for label in labels if label],
+                }
             },
         )
-        webhook_id = None
-        if isinstance(payload, dict):
-            for key in ("id", "webhookId", "createdWebhookId"):
-                candidate = payload.get(key)
-                if isinstance(candidate, (str, int)):
-                    webhook_id = str(candidate)
-                    break
-        if webhook_id is None:
-            webhooks = self.list_webhooks(access_token=access_token, cloud_id=cloud_id)
-            for existing in webhooks:
-                if (
-                    existing.name == name
-                    and existing.url == url
-                    and existing.jql_filter == jql_filter
-                    and sorted(existing.events) == sorted(events)
-                ):
-                    return existing
-            raise JiraOAuthError("Jira webhook create succeeded but webhook ID was not returned")
 
-        return JiraWebhook(
-            webhook_id=webhook_id,
-            name=name,
-            url=url,
-            jql_filter=jql_filter,
-            events=sorted({event.strip() for event in events if event.strip()}),
-        )
-
-    def ensure_webhook(
+    def add_issue_comment(
         self,
         *,
         access_token: str,
         cloud_id: str,
-        name: str,
-        url: str,
+        issue_id_or_key: str,
+        comment: str | dict[str, Any],
+    ) -> dict:
+        normalized_issue = issue_id_or_key.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for comment create")
+
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}/comment",
+            access_token=access_token,
+            payload={
+                "body": _to_adf_description(comment),
+            },
+        )
+        if not isinstance(payload, dict):
+            raise JiraOAuthError("Jira comment create response was not an object")
+        return payload
+
+    def register_webhook(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        callback_url: str,
         jql_filter: str,
         events: list[str],
-    ) -> JiraWebhook:
-        normalized_events = sorted({event.strip() for event in events if event.strip()})
-        webhooks = self.list_webhooks(access_token=access_token, cloud_id=cloud_id)
-        for existing in webhooks:
-            if (
-                existing.name == name
-                and existing.url == url
-                and existing.jql_filter == jql_filter
-                and sorted(existing.events) == normalized_events
-            ):
-                return existing
-        return self.create_webhook(
+    ) -> list[int]:
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
             access_token=access_token,
-            cloud_id=cloud_id,
-            name=name,
-            url=url,
-            jql_filter=jql_filter,
-            events=normalized_events,
+            payload={
+                "url": callback_url,
+                "webhooks": [
+                    {
+                        "jqlFilter": jql_filter,
+                        "events": events,
+                    }
+                ],
+            },
+        )
+        normalized_ids = _extract_created_webhook_ids(payload)
+        if not normalized_ids:
+            summary = _summarize_webhook_registration_failure(payload)
+            raise JiraOAuthError(
+                f"Webhook registration did not return any webhook IDs ({summary})"
+            )
+        return normalized_ids
+
+    def list_webhooks(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+    ) -> list[dict]:
+        payload = self._request_json(
+            method="GET",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
+            access_token=access_token,
+        )
+        if not isinstance(payload, dict):
+            return []
+        values = payload.get("values")
+        if not isinstance(values, list):
+            return []
+        return [item for item in values if isinstance(item, dict)]
+
+    def delete_webhooks(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        webhook_ids: list[int],
+    ) -> None:
+        if not webhook_ids:
+            return
+        self._request_json(
+            method="DELETE",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
+            access_token=access_token,
+            payload={"webhookIds": webhook_ids},
         )
 
+    def upload_issue_attachment(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        filename: str,
+        content: bytes,
+        content_type: str | None = None,
+    ) -> list[dict]:
+        normalized_issue = issue_id_or_key.strip()
+        normalized_filename = filename.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for attachment upload")
+        if not normalized_filename:
+            raise JiraOAuthError("Missing attachment filename")
+        if not content:
+            raise JiraOAuthError("Attachment payload is empty")
 
-def _to_adf_description(text: str) -> dict:
+        boundary = f"--------------------------{uuid4().hex}"
+        payload = BytesIO()
+        payload.write(f"--{boundary}\r\n".encode("utf-8"))
+        payload.write(
+            f'Content-Disposition: form-data; name="file"; filename="{normalized_filename}"\r\n'.encode("utf-8")
+        )
+        payload.write(f"Content-Type: {(content_type or 'application/octet-stream').strip()}\r\n\r\n".encode("utf-8"))
+        payload.write(content)
+        payload.write(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+
+        request = Request(
+            url=(
+                f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
+                f"{quote(normalized_issue, safe='')}/attachments"
+            ),
+            data=payload.getvalue(),
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "X-Atlassian-Token": "no-check",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                response_body = response.read().decode("utf-8")
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8")
+            raise JiraOAuthError(f"Jira attachment upload failed ({exc.code}): {error_body}") from exc
+
+        if not response_body:
+            return []
+        parsed = json.loads(response_body)
+        if not isinstance(parsed, list):
+            raise JiraOAuthError("Jira attachment upload response was not a list")
+        return [item for item in parsed if isinstance(item, dict)]
+
+
+def _to_adf_description(text: str | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(text, dict):
+        if text.get("type") == "doc" and isinstance(text.get("content"), list):
+            return text
+        text = ""
+    elif text is None:
+        text = ""
+    elif not isinstance(text, str):
+        text = str(text)
+
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         lines = ["No description provided"]
@@ -497,3 +603,137 @@ def _to_adf_description(text: str) -> dict:
         "version": 1,
         "content": paragraphs,
     }
+
+
+def _parse_issue_type_names_from_payload(payload: dict | list) -> list[str]:
+    candidates: list[object] = []
+    if isinstance(payload, list):
+        candidates.extend(payload)
+    elif isinstance(payload, dict):
+        for key in ("values", "issueTypes", "issuetypes", "projects"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+
+    names: list[str] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        for key in ("name",):
+            raw_name = item.get(key)
+            name = str(raw_name).strip() if raw_name is not None else ""
+            if name and name not in names:
+                names.append(name)
+
+        nested_issue_types = item.get("issueTypes") or item.get("issuetypes")
+        if isinstance(nested_issue_types, list):
+            for nested in nested_issue_types:
+                if not isinstance(nested, dict):
+                    continue
+                raw_nested_name = nested.get("name")
+                nested_name = str(raw_nested_name).strip() if raw_nested_name is not None else ""
+                if nested_name and nested_name not in names:
+                    names.append(nested_name)
+    return names
+
+
+def _select_issue_type_name(*, requested_issue_type: str | None, available_issue_types: list[str]) -> str:
+    requested = str(requested_issue_type or "").strip()
+    if not available_issue_types:
+        return requested or "Task"
+
+    by_lower = {name.lower(): name for name in available_issue_types}
+    if requested:
+        direct = by_lower.get(requested.lower())
+        if direct:
+            return direct
+
+    def _first_present(candidates: list[str]) -> str | None:
+        for candidate in candidates:
+            existing = by_lower.get(candidate.lower())
+            if existing:
+                return existing
+        return None
+
+    normalized = requested.lower()
+    if normalized in {"bug", "defect", "incident"}:
+        bug_choice = _first_present(["Bug", "Defect", "Incident", "Task", "Story", "Issue"])
+        if bug_choice:
+            return bug_choice
+    if normalized in {"story", "feature", "enhancement"}:
+        story_choice = _first_present(["Story", "Task", "Issue", "Epic", "Bug"])
+        if story_choice:
+            return story_choice
+    if normalized in {"epic"}:
+        epic_choice = _first_present(["Epic", "Story", "Task", "Issue"])
+        if epic_choice:
+            return epic_choice
+
+    default_choice = _first_present(["Task", "Story", "Issue", "Bug"])
+    if default_choice:
+        return default_choice
+    return available_issue_types[0]
+
+
+def _extract_created_webhook_ids(payload: dict | list) -> list[int]:
+    candidates: list[object] = []
+    if isinstance(payload, dict):
+        candidates.extend([payload.get("createdWebhookId"), payload.get("createdWebhookIds")])
+        registration_results = payload.get("webhookRegistrationResult")
+        if isinstance(registration_results, list):
+            for item in registration_results:
+                if isinstance(item, dict):
+                    candidates.extend([item.get("createdWebhookId"), item.get("createdWebhookIds")])
+
+    normalized_ids: list[int] = []
+    for candidate in candidates:
+        if isinstance(candidate, int):
+            normalized_ids.append(candidate)
+            continue
+        if isinstance(candidate, str) and candidate.isdigit():
+            normalized_ids.append(int(candidate))
+            continue
+        if isinstance(candidate, list):
+            for item in candidate:
+                if isinstance(item, int):
+                    normalized_ids.append(item)
+                elif isinstance(item, str) and item.isdigit():
+                    normalized_ids.append(int(item))
+    return normalized_ids
+
+
+def _summarize_webhook_registration_failure(payload: dict | list) -> str:
+    if isinstance(payload, list):
+        return f"response was a list with {len(payload)} item(s)"
+
+    if not isinstance(payload, dict):
+        return f"unexpected response type: {type(payload).__name__}"
+
+    error_messages = payload.get("errorMessages")
+    if isinstance(error_messages, list) and error_messages:
+        joined = "; ".join(str(item).strip() for item in error_messages if str(item).strip())
+        if joined:
+            return f"errorMessages: {joined}"
+
+    errors = payload.get("errors")
+    if isinstance(errors, dict) and errors:
+        pairs = ", ".join(f"{key}: {value}" for key, value in errors.items())
+        return f"errors: {pairs}"
+
+    registration_results = payload.get("webhookRegistrationResult")
+    if isinstance(registration_results, list) and registration_results:
+        item_summaries: list[str] = []
+        for item in registration_results:
+            if not isinstance(item, dict):
+                continue
+            item_errors = item.get("errors")
+            if isinstance(item_errors, list) and item_errors:
+                joined = "; ".join(str(part).strip() for part in item_errors if str(part).strip())
+                if joined:
+                    item_summaries.append(joined)
+        if item_summaries:
+            return "webhookRegistrationResult errors: " + " | ".join(item_summaries)
+        return f"webhookRegistrationResult present without IDs ({len(registration_results)} item(s))"
+
+    keys = ", ".join(sorted(str(key) for key in payload.keys()))
+    return f"response keys: {keys or 'none'}"

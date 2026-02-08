@@ -7,9 +7,11 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orchestrator.core.config import Settings
+from orchestrator.core.enforcement_context import EnforcementAssetsError, build_agent_enforcement_context
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 
@@ -28,9 +30,18 @@ class CodexRuntime:
     max_output_tokens: int
     command: str
     _request: Callable[[str, str], str]
+    enforcement_context: str = ""
 
     def run_text(self, *, system_prompt: str, user_prompt: str) -> str:
-        output = self._request(system_prompt, user_prompt).strip()
+        effective_system_prompt = system_prompt
+        if self.enforcement_context:
+            effective_system_prompt = (
+                f"{self.enforcement_context}\n\n"
+                "---\n"
+                "Agent role instructions:\n"
+                f"{system_prompt}"
+            )
+        output = self._request(effective_system_prompt, user_prompt).strip()
         if not output:
             raise CodexRuntimeError("Codex runtime returned an empty response")
         return output
@@ -77,6 +88,12 @@ def build_codex_runtime(
     settings: Settings,
     request_override: Callable[[str, str], str] | None = None,
 ) -> CodexRuntime:
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        enforcement_context = build_agent_enforcement_context(repo_root=repo_root)
+    except (EnforcementAssetsError, FileNotFoundError, ValueError) as exc:
+        raise CodexRuntimeError(f"Failed to load Codex enforcement context: {exc}") from exc
+
     if request_override is not None:
         return CodexRuntime(
             model=settings.codex_model,
@@ -84,6 +101,7 @@ def build_codex_runtime(
             max_output_tokens=settings.codex_max_output_tokens,
             command="override",
             _request=request_override,
+            enforcement_context=enforcement_context,
         )
 
     codex_command = (settings.codex_cli_command or "").strip()
@@ -146,4 +164,5 @@ def build_codex_runtime(
         max_output_tokens=settings.codex_max_output_tokens,
         command=codex_command,
         _request=_request,
+        enforcement_context=enforcement_context,
     )

@@ -65,7 +65,7 @@ jobs:
   dependency-review:
     name: Dependency review
     needs: detect
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: github.event_name == 'pull_request' && vars.ENABLE_DEPENDENCY_REVIEW == 'true'
     permissions:
       contents: read
@@ -82,7 +82,7 @@ jobs:
     name: Python dependency audit
     needs: detect
     if: needs.detect.outputs.is_python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
@@ -114,7 +114,7 @@ jobs:
   gitleaks:
     name: Secret scanning (gitleaks)
     needs: detect
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       pull-requests: read
@@ -133,7 +133,7 @@ jobs:
     name: SAST (CodeQL)
     needs: detect
     if: needs.detect.outputs.codeql_languages != '' && vars.ENABLE_CODEQL == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       actions: read
       contents: read

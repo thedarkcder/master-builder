@@ -10,7 +10,7 @@ description: Use when creating, seeding, deduplicating, or maintaining Jira back
 - User asks to keep backlog organized before execution starts.
 
 ## Inputs (must obtain)
-- Project key (for example `MAB`).
+- Project key from runtime tenant context (`tenant.jira.project_keys`).
 - Source spec(s) or markdown content.
 - Label/component conventions (if any).
 - Desired issue type (default `Task`, use `Bug` for defects).
@@ -36,15 +36,21 @@ description: Use when creating, seeding, deduplicating, or maintaining Jira back
 - For each item include Jira key + action (`created` or `updated`) + missing capability notes.
 
 ## Required description structure
-- Objective
-- Scope (in / out)
-- Acceptance Criteria
-- Good To Do checklist
-- Decision Gate triggers
-- Notes / Links
+- Use Markdown with **bold section titles** and `-` list bullets.
+- **Objective**
+- **Scope In**
+- **Scope Out**
+- **Acceptance Criteria**
+- **Good To Do checklist**
+- **Decision Gate triggers**
+- **Notes / Links**
+- Do **not** put tags/labels inside the description body.
+- Put labels only in Jira issue metadata (`labels` field).
 
 ## Guardrails
 - Always dedupe before creating.
 - Do not silently skip failed creates/updates; return a clear per-item failure list.
 - Do not force repo-specific labels unless explicitly requested.
+- Do not hardcode project keys; use runtime tenant project keys only.
 - Keep Jira comments concise and operational.
+- Description formatting is mandatory: bold section headers + list bullets for readability and consistency.

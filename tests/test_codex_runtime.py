@@ -58,12 +58,21 @@ class CodexRuntimeTests(unittest.TestCase):
 
     def test_build_runtime_uses_request_override(self) -> None:
         settings = Settings(codex_cli_command="codex")
+        captured: dict[str, str] = {}
+
+        def _request(system_prompt: str, _user_prompt: str) -> str:
+            captured["system_prompt"] = system_prompt
+            return '{"ok":true}'
+
         runtime = build_codex_runtime(
             settings=settings,
-            request_override=lambda _sys, _user: '{"ok":true}',
+            request_override=_request,
         )
         payload = runtime.run_json(system_prompt="sys", user_prompt="user")
         self.assertEqual(payload, {"ok": True})
+        self.assertIn("Run enforcement context (must apply):", captured["system_prompt"])
+        self.assertIn("Agent role instructions:", captured["system_prompt"])
+        self.assertIn("sys", captured["system_prompt"])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import re
+
+ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 
 def _normalize_lines(values: Iterable[str], *, max_items: int, max_line_chars: int) -> list[str]:
@@ -23,6 +26,12 @@ def _clip_message_lines(lines: list[str], *, max_lines: int = 40, max_chars: int
     if len(rendered) <= max_chars:
         return rendered
     return f"{rendered[: max_chars - 1].rstrip()}…"
+
+
+def _format_issue_reference(issue_key: str, jira_url: str | None) -> str:
+    if jira_url:
+        return f"[{issue_key}]({jira_url})"
+    return issue_key
 
 
 def format_discord_ready_gate_guidance(*, issue_key: str, issue_status: str, ready_statuses: Iterable[str]) -> str:
@@ -48,14 +57,12 @@ def format_stage_discord_update(
     error: str | None = None,
     next_steps: Iterable[str] = (),
 ) -> str:
-    lines = [
-        f"Stage update: {stage}",
-        f"Tenant: {tenant_id} | Issue: {issue_key} | Run: {run_id}",
-    ]
+    lines = [f"Stage update: {stage}", f"Tenant: {tenant_id} | Run: {run_id}"]
+    lines.append(f"Issue: {_format_issue_reference(issue_key, jira_url)}")
     if jira_url:
-        lines.append(f"Jira: {jira_url}")
+        lines.append(f"Jira: [Open issue]({jira_url})")
     if pr_url:
-        lines.append(f"PR: {pr_url}")
+        lines.append(f"PR: [Open PR]({pr_url})")
     if error:
         lines.append(f"Error: {' '.join(error.strip().split())[:200]}")
 
@@ -81,7 +88,7 @@ def format_stage_jira_update(
     lines = [
         f"Stage: {stage}",
         f"- Tenant: `{tenant_id}`",
-        f"- Issue: `{issue_key}`",
+        f"- Issue: {_format_issue_reference(issue_key, jira_url)}",
         f"- Run: `{run_id}`",
     ]
     if jira_url:
@@ -116,9 +123,9 @@ def format_discord_pr_ready_message(
     test_steps = _normalize_lines(how_to_test, max_items=3, max_line_chars=140)
     unresolved_questions = _normalize_lines(questions or (), max_items=2, max_line_chars=140)
 
-    lines = [f"✅ PR Ready: {pr_url}"]
+    lines = [f"✅ PR Ready: [Open PR]({pr_url})"]
     if jira_url or run_id:
-        jira_text = jira_url or "n/a"
+        jira_text = f"[Open issue]({jira_url})" if jira_url else "n/a"
         run_text = run_id or "n/a"
         lines.append(f"Jira: {jira_text} | Run: {run_text}")
     if changed:
@@ -153,6 +160,7 @@ def format_jira_final_comment(
     notes: Iterable[str] = (),
     open_questions: Iterable[str] = (),
     follow_up_issues: Iterable[str] = (),
+    jira_base_url: str | None = None,
 ) -> str:
     summary_lines = _normalize_lines(summary, max_items=4, max_line_chars=200)
     criteria_lines = _normalize_lines(acceptance_criteria, max_items=8, max_line_chars=200)
@@ -191,6 +199,15 @@ def format_jira_final_comment(
     if followups:
         lines.append("")
         lines.append("Follow-ups created (Backlog):")
-        lines.extend(f"- {item}" for item in followups)
+        for item in followups:
+            if "http://" in item or "https://" in item:
+                lines.append(f"- {item}")
+                continue
+            issue_match = ISSUE_KEY_PATTERN.search(item)
+            if issue_match and jira_base_url:
+                issue_key = issue_match.group(0)
+                lines.append(f"- {item} ({jira_base_url.rstrip('/')}/browse/{issue_key})")
+            else:
+                lines.append(f"- {item}")
 
     return _clip_message_lines(lines, max_lines=80, max_chars=5000)
