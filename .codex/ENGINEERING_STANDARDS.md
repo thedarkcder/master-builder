@@ -106,6 +106,25 @@ A PR should be blocked if it contains:
 - unclear “how to test”
 - changes that imply major NFR impact without Decision Gate discussion
 
+## 7.1) Mandatory test execution gate (pre-commit and pre-PR)
+
+Before commit:
+- Run targeted tests that cover changed behavior.
+- If targeted tests fail/skip/not-run: stop and do not commit.
+
+Before PR open/update:
+- Run the relevant full suite for the affected repo/service.
+- If full suite fails/skip/not-run: stop and do not open/update PR.
+
+Required evidence in PR/Jira update:
+- Exact targeted command(s) and exact full-suite command(s).
+- Pass/fail outcome for each command.
+- Short mapping: changed behavior -> targeted test command.
+
+Hard rule:
+- “Partial tests passed” is not an acceptable completion state.
+- If environment/tooling prevents full execution, mark blocked and state the blocker explicitly.
+
 ## 8) Output formatting (signal-only)
 
 Discord “PR Ready” message:
