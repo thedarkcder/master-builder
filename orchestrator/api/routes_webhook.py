@@ -42,6 +42,7 @@ from orchestrator.core.signal_templates import format_discord_ready_gate_guidanc
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 router = APIRouter(tags=["jira-webhook"])
 
@@ -990,6 +991,35 @@ def _send_discord_interaction_followup(
         raise RuntimeError(f"Discord follow-up request failed ({exc.code}): {error_body}") from exc
 
 
+def _send_discord_thread_followup(
+    *,
+    session: Session,
+    settings,
+    tenant: Tenant,
+    channel_id: str,
+    reply_to_message_id: str,
+    content: str,
+) -> None:  # noqa: ANN001
+    token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not token_ref:
+        raise RuntimeError("Discord bot token secret ref is not configured")
+    bot_token = resolve_secret_ref(
+        session,
+        secret_ref=token_ref,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if not bot_token:
+        raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
+    client = DiscordApiClient(bot_token=bot_token)
+    thread_name = f"{tenant.tenant_id}-{reply_to_message_id[-6:]}".replace(" ", "-")
+    thread_channel_id = client.ensure_thread_for_message(
+        channel_id=channel_id,
+        message_id=reply_to_message_id,
+        thread_name=thread_name[:100],
+    )
+    client.post_message(channel_id=thread_channel_id, content=content)
+
+
 async def _run_discord_command_followup(
     *,
     tenant_id: str,
@@ -1001,8 +1031,10 @@ async def _run_discord_command_followup(
     reply_to_message_id: str | None = None,
 ) -> None:
     session_factory = create_session_factory()
+    settings = get_settings()
     content = f"<@{user_id}> Command failed due to an internal error."
     components: list[dict] | None = None
+    sent_to_thread = False
     try:
         with session_factory() as session:
             tenant = session.get(Tenant, tenant_id)
@@ -1050,12 +1082,32 @@ async def _run_discord_command_followup(
                         user_id,
                     )
                     content = f"<@{user_id}> Command failed due to an internal error."
+                if reply_to_message_id:
+                    try:
+                        _send_discord_thread_followup(
+                            session=session,
+                            settings=settings,
+                            tenant=tenant,
+                            channel_id=channel_id,
+                            reply_to_message_id=reply_to_message_id,
+                            content=content,
+                        )
+                        sent_to_thread = True
+                    except (DiscordApiError, RuntimeError, ValueError):
+                        logger.exception(
+                            "discord_thread_followup_send_failed tenant_id=%s user_id=%s message_id=%s",
+                            tenant_id,
+                            user_id,
+                            reply_to_message_id,
+                        )
     except Exception:  # pragma: no cover - defensive logging path
         logger.exception(
             "discord_command_followup_runtime_failed tenant_id=%s user_id=%s",
             tenant_id,
             user_id,
         )
+    if sent_to_thread:
+        return
     try:
         _send_discord_interaction_followup(
             application_id=application_id,

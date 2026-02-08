@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import hmac
@@ -12,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
-from orchestrator.api.routes_webhook import _build_command_followup_message
+from orchestrator.api.routes_webhook import _build_command_followup_message, _run_discord_command_followup
 from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -591,3 +592,32 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertIn("[TP-999](https://master-builder.atlassian.net/browse/TP-999)", message)
         self.assertIn("[Open PR](https://github.com/example/repo/pull/77)", message)
+
+    def test_discord_reply_followup_posts_to_thread_without_webhook_followup(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.routes_webhook.execute_discord_command",
+                return_value=DiscordCommandResponse(
+                    ok=True,
+                    command="ask",
+                    message="Done.",
+                    data={"issue_key": "TP-324"},
+                ),
+            ),
+            patch("orchestrator.api.routes_webhook._send_discord_thread_followup") as thread_send_mock,
+            patch("orchestrator.api.routes_webhook._send_discord_interaction_followup") as interaction_send_mock,
+        ):
+            asyncio.run(
+                _run_discord_command_followup(
+                    tenant_id="tenant-webhook",
+                    user_id="discord-user-1",
+                    channel_id="discord-channel-1",
+                    command_text="!ask Can you fix it?",
+                    application_id="discord-app-1",
+                    interaction_token="interaction-token-1",
+                    reply_to_message_id="123456789012345678",
+                )
+            )
+
+        thread_send_mock.assert_called_once()
+        interaction_send_mock.assert_not_called()
