@@ -7,6 +7,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
@@ -24,6 +26,12 @@ class JiraWebhookTests(unittest.TestCase):
         self.webhook_secret_env = "ORCHESTRATOR_TEST_WEBHOOK_SECRET"
         self.webhook_secret_value = "super-secret-token"
         self.github_webhook_secret_value = "github-super-secret-token"
+        self.discord_interactions_secret_ref = "DISCORD_INTERACTIONS_PUBLIC_KEY"
+        self.discord_private_key = Ed25519PrivateKey.generate()
+        self.discord_public_key_hex = self.discord_private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        ).hex()
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
@@ -36,6 +44,11 @@ class JiraWebhookTests(unittest.TestCase):
         run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
+        self.client.put(
+            f"/api/admin/secrets/{self.discord_interactions_secret_ref}",
+            json={"value": self.discord_public_key_hex},
+            auth=("admin", "secret"),
+        )
         self._create_tenant("tenant-webhook")
 
     def tearDown(self) -> None:
@@ -98,6 +111,10 @@ class JiraWebhookTests(unittest.TestCase):
     def _sign_github_payload(self, payload_bytes: bytes, secret: str) -> str:
         digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
         return f"sha256={digest}"
+
+    def _sign_discord_interaction(self, *, payload_bytes: bytes, timestamp: str) -> str:
+        signed_message = timestamp.encode("utf-8") + payload_bytes
+        return self.discord_private_key.sign(signed_message).hex()
 
     def _jira_issue_payload(
         self,
@@ -402,6 +419,57 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertFalse(response.json()["accepted"])
         self.assertEqual(response.json()["reason"], "missing_pr_context")
+
+    def test_discord_interactions_ping(self) -> None:
+        payload = {"type": 1}
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        timestamp = "1700000000"
+        signature = self._sign_discord_interaction(payload_bytes=payload_bytes, timestamp=timestamp)
+
+        response = self.client.post(
+            "/discord/interactions",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-Signature-Ed25519": signature,
+                "X-Signature-Timestamp": timestamp,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], 1)
+
+    def test_discord_interactions_executes_command_for_channel_mapped_tenant(self) -> None:
+        self._create_tenant(
+            "tenant-discord-interactions",
+            discord_config={
+                "channel_id": "discord-channel-2",
+                "notify_events": [],
+                "allowed_user_ids": [],
+                "command_secret_ref": None,
+            },
+        )
+        payload = {
+            "type": 2,
+            "channel_id": "discord-channel-2",
+            "member": {"user": {"id": "discord-user-1"}},
+            "data": {"name": "help", "options": []},
+        }
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        timestamp = "1700000001"
+        signature = self._sign_discord_interaction(payload_bytes=payload_bytes, timestamp=timestamp)
+
+        response = self.client.post(
+            "/discord/interactions",
+            content=payload_bytes,
+            headers={
+                "content-type": "application/json",
+                "X-Signature-Ed25519": signature,
+                "X-Signature-Timestamp": timestamp,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], 4)
+        self.assertIn("Commands:", response.json()["data"]["content"])
 
     def test_discord_webhook_executes_help_command(self) -> None:
         self._create_tenant(

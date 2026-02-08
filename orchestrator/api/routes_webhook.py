@@ -8,6 +8,8 @@ import os
 import secrets
 from uuid import uuid4
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -35,6 +37,7 @@ HTTP_413_TOO_LARGE = getattr(
     status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
 )
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
+DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 
 
 def _max_webhook_body_bytes() -> int:
@@ -194,6 +197,158 @@ def _extract_delivery_id(request: Request) -> str | None:
             if normalized:
                 return normalized
     return None
+
+
+def _resolve_discord_interactions_public_key(
+    *,
+    session: Session,
+    settings,
+) -> bytes:  # noqa: ANN001
+    raw_public_key = resolve_secret_ref(
+        session,
+        secret_ref=DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF,
+        encryption_key=settings.secrets_encryption_key,
+    ).strip()
+    if not raw_public_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Discord interactions public key is missing. "
+                f"Set managed secret '{DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF}'."
+            ),
+        )
+
+    try:
+        public_key_bytes = bytes.fromhex(raw_public_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Discord interactions public key must be a hex-encoded Ed25519 public key",
+        ) from exc
+
+    if len(public_key_bytes) != 32:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Discord interactions public key must be 32 bytes (64 hex chars)",
+        )
+    return public_key_bytes
+
+
+def _validate_discord_interaction_signature(
+    *,
+    request: Request,
+    payload_bytes: bytes,
+    public_key: bytes,
+) -> None:
+    signature_hex = (request.headers.get("X-Signature-Ed25519") or "").strip()
+    timestamp = (request.headers.get("X-Signature-Timestamp") or "").strip()
+    if not signature_hex or not timestamp:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Discord interaction signature headers",
+        )
+
+    try:
+        signature = bytes.fromhex(signature_hex)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Discord interaction signature",
+        ) from exc
+
+    message = timestamp.encode("utf-8") + payload_bytes
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
+    except InvalidSignature as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Discord interaction signature",
+        ) from exc
+
+
+def _discord_interaction_response(*, content: str, ephemeral: bool = True) -> JSONResponse:
+    response_data = {"content": content}
+    if ephemeral:
+        response_data["flags"] = 64
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"type": 4, "data": response_data},
+    )
+
+
+def _find_tenant_for_discord_channel(
+    *,
+    session: Session,
+    channel_id: str,
+) -> Tenant | None:
+    tenants = session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
+    matches: list[Tenant] = []
+    for tenant in tenants:
+        discord_channel_id = str((tenant.discord_config or {}).get("channel_id") or "").strip()
+        if discord_channel_id and discord_channel_id == channel_id:
+            matches.append(tenant)
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _flatten_discord_option_values(options: object) -> list[str]:
+    if not isinstance(options, list):
+        return []
+    flattened: list[str] = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_type = option.get("type")
+        if option_type in {1, 2}:  # SUB_COMMAND / SUB_COMMAND_GROUP
+            nested_name = option.get("name")
+            if isinstance(nested_name, str) and nested_name.strip():
+                flattened.append(nested_name.strip())
+            flattened.extend(_flatten_discord_option_values(option.get("options")))
+            continue
+        value = option.get("value")
+        if value is None:
+            continue
+        flattened.append(str(value))
+    return flattened
+
+
+def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str]:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction data")
+
+    command_name = data.get("name")
+    if not isinstance(command_name, str) or not command_name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction command name")
+
+    channel_id = payload.get("channel_id")
+    if not isinstance(channel_id, str) or not channel_id.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction channel_id")
+
+    user_id: str | None = None
+    member = payload.get("member")
+    if isinstance(member, dict):
+        member_user = member.get("user")
+        if isinstance(member_user, dict):
+            raw_user_id = member_user.get("id")
+            if isinstance(raw_user_id, str) and raw_user_id.strip():
+                user_id = raw_user_id.strip()
+    if user_id is None:
+        direct_user = payload.get("user")
+        if isinstance(direct_user, dict):
+            raw_user_id = direct_user.get("id")
+            if isinstance(raw_user_id, str) and raw_user_id.strip():
+                user_id = raw_user_id.strip()
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction user_id")
+
+    option_values = _flatten_discord_option_values(data.get("options"))
+    command_text = f"!{command_name.strip().lower()}"
+    if option_values:
+        command_text = f"{command_text} {' '.join(option_values)}"
+
+    return user_id, channel_id.strip(), command_text
 
 
 def _validate_webhook_auth(
@@ -560,6 +715,60 @@ async def ingest_jira_webhook(
         "run_id": enqueue_result.run.run_id,
         "trigger_reason": trigger_reason,
     }
+
+
+@router.post("/discord/interactions")
+async def ingest_discord_interaction(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    settings = get_settings()
+    request_id = request.headers.get("X-Request-Id") or str(uuid4())
+
+    payload, payload_bytes = await _read_json_payload(request, request_id=request_id, source="discord")
+    public_key = _resolve_discord_interactions_public_key(session=session, settings=settings)
+    _validate_discord_interaction_signature(
+        request=request,
+        payload_bytes=payload_bytes,
+        public_key=public_key,
+    )
+
+    interaction_type = payload.get("type")
+    if interaction_type == 1:  # PING
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"type": 1})
+
+    if interaction_type != 2:  # APPLICATION_COMMAND
+        return _discord_interaction_response(
+            content=f"Unsupported Discord interaction type '{interaction_type}'",
+            ephemeral=True,
+        )
+
+    try:
+        user_id, channel_id, command_text = _parse_discord_interaction_command(payload)
+    except HTTPException as exc:
+        return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
+
+    tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id)
+    if tenant is None:
+        return _discord_interaction_response(
+            content="No enabled tenant is configured for this Discord channel.",
+            ephemeral=True,
+        )
+
+    try:
+        command_response = execute_discord_command(
+            tenant_id=tenant.tenant_id,
+            payload=DiscordCommandRequest(
+                user_id=user_id,
+                command=command_text,
+                channel_id=channel_id,
+            ),
+            session=session,
+        )
+    except HTTPException as exc:
+        return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
+
+    return _discord_interaction_response(content=command_response.message, ephemeral=True)
 
 
 @router.post("/discord/webhook/{tenant_id}")
