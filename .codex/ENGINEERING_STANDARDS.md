@@ -148,32 +148,31 @@ Apply these to all UI/UX work by default:
 
 ### Consistent structure
 - Maintain uniform layouts.
-- Similar tasks should follow the same structural pattern (modular steps or single cohesive flows).
+- Similar tasks should follow the same structural pattern, whether modular steps or single cohesive flows.
 
 ### Clear navigation
-- Users should always know where they are.
+- Ensure users always know where they are.
 - Use clear headings, breadcrumbs, or step indicators.
 
 ### Predictable feedback
-- Alerts, errors, and confirmations must appear in a consistent location.
-- Prefer top banner or top-right toast patterns that do not move between screens.
+- Alerts, errors, or confirmations should always appear in a consistent spot (for example top-right toast or top banner).
 
 ### Responsive design
-- Layouts must adapt at all supported screen sizes.
-- On mobile, components should stack or use full width; avoid dead space and broken alignment.
+- On all screen sizes, layouts adapt.
+- On mobile, components should use full width or stack vertically.
 
 ### Consistent spacing and typographic hierarchy
-- Use consistent spacing scale and typography hierarchy.
-- Make visual flow and grouping obvious at a glance.
+- Use consistent spacing scales and clear typography for hierarchy.
 
 ### Accessible interactions
-- All interactions must be keyboard accessible.
-- Maintain sufficient contrast and clear visible focus states.
+- All interactions must be keyboard-accessible, with clear focus states.
 
 ### Context retention
-- Multi-step flows and wizards must retain user input/context across steps.
-- No unexpected resets when navigating forward/back.
+- Multi-step flows must retain input and context across steps.
+- No resets.
 
 ### Guided user flow
-- Provide clear next actions, progress indicators, and affordances.
-- Users should never need to guess the next step.
+- Guide users with clear next steps or progress indicators.
+
+### Full-width for data-dense interfaces
+- For admin dashboards or data-heavy screens, always use full-width layouts to maximize space and clarity.
