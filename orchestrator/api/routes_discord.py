@@ -529,6 +529,8 @@ def execute_discord_command(
     tenant_id: str,
     payload: DiscordCommandRequest,
     session: Session = Depends(get_session),
+    *,
+    defer_seed_issues: bool = False,
 ) -> DiscordCommandResponse:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
@@ -699,6 +701,13 @@ def execute_discord_command(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Usage: !issues seed <markdown spec>",
+            )
+        if defer_seed_issues:
+            return DiscordCommandResponse(
+                ok=True,
+                command=command_name,
+                message="Issue seeding started. I will reply in this thread with created issue links when done.",
+                data={"deferred": True, "prompt_markdown": prompt_markdown},
             )
         message, data = _seed_issues_with_codex(
             session=session,

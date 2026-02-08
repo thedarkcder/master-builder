@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -7,6 +8,8 @@ import logging
 import os
 import secrets
 from datetime import datetime, timezone
+from urllib.error import HTTPError
+from urllib.request import Request as UrlRequest, urlopen
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidSignature
@@ -34,7 +37,8 @@ from orchestrator.core.runs import (
 )
 from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.db import create_session_factory
+from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 
 router = APIRouter(tags=["jira-webhook"])
@@ -325,6 +329,16 @@ def _discord_interaction_response(*, content: str, ephemeral: bool = True) -> JS
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={"type": 4, "data": response_data},
+    )
+
+
+def _discord_interaction_deferred_response(*, ephemeral: bool = True) -> JSONResponse:
+    response_data: dict[str, object] = {}
+    if ephemeral:
+        response_data["flags"] = 64
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"type": 5, "data": response_data},
     )
 
 
@@ -681,6 +695,159 @@ def _extract_installation_id(payload: dict) -> str | None:
     if isinstance(installation_id_fallback, str) and installation_id_fallback.strip():
         return installation_id_fallback.strip()
     return None
+
+
+def _tenant_jira_browse_base_url(*, session: Session, tenant: Tenant) -> str | None:
+    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        return None
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        return None
+    normalized_site_url = str(connection.site_url or "").strip().rstrip("/")
+    if not normalized_site_url:
+        return None
+    return normalized_site_url
+
+
+def _build_command_followup_message(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    command_response,
+) -> str:  # noqa: ANN001
+    response_data = command_response.data if isinstance(command_response.data, dict) else {}
+    raw_keys = response_data.get("created_issue_keys")
+    created_issue_keys = (
+        [str(value).strip().upper() for value in raw_keys if str(value).strip()]
+        if isinstance(raw_keys, list)
+        else []
+    )
+    lines: list[str] = [f"<@{user_id}> {command_response.message}"]
+    if command_response.command == "link":
+        jira_url = str(response_data.get("jira_url") or "").strip()
+        pr_url = str(response_data.get("pr_url") or "").strip()
+        if jira_url or pr_url:
+            lines.append("")
+            lines.append("Links:")
+            if jira_url:
+                lines.append(f"- Jira: {jira_url}")
+            if pr_url:
+                lines.append(f"- PR: {pr_url}")
+    if created_issue_keys:
+        jira_base_url = _tenant_jira_browse_base_url(session=session, tenant=tenant)
+        lines.append("")
+        lines.append("Created issues:")
+        for issue_key in created_issue_keys[:20]:
+            if jira_base_url:
+                lines.append(f"- [{issue_key}]({jira_base_url}/browse/{issue_key})")
+            else:
+                lines.append(f"- {issue_key}")
+        if len(created_issue_keys) > 20:
+            lines.append(f"- ...and {len(created_issue_keys) - 20} more")
+    content = "\n".join(lines).strip()
+    if len(content) <= 1900:
+        return content
+    return f"{content[:1897]}..."
+
+
+def _send_discord_interaction_followup(
+    *,
+    application_id: str,
+    interaction_token: str,
+    content: str,
+    ephemeral: bool = False,
+) -> None:
+    normalized_app_id = application_id.strip()
+    normalized_token = interaction_token.strip()
+    normalized_content = content.strip()
+    if not normalized_app_id or not normalized_token or not normalized_content:
+        raise ValueError("Discord interaction follow-up payload is incomplete")
+    payload: dict[str, object] = {"content": normalized_content}
+    if ephemeral:
+        payload["flags"] = 64
+    request = UrlRequest(
+        url=f"https://discord.com/api/v10/webhooks/{normalized_app_id}/{normalized_token}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "MasterBuilderDiscordClient/1.0 (+https://github.com/thedarkcder/master-builder)",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=30):
+            return
+    except HTTPError as exc:
+        error_body = exc.read().decode("utf-8")
+        raise RuntimeError(f"Discord follow-up request failed ({exc.code}): {error_body}") from exc
+
+
+async def _run_discord_command_followup(
+    *,
+    tenant_id: str,
+    user_id: str,
+    channel_id: str,
+    command_text: str,
+    application_id: str,
+    interaction_token: str,
+) -> None:
+    session_factory = create_session_factory()
+    content = f"<@{user_id}> Command failed due to an internal error."
+    try:
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            if tenant is None or not tenant.is_enabled:
+                content = f"<@{user_id}> Command failed: tenant is unavailable."
+            else:
+                try:
+                    command_response = execute_discord_command(
+                        tenant_id=tenant_id,
+                        payload=DiscordCommandRequest(
+                            user_id=user_id,
+                            command=command_text,
+                            channel_id=channel_id,
+                        ),
+                        session=session,
+                        defer_seed_issues=False,
+                    )
+                    content = _build_command_followup_message(
+                        session=session,
+                        tenant=tenant,
+                        user_id=user_id,
+                        command_response=command_response,
+                    )
+                except HTTPException as exc:
+                    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                    content = f"<@{user_id}> Command failed: {detail}"
+                except Exception:  # pragma: no cover - defensive logging path
+                    logger.exception(
+                        "discord_command_followup_failed tenant_id=%s user_id=%s",
+                        tenant_id,
+                        user_id,
+                    )
+                    content = f"<@{user_id}> Command failed due to an internal error."
+    except Exception:  # pragma: no cover - defensive logging path
+        logger.exception(
+            "discord_command_followup_runtime_failed tenant_id=%s user_id=%s",
+            tenant_id,
+            user_id,
+        )
+    try:
+        _send_discord_interaction_followup(
+            application_id=application_id,
+            interaction_token=interaction_token,
+            content=content,
+            ephemeral=False,
+        )
+    except Exception:  # pragma: no cover - defensive logging path
+        logger.exception(
+            "discord_command_followup_send_failed tenant_id=%s user_id=%s",
+            tenant_id,
+            user_id,
+        )
 
 
 def _find_tenant_by_installation_id(session: Session, installation_id: str) -> Tenant | None:
@@ -1042,20 +1209,25 @@ async def ingest_discord_interaction(
             ephemeral=True,
         )
 
-    try:
-        command_response = execute_discord_command(
-            tenant_id=tenant.tenant_id,
-            payload=DiscordCommandRequest(
-                user_id=user_id,
-                command=command_text,
-                channel_id=channel_id,
-            ),
-            session=session,
+    application_id = str(payload.get("application_id") or "").strip()
+    interaction_token = str(payload.get("token") or "").strip()
+    if not application_id or not interaction_token:
+        return _discord_interaction_response(
+            content="Missing Discord interaction context for deferred response.",
+            ephemeral=True,
         )
-    except HTTPException as exc:
-        return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
 
-    return _discord_interaction_response(content=command_response.message, ephemeral=True)
+    asyncio.create_task(
+        _run_discord_command_followup(
+            tenant_id=tenant.tenant_id,
+            user_id=user_id,
+            channel_id=channel_id,
+            command_text=command_text,
+            application_id=application_id,
+            interaction_token=interaction_token,
+        )
+    )
+    return _discord_interaction_deferred_response(ephemeral=True)
 
 
 @router.post("/discord/webhook/{tenant_id}")
