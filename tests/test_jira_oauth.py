@@ -2,7 +2,11 @@ import unittest
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
-from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig
+from orchestrator.tools.jira_oauth import (
+    JiraIssueCreateInput,
+    JiraOAuthClient,
+    JiraOAuthClientConfig,
+)
 
 
 class JiraOAuthTests(unittest.TestCase):
@@ -90,6 +94,89 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertIn(b"filename=\"screen.png\"", captured["payload"])
         self.assertIn(b"binary-data", captured["payload"])
         self.assertEqual(result[0]["id"], "1001")
+
+    def test_create_issues_bulk_uses_valid_project_issue_type_when_requested_type_missing(self) -> None:
+        client = JiraOAuthClient(
+            JiraOAuthClientConfig(
+                client_id="client-id",
+                client_secret="client-secret",
+                redirect_uri="https://example.test/callback",
+            )
+        )
+        captured_payload: dict[str, object] = {}
+
+        def _fake_request_json(**kwargs: object) -> dict:
+            payload = kwargs.get("payload")
+            if isinstance(payload, dict):
+                captured_payload.update(payload)
+            return {"issues": [{"key": "MAB-1", "id": "1001"}], "errors": []}
+
+        with (
+            patch.object(client, "_get_json", return_value={"values": [{"name": "Story"}, {"name": "Bug"}]}),
+            patch.object(client, "_request_json", side_effect=_fake_request_json),
+        ):
+            result = client.create_issues_bulk(
+                access_token="token",
+                cloud_id="cloud-id",
+                project_key="MAB",
+                issues=[
+                    JiraIssueCreateInput(
+                        summary="Seed issue",
+                        description="Description",
+                        labels=["discord-seeded"],
+                        issue_type="Task",
+                    )
+                ],
+            )
+
+        self.assertEqual([created.key for created in result.created], ["MAB-1"])
+        issue_updates = captured_payload.get("issueUpdates")
+        self.assertIsInstance(issue_updates, list)
+        first_issue = issue_updates[0]
+        self.assertEqual(first_issue["fields"]["issuetype"]["name"], "Story")
+
+    def test_create_issues_bulk_surfaces_field_level_errors(self) -> None:
+        client = JiraOAuthClient(
+            JiraOAuthClientConfig(
+                client_id="client-id",
+                client_secret="client-secret",
+                redirect_uri="https://example.test/callback",
+            )
+        )
+        with (
+            patch.object(client, "_get_json", return_value={"values": [{"name": "Task"}]}),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={
+                    "issues": [],
+                    "errors": [
+                        {
+                            "failedElementNumber": 0,
+                            "elementErrors": {
+                                "errorMessages": [],
+                                "errors": {"issuetype": "Specify a valid issue type"},
+                            },
+                        }
+                    ],
+                },
+            ),
+        ):
+            result = client.create_issues_bulk(
+                access_token="token",
+                cloud_id="cloud-id",
+                project_key="MAB",
+                issues=[
+                    JiraIssueCreateInput(
+                        summary="Seed issue",
+                        description="Description",
+                        labels=["discord-seeded"],
+                        issue_type="Task",
+                    )
+                ],
+            )
+        self.assertEqual(result.created, [])
+        self.assertEqual(result.errors, ["Item 0: issuetype: Specify a valid issue type"])
 
 
 if __name__ == "__main__":

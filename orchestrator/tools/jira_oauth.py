@@ -308,16 +308,25 @@ class JiraOAuthClient:
         project_key: str,
         issues: list[JiraIssueCreateInput],
     ) -> JiraIssueBulkCreateResult:
+        available_issue_types = self._list_project_issue_types_for_create(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            project_key=project_key,
+        )
         issue_updates = []
         for issue in issues:
             summary = issue.summary.strip()
             if not summary:
                 continue
+            issue_type = _select_issue_type_name(
+                requested_issue_type=issue.issue_type,
+                available_issue_types=available_issue_types,
+            )
             issue_updates.append(
                 {
                     "fields": {
                         "project": {"key": project_key},
-                        "issuetype": {"name": issue.issue_type or "Task"},
+                        "issuetype": {"name": issue_type},
                         "summary": summary,
                         "description": _to_adf_description(issue.description),
                         "labels": [label for label in issue.labels if label],
@@ -357,13 +366,45 @@ class JiraOAuthClient:
             failed_element = item.get("failedElementNumber")
             element_errors = item.get("elementErrors") if isinstance(item.get("elementErrors"), dict) else {}
             error_messages = element_errors.get("errorMessages")
+            reason_parts: list[str] = []
             if isinstance(error_messages, list):
-                reason_text = "; ".join(str(part) for part in error_messages if str(part).strip()) or "Unknown error"
-            else:
-                reason_text = "Unknown error"
+                reason_parts.extend(str(part).strip() for part in error_messages if str(part).strip())
+            field_errors = element_errors.get("errors")
+            if isinstance(field_errors, dict):
+                for field_name, field_reason in field_errors.items():
+                    normalized_field_name = str(field_name).strip()
+                    normalized_field_reason = str(field_reason).strip()
+                    if normalized_field_name and normalized_field_reason:
+                        reason_parts.append(f"{normalized_field_name}: {normalized_field_reason}")
+            reason_text = "; ".join(reason_parts) or "Unknown error"
             errors.append(f"Item {failed_element}: {reason_text}")
 
         return JiraIssueBulkCreateResult(created=created, errors=errors)
+
+    def _list_project_issue_types_for_create(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+    ) -> list[str]:
+        normalized_project_key = project_key.strip().upper()
+        if not normalized_project_key:
+            return []
+
+        for endpoint in (
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/createmeta/{quote(normalized_project_key, safe='')}/issuetypes",
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/createmeta?projectKeys={quote(normalized_project_key, safe='')}&expand=projects.issuetypes",
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/{quote(normalized_project_key, safe='')}",
+        ):
+            try:
+                payload = self._get_json(endpoint, access_token=access_token)
+            except JiraOAuthError:
+                continue
+            parsed = _parse_issue_type_names_from_payload(payload)
+            if parsed:
+                return parsed
+        return []
 
     def update_issue_fields(
         self,
@@ -528,6 +569,76 @@ def _to_adf_description(text: str) -> dict:
         "version": 1,
         "content": paragraphs,
     }
+
+
+def _parse_issue_type_names_from_payload(payload: dict | list) -> list[str]:
+    candidates: list[object] = []
+    if isinstance(payload, list):
+        candidates.extend(payload)
+    elif isinstance(payload, dict):
+        for key in ("values", "issueTypes", "issuetypes", "projects"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+
+    names: list[str] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        for key in ("name",):
+            raw_name = item.get(key)
+            name = str(raw_name).strip() if raw_name is not None else ""
+            if name and name not in names:
+                names.append(name)
+
+        nested_issue_types = item.get("issueTypes") or item.get("issuetypes")
+        if isinstance(nested_issue_types, list):
+            for nested in nested_issue_types:
+                if not isinstance(nested, dict):
+                    continue
+                raw_nested_name = nested.get("name")
+                nested_name = str(raw_nested_name).strip() if raw_nested_name is not None else ""
+                if nested_name and nested_name not in names:
+                    names.append(nested_name)
+    return names
+
+
+def _select_issue_type_name(*, requested_issue_type: str | None, available_issue_types: list[str]) -> str:
+    requested = str(requested_issue_type or "").strip()
+    if not available_issue_types:
+        return requested or "Task"
+
+    by_lower = {name.lower(): name for name in available_issue_types}
+    if requested:
+        direct = by_lower.get(requested.lower())
+        if direct:
+            return direct
+
+    def _first_present(candidates: list[str]) -> str | None:
+        for candidate in candidates:
+            existing = by_lower.get(candidate.lower())
+            if existing:
+                return existing
+        return None
+
+    normalized = requested.lower()
+    if normalized in {"bug", "defect", "incident"}:
+        bug_choice = _first_present(["Bug", "Defect", "Incident", "Task", "Story", "Issue"])
+        if bug_choice:
+            return bug_choice
+    if normalized in {"story", "feature", "enhancement"}:
+        story_choice = _first_present(["Story", "Task", "Issue", "Epic", "Bug"])
+        if story_choice:
+            return story_choice
+    if normalized in {"epic"}:
+        epic_choice = _first_present(["Epic", "Story", "Task", "Issue"])
+        if epic_choice:
+            return epic_choice
+
+    default_choice = _first_present(["Task", "Story", "Issue", "Bug"])
+    if default_choice:
+        return default_choice
+    return available_issue_types[0]
 
 
 def _extract_created_webhook_ids(payload: dict | list) -> list[int]:
