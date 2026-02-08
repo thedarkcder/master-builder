@@ -372,22 +372,20 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.routes_discord.build_codex_runtime"),
-            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Recovered answer"),
         ):
-            command_response = execute_discord_command(
-                tenant_id=self.tenant_id,
-                payload=DiscordCommandRequest(
-                    user_id="u-viewer",
-                    channel_id="discord-channel-1",
-                    command="!ask what changed since last update?",
-                ),
-                session=session,
-            )
+            with self.assertRaises(HTTPException) as exc_info:
+                execute_discord_command(
+                    tenant_id=self.tenant_id,
+                    payload=DiscordCommandRequest(
+                        user_id="u-viewer",
+                        channel_id="discord-channel-1",
+                        command="!ask what changed since last update?",
+                    ),
+                    session=session,
+                )
 
-        self.assertTrue(command_response.ok)
-        self.assertEqual(command_response.message, "Recovered answer")
-        self.assertIsNone(command_response.data["issue_key"])
+        self.assertEqual(exc_info.exception.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("no longer exists", str(exc_info.exception.detail))
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)

@@ -201,6 +201,92 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(jira_config["webhook_last_issue_key"], "TP-777")
         self.assertIsNotNone(jira_config["webhook_last_received_at"])
 
+    def test_webhook_issue_deleted_clears_discord_ask_history(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+            discord_config = {
+                "channel_id": "discord-channel-1",
+                "notify_events": ["run_started"],
+                "allowed_user_ids": ["u-admin"],
+                "ask_history": [
+                    {
+                        "user_id": "u-viewer",
+                        "channel_id": "discord-channel-1",
+                        "question": "What changed?",
+                        "answer": "Previous answer",
+                        "issue_key": "TP-404",
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+            tenant.discord_config = discord_config
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-404", labels=["agent:ready"])
+        payload["webhookEvent"] = "jira:issue_deleted"
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "issue_deleted")
+        self.assertEqual(response.json()["removed_history_entries"], 1)
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+            ask_history = (tenant.discord_config or {}).get("ask_history", [])
+            self.assertFalse(ask_history)
+
+    def test_comment_webhook_without_mb_command_is_ignored(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-902", status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-1"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Can someone take a look?"}],
+                    }
+                ],
+            },
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "comment_without_command")
+        self.assertEqual(body["webhook_event"], "comment_created")
+
+    def test_comment_updated_without_mb_command_is_ignored(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-903", status_name="To Do")
+        payload["webhookEvent"] = "comment_updated"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-1"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Updated note without command"}],
+                    }
+                ],
+            },
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "comment_without_command")
+        self.assertEqual(body["webhook_event"], "comment_updated")
+
     def test_webhook_marks_transition_into_ready_status(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
         payload["changelog"] = {

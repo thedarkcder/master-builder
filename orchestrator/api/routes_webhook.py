@@ -27,6 +27,7 @@ from orchestrator.api.routes_discord import (
     _search_jira_issues_for_tenant,
     consume_pending_ask_action,
     execute_discord_command,
+    remove_issue_key_from_tenant_ask_history,
 )
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
@@ -58,6 +59,7 @@ HTTP_413_TOO_LARGE = getattr(
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "ask"}
+JIRA_COMMENT_EVENTS = {"comment_created", "comment_updated"}
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")
 ASK_REPLY_MODAL_CUSTOM_ID_PATTERN = re.compile(r"^ask\.reply\.([0-9]{15,25})$")
@@ -1544,6 +1546,12 @@ async def ingest_jira_webhook(
     )
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
+    raw_webhook_event = payload.get("webhookEvent")
+    webhook_event = (
+        str(raw_webhook_event).strip().lower()
+        if isinstance(raw_webhook_event, str) and str(raw_webhook_event).strip()
+        else None
+    )
 
     issue_key, labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
         _extract_issue_payload(payload)
@@ -1557,14 +1565,38 @@ async def ingest_jira_webhook(
         issue_key=issue_key,
     )
     logger.info(
-        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s comment_command=%s comment_command_error=%s",
+        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s webhook_event=%s comment_command=%s comment_command_error=%s",
         request_id,
         tenant_id,
         issue_key,
         delivery_id,
+        webhook_event,
         comment_command,
         comment_command_error,
     )
+
+    if webhook_event == "jira:issue_deleted":
+        removed_entries = remove_issue_key_from_tenant_ask_history(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
+        )
+        logger.info(
+            "jira_webhook_issue_deleted request_id=%s tenant_id=%s issue_key=%s removed_history_entries=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            removed_entries,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "issue_deleted",
+            "removed_history_entries": removed_entries,
+            "webhook_event": webhook_event,
+        }
 
     if comment_command_error:
         logger.info(
@@ -1579,6 +1611,24 @@ async def ingest_jira_webhook(
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "invalid_comment_command",
+            "webhook_event": webhook_event,
+        }
+
+    if webhook_event in JIRA_COMMENT_EVENTS and comment_command is None:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=comment_without_command webhook_event=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            webhook_event,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "comment_without_command",
+            "webhook_event": webhook_event,
         }
 
     if comment_command == "ask":
@@ -1625,6 +1675,7 @@ async def ingest_jira_webhook(
             "question": question,
             "comment_posted": posted,
             "comment_error": post_error,
+            "webhook_event": webhook_event,
         }
 
     configured_ready_statuses = tenant.jira_config.get("ready_statuses")
@@ -1648,6 +1699,7 @@ async def ingest_jira_webhook(
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "issue_status_missing",
+            "webhook_event": webhook_event,
         }
 
     if issue_status_category_key == "done":
@@ -1665,6 +1717,7 @@ async def ingest_jira_webhook(
             "enqueued": False,
             "reason": "issue_done",
             "issue_status": issue_status,
+            "webhook_event": webhook_event,
         }
 
     normalized_ready_statuses = {status.casefold() for status in ready_statuses}
@@ -1689,6 +1742,7 @@ async def ingest_jira_webhook(
                 issue_status=issue_status,
                 ready_statuses=ready_statuses,
             ),
+            "webhook_event": webhook_event,
         }
 
     from_status, to_status = _extract_status_transition(payload)
@@ -1743,6 +1797,7 @@ async def ingest_jira_webhook(
                 "enqueued": False,
                 "reason": "no_retryable_run",
                 "trigger_reason": trigger_reason,
+                "webhook_event": webhook_event,
             }
         resolved_issue_description = retry_source_run.issue_description
 
@@ -1773,6 +1828,7 @@ async def ingest_jira_webhook(
             "run_id": enqueue_result.run.run_id,
             "trigger_reason": trigger_reason,
             "command": comment_command,
+            "webhook_event": webhook_event,
         }
     logger.info(
         "jira_webhook_enqueued request_id=%s tenant_id=%s issue_key=%s run_id=%s",
@@ -1790,6 +1846,7 @@ async def ingest_jira_webhook(
         "run_id": enqueue_result.run.run_id,
         "trigger_reason": trigger_reason,
         "command": comment_command,
+        "webhook_event": webhook_event,
     }
 
 
