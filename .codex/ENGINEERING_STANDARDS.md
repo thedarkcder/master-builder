@@ -141,3 +141,39 @@ Jira final comment:
 - how to test (commands + steps)
 - notes (rollout/migrations/monitoring)
 - follow-ups created (Backlog)
+
+## 9) Universal UX principles
+
+Apply these to all UI/UX work by default:
+
+### Consistent structure
+- Maintain uniform layouts.
+- Similar tasks should follow the same structural pattern (modular steps or single cohesive flows).
+
+### Clear navigation
+- Users should always know where they are.
+- Use clear headings, breadcrumbs, or step indicators.
+
+### Predictable feedback
+- Alerts, errors, and confirmations must appear in a consistent location.
+- Prefer top banner or top-right toast patterns that do not move between screens.
+
+### Responsive design
+- Layouts must adapt at all supported screen sizes.
+- On mobile, components should stack or use full width; avoid dead space and broken alignment.
+
+### Consistent spacing and typographic hierarchy
+- Use consistent spacing scale and typography hierarchy.
+- Make visual flow and grouping obvious at a glance.
+
+### Accessible interactions
+- All interactions must be keyboard accessible.
+- Maintain sufficient contrast and clear visible focus states.
+
+### Context retention
+- Multi-step flows and wizards must retain user input/context across steps.
+- No unexpected resets when navigating forward/back.
+
+### Guided user flow
+- Provide clear next actions, progress indicators, and affordances.
+- Users should never need to guess the next step.
