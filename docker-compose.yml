@@ -21,18 +21,23 @@ services:
     container_name: master-builder-packages
     environment:
       PACKAGE_INDEX_USERNAME: ${PACKAGE_INDEX_USERNAME:-tenant}
-      PACKAGE_INDEX_PASSWORD: ${PACKAGE_INDEX_PASSWORD:-change-me}
+      PACKAGE_INDEX_PASSWORD: ${PACKAGE_INDEX_PASSWORD:?Set PACKAGE_INDEX_PASSWORD}
     ports:
-      - "4401:8080"
-    command:
-      - run
-      - -p
-      - "8080"
-      - -P
-      - .
-      - -a
-      - .
-      - /data/packages
+      - "4401:4401"
+    entrypoint:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /data/packages
+        printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /tmp/.htpasswd
+        exec pypi-server --hash-algo off run -p 4401 -P /tmp/.htpasswd -a update,download,list /data/packages
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s = socket.create_connection(('127.0.0.1', 4401), 2); s.close()"
+      interval: 5s
+      timeout: 5s
+      retries: 20
     volumes:
       - packages-data:/data/packages
 
@@ -41,42 +46,35 @@ services:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-http://tenant:change-me@host.docker.internal:4401/simple/}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your package index URL}
     container_name: master-builder-api
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
-      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-change-me}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:4100,http://127.0.0.1:4100}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
-      ORCHESTRATOR_GITHUB_APP_SLUG: ${ORCHESTRATOR_GITHUB_APP_SLUG:-}
-      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:-change-me}
-      ORCHESTRATOR_GITHUB_APP_ID_REF: ${ORCHESTRATOR_GITHUB_APP_ID_REF:-MB_GH_APP_ID}
-      ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF: ${ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF:-MB_GH_PRIVATE_KEY}
-      ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF: ${ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF:-MB_GH_WEBHOOK_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF: ${ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF:-MB_JIRA_CLIENT_ID}
-      ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF: ${ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF:-MB_JIRA_CLIENT_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:-change-me}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:-}
-      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.1}
-      MB_GH_APP_ID: ${MB_GH_APP_ID:-}
-      MB_GH_PRIVATE_KEY: ${MB_GH_PRIVATE_KEY:-}
-      MB_GH_WEBHOOK_SECRET: ${MB_GH_WEBHOOK_SECRET:-}
-      MB_JIRA_CLIENT_ID: ${MB_JIRA_CLIENT_ID:-}
-      MB_JIRA_CLIENT_SECRET: ${MB_JIRA_CLIENT_SECRET:-}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.2}
     ports:
       - "4000:4000"
     depends_on:
       postgres:
         condition: service_healthy
-
+      packages:
+        condition: service_healthy
+    volumes:
+      - codex-home:/root/.codex
+        
   worker:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-http://tenant:change-me@host.docker.internal:4401/simple/}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your package index URL}
     container_name: master-builder-worker
     depends_on:
       api:
@@ -85,26 +83,17 @@ services:
         condition: service_healthy
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
-      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:-change-me}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
-      ORCHESTRATOR_GITHUB_APP_SLUG: ${ORCHESTRATOR_GITHUB_APP_SLUG:-}
-      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:-change-me}
-      ORCHESTRATOR_GITHUB_APP_ID_REF: ${ORCHESTRATOR_GITHUB_APP_ID_REF:-MB_GH_APP_ID}
-      ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF: ${ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF:-MB_GH_PRIVATE_KEY}
-      ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF: ${ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF:-MB_GH_WEBHOOK_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF: ${ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF:-MB_JIRA_CLIENT_ID}
-      ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF: ${ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF:-MB_JIRA_CLIENT_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:-change-me}
-      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:-}
-      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.1}
-      MB_GH_APP_ID: ${MB_GH_APP_ID:-}
-      MB_GH_PRIVATE_KEY: ${MB_GH_PRIVATE_KEY:-}
-      MB_GH_WEBHOOK_SECRET: ${MB_GH_WEBHOOK_SECRET:-}
-      MB_JIRA_CLIENT_ID: ${MB_JIRA_CLIENT_ID:-}
-      MB_JIRA_CLIENT_SECRET: ${MB_JIRA_CLIENT_SECRET:-}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.2}
     command: ["sh", "-c", "python -m orchestrator migrate && python -m orchestrator worker"]
+    volumes:
+      - codex-home:/root/.codex
 
   admin-ui:
     build:
@@ -125,15 +114,38 @@ services:
     depends_on:
       - api
     network_mode: "service:api"
+    entrypoint:
+      - /bin/sh
+      - /etc/tailscale/funnel-bootstrap.sh
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "true"
-      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---advertise-tags=tag:container --accept-dns=false}
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---accept-dns=false}
+      TS_FUNNEL_PORT: ${TS_FUNNEL_PORT:-4000}
     volumes:
       - tailscale-state:/var/lib/tailscale
+      - ./scripts/tailscale/funnel-bootstrap.sh:/etc/tailscale/funnel-bootstrap.sh:ro
+  gha-linux-runner:
+    image: myoung34/github-runner:latest
+    platform: linux/amd64
+    container_name: master-builder-gha-linux-runner
+    restart: unless-stopped
+    environment:
+      RUNNER_SCOPE: repo
+      REPO_URL: ${GHA_REPO_URL:-https://github.com/thedarkcder/master-builder}
+      RUNNER_NAME_PREFIX: master-builder-linux
+      LABELS: self-hosted,linux,non-macos
+      RUNNER_WORKDIR: /tmp/runner/work
+      DISABLE_AUTO_UPDATE: "true"
+      RUNNER_TOKEN: ${GHA_RUNNER_TOKEN:-}
+    volumes:
+      - runner-data:/runner
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   postgres-data:
   packages-data:
   tailscale-state:
+  runner-data:
+  codex-home:

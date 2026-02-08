@@ -9,8 +9,9 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import jwt
+from jwt.exceptions import InvalidKeyError
 
-from orchestrator.tools.repo_allowlist import enforce_repo_allowlist
+from orchestrator.tools.repo_allowlist import enforce_repo_match
 
 
 class GitHubApiError(RuntimeError):
@@ -114,14 +115,43 @@ class GitHubAppClient:
         self._cached_installation_token: _InstallationToken | None = None
 
     def create_app_jwt(self) -> str:
+        private_key_pem = self._normalize_private_key(self._config.private_key_pem)
+        if private_key_pem.startswith(("gho_", "ghu_", "ghs_", "github_pat_")):
+            raise ValueError(
+                "Invalid GitHub App private key secret: received OAuth/PAT token, expected PEM private key"
+            )
+        if not private_key_pem.startswith(
+            ("-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----")
+        ):
+            raise ValueError(
+                "Invalid GitHub App private key secret: expected GitHub App PEM private key "
+                "(-----BEGIN PRIVATE KEY----- or -----BEGIN RSA PRIVATE KEY-----)"
+            )
+
         now = datetime.now(timezone.utc)
         payload = {
             "iat": int((now - timedelta(seconds=60)).timestamp()),
             "exp": int((now + timedelta(minutes=9)).timestamp()),
             "iss": self._config.app_id,
         }
-        encoded = jwt.encode(payload, self._config.private_key_pem, algorithm="RS256")
+        try:
+            encoded = jwt.encode(payload, private_key_pem, algorithm="RS256")
+        except InvalidKeyError as exc:
+            raise ValueError(
+                "Invalid GitHub App private key secret: expected PEM (-----BEGIN...-----) format"
+            ) from exc
         return str(encoded)
+
+    @staticmethod
+    def _normalize_private_key(raw_value: str) -> str:
+        value = raw_value.strip()
+        # Accept env-style quoted strings.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1].strip()
+        # Accept escaped newlines from forms/env files.
+        value = value.replace("\\r\\n", "\n").replace("\\n", "\n")
+        value = value.replace("\r\n", "\n")
+        return value.strip()
 
     def _request_json(
         self,
@@ -186,13 +216,13 @@ class GitHubAppClient:
         self,
         *,
         repo_full_name: str,
-        allowlist: list[str],
+        github_repository: str,
         title: str,
         head_branch: str,
         base_branch: str,
         body: str,
     ) -> PullRequestResult:
-        enforce_repo_allowlist(f"https://github.com/{repo_full_name}", allowlist)
+        enforce_repo_match(f"https://github.com/{repo_full_name}", github_repository)
         installation_token = self.get_installation_token()
         response = self._request_json(
             method="POST",

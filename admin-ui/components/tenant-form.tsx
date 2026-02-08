@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
-import type { TenantCreatePayload, TenantUpdatePayload } from "@/lib/api";
+import type { GitHubRepositoryRecord, TenantCreatePayload, TenantUpdatePayload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,8 +15,43 @@ import {
   toUpdatePayload
 } from "@/lib/tenant-form";
 
+const DISCORD_NOTIFY_EVENT_OPTIONS = [
+  {
+    value: "lock_acquired",
+    label: "Run queued",
+    description: "Post when a run is accepted and lock is acquired."
+  },
+  {
+    value: "plan_posted",
+    label: "Plan posted",
+    description: "Post when the PM plan is produced for the run."
+  },
+  {
+    value: "pr_opened",
+    label: "PR opened",
+    description: "Post when a pull request is opened."
+  },
+  {
+    value: "run_failed",
+    label: "Run failed",
+    description: "Post when a run fails and needs intervention."
+  },
+  {
+    value: "review_signal",
+    label: "Review signal",
+    description: "Post PR-ready or review-required signals from GitHub webhook events."
+  },
+  {
+    value: "decision_gate_required",
+    label: "Decision gate required",
+    description: "Post when a run is blocked pending PM/BA clarification."
+  }
+] as const;
+
 type TenantFormProps = {
   submitting?: boolean;
+  repositoryOptions?: GitHubRepositoryRecord[];
+  repositoriesLoading?: boolean;
 } & (
   | {
       mode: "create";
@@ -56,12 +91,38 @@ function Toggle({
   );
 }
 
-export function TenantForm({ mode, initialValues, onSubmit, submitting = false }: TenantFormProps) {
+export function TenantForm({
+  mode,
+  initialValues,
+  onSubmit,
+  submitting = false,
+  repositoryOptions = [],
+  repositoriesLoading = false
+}: TenantFormProps) {
   const [values, setValues] = useState<TenantFormValues>(initialValues ?? defaultTenantFormValues());
   const [error, setError] = useState("");
   const [textFields, setTextFields] = useState(() => formValuesToTextFields(initialValues ?? defaultTenantFormValues()));
 
+  useEffect(() => {
+    const nextValues = initialValues ?? defaultTenantFormValues();
+    setValues(nextValues);
+    setTextFields(formValuesToTextFields(nextValues));
+  }, [initialValues]);
+
   const submitLabel = mode === "create" ? "Create Tenant" : "Save Tenant";
+
+  function toggleDiscordNotifyEvent(eventValue: string, enabled: boolean): void {
+    setValues((prev) => {
+      const current = prev.discord.notify_events;
+      const next = enabled
+        ? Array.from(new Set([...current, eventValue]))
+        : current.filter((value) => value !== eventValue);
+      return {
+        ...prev,
+        discord: { ...prev.discord, notify_events: next }
+      };
+    });
+  }
 
   const validation = useMemo(() => {
     if (!values.name.trim()) {
@@ -76,11 +137,11 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
     if (!textFields.readyStatusesText.trim()) {
       return "At least one ready status is required.";
     }
-    if (!textFields.allowlistText.trim()) {
-      return "At least one repository allowlist entry is required.";
+    if (!textFields.githubRepositoryText.trim()) {
+      return "Repository selection is required.";
     }
     return "";
-  }, [mode, textFields.allowlistText, textFields.projectKeysText, textFields.readyStatusesText, values]);
+  }, [mode, textFields.githubRepositoryText, textFields.projectKeysText, textFields.readyStatusesText, values]);
 
   async function handleSubmit(): Promise<void> {
     if (validation) {
@@ -254,45 +315,30 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
       <Card>
         <CardHeader>
           <CardTitle>Repository Mapping</CardTitle>
-          <CardDescription>Define the target repos and mapping rules.</CardDescription>
+          <CardDescription>Define the target repository.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-2">
-            <FieldLabel>Allowlist (one URL per line)</FieldLabel>
-            <Textarea
-              value={textFields.allowlistText}
-              onChange={(event) => setTextFields((prev) => ({ ...prev, allowlistText: event.target.value }))}
-              className="min-h-[110px]"
-              placeholder="https://github.com/example/repo"
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Rules by Jira project key (one per line: key=url)</FieldLabel>
-            <Textarea
-              value={textFields.mappingByProjectText}
-              onChange={(event) => setTextFields((prev) => ({ ...prev, mappingByProjectText: event.target.value }))}
-              className="min-h-[110px]"
-              placeholder="TP=https://github.com/example/repo"
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Rules by Jira component (one per line: component=url)</FieldLabel>
-            <Textarea
-              value={textFields.mappingByComponentText}
-              onChange={(event) => setTextFields((prev) => ({ ...prev, mappingByComponentText: event.target.value }))}
-              className="min-h-[110px]"
-              placeholder="payments=https://github.com/example/payments"
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Fallback repo (optional)</FieldLabel>
-            <Input
-              value={values.repos.fallback_repo ?? ""}
-              onChange={(event) =>
-                setValues((prev) => ({ ...prev, repos: { ...prev.repos, fallback_repo: event.target.value || null } }))
-              }
-              placeholder="https://github.com/example/default"
-            />
+            <FieldLabel>Repository</FieldLabel>
+            <select
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={textFields.githubRepositoryText}
+              onChange={(event) => setTextFields((prev) => ({ ...prev, githubRepositoryText: event.target.value }))}
+              disabled={repositoriesLoading || repositoryOptions.length === 0}
+            >
+              <option value="">
+                {repositoriesLoading
+                  ? "Loading repositories..."
+                  : repositoryOptions.length === 0
+                    ? "No repositories available"
+                    : "Select repository"}
+              </option>
+              {repositoryOptions.map((repo) => (
+                <option key={repo.html_url} value={repo.html_url}>
+                  {repo.full_name}
+                </option>
+              ))}
+            </select>
           </div>
         </CardContent>
       </Card>
@@ -387,7 +433,9 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
       <Card>
         <CardHeader>
           <CardTitle>Discord (optional)</CardTitle>
-          <CardDescription>Notification channel defaults for this tenant.</CardDescription>
+          <CardDescription>
+            Notification events for this tenant. Channel binding is managed automatically by the backend.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <Toggle
@@ -399,38 +447,23 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
           {values.discordEnabled ? (
             <>
               <div className="space-y-2">
-                <FieldLabel>Channel ID (optional)</FieldLabel>
-                <Input
-                  value={values.discord.channel_id ?? ""}
-                  onChange={(event) =>
-                    setValues((prev) => ({
-                      ...prev,
-                      discord: { ...prev.discord, channel_id: event.target.value || null }
-                    }))
-                  }
-                  placeholder="123456789012345"
-                />
-              </div>
-              <div className="space-y-2">
-                <FieldLabel>Channel name template</FieldLabel>
-                <Input
-                  value={values.discord.channel_name_template}
-                  onChange={(event) =>
-                    setValues((prev) => ({
-                      ...prev,
-                      discord: { ...prev.discord, channel_name_template: event.target.value }
-                    }))
-                  }
-                  placeholder="proj-{tenant_id}"
-                />
-              </div>
-              <div className="space-y-2">
-                <FieldLabel>Notify events (one per line)</FieldLabel>
-                <Textarea
-                  value={textFields.notifyEventsText}
-                  onChange={(event) => setTextFields((prev) => ({ ...prev, notifyEventsText: event.target.value }))}
-                  placeholder="run.started"
-                />
+                <FieldLabel>Notify events</FieldLabel>
+                <div className="space-y-2 rounded-md border p-3">
+                  {DISCORD_NOTIFY_EVENT_OPTIONS.map((option) => (
+                    <label key={option.value} className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 rounded border-input"
+                        checked={values.discord.notify_events.includes(option.value)}
+                        onChange={(event) => toggleDiscordNotifyEvent(option.value, event.target.checked)}
+                      />
+                      <span>
+                        <span className="font-medium text-foreground">{option.label}</span>
+                        <span className="block text-xs text-muted-foreground">{option.description}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
               </div>
             </>
           ) : null}

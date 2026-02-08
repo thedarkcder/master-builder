@@ -7,16 +7,23 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
+    AdminIdentityResponse,
+    AdminLoginRequest,
+    AdminLoginResponse,
+    DiscordAllowlistApprovalResult,
+    DiscordAllowlistRequestRead,
     GitHubRepositoryRead,
     GitHubInstallStart,
     IntegrationTestResult,
     JiraConnectStart,
+    JiraWebhookActionResult,
+    JiraWebhookDiagnosticsRead,
     ReadyGatePreviewRead,
     ReadyIssuePreviewRead,
     JiraProjectRead,
@@ -30,6 +37,7 @@ from orchestrator.api.schemas import (
     TenantRead,
     TenantUpdate,
 )
+from orchestrator.core.admin_tokens import create_admin_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
 from orchestrator.core.secret_manager import (
@@ -45,13 +53,41 @@ from orchestrator.core.jira_oauth_state import (
 )
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
-from orchestrator.core.security import require_admin
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.core.security import require_admin, validate_admin_credentials
+from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+JIRA_WEBHOOK_EVENTS = ["jira:issue_created", "jira:issue_updated"]
+DISCORD_INTERNAL_CONFIG_KEYS = {
+    "allowlist_requests",
+    "pending_ask_actions",
+    "ask_history",
+    "ask_thread_channel_ids",
+}
+
+
+@router.post("/auth/login", response_model=AdminLoginResponse)
+def admin_login(payload: AdminLoginRequest) -> AdminLoginResponse:
+    if not validate_admin_credentials(username=payload.username, password=payload.password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
+
+    settings = get_settings()
+    token, expires_in = create_admin_access_token(
+        username=settings.admin_username,
+        secret=settings.admin_token_secret,
+        ttl_seconds=settings.admin_token_ttl_seconds,
+    )
+    return AdminLoginResponse(access_token=token, expires_in=expires_in)
+
+
+@router.get("/auth/me", response_model=AdminIdentityResponse)
+def admin_me(username: str = Depends(require_admin)) -> AdminIdentityResponse:
+    return AdminIdentityResponse(username=username)
 
 
 def _tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -107,6 +143,19 @@ def _with_managed_github_refs(raw_github_config: dict) -> dict:
     github_config["app_id_ref"] = settings.github_app_id_ref
     github_config["private_key_ref"] = settings.github_private_key_ref
     return github_config
+
+
+def _with_preserved_discord_system_fields(*, existing: dict, proposed: dict | None) -> dict | None:
+    if proposed is None:
+        return None
+    merged = dict(proposed)
+    for key in DISCORD_INTERNAL_CONFIG_KEYS:
+        if key in merged:
+            continue
+        value = existing.get(key)
+        if value is not None:
+            merged[key] = value
+    return merged
 
 
 def _validate_codex_assets_for_tenant_init() -> None:
@@ -198,6 +247,411 @@ def _default_ready_jql(*, project_keys: list[str], ready_statuses: list[str]) ->
     return f"project in ({quoted_projects}) AND status in ({quoted_statuses}) ORDER BY updated DESC"
 
 
+def _parse_managed_webhook_ids(jira_config: dict) -> list[int]:
+    raw_ids = jira_config.get("managed_webhook_ids")
+    if not isinstance(raw_ids, list):
+        return []
+    normalized: list[int] = []
+    for item in raw_ids:
+        if isinstance(item, int):
+            normalized.append(item)
+        elif isinstance(item, str) and item.isdigit():
+            normalized.append(int(item))
+    return normalized
+
+
+def _all_managed_webhook_ids(session: Session) -> set[int]:
+    managed: set[int] = set()
+    tenants = session.execute(select(Tenant.jira_config)).all()
+    for (jira_config_raw,) in tenants:
+        if not isinstance(jira_config_raw, dict):
+            continue
+        managed.update(_parse_managed_webhook_ids(jira_config_raw))
+    return managed
+
+
+def _parse_jira_webhook_id(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _is_jira_webhook_limit_error(exc: Exception) -> bool:
+    return "maximum of 5 webhooks is allowed per app per user" in str(exc).lower()
+
+
+def _cleanup_unmanaged_jira_webhooks_for_connection(
+    *,
+    session: Session,
+    client: JiraOAuthClient,
+    access_token: str,
+    cloud_id: str,
+) -> tuple[int, str]:
+    webhooks = client.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+    if not webhooks:
+        return 0, "No existing Jira webhooks were listed for this app/user."
+
+    managed_ids = _all_managed_webhook_ids(session)
+    stale_ids: list[int] = []
+    for item in webhooks:
+        webhook_id = _parse_jira_webhook_id(item.get("id"))
+        if webhook_id is None:
+            continue
+        if webhook_id not in managed_ids:
+            stale_ids.append(webhook_id)
+
+    if not stale_ids:
+        return 0, "No unmanaged Jira webhooks were found to clean up."
+
+    client.delete_webhooks(
+        access_token=access_token,
+        cloud_id=cloud_id,
+        webhook_ids=stale_ids,
+    )
+    return len(stale_ids), f"Deleted {len(stale_ids)} unmanaged Jira webhook(s)."
+
+
+def _remove_managed_webhook_id_from_tenants(*, session: Session, webhook_id: int) -> int:
+    removed_count = 0
+    tenants = session.execute(select(Tenant)).scalars().all()
+    for tenant in tenants:
+        jira_config = tenant.jira_config
+        if not isinstance(jira_config, dict):
+            continue
+        managed_ids = _parse_managed_webhook_ids(jira_config)
+        if webhook_id not in managed_ids:
+            continue
+        updated_ids = [item for item in managed_ids if item != webhook_id]
+        updated_config = dict(jira_config)
+        updated_config["managed_webhook_ids"] = updated_ids
+        tenant.jira_config = updated_config
+        tenant.updated_at = datetime.now(timezone.utc)
+        removed_count += 1
+    return removed_count
+
+
+def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:
+    merged = dict(proposed)
+    for key in (
+        "managed_webhook_ids",
+        "webhook_last_provisioned_at",
+        "webhook_last_error",
+        "webhook_last_received_at",
+        "webhook_last_delivery_id",
+        "webhook_last_issue_key",
+    ):
+        if key in existing:
+            merged[key] = existing.get(key)
+    return merged
+
+
+def _parse_discord_allowlist_requests(discord_config: dict | None) -> list[DiscordAllowlistRequestRead]:
+    if not isinstance(discord_config, dict):
+        return []
+    raw = discord_config.get("allowlist_requests")
+    if not isinstance(raw, list):
+        return []
+    normalized: list[DiscordAllowlistRequestRead] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        user_id = str(item.get("user_id") or "").strip()
+        if not user_id:
+            continue
+        permissions_raw = item.get("permissions")
+        permissions = (
+            [str(value).strip() for value in permissions_raw if str(value).strip()]
+            if isinstance(permissions_raw, list)
+            else []
+        )
+        normalized.append(
+            DiscordAllowlistRequestRead(
+                user_id=user_id,
+                requested_at=str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
+                channel_id=str(item.get("channel_id") or "").strip() or None,
+                reason=str(item.get("reason") or "").strip() or None,
+                permissions=permissions,
+            )
+        )
+    normalized.sort(key=lambda item: item.requested_at, reverse=True)
+    return normalized
+
+
+def _notify_discord_allowlist_approved(
+    *,
+    session: Session,
+    settings,
+    user_id: str,
+) -> bool:  # noqa: ANN001
+    bot_token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not bot_token_ref:
+        return False
+    bot_token = resolve_secret_ref(
+        session,
+        secret_ref=bot_token_ref,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if not bot_token:
+        return False
+    client = DiscordApiClient(bot_token=bot_token)
+    client.send_direct_message(
+        user_id=user_id,
+        content="Your allowlist request has been approved. You can now run sensitive commands for this tenant.",
+    )
+    return True
+
+
+def _jira_webhook_callback_url(*, settings, tenant_id: str) -> str:  # noqa: ANN001
+    return f"{settings.public_api_base_url.rstrip('/')}/jira/webhook/{quote(tenant_id, safe='')}"
+
+
+def _jira_webhook_filter_jql(jira_config: dict) -> str:
+    project_keys = jira_config.get("project_keys")
+    if not isinstance(project_keys, list) or not project_keys:
+        raise ValueError("Missing Jira project_keys")
+    quoted_projects = ", ".join(f"\"{str(key).strip()}\"" for key in project_keys if str(key).strip())
+    if not quoted_projects:
+        raise ValueError("Missing Jira project_keys")
+    # Keep webhook subscriptions broad so events are always delivered; runtime status gates decide executability.
+    return f"project in ({quoted_projects}) ORDER BY updated DESC"
+
+
+def _delete_jira_webhooks(
+    *,
+    session: Session,
+    tenant: Tenant,
+    settings,  # noqa: ANN001
+) -> tuple[bool, str, list[int]]:
+    jira_config = dict(tenant.jira_config)
+    connection_id = jira_config.get("connection_id")
+    if not isinstance(connection_id, str) or not connection_id:
+        jira_config["managed_webhook_ids"] = []
+        jira_config["webhook_last_error"] = None
+        tenant.jira_config = jira_config
+        tenant.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        return True, "No Jira connection linked; cleared local webhook metadata.", []
+
+    webhook_ids = _parse_managed_webhook_ids(jira_config)
+    if not webhook_ids:
+        jira_config["webhook_last_error"] = None
+        tenant.jira_config = jira_config
+        tenant.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        return True, "No managed Jira webhook IDs stored; nothing to delete.", []
+
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        jira_config["managed_webhook_ids"] = []
+        jira_config["webhook_last_error"] = "Configured Jira connection was not found during webhook deletion"
+        tenant.jira_config = jira_config
+        tenant.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        return False, "Configured Jira connection was not found.", webhook_ids
+
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        client.delete_webhooks(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            webhook_ids=webhook_ids,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        error_message = f"Failed to delete Jira webhooks: {exc}"
+        jira_config["webhook_last_error"] = error_message
+        tenant.jira_config = jira_config
+        tenant.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        return False, error_message, webhook_ids
+
+    jira_config["managed_webhook_ids"] = []
+    jira_config["webhook_last_error"] = None
+    tenant.jira_config = jira_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return True, f"Deleted {len(webhook_ids)} Jira webhook(s).", webhook_ids
+
+
+def _provision_jira_webhook(
+    *,
+    session: Session,
+    tenant: Tenant,
+    settings,  # noqa: ANN001
+    replace_existing: bool,
+) -> JiraWebhookActionResult:
+    action_name = "reset" if replace_existing else "provision"
+    jira_config = dict(tenant.jira_config)
+    connection_id = jira_config.get("connection_id")
+    if not isinstance(connection_id, str) or not connection_id:
+        return JiraWebhookActionResult(
+            ok=False,
+            action=action_name,
+            details="Jira OAuth connection is not linked for this tenant",
+            webhook_ids=[],
+        )
+
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        return JiraWebhookActionResult(
+            ok=False,
+            action=action_name,
+            details="Configured Jira connection was not found",
+            webhook_ids=[],
+        )
+
+    if replace_existing:
+        delete_ok, delete_details, _ = _delete_jira_webhooks(
+            session=session,
+            tenant=tenant,
+            settings=settings,
+        )
+        if not delete_ok:
+            return JiraWebhookActionResult(
+                ok=False,
+                action="reset",
+                details=delete_details,
+                webhook_ids=_parse_managed_webhook_ids(jira_config),
+            )
+        session.refresh(tenant)
+        jira_config = dict(tenant.jira_config)
+
+    access_token = _refresh_jira_connection_tokens(
+        session,
+        connection=connection,
+        settings=settings,
+    )
+    client = _jira_oauth_client(session=session, settings=settings)
+    callback_url = _jira_webhook_callback_url(settings=settings, tenant_id=tenant.tenant_id)
+    jql_filter = _jira_webhook_filter_jql(jira_config)
+    webhook_ids: list[int] | None = None
+    cleanup_note: str | None = None
+    try:
+        webhook_ids = client.register_webhook(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            callback_url=callback_url,
+            jql_filter=jql_filter,
+            events=JIRA_WEBHOOK_EVENTS,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        if _is_jira_webhook_limit_error(exc):
+            try:
+                deleted_count, cleanup_details = _cleanup_unmanaged_jira_webhooks_for_connection(
+                    session=session,
+                    client=client,
+                    access_token=access_token,
+                    cloud_id=connection.cloud_id,
+                )
+                cleanup_note = cleanup_details
+                if deleted_count == 0:
+                    current_tenant_ids = _parse_managed_webhook_ids(jira_config)
+                    if current_tenant_ids:
+                        client.delete_webhooks(
+                            access_token=access_token,
+                            cloud_id=connection.cloud_id,
+                            webhook_ids=current_tenant_ids,
+                        )
+                        deleted_count = len(current_tenant_ids)
+                        cleanup_note = (
+                            f"{cleanup_details} Deleted {deleted_count} existing tenant Jira webhook(s)."
+                        )
+                if deleted_count == 0:
+                    all_webhooks = client.list_webhooks(access_token=access_token, cloud_id=connection.cloud_id)
+                    rollover_id: int | None = None
+                    for item in all_webhooks:
+                        parsed = _parse_jira_webhook_id(item.get("id"))
+                        if parsed is not None:
+                            rollover_id = parsed
+                            break
+                    if rollover_id is not None:
+                        client.delete_webhooks(
+                            access_token=access_token,
+                            cloud_id=connection.cloud_id,
+                            webhook_ids=[rollover_id],
+                        )
+                        touched_tenants = _remove_managed_webhook_id_from_tenants(
+                            session=session,
+                            webhook_id=rollover_id,
+                        )
+                        deleted_count = 1
+                        tenant_note = (
+                            f" Removed stale managed reference from {touched_tenants} tenant(s)."
+                            if touched_tenants > 0
+                            else ""
+                        )
+                        cleanup_note = (
+                            f"{cleanup_details} Deleted 1 rollover Jira webhook ({rollover_id}) to free capacity."
+                            f"{tenant_note}"
+                        )
+                if deleted_count > 0:
+                    webhook_ids = client.register_webhook(
+                        access_token=access_token,
+                        cloud_id=connection.cloud_id,
+                        callback_url=callback_url,
+                        jql_filter=jql_filter,
+                        events=JIRA_WEBHOOK_EVENTS,
+                    )
+            except (ValueError, JiraOAuthError) as cleanup_exc:
+                jira_config["webhook_last_error"] = (
+                    "Failed to provision Jira webhook: "
+                    f"{exc}. Cleanup attempt failed: {cleanup_exc}"
+                )
+                tenant.jira_config = jira_config
+                tenant.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                return JiraWebhookActionResult(
+                    ok=False,
+                    action=action_name,
+                    details=jira_config["webhook_last_error"],
+                    webhook_ids=_parse_managed_webhook_ids(jira_config),
+                )
+        if webhook_ids is None:
+            jira_config["webhook_last_error"] = f"Failed to provision Jira webhook: {exc}"
+            tenant.jira_config = jira_config
+            tenant.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            return JiraWebhookActionResult(
+                ok=False,
+                action=action_name,
+                details=jira_config["webhook_last_error"],
+                webhook_ids=_parse_managed_webhook_ids(jira_config),
+            )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    jira_config["managed_webhook_ids"] = webhook_ids
+    jira_config["webhook_last_provisioned_at"] = now_iso
+    jira_config["webhook_last_error"] = None
+    tenant.jira_config = jira_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    details = f"Provisioned {len(webhook_ids)} Jira webhook(s)."
+    if cleanup_note:
+        details = f"{details} {cleanup_note}"
+    return JiraWebhookActionResult(
+        ok=True,
+        action=action_name,
+        details=details,
+        webhook_ids=webhook_ids,
+    )
+
+
+def _jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
+    if result.ok:
+        return status.HTTP_200_OK
+    if result.details.startswith("Jira OAuth connection is not linked"):
+        return status.HTTP_400_BAD_REQUEST
+    if result.details.startswith("Configured Jira connection was not found"):
+        return status.HTTP_400_BAD_REQUEST
+    return status.HTTP_502_BAD_GATEWAY
+
+
 @router.get("/secrets", response_model=list[ManagedSecretRead])
 def list_secrets(
     _: str = Depends(require_admin),
@@ -249,6 +703,21 @@ def resolve_secret(
         source=metadata.source,
         resolved=bool(resolved_value),
     )
+
+
+@router.delete("/secrets/{secret_ref:path}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_secret(
+    secret_ref: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> Response:
+    normalized_ref = normalize_secret_ref(secret_ref)
+    row = session.get(ManagedSecret, normalized_ref)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found")
+    session.delete(row)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/jira/connect/start", response_model=JiraConnectStart)
@@ -378,6 +847,218 @@ def list_jira_projects_for_connection(
     return [JiraProjectRead(key=project.key, name=project.name) for project in projects]
 
 
+@router.get("/tenants/{tenant_id}/jira/webhooks/diagnostics", response_model=JiraWebhookDiagnosticsRead)
+def get_jira_webhook_diagnostics(
+    tenant_id: str,
+    within_minutes: int = Query(default=60, ge=1, le=1440),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> JiraWebhookDiagnosticsRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    settings = get_settings()
+    jira_config = dict(tenant.jira_config)
+    connection_id = jira_config.get("connection_id")
+    connected = isinstance(connection_id, str) and bool(connection_id.strip())
+    last_received_at_raw = jira_config.get("webhook_last_received_at")
+    last_received_at = (
+        last_received_at_raw.strip()
+        if isinstance(last_received_at_raw, str) and last_received_at_raw.strip()
+        else None
+    )
+    recent_delivery_ok = False
+    if last_received_at:
+        try:
+            parsed_last_received = datetime.fromisoformat(last_received_at.replace("Z", "+00:00"))
+            threshold = datetime.now(timezone.utc) - timedelta(minutes=within_minutes)
+            recent_delivery_ok = parsed_last_received >= threshold
+        except ValueError:
+            recent_delivery_ok = False
+
+    return JiraWebhookDiagnosticsRead(
+        tenant_id=tenant_id,
+        connected=connected,
+        webhook_url=_jira_webhook_callback_url(settings=settings, tenant_id=tenant_id),
+        managed_webhook_ids=_parse_managed_webhook_ids(jira_config),
+        last_provisioned_at=jira_config.get("webhook_last_provisioned_at"),
+        last_received_at=last_received_at,
+        last_delivery_id=jira_config.get("webhook_last_delivery_id"),
+        last_issue_key=jira_config.get("webhook_last_issue_key"),
+        last_error=jira_config.get("webhook_last_error"),
+        recent_delivery_window_minutes=within_minutes,
+        recent_delivery_ok=recent_delivery_ok,
+    )
+
+
+@router.post("/tenants/{tenant_id}/jira/webhooks/provision", response_model=JiraWebhookActionResult)
+def provision_tenant_jira_webhook(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> JiraWebhookActionResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    settings = get_settings()
+    result = _provision_jira_webhook(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        replace_existing=False,
+    )
+    return JSONResponse(
+        status_code=_jira_webhook_action_status_code(result),
+        content=result.model_dump(),
+    )
+
+
+@router.post("/tenants/{tenant_id}/jira/webhooks/reset", response_model=JiraWebhookActionResult)
+def reset_tenant_jira_webhook(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> JiraWebhookActionResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    settings = get_settings()
+    result = _provision_jira_webhook(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        replace_existing=True,
+    )
+    return JSONResponse(
+        status_code=_jira_webhook_action_status_code(result),
+        content=result.model_dump(),
+    )
+
+
+@router.post("/tenants/{tenant_id}/jira/disconnect", response_model=JiraWebhookActionResult)
+def disconnect_tenant_jira(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> JiraWebhookActionResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    settings = get_settings()
+
+    webhook_delete_ok, delete_details, _ = _delete_jira_webhooks(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+    )
+    session.refresh(tenant)
+    jira_config = dict(tenant.jira_config)
+    jira_config["connection_id"] = None
+    jira_config["managed_webhook_ids"] = []
+    tenant.jira_config = jira_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+    details = "Jira connection disconnected and webhook metadata cleared."
+    if not webhook_delete_ok:
+        details = (
+            "Jira connection disconnected, but webhook deletion failed. "
+            f"{delete_details}"
+        )
+    return JiraWebhookActionResult(
+        ok=True,
+        action="disconnect",
+        details=details,
+        webhook_ids=[],
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/discord/allowlist-requests",
+    response_model=list[DiscordAllowlistRequestRead],
+)
+def list_discord_allowlist_requests(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[DiscordAllowlistRequestRead]:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    return _parse_discord_allowlist_requests(tenant.discord_config)
+
+
+@router.post(
+    "/tenants/{tenant_id}/discord/allowlist-requests/{user_id}/approve",
+    response_model=DiscordAllowlistApprovalResult,
+)
+def approve_discord_allowlist_request(
+    tenant_id: str,
+    user_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> DiscordAllowlistApprovalResult:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    normalized_user_id = user_id.strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Discord user ID is required")
+
+    discord_config = dict(tenant.discord_config or {})
+    existing_requests = _parse_discord_allowlist_requests(discord_config)
+    matching_request = next((item for item in existing_requests if item.user_id == normalized_user_id), None)
+    if matching_request is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allowlist request not found")
+
+    allowed_user_ids_raw = discord_config.get("allowed_user_ids")
+    allowed_user_ids = (
+        [str(value).strip() for value in allowed_user_ids_raw if str(value).strip()]
+        if isinstance(allowed_user_ids_raw, list)
+        else []
+    )
+    if normalized_user_id not in allowed_user_ids:
+        allowed_user_ids.append(normalized_user_id)
+    discord_config["allowed_user_ids"] = allowed_user_ids
+    discord_config["allowlist_requests"] = [
+        item.model_dump()
+        for item in existing_requests
+        if item.user_id != normalized_user_id
+    ]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+    settings = get_settings()
+    notified = False
+    notify_error: str | None = None
+    try:
+        notified = _notify_discord_allowlist_approved(
+            session=session,
+            settings=settings,
+            user_id=normalized_user_id,
+        )
+    except (DiscordApiError, ValueError) as exc:
+        notify_error = str(exc)
+
+    details = f"Approved allowlist request for {normalized_user_id}."
+    if notified:
+        details = f"{details} Sent Discord DM confirmation."
+    elif notify_error:
+        details = f"{details} DM notification failed: {notify_error}"
+    else:
+        details = f"{details} DM notification skipped (bot token unavailable)."
+
+    return DiscordAllowlistApprovalResult(
+        ok=True,
+        details=details,
+        user_id=normalized_user_id,
+        notified=notified,
+    )
+
+
 @router.get("/tenants/{tenant_id}/ready-preview", response_model=ReadyGatePreviewRead)
 def preview_tenant_ready_gate(
     tenant_id: str,
@@ -468,11 +1149,17 @@ def create_tenant(
         tenant_id=tenant_id,
         name=payload.name,
         is_enabled=payload.is_enabled,
-        jira_config=payload.jira.model_dump(),
+        jira_config=_with_preserved_jira_system_fields(
+            existing={},
+            proposed=payload.jira.model_dump(),
+        ),
         github_config=_with_managed_github_refs(payload.github.model_dump()),
         repos_config=payload.repos.model_dump(),
         policy_config=payload.policy.model_dump(),
-        discord_config=payload.discord.model_dump() if payload.discord else None,
+        discord_config=_with_preserved_discord_system_fields(
+            existing={},
+            proposed=payload.discord.model_dump() if payload.discord else None,
+        ),
         created_at=now,
         updated_at=now,
     )
@@ -509,11 +1196,17 @@ def update_tenant(
 
     tenant.name = payload.name
     tenant.is_enabled = payload.is_enabled
-    tenant.jira_config = payload.jira.model_dump()
+    tenant.jira_config = _with_preserved_jira_system_fields(
+        existing=dict(tenant.jira_config),
+        proposed=payload.jira.model_dump(),
+    )
     tenant.github_config = _with_managed_github_refs(payload.github.model_dump())
     tenant.repos_config = payload.repos.model_dump()
     tenant.policy_config = payload.policy.model_dump()
-    tenant.discord_config = payload.discord.model_dump() if payload.discord else None
+    tenant.discord_config = _with_preserved_discord_system_fields(
+        existing=dict(tenant.discord_config or {}),
+        proposed=payload.discord.model_dump() if payload.discord else None,
+    )
     tenant.updated_at = datetime.now(timezone.utc)
 
     session.commit()
