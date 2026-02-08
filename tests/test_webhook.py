@@ -9,11 +9,15 @@ from unittest.mock import MagicMock, patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from orchestrator.api.main import create_app
+from orchestrator.api.routes_webhook import _build_command_followup_message
+from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.config import get_settings
-from orchestrator.storage.db import reset_db_engine_cache
+from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
+from orchestrator.storage.models import Tenant
 
 
 class JiraWebhookTests(unittest.TestCase):
@@ -35,6 +39,7 @@ class JiraWebhookTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)
+        self.session_factory = create_session_factory(database_url=self.database_url)
 
         self.client = TestClient(create_app())
         self._create_tenant("tenant-webhook")
@@ -449,3 +454,27 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["data"]["flags"], 64)
         create_task_mock.assert_called_once()
+
+    def test_discord_followup_formats_issue_and_pr_references_as_hyperlinks(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.execute(
+                select(Tenant).where(Tenant.tenant_id == "tenant-webhook")
+            ).scalar_one()
+            message = _build_command_followup_message(
+                session=session,
+                tenant=tenant,
+                user_id="discord-user-1",
+                command_response=DiscordCommandResponse(
+                    ok=True,
+                    command="link",
+                    message="Links for TP-999",
+                    data={
+                        "issue_key": "TP-999",
+                        "jira_url": "https://master-builder.atlassian.net/browse/TP-999",
+                        "pr_url": "https://github.com/example/repo/pull/77",
+                    },
+                ),
+            )
+
+        self.assertIn("[TP-999](https://master-builder.atlassian.net/browse/TP-999)", message)
+        self.assertIn("[Open PR](https://github.com/example/repo/pull/77)", message)

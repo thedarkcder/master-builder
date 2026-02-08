@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timezone
 from urllib.error import HTTPError
@@ -53,6 +54,7 @@ HTTP_413_TOO_LARGE = getattr(
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry"}
+ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 
 def _max_webhook_body_bytes() -> int:
@@ -718,32 +720,119 @@ def _build_command_followup_message(
     command_response,
 ) -> str:  # noqa: ANN001
     response_data = command_response.data if isinstance(command_response.data, dict) else {}
+    jira_base_url = _tenant_jira_browse_base_url(session=session, tenant=tenant)
     raw_keys = response_data.get("created_issue_keys")
     created_issue_keys = (
         [str(value).strip().upper() for value in raw_keys if str(value).strip()]
         if isinstance(raw_keys, list)
         else []
     )
-    lines: list[str] = [f"<@{user_id}> {command_response.message}"]
-    if command_response.command == "link":
+
+    def _issue_link(issue_key: str) -> str:
+        if not jira_base_url:
+            return issue_key
+        return f"[{issue_key}]({jira_base_url}/browse/{issue_key})"
+
+    def _linkify_issue_mentions(text: str) -> str:
+        if not jira_base_url:
+            return text
+
+        def _replace(match: re.Match[str]) -> str:
+            issue_key = match.group(0)
+            return _issue_link(issue_key)
+
+        return ISSUE_KEY_PATTERN.sub(_replace, text)
+
+    lines: list[str] = [f"<@{user_id}>"]
+    command_name = str(command_response.command or "").strip().lower()
+    response_message = str(command_response.message or "").strip()
+    if command_name == "issues" and created_issue_keys:
+        lines[0] = f"{lines[0]} Issue seeding completed."
+    elif command_name == "link":
+        lines[0] = f"{lines[0]} Here are the links."
+    elif command_name in {"run", "retry"}:
+        lines[0] = f"{lines[0]} Run queued."
+    elif response_message:
+        if command_name == "ask":
+            response_message = _linkify_issue_mentions(response_message)
+        lines[0] = f"{lines[0]} {response_message}"
+
+    if command_name == "link":
         jira_url = str(response_data.get("jira_url") or "").strip()
         pr_url = str(response_data.get("pr_url") or "").strip()
-        if jira_url or pr_url:
+        issue_key = str(response_data.get("issue_key") or "").strip().upper()
+        if jira_url or pr_url or issue_key:
             lines.append("")
             lines.append("Links:")
             if jira_url:
-                lines.append(f"- Jira: {jira_url}")
+                issue_label = issue_key or "Issue"
+                lines.append(f"- Jira: [{issue_label}]({jira_url})")
             if pr_url:
-                lines.append(f"- PR: {pr_url}")
+                lines.append(f"- PR: [Open PR]({pr_url})")
+            if issue_key and not jira_url:
+                lines.append(f"- Issue: {_issue_link(issue_key)}")
+
+    if command_name in {"run", "retry"}:
+        issue_key = str(response_data.get("issue_key") or "").strip().upper()
+        run_id = str(response_data.get("run_id") or "").strip()
+        if issue_key or run_id:
+            lines.append("")
+            lines.append("Queued:")
+            if issue_key:
+                lines.append(f"- Issue: {_issue_link(issue_key)}")
+            if run_id:
+                lines.append(f"- Run ID: `{run_id}`")
+
+    if command_name == "runs":
+        runs = response_data.get("runs")
+        if isinstance(runs, list) and runs:
+            lines.append("")
+            lines.append("Recent runs:")
+            for item in runs[:20]:
+                if not isinstance(item, dict):
+                    continue
+                run_id = str(item.get("run_id") or "").strip()
+                issue_key = str(item.get("issue_key") or "").strip().upper()
+                status_name = str(item.get("status") or "").strip()
+                pr_url = str(item.get("pr_url") or "").strip()
+                line_parts: list[str] = []
+                if run_id:
+                    line_parts.append(f"`{run_id}`")
+                if status_name:
+                    line_parts.append(status_name)
+                if issue_key:
+                    line_parts.append(_issue_link(issue_key))
+                if pr_url:
+                    line_parts.append(f"[PR]({pr_url})")
+                if line_parts:
+                    lines.append(f"- {' | '.join(line_parts)}")
+
+    if command_name == "status":
+        active_runs = response_data.get("active_runs")
+        if isinstance(active_runs, list) and active_runs:
+            lines.append("")
+            lines.append("Active runs:")
+            for item in active_runs[:20]:
+                if not isinstance(item, dict):
+                    continue
+                run_id = str(item.get("run_id") or "").strip()
+                issue_key = str(item.get("issue_key") or "").strip().upper()
+                status_name = str(item.get("status") or "").strip()
+                line_parts: list[str] = []
+                if run_id:
+                    line_parts.append(f"`{run_id}`")
+                if status_name:
+                    line_parts.append(status_name)
+                if issue_key:
+                    line_parts.append(_issue_link(issue_key))
+                if line_parts:
+                    lines.append(f"- {' | '.join(line_parts)}")
+
     if created_issue_keys:
-        jira_base_url = _tenant_jira_browse_base_url(session=session, tenant=tenant)
         lines.append("")
         lines.append("Created issues:")
         for issue_key in created_issue_keys[:20]:
-            if jira_base_url:
-                lines.append(f"- [{issue_key}]({jira_base_url}/browse/{issue_key})")
-            else:
-                lines.append(f"- {issue_key}")
+            lines.append(f"- {_issue_link(issue_key)}")
         if len(created_issue_keys) > 20:
             lines.append(f"- ...and {len(created_issue_keys) - 20} more")
     content = "\n".join(lines).strip()
