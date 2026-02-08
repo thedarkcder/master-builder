@@ -113,6 +113,73 @@ class DiscordApiClient:
             raise DiscordApiError("Discord create message response was not an object")
         return data
 
+    def get_message(self, *, channel_id: str, message_id: str) -> dict:
+        normalized_channel_id = channel_id.strip()
+        normalized_message_id = message_id.strip()
+        if not normalized_channel_id:
+            raise ValueError("Discord channel ID cannot be empty")
+        if not normalized_message_id:
+            raise ValueError("Discord message ID cannot be empty")
+        data = self._request_json(
+            method="GET",
+            path=f"/channels/{normalized_channel_id}/messages/{normalized_message_id}",
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord get message response was not an object")
+        return data
+
+    def create_thread_from_message(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+        name: str,
+        auto_archive_duration: int = 1440,
+    ) -> str:
+        normalized_channel_id = channel_id.strip()
+        normalized_message_id = message_id.strip()
+        normalized_name = name.strip()
+        if not normalized_channel_id:
+            raise ValueError("Discord channel ID cannot be empty")
+        if not normalized_message_id:
+            raise ValueError("Discord message ID cannot be empty")
+        if not normalized_name:
+            raise ValueError("Discord thread name cannot be empty")
+        payload = {
+            "name": normalized_name[:100],
+            "auto_archive_duration": int(auto_archive_duration),
+        }
+        data = self._request_json(
+            method="POST",
+            path=f"/channels/{normalized_channel_id}/messages/{normalized_message_id}/threads",
+            payload=payload,
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord create thread response was not an object")
+        thread_id = data.get("id")
+        if not isinstance(thread_id, str) or not thread_id.strip():
+            raise DiscordApiError("Discord create thread response missing id")
+        return thread_id.strip()
+
+    def ensure_thread_for_message(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+        thread_name: str,
+    ) -> str:
+        message = self.get_message(channel_id=channel_id, message_id=message_id)
+        thread = message.get("thread")
+        if isinstance(thread, dict):
+            thread_id = thread.get("id")
+            if isinstance(thread_id, str) and thread_id.strip():
+                return thread_id.strip()
+        return self.create_thread_from_message(
+            channel_id=channel_id,
+            message_id=message_id,
+            name=thread_name,
+        )
+
     def create_dm_channel(self, *, user_id: str) -> str:
         normalized_user_id = user_id.strip()
         if not normalized_user_id:
