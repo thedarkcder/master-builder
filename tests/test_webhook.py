@@ -537,7 +537,7 @@ class JiraWebhookTests(unittest.TestCase):
             patch(
                 "orchestrator.api.routes_webhook.send_tenant_discord_message",
                 return_value=DiscordSendResult(sent=True, reason="sent", channel_id="discord-channel-1"),
-            ),
+            ) as send_mock,
         ):
             response = self.client.post(
                 "/github/webhook",
@@ -557,3 +557,5 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertTrue(response.json()["accepted"])
         self.assertEqual(response.json()["reason"], "review_processed")
         self.assertEqual(response.json()["signals"][0]["state"], "ready")
+        self.assertEqual(send_mock.call_count, 1)
+        self.assertEqual(send_mock.call_args.kwargs["event"], "review_signal")

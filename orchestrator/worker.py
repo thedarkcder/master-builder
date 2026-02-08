@@ -188,6 +188,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             tenant=tenant,
             message=stage_update["discord_message"],
             settings=settings,
+            event=stage_update["stage"],
         )
         if not send_result.sent:
             logger.info(

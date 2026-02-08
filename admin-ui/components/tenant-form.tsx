@@ -35,6 +35,11 @@ const DISCORD_NOTIFY_EVENT_OPTIONS = [
     value: "run_failed",
     label: "Run failed",
     description: "Post when a run fails and needs intervention."
+  },
+  {
+    value: "review_signal",
+    label: "Review signal",
+    description: "Post PR-ready or review-required signals from GitHub webhook events."
   }
 ] as const;
 
