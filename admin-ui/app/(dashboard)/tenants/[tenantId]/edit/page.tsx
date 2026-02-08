@@ -10,11 +10,16 @@ import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  disconnectJira,
   getTenant,
+  getJiraWebhookDiagnostics,
   previewReadyGate,
+  provisionJiraWebhook,
   type ReadyGatePreviewRecord,
+  type JiraWebhookDiagnosticsRecord,
   startJiraConnect,
   startGitHubInstall,
+  resetJiraWebhook,
   testGithub,
   testJira,
   updateTenant,
@@ -33,6 +38,20 @@ export default function EditTenantPage() {
   const [saving, setSaving] = useState(false);
   const [statusLine, setStatusLine] = useState("Loading tenant...");
   const [readyPreview, setReadyPreview] = useState<ReadyGatePreviewRecord | null>(null);
+  const [jiraWebhook, setJiraWebhook] = useState<JiraWebhookDiagnosticsRecord | null>(null);
+  const [jiraWebhookBusy, setJiraWebhookBusy] = useState(false);
+
+  async function loadJiraWebhookDiagnostics() {
+    if (!credentials) {
+      return;
+    }
+    try {
+      const diagnostics = await getJiraWebhookDiagnostics(credentials, params.tenantId);
+      setJiraWebhook(diagnostics);
+    } catch (error) {
+      setStatusLine(`Failed to load Jira webhook diagnostics: ${(error as Error).message}`);
+    }
+  }
 
   async function loadTenant() {
     if (!credentials) {
@@ -43,6 +62,7 @@ export default function EditTenantPage() {
       const payload = await getTenant(credentials, params.tenantId);
       setTenant(payload);
       setStatusLine(`Loaded ${payload.tenant_id}.`);
+      await loadJiraWebhookDiagnostics();
     } catch (error) {
       setStatusLine(`Failed to load tenant: ${(error as Error).message}`);
     } finally {
@@ -133,6 +153,57 @@ export default function EditTenantPage() {
     }
   }
 
+  async function handleProvisionJiraWebhook() {
+    if (!credentials) {
+      return;
+    }
+    setJiraWebhookBusy(true);
+    try {
+      const result = await provisionJiraWebhook(credentials, params.tenantId);
+      setStatusLine(result.details);
+      await loadJiraWebhookDiagnostics();
+      await loadTenant();
+    } catch (error) {
+      setStatusLine(`Unable to provision Jira webhook: ${(error as Error).message}`);
+    } finally {
+      setJiraWebhookBusy(false);
+    }
+  }
+
+  async function handleResetJiraWebhook() {
+    if (!credentials) {
+      return;
+    }
+    setJiraWebhookBusy(true);
+    try {
+      const result = await resetJiraWebhook(credentials, params.tenantId);
+      setStatusLine(result.details);
+      await loadJiraWebhookDiagnostics();
+      await loadTenant();
+    } catch (error) {
+      setStatusLine(`Unable to reset Jira webhook: ${(error as Error).message}`);
+    } finally {
+      setJiraWebhookBusy(false);
+    }
+  }
+
+  async function handleDisconnectJira() {
+    if (!credentials) {
+      return;
+    }
+    setJiraWebhookBusy(true);
+    try {
+      const result = await disconnectJira(credentials, params.tenantId);
+      setStatusLine(result.details);
+      await loadJiraWebhookDiagnostics();
+      await loadTenant();
+    } catch (error) {
+      setStatusLine(`Unable to disconnect Jira: ${(error as Error).message}`);
+    } finally {
+      setJiraWebhookBusy(false);
+    }
+  }
+
   if (loading) {
     return <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">Loading tenant configuration...</p>;
   }
@@ -186,6 +257,56 @@ export default function EditTenantPage() {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        <p className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">{statusLine}</p>
+        <Card>
+          <CardHeader>
+            <CardTitle>Jira Webhook Lifecycle</CardTitle>
+            <CardDescription>Provision, reset, and diagnose tenant Jira webhook delivery.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p>
+              <strong>Webhook URL:</strong> {jiraWebhook?.webhook_url ?? "Loading..."}
+            </p>
+            <p>
+              <strong>Connected:</strong> {jiraWebhook?.connected ? "yes" : "no"}
+            </p>
+            <p>
+              <strong>Managed webhook IDs:</strong>{" "}
+              {jiraWebhook?.managed_webhook_ids.length ? jiraWebhook.managed_webhook_ids.join(", ") : "-"}
+            </p>
+            <p>
+              <strong>Last provisioned:</strong> {jiraWebhook?.last_provisioned_at ?? "-"}
+            </p>
+            <p>
+              <strong>Last received:</strong> {jiraWebhook?.last_received_at ?? "-"}
+            </p>
+            <p>
+              <strong>Last issue key:</strong> {jiraWebhook?.last_issue_key ?? "-"}
+            </p>
+            <p>
+              <strong>Recent delivery:</strong>{" "}
+              {jiraWebhook
+                ? jiraWebhook.recent_delivery_ok
+                  ? `ok (within ${jiraWebhook.recent_delivery_window_minutes}m)`
+                  : `none within ${jiraWebhook.recent_delivery_window_minutes}m`
+                : "-"}
+            </p>
+            <p>
+              <strong>Last error:</strong> {jiraWebhook?.last_error ?? "-"}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" disabled={jiraWebhookBusy} onClick={() => void handleProvisionJiraWebhook()}>
+                Provision Webhook
+              </Button>
+              <Button variant="secondary" disabled={jiraWebhookBusy} onClick={() => void handleResetJiraWebhook()}>
+                Reset Webhook
+              </Button>
+              <Button variant="outline" disabled={jiraWebhookBusy} onClick={() => void handleDisconnectJira()}>
+                Disconnect Jira
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
         <TenantForm mode="edit" initialValues={recordToFormValues(tenant)} onSubmit={handleSave} submitting={saving} />
         {readyPreview ? (
           <Card>
@@ -217,7 +338,6 @@ export default function EditTenantPage() {
             </CardContent>
           </Card>
         ) : null}
-        <p className="text-sm text-muted-foreground">{statusLine}</p>
       </CardContent>
     </Card>
   );

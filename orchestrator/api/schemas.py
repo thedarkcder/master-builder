@@ -17,6 +17,12 @@ class JiraConfig(BaseModel):
     blocked_label: str = Field(default="agent:blocked", min_length=1)
     done_label: str | None = None
     webhook_secret_ref: str | None = None
+    managed_webhook_ids: list[int] = Field(default_factory=list)
+    webhook_last_provisioned_at: str | None = None
+    webhook_last_error: str | None = None
+    webhook_last_received_at: str | None = None
+    webhook_last_delivery_id: str | None = None
+    webhook_last_issue_key: str | None = None
 
 
 class GithubConfig(BaseModel):
@@ -110,6 +116,27 @@ class JiraConnectStart(BaseModel):
 class JiraProjectRead(BaseModel):
     key: str
     name: str
+
+
+class JiraWebhookActionResult(BaseModel):
+    ok: bool
+    action: str
+    details: str
+    webhook_ids: list[int] = Field(default_factory=list)
+
+
+class JiraWebhookDiagnosticsRead(BaseModel):
+    tenant_id: str
+    connected: bool
+    webhook_url: str
+    managed_webhook_ids: list[int] = Field(default_factory=list)
+    last_provisioned_at: str | None = None
+    last_received_at: str | None = None
+    last_delivery_id: str | None = None
+    last_issue_key: str | None = None
+    last_error: str | None = None
+    recent_delivery_window_minutes: int
+    recent_delivery_ok: bool
 
 
 class ReadyIssuePreviewRead(BaseModel):
