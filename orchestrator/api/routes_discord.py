@@ -791,6 +791,103 @@ def _collect_ask_context(
     return normalized_issue_key, requested_status, issues, status_counts
 
 
+def _drop_issue_key_from_ask_history(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str,
+    issue_key: str,
+) -> None:
+    target_issue_key = issue_key.strip().upper()
+    if not target_issue_key:
+        return
+
+    entries = _tenant_ask_history(tenant)
+    kept_entries: list[dict] = []
+    removed = False
+    for entry in entries:
+        entry_issue_key = str(entry.get("issue_key") or "").strip().upper()
+        if (
+            entry.get("user_id") == user_id
+            and entry.get("channel_id") == channel_id
+            and entry_issue_key == target_issue_key
+        ):
+            removed = True
+            continue
+        kept_entries.append(entry)
+
+    if not removed:
+        return
+
+    discord_config = dict(tenant.discord_config or {})
+    discord_config["ask_history"] = kept_entries[-MAX_ASK_HISTORY_ENTRIES:]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+
+def _collect_ask_context_with_history_fallback(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str,
+    question: str,
+    scoped_issue_key: str | None,
+) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
+    history_context = _recent_ask_history(
+        tenant=tenant,
+        user_id=user_id,
+        channel_id=channel_id,
+        limit=MAX_ASK_HISTORY_CONTEXT,
+    )
+
+    resolved_scoped_issue_key = scoped_issue_key
+    history_issue_key: str | None = None
+    if resolved_scoped_issue_key is None:
+        for entry in reversed(history_context):
+            issue_key = str(entry.get("issue_key") or "").strip().upper()
+            if issue_key:
+                resolved_scoped_issue_key = issue_key
+                history_issue_key = issue_key
+                break
+
+    try:
+        normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
+            session=session,
+            tenant=tenant,
+            question=question,
+            scoped_issue_key=resolved_scoped_issue_key,
+        )
+    except HTTPException as exc:
+        # If a history-derived issue was deleted in Jira, clear stale memory and retry unscoped.
+        if history_issue_key and exc.status_code == status.HTTP_404_NOT_FOUND:
+            _drop_issue_key_from_ask_history(
+                session=session,
+                tenant=tenant,
+                user_id=user_id,
+                channel_id=channel_id,
+                issue_key=history_issue_key,
+            )
+            history_context = _recent_ask_history(
+                tenant=tenant,
+                user_id=user_id,
+                channel_id=channel_id,
+                limit=MAX_ASK_HISTORY_CONTEXT,
+            )
+            normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
+                session=session,
+                tenant=tenant,
+                question=question,
+                scoped_issue_key=None,
+            )
+        else:
+            raise
+
+    return normalized_issue_key, requested_status, issues, status_counts, history_context
+
+
 def _store_pending_ask_action(
     *,
     session: Session,
@@ -1151,25 +1248,13 @@ def _ask_board_message(
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str, dict]:
-    history_context = _recent_ask_history(
+    normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_fallback(
+        session=session,
         tenant=tenant,
         user_id=user_id,
         channel_id=channel_id,
-        limit=MAX_ASK_HISTORY_CONTEXT,
-    )
-    resolved_scoped_issue_key = scoped_issue_key
-    if resolved_scoped_issue_key is None:
-        for entry in reversed(history_context):
-            issue_key = str(entry.get("issue_key") or "").strip().upper()
-            if issue_key:
-                resolved_scoped_issue_key = issue_key
-                break
-
-    normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
-        session=session,
-        tenant=tenant,
         question=question,
-        scoped_issue_key=resolved_scoped_issue_key,
+        scoped_issue_key=scoped_issue_key,
     )
 
     settings = get_settings()
@@ -1375,24 +1460,13 @@ def execute_discord_command(
         normalized_user_id = payload.user_id.strip()
         normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
         if require_ask_confirmation:
-            history_context = _recent_ask_history(
+            normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_fallback(
+                session=session,
                 tenant=tenant,
                 user_id=normalized_user_id,
                 channel_id=normalized_channel_id,
-                limit=MAX_ASK_HISTORY_CONTEXT,
-            )
-            resolved_scoped_issue_key = scoped_issue_key
-            if resolved_scoped_issue_key is None:
-                for entry in reversed(history_context):
-                    issue_key_from_history = str(entry.get("issue_key") or "").strip().upper()
-                    if issue_key_from_history:
-                        resolved_scoped_issue_key = issue_key_from_history
-                        break
-            normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
-                session=session,
-                tenant=tenant,
                 question=question,
-                scoped_issue_key=resolved_scoped_issue_key,
+                scoped_issue_key=scoped_issue_key,
             )
             settings = get_settings()
             runtime = build_codex_runtime(session=session, settings=settings)
