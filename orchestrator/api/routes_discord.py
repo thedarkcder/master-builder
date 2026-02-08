@@ -880,7 +880,7 @@ def _collect_ask_context_with_history_context(
             scoped_issue_key=resolved_scoped_issue_key,
         )
     except HTTPException as exc:
-        # If a history-derived issue was deleted in Jira, clear stale memory and ask user to re-scope.
+        # If a history-derived issue was deleted in Jira, clear stale memory and continue with board context.
         if history_issue_key and exc.status_code == status.HTTP_404_NOT_FOUND:
             _drop_issue_key_from_ask_history(
                 session=session,
@@ -889,12 +889,17 @@ def _collect_ask_context_with_history_context(
                 channel_id=channel_id,
                 issue_key=history_issue_key,
             )
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Previous issue context {history_issue_key} no longer exists in Jira. "
-                    "I cleared that stale context. Re-run with @ISSUE-KEY or ask a board-level question."
-                ),
+            normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
+                session=session,
+                tenant=tenant,
+                question=question,
+                scoped_issue_key=None,
+            )
+            history_context = _recent_ask_history(
+                tenant=tenant,
+                user_id=user_id,
+                channel_id=channel_id,
+                limit=MAX_ASK_HISTORY_CONTEXT,
             )
         else:
             raise
