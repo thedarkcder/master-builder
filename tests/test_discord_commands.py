@@ -197,6 +197,33 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["message"], "Board snapshot")
         self.assertEqual(response.json()["data"]["status_counts"]["To Do"], 2)
 
+    def test_ask_command_supports_issue_scope(self) -> None:
+        with patch(
+            "orchestrator.api.routes_discord._ask_board_message",
+            return_value=("Issue snapshot", {"issue_key": "TP-101"}),
+        ) as ask_mock:
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-1",
+                    "command": "!ask @TP-101 summarize status",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["message"], "Issue snapshot")
+        self.assertEqual(response.json()["data"]["issue_key"], "TP-101")
+        self.assertEqual(ask_mock.call_args.kwargs["scoped_issue_key"], "TP-101")
+
+    def test_ask_command_rejects_invalid_issue_scope_token(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!ask @bad summarize"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !ask @ISSUE-123", response.json()["detail"])
+
     def test_issues_seed_requires_spec(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",

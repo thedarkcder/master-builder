@@ -16,6 +16,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.discord_notifications import DiscordSendResult
 from orchestrator.storage.db import reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
+from orchestrator.tools.jira_oauth import JiraIssuePreview
 from orchestrator.tools.github_app import PullRequestDetails, PullRequestFileChange, WorkflowCheckSuite
 
 
@@ -470,6 +471,100 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["type"], 4)
         self.assertIn("Commands:", response.json()["data"]["content"])
+
+    def test_discord_interactions_supports_issue_key_autocomplete(self) -> None:
+        self._create_tenant(
+            "tenant-discord-autocomplete",
+            discord_config={
+                "channel_id": "discord-channel-ac",
+                "notify_events": [],
+                "allowed_user_ids": [],
+                "command_secret_ref": None,
+            },
+        )
+        payload = {
+            "type": 4,
+            "channel_id": "discord-channel-ac",
+            "data": {
+                "name": "ask",
+                "options": [
+                    {
+                        "type": 3,
+                        "name": "issue_key",
+                        "value": "TP-1",
+                        "focused": True,
+                    }
+                ],
+            },
+        }
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        timestamp = "1700000002"
+        signature = self._sign_discord_interaction(payload_bytes=payload_bytes, timestamp=timestamp)
+        with patch(
+            "orchestrator.api.routes_webhook._search_jira_issues_for_tenant",
+            return_value=[
+                JiraIssuePreview(key="TP-101", summary="Implement notifications", status="To Do"),
+                JiraIssuePreview(key="TP-102", summary="Fix webhook parser", status="In Progress"),
+            ],
+        ):
+            response = self.client.post(
+                "/discord/interactions",
+                content=payload_bytes,
+                headers={
+                    "content-type": "application/json",
+                    "X-Signature-Ed25519": signature,
+                    "X-Signature-Timestamp": timestamp,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], 8)
+        choices = response.json()["data"]["choices"]
+        self.assertEqual(choices[0]["value"], "TP-101")
+        self.assertTrue(choices[0]["name"].startswith("TP-101"))
+
+    def test_discord_interactions_ask_supports_issue_scope_option(self) -> None:
+        self._create_tenant(
+            "tenant-discord-ask-scope",
+            discord_config={
+                "channel_id": "discord-channel-ask",
+                "notify_events": [],
+                "allowed_user_ids": [],
+                "command_secret_ref": None,
+            },
+        )
+        payload = {
+            "type": 2,
+            "channel_id": "discord-channel-ask",
+            "member": {"user": {"id": "discord-user-2"}},
+            "data": {
+                "name": "ask",
+                "options": [
+                    {"type": 3, "name": "issue_key", "value": "TP-88"},
+                    {"type": 3, "name": "question", "value": "what is blocked"},
+                ],
+            },
+        }
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        timestamp = "1700000003"
+        signature = self._sign_discord_interaction(payload_bytes=payload_bytes, timestamp=timestamp)
+
+        with patch(
+            "orchestrator.api.routes_discord._ask_board_message",
+            return_value=("Issue-scoped answer", {"issue_key": "TP-88"}),
+        ):
+            response = self.client.post(
+                "/discord/interactions",
+                content=payload_bytes,
+                headers={
+                    "content-type": "application/json",
+                    "X-Signature-Ed25519": signature,
+                    "X-Signature-Timestamp": timestamp,
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["type"], 4)
+        self.assertIn("Issue-scoped answer", response.json()["data"]["content"])
 
     def test_discord_webhook_executes_help_command(self) -> None:
         self._create_tenant(

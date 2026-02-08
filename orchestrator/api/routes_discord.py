@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -30,6 +31,7 @@ SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
 PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
+ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 
 
 def _normalize_status_name(value: str) -> str:
@@ -357,8 +359,30 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
     )
 
 
-def _ask_board_message(*, session: Session, tenant: Tenant, question: str) -> tuple[str, dict]:
+def _ask_board_message(
+    *,
+    session: Session,
+    tenant: Tenant,
+    question: str,
+    scoped_issue_key: str | None = None,
+) -> tuple[str, dict]:
     project_jql = _project_filter_jql(tenant)
+    if scoped_issue_key:
+        normalized_issue_key = scoped_issue_key.strip().upper()
+        jira_issues = _search_jira_issues_for_tenant(
+            session=session,
+            tenant=tenant,
+            jql=f'{project_jql} AND key = "{normalized_issue_key}"',
+            max_results=1,
+        )
+        if not jira_issues:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Issue {normalized_issue_key} was not found for this tenant",
+            )
+    else:
+        normalized_issue_key = None
+
     lowered = question.strip().lower()
     status_queries = {
         "blocked": "Blocked",
@@ -374,14 +398,14 @@ def _ask_board_message(*, session: Session, tenant: Tenant, question: str) -> tu
             requested_status = status_name
             break
 
-    if requested_status:
+    if normalized_issue_key is None and requested_status:
         jira_issues = _search_jira_issues_for_tenant(
             session=session,
             tenant=tenant,
             jql=f'{project_jql} AND status = "{requested_status}" ORDER BY updated DESC',
             max_results=30,
         )
-    else:
+    elif normalized_issue_key is None:
         jira_issues = _search_jira_issues_for_tenant(
             session=session,
             tenant=tenant,
@@ -421,6 +445,7 @@ def _ask_board_message(*, session: Session, tenant: Tenant, question: str) -> tu
     return (
         message,
         {
+            "issue_key": normalized_issue_key,
             "status": requested_status,
             "status_counts": status_counts,
             "issues": issues,
@@ -560,10 +585,32 @@ def execute_discord_command(
         if not arguments:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !ask <question about board>",
+                detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
             )
-        question = " ".join(arguments).strip()
-        message, data = _ask_board_message(session=session, tenant=tenant, question=question)
+        scoped_issue_key: str | None = None
+        question_tokens = arguments
+        first_token = arguments[0].strip()
+        if first_token.startswith("@"):
+            candidate_issue_key = first_token[1:].strip().upper()
+            if not ISSUE_KEY_PATTERN.match(candidate_issue_key):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Usage: !ask @ISSUE-123 <question>",
+                )
+            scoped_issue_key = candidate_issue_key
+            question_tokens = arguments[1:]
+        question = " ".join(question_tokens).strip()
+        if not question:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
+            )
+        message, data = _ask_board_message(
+            session=session,
+            tenant=tenant,
+            question=question,
+            scoped_issue_key=scoped_issue_key,
+        )
         return DiscordCommandResponse(
             ok=True,
             command=command_name,
