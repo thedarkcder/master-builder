@@ -638,27 +638,6 @@ class AdminApiTests(unittest.TestCase):
                     {"webhook_id": "1001"},
                 )()
 
-            def ensure_webhook(self, **_: object):  # noqa: ANN003
-                return type(
-                    "Webhook",
-                    (),
-                    {"webhook_id": "1001"},
-                )()
-
-            def ensure_webhook(self, **_: object):  # noqa: ANN003
-                return type(
-                    "Webhook",
-                    (),
-                    {"webhook_id": "1002"},
-                )()
-
-            def ensure_webhook(self, **_: object):  # noqa: ANN003
-                return type(
-                    "Webhook",
-                    (),
-                    {"webhook_id": "1001"},
-                )()
-
         with patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()):
             callback_response = self.client.get(
                 "/api/admin/jira/connect/callback",
