@@ -50,12 +50,17 @@ from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
 from orchestrator.core.admin_tokens import create_admin_access_token
 from orchestrator.core.security import require_admin, validate_admin_credentials
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+GITHUB_APP_SLUG_SECRET_REF = "GITHUB_APP_SLUG"
+GITHUB_APP_ID_SECRET_REF = "GITHUB_APP_ID"
+GITHUB_APP_PRIVATE_KEY_SECRET_REF = "GITHUB_APP_PRIVATE_KEY"
+JIRA_OAUTH_CLIENT_ID_SECRET_REF = "JIRA_OAUTH_CLIENT_ID"
+JIRA_OAUTH_CLIENT_SECRET_SECRET_REF = "JIRA_OAUTH_CLIENT_SECRET"
 
 
 @router.post("/auth/login", response_model=AdminLoginResponse)
@@ -82,13 +87,14 @@ def admin_me(admin_username: str = Depends(require_admin)) -> AdminSessionRead:
 
 
 def _tenant_to_schema(tenant: Tenant) -> TenantRead:
+    repos_config = _normalize_repos_config(tenant.repos_config)
     return TenantRead(
         tenant_id=tenant.tenant_id,
         name=tenant.name,
         is_enabled=tenant.is_enabled,
         jira=tenant.jira_config,
         github=tenant.github_config,
-        repos=tenant.repos_config,
+        repos=repos_config,
         policy=tenant.policy_config,
         discord=tenant.discord_config,
         created_at=tenant.created_at,
@@ -129,11 +135,26 @@ def _allocate_tenant_id(session: Session, *, name: str) -> str:
 
 
 def _with_managed_github_refs(raw_github_config: dict) -> dict:
-    settings = get_settings()
     github_config = dict(raw_github_config)
-    github_config["app_id_ref"] = settings.github_app_id_ref
-    github_config["private_key_ref"] = settings.github_private_key_ref
+    github_config["app_id_ref"] = GITHUB_APP_ID_SECRET_REF
+    github_config["private_key_ref"] = GITHUB_APP_PRIVATE_KEY_SECRET_REF
     return github_config
+
+
+def _normalize_repos_config(raw_repos_config: dict | None) -> dict:
+    repos_config = dict(raw_repos_config or {})
+    github_repository = str(repos_config.get("github_repository") or "").strip()
+    return {"github_repository": github_repository or None}
+
+
+def _build_repos_config(payload_repos: dict) -> dict:
+    repos_config = _normalize_repos_config(payload_repos)
+    if not repos_config["github_repository"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="github_repository is required",
+        )
+    return repos_config
 
 
 def _validate_codex_assets_for_tenant_init() -> None:
@@ -163,10 +184,8 @@ def _resolve_secret_ref(session: Session, *, ref_name: str, settings) -> str:  #
 
 
 def _jira_oauth_client(*, session: Session, settings) -> JiraOAuthClient:  # noqa: ANN001
-    client_id = _resolve_secret_ref(session, ref_name=settings.jira_oauth_client_id_ref, settings=settings)
-    client_secret = _resolve_secret_ref(
-        session, ref_name=settings.jira_oauth_client_secret_ref, settings=settings
-    )
+    client_id = _resolve_secret_ref(session, ref_name=JIRA_OAUTH_CLIENT_ID_SECRET_REF, settings=settings)
+    client_secret = _resolve_secret_ref(session, ref_name=JIRA_OAUTH_CLIENT_SECRET_SECRET_REF, settings=settings)
     redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/jira/connect/callback"
     return JiraOAuthClient(
         JiraOAuthClientConfig(
@@ -252,6 +271,26 @@ def upsert_secret(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _secret_metadata_to_schema(metadata)
+
+
+@router.delete("/secrets/{secret_ref:path}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_secret(
+    secret_ref: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> Response:
+    try:
+        normalized_ref = normalize_secret_ref(secret_ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    row = session.get(ManagedSecret, normalized_ref)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Secret ref not found")
+
+    session.delete(row)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/secrets/resolve", response_model=ManagedSecretResolveResult)
@@ -378,7 +417,7 @@ def jira_connect_callback(
         )
     else:
         redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new"
+            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new/jira"
             f"?jira_oauth=success&jira_connection_id={quote(connection.connection_id, safe='')}"
         )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
@@ -497,7 +536,7 @@ def create_tenant(
         is_enabled=payload.is_enabled,
         jira_config=payload.jira.model_dump(),
         github_config=_with_managed_github_refs(payload.github.model_dump()),
-        repos_config=payload.repos.model_dump(),
+        repos_config=_build_repos_config(payload.repos.model_dump()),
         policy_config=payload.policy.model_dump(),
         discord_config=payload.discord.model_dump() if payload.discord else None,
         created_at=now,
@@ -538,7 +577,7 @@ def update_tenant(
     tenant.is_enabled = payload.is_enabled
     tenant.jira_config = payload.jira.model_dump()
     tenant.github_config = _with_managed_github_refs(payload.github.model_dump())
-    tenant.repos_config = payload.repos.model_dump()
+    tenant.repos_config = _build_repos_config(payload.repos.model_dump())
     tenant.policy_config = payload.policy.model_dump()
     tenant.discord_config = payload.discord.model_dump() if payload.discord else None
     tenant.updated_at = datetime.now(timezone.utc)
@@ -636,7 +675,7 @@ def test_github_connection(
 
     try:
         settings = get_settings()
-        github_client_from_tenant_config(
+        client = github_client_from_tenant_config(
             _with_managed_github_refs(github),
             secret_lookup=lambda ref: resolve_secret_ref(
                 session,
@@ -644,13 +683,63 @@ def test_github_connection(
                 encryption_key=settings.secrets_encryption_key,
             ),
         )
+        repositories = client.list_installation_repositories()
     except ValueError as exc:
         return IntegrationTestResult(ok=False, details=str(exc))
+    except GitHubApiError as exc:
+        return IntegrationTestResult(ok=False, details=f"GitHub API validation failed: {exc}")
+
+    if not repositories:
+        return IntegrationTestResult(
+            ok=False,
+            details="GitHub App is connected, but no repositories are accessible for this installation",
+        )
 
     return IntegrationTestResult(
         ok=True,
-        details="GitHub tenant configuration looks valid and secret refs resolve",
+        details=f"GitHub App config is valid; {len(repositories)} repository/repositories accessible",
     )
+
+
+@router.post("/tenants/{tenant_id}/jira/disconnect", response_model=TenantRead)
+def disconnect_jira_connection(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    jira_config = dict(tenant.jira_config)
+    jira_config["connection_id"] = None
+    tenant.jira_config = jira_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+    return _tenant_to_schema(tenant)
+
+
+@router.post("/tenants/{tenant_id}/github/disconnect", response_model=TenantRead)
+def disconnect_github_installation(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    github_config = dict(tenant.github_config)
+    github_config["installation_id"] = None
+    github_config.pop("installation_setup_action", None)
+    github_config.pop("installation_updated_at", None)
+    tenant.github_config = github_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+    return _tenant_to_schema(tenant)
+
 
 @router.get("/tenants/{tenant_id}/repo-bootstrap", response_model=list[RepoBootstrapStateRead])
 def list_tenant_repo_bootstrap_states(
@@ -695,7 +784,14 @@ def start_github_install(
         )
 
     settings = get_settings()
-    app_slug = settings.github_app_slug.strip()
+    try:
+        app_slug = _resolve_secret_ref(
+            session,
+            ref_name=GITHUB_APP_SLUG_SECRET_REF,
+            settings=settings,
+        ).strip()
+    except ValueError:
+        app_slug = ""
     if not app_slug:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -747,7 +843,7 @@ def github_install_callback(
 
     if state.return_to == "wizard":
         redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new"
+            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new/github"
             f"?tenant_id={quote(tenant.tenant_id, safe='')}&github_install=success"
         )
     else:

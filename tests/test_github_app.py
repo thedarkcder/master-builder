@@ -5,6 +5,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+from jwt.exceptions import InvalidKeyError
+
 from orchestrator.tools.github_app import (
     GitHubAppClient,
     GitHubAppConfig,
@@ -32,6 +34,63 @@ class _FakeHTTPResponse:
 
 
 class GitHubAppClientTests(unittest.TestCase):
+    def test_create_app_jwt_normalizes_escaped_newlines(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n",
+        )
+        client = GitHubAppClient(config)
+
+        with patch("orchestrator.tools.github_app.jwt.encode", return_value="token") as mock_encode:
+            token = client.create_app_jwt()
+
+        self.assertEqual(token, "token")
+        self.assertEqual(
+            mock_encode.call_args.args[1],
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        )
+
+    def test_create_app_jwt_normalizes_quoted_escaped_newlines(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem='"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n"',
+        )
+        client = GitHubAppClient(config)
+
+        with patch("orchestrator.tools.github_app.jwt.encode", return_value="token") as mock_encode:
+            token = client.create_app_jwt()
+
+        self.assertEqual(token, "token")
+        self.assertEqual(
+            mock_encode.call_args.args[1],
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        )
+
+    def test_create_app_jwt_rejects_client_or_pat_token_values(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="gho_example_token",
+        )
+        client = GitHubAppClient(config)
+
+        with self.assertRaisesRegex(ValueError, "received OAuth/PAT token"):
+            client.create_app_jwt()
+
+    def test_create_app_jwt_raises_value_error_for_invalid_private_key(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="not-a-private-key",
+        )
+        client = GitHubAppClient(config)
+
+        with patch("orchestrator.tools.github_app.jwt.encode", side_effect=InvalidKeyError("invalid key")):
+            with self.assertRaisesRegex(ValueError, "Invalid GitHub App private key secret"):
+                client.create_app_jwt()
+
     def test_installation_token_is_cached_until_expiry(self) -> None:
         config = GitHubAppConfig(
             app_id="12345",
@@ -94,7 +153,7 @@ class GitHubAppClientTests(unittest.TestCase):
         ):
             result = client.create_pull_request(
                 repo_full_name="example/repo",
-                allowlist=["https://github.com/example/repo"],
+                github_repository="https://github.com/example/repo",
                 title="MAB-8: add github client",
                 head_branch="jira/MAB-8-add-github-client",
                 base_branch="main",
@@ -115,7 +174,7 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(payload["body"], "PR body")
         self.assertEqual(requests[1].get_header("Authorization"), "Bearer inst_token_2")
 
-    def test_create_pull_request_rejects_repo_outside_allowlist(self) -> None:
+    def test_create_pull_request_rejects_repo_outside_tenant_repository(self) -> None:
         config = GitHubAppConfig(
             app_id="12345",
             installation_id="999",
@@ -126,7 +185,7 @@ class GitHubAppClientTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             client.create_pull_request(
                 repo_full_name="example/repo",
-                allowlist=["https://github.com/example/other-repo"],
+                github_repository="https://github.com/example/other-repo",
                 title="MAB-11: enforce repo guardrails",
                 head_branch="jira/MAB-11-guardrails",
                 base_branch="main",

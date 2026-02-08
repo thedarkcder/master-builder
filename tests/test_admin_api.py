@@ -26,40 +26,43 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
         os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
         os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
         os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF"] = "secret/jira-client-id"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF"] = "secret/jira-client-secret"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 
-        os.environ["secret/app-id"] = "12345"
-        os.environ["secret/private-key"] = "not-a-real-key-for-tests"
-        os.environ["secret/jira-client-id"] = "jira-client-id"
-        os.environ["secret/jira-client-secret"] = "jira-client-secret"
+        os.environ["GITHUB_APP_ID"] = "12345"
+        os.environ["GITHUB_CLIENT_SECRET"] = "not-a-real-key-for-tests"
+        os.environ["JIRA_OAUTH_CLIENT_ID"] = "jira-client-id"
+        os.environ["JIRA_OAUTH_CLIENT_SECRET"] = "jira-client-secret"
 
         get_settings.cache_clear()
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
+        seed_slug_secret_response = self.client.put(
+            "/api/admin/secrets/GITHUB_APP_SLUG",
+            json={"value": "master-builder-app"},
+            auth=("admin", "secret"),
+        )
+        if seed_slug_secret_response.status_code != 200:
+            raise RuntimeError(
+                f"Failed to seed GITHUB_APP_SLUG secret for tests: {seed_slug_secret_response.text}"
+            )
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
-        os.environ.pop("secret/app-id", None)
-        os.environ.pop("secret/private-key", None)
-        os.environ.pop("secret/jira-client-id", None)
-        os.environ.pop("secret/jira-client-secret", None)
+        os.environ.pop("GITHUB_APP_ID", None)
+        os.environ.pop("GITHUB_CLIENT_SECRET", None)
+        os.environ.pop("JIRA_OAUTH_CLIENT_ID", None)
+        os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
 
-        os.environ.pop("ORCHESTRATOR_GITHUB_APP_SLUG", None)
         os.environ.pop("ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", None)
         os.environ.pop("ORCHESTRATOR_ADMIN_UI_BASE_URL", None)
         os.environ.pop("ORCHESTRATOR_PUBLIC_API_BASE_URL", None)
         os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", None)
-        os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF", None)
-        os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF", None)
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
 
         get_settings.cache_clear()
@@ -86,10 +89,7 @@ class AdminApiTests(unittest.TestCase):
                 "installation_id": "12345",
             },
             "repos": {
-                "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
-                "mapping_rules_by_component": {},
-                "fallback_repo": None,
+                "github_repository": "https://github.com/example/repo",
             },
             "policy": {
                 "allow_jira_transitions": False,
@@ -194,17 +194,46 @@ class AdminApiTests(unittest.TestCase):
         self.assertTrue(resolve_response.json()["resolved"])
         self.assertEqual(resolve_response.json()["source"], "managed")
 
+    def test_managed_secret_delete(self) -> None:
+        put_response = self.client.put(
+            "/api/admin/secrets/temporary-secret",
+            json={"value": "temp-value"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(put_response.status_code, 200)
+
+        delete_response = self.client.delete(
+            "/api/admin/secrets/temporary-secret",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(delete_response.status_code, 204)
+
+        resolve_response = self.client.post(
+            "/api/admin/secrets/resolve",
+            json={"secret_ref": "temporary-secret"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(resolve_response.status_code, 200)
+        self.assertFalse(resolve_response.json()["resolved"])
+        self.assertEqual(resolve_response.json()["source"], "missing")
+
+        missing_delete_response = self.client.delete(
+            "/api/admin/secrets/temporary-secret",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(missing_delete_response.status_code, 404)
+
     def test_jira_connect_uses_managed_secret_when_env_not_set(self) -> None:
-        os.environ.pop("secret/jira-client-id", None)
-        os.environ.pop("secret/jira-client-secret", None)
+        os.environ.pop("JIRA_OAUTH_CLIENT_ID", None)
+        os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
 
         self.client.put(
-            "/api/admin/secrets/secret%2Fjira-client-id",
+            "/api/admin/secrets/JIRA_OAUTH_CLIENT_ID",
             json={"value": "jira-client-id-managed"},
             auth=("admin", "secret"),
         )
         self.client.put(
-            "/api/admin/secrets/secret%2Fjira-client-secret",
+            "/api/admin/secrets/JIRA_OAUTH_CLIENT_SECRET",
             json={"value": "jira-client-secret-managed"},
             auth=("admin", "secret"),
         )
@@ -248,10 +277,21 @@ class AdminApiTests(unittest.TestCase):
         class _FakeJiraClient:
             def list_projects(self, *, access_token: str, cloud_id: str):  # noqa: ANN001
                 return []
+        class _FakeGitHubClient:
+            def list_installation_repositories(self):  # noqa: ANN001
+                return [
+                    InstallationRepository(
+                        full_name="example/repo-one",
+                        html_url="https://github.com/example/repo-one",
+                        default_branch="main",
+                        private=False,
+                    )
+                ]
 
         with (
             patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
             patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeJiraClient()),
+            patch("orchestrator.api.routes_admin.github_client_from_tenant_config", return_value=_FakeGitHubClient()),
         ):
             jira_test = self.client.post(
                 "/api/admin/tenants/tenant-a/test-jira",
@@ -260,12 +300,14 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(jira_test.status_code, 200)
         self.assertTrue(jira_test.json()["ok"])
 
-        github_test = self.client.post(
-            "/api/admin/tenants/tenant-a/test-github",
-            auth=("admin", "secret"),
-        )
+        with patch("orchestrator.api.routes_admin.github_client_from_tenant_config", return_value=_FakeGitHubClient()):
+            github_test = self.client.post(
+                "/api/admin/tenants/tenant-a/test-github",
+                auth=("admin", "secret"),
+            )
         self.assertEqual(github_test.status_code, 200)
         self.assertTrue(github_test.json()["ok"])
+        self.assertIn("1 repository/repositories accessible", github_test.json()["details"])
 
         repo_bootstrap = self.client.get(
             "/api/admin/tenants/tenant-a/repo-bootstrap",
@@ -468,7 +510,10 @@ class AdminApiTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(callback_response.status_code, 302)
-        self.assertIn("/tenants/new?tenant_id=tenant-a&github_install=success", callback_response.headers.get("location", ""))
+        self.assertIn(
+            "/tenants/new/github?tenant_id=tenant-a&github_install=success",
+            callback_response.headers.get("location", ""),
+        )
 
     def test_list_github_repositories_for_tenant(self) -> None:
         payload = self._tenant_payload()
@@ -507,6 +552,28 @@ class AdminApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(len(payload), 2)
         self.assertEqual(payload[0]["full_name"], "example/repo-one")
+
+    def test_list_github_repositories_returns_400_for_invalid_private_key(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = "12345"
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        with patch(
+            "orchestrator.api.routes_admin.github_client_from_tenant_config",
+            side_effect=ValueError("Invalid GitHub App private key secret"),
+        ):
+            response = self.client.get(
+                "/api/admin/tenants/tenant-a/github/repositories",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid GitHub App private key secret", response.json()["detail"])
 
     def test_jira_connect_start_requires_tenant_for_edit_mode(self) -> None:
         response = self.client.post(
@@ -561,7 +628,10 @@ class AdminApiTests(unittest.TestCase):
             )
 
         self.assertEqual(callback_response.status_code, 302)
-        self.assertIn("/tenants/new?jira_oauth=success&jira_connection_id=", callback_response.headers.get("location", ""))
+        self.assertIn(
+            "/tenants/new/jira?jira_oauth=success&jira_connection_id=",
+            callback_response.headers.get("location", ""),
+        )
 
     def test_jira_connect_edit_callback_updates_tenant(self) -> None:
         payload = self._tenant_payload()

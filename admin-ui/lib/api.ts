@@ -17,10 +17,7 @@ export type GithubConfig = {
 };
 
 export type ReposConfig = {
-  allowlist: string[];
-  mapping_rules_by_project_key: Record<string, string>;
-  mapping_rules_by_component: Record<string, string>;
-  fallback_repo: string | null;
+  github_repository: string | null;
 };
 
 export type PolicyConfig = {
@@ -264,6 +261,15 @@ export function testJira(
   });
 }
 
+export function disconnectJira(
+  credentials: Credentials,
+  tenantId: string
+): Promise<TenantRecord> {
+  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/disconnect`, {
+    method: "POST"
+  });
+}
+
 export function startJiraConnect(
   credentials: Credentials,
   options?: { returnTo?: "wizard" | "edit"; tenantId?: string }
@@ -308,6 +314,15 @@ export function testGithub(
   tenantId: string
 ): Promise<{ ok: boolean; details: string }> {
   return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/test-github`, {
+    method: "POST"
+  });
+}
+
+export function disconnectGitHub(
+  credentials: Credentials,
+  tenantId: string
+): Promise<TenantRecord> {
+  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/github/disconnect`, {
     method: "POST"
   });
 }
@@ -368,6 +383,12 @@ export function upsertManagedSecret(
   return request<ManagedSecretRecord>(credentials, `/api/admin/secrets/${encodeURIComponent(secretRef)}`, {
     method: "PUT",
     body: JSON.stringify({ value })
+  });
+}
+
+export async function deleteManagedSecret(credentials: Credentials, secretRef: string): Promise<void> {
+  await request<void>(credentials, `/api/admin/secrets/${encodeURIComponent(secretRef)}`, {
+    method: "DELETE"
   });
 }
 
