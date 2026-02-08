@@ -880,6 +880,67 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [3003])
         self.assertIsNone(tenant_response.json()["jira"]["webhook_last_error"])
 
+    def test_provision_tenant_jira_webhooks_recovers_after_limit_by_rotating_current_tenant_ids(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant_a = session.get(Tenant, "tenant-a")
+            self.assertIsNotNone(tenant_a)
+            jira_config = dict(tenant_a.jira_config)
+            jira_config["managed_webhook_ids"] = [7001]
+            tenant_a.jira_config = jira_config
+            session.commit()
+
+        deleted_batches: list[list[int]] = []
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.register_attempts = 0
+
+            def register_webhook(self, **_: object) -> list[int]:  # noqa: ANN003
+                self.register_attempts += 1
+                if self.register_attempts == 1:
+                    raise ValueError(
+                        "Webhook registration did not return any webhook IDs "
+                        "(webhookRegistrationResult errors: A maximum of 5 webhooks is allowed per app per user.)"
+                    )
+                return [7002]
+
+            def list_webhooks(self, **_: object) -> list[dict]:  # noqa: ANN003
+                return [{"id": 7001}]
+
+            def delete_webhooks(self, *, access_token: str, cloud_id: str, webhook_ids: list[int]) -> None:  # noqa: ANN001
+                deleted_batches.append(list(webhook_ids))
+
+        fake_client = _FakeClient()
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["webhook_ids"], [7002])
+        self.assertEqual(deleted_batches, [[7001]])
+        self.assertIn("Deleted 1 existing tenant Jira webhook(s).", response.json()["details"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [7002])
+        self.assertIsNone(tenant_response.json()["jira"]["webhook_last_error"])
+
     def test_list_discord_allowlist_requests_returns_pending_requests(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(

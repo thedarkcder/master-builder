@@ -519,6 +519,18 @@ def _provision_jira_webhook(
                     cloud_id=connection.cloud_id,
                 )
                 cleanup_note = cleanup_details
+                if deleted_count == 0:
+                    current_tenant_ids = _parse_managed_webhook_ids(jira_config)
+                    if current_tenant_ids:
+                        client.delete_webhooks(
+                            access_token=access_token,
+                            cloud_id=connection.cloud_id,
+                            webhook_ids=current_tenant_ids,
+                        )
+                        deleted_count = len(current_tenant_ids)
+                        cleanup_note = (
+                            f"{cleanup_details} Deleted {deleted_count} existing tenant Jira webhook(s)."
+                        )
                 if deleted_count > 0:
                     webhook_ids = client.register_webhook(
                         access_token=access_token,
