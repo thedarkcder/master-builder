@@ -29,6 +29,7 @@ HTTP_413_TOO_LARGE = getattr(
     "HTTP_413_CONTENT_TOO_LARGE",
     status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
 )
+GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
 
 
 def _max_webhook_body_bytes() -> int:
@@ -238,25 +239,13 @@ def _resolve_global_github_webhook_secret(
     session: Session,
     settings,
 ) -> str | None:  # noqa: ANN001
-    secret_ref = (os.environ.get("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF") or "").strip()
-    if not secret_ref:
-        return None
-
     secret_value = resolve_secret_ref(
         session,
-        secret_ref=secret_ref,
+        secret_ref=GLOBAL_GITHUB_WEBHOOK_SECRET_REF,
         encryption_key=settings.secrets_encryption_key,
     )
     if not secret_value:
-        logger.error(
-            "github_webhook_auth_misconfigured request_id=%s secret_ref=%s",
-            request_id,
-            secret_ref,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="GitHub webhook authentication is misconfigured",
-        )
+        return None
     return secret_value
 
 

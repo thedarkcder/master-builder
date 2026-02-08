@@ -26,10 +26,7 @@ class GithubConfig(BaseModel):
 
 
 class ReposConfig(BaseModel):
-    allowlist: list[str] = Field(default_factory=list)
-    mapping_rules_by_project_key: dict[str, str] = Field(default_factory=dict)
-    mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
-    fallback_repo: str | None = None
+    github_repository: str | None = None
 
 
 class PolicyConfig(BaseModel):

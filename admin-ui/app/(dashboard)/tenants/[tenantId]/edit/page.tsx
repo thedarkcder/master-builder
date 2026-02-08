@@ -3,16 +3,20 @@
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { KeyRound, Link2 } from "lucide-react";
+import { CheckCircle2, KeyRound, Link2, RefreshCw } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  disconnectGitHub,
+  disconnectJira,
   getTenant,
+  listGitHubRepositories,
   previewReadyGate,
   type ReadyGatePreviewRecord,
+  type GitHubRepositoryRecord,
   startJiraConnect,
   startGitHubInstall,
   testGithub,
@@ -33,6 +37,36 @@ export default function EditTenantPage() {
   const [saving, setSaving] = useState(false);
   const [statusLine, setStatusLine] = useState("Loading tenant...");
   const [readyPreview, setReadyPreview] = useState<ReadyGatePreviewRecord | null>(null);
+  const [repositoryOptions, setRepositoryOptions] = useState<GitHubRepositoryRecord[]>([]);
+  const [repositoriesLoading, setRepositoriesLoading] = useState(false);
+
+  async function loadRepositoryOptions(
+    record: TenantRecord,
+    options: { announceSuccess?: boolean } = {}
+  ): Promise<string | null> {
+    const announceSuccess = options.announceSuccess ?? false;
+    if (!credentials || !record.github.installation_id) {
+      setRepositoryOptions([]);
+      return null;
+    }
+    setRepositoriesLoading(true);
+    try {
+      const repositories = await listGitHubRepositories(credentials, record.tenant_id);
+      setRepositoryOptions(repositories);
+      if (repositories.length === 0) {
+        return "GitHub installation connected, but no repositories are accessible.";
+      }
+      if (announceSuccess) {
+        return `Loaded ${repositories.length} GitHub repository option(s).`;
+      }
+      return null;
+    } catch (error) {
+      setRepositoryOptions([]);
+      return `Unable to load GitHub repositories: ${(error as Error).message}`;
+    } finally {
+      setRepositoriesLoading(false);
+    }
+  }
 
   async function loadTenant() {
     if (!credentials) {
@@ -42,11 +76,22 @@ export default function EditTenantPage() {
     try {
       const payload = await getTenant(credentials, params.tenantId);
       setTenant(payload);
-      setStatusLine(`Loaded ${payload.tenant_id}.`);
+      const repoStatus = await loadRepositoryOptions(payload);
+      setStatusLine(repoStatus ?? `Loaded ${payload.tenant_id}.`);
     } catch (error) {
       setStatusLine(`Failed to load tenant: ${(error as Error).message}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshRepositoryOptions() {
+    if (!tenant) {
+      return;
+    }
+    const repoStatus = await loadRepositoryOptions(tenant, { announceSuccess: true });
+    if (repoStatus) {
+      setStatusLine(repoStatus);
     }
   }
 
@@ -57,27 +102,53 @@ export default function EditTenantPage() {
   }, [ready, credentials]);
 
   useEffect(() => {
-    if (searchParams.get("github_install") === "success") {
-      setStatusLine("GitHub App install callback received. Installation details were saved.");
-    }
+    const githubInstallSuccess = searchParams.get("github_install") === "success";
     if (searchParams.get("jira_oauth") === "success") {
       setStatusLine("Jira OAuth callback received. Update project keys if needed, then save.");
     }
-  }, [searchParams]);
+    if (!githubInstallSuccess || !ready || !credentials) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const payload = await getTenant(credentials, params.tenantId);
+        if (cancelled) {
+          return;
+        }
+        setTenant(payload);
+        const repoStatus = await loadRepositoryOptions(payload, { announceSuccess: true });
+        if (cancelled) {
+          return;
+        }
+        setStatusLine(repoStatus ?? "GitHub App install callback received. Installation connected.");
+      } catch (error) {
+        if (!cancelled) {
+          setStatusLine(`GitHub install callback refresh failed: ${(error as Error).message}`);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, ready, credentials, params.tenantId]);
 
   async function handleSave(payload: TenantUpdatePayload): Promise<void> {
     if (!credentials) {
       return;
     }
-    setSaving(true);
-    try {
-      const updated = await updateTenant(credentials, params.tenantId, payload);
-      setTenant(updated);
-      setStatusLine(`Saved ${updated.tenant_id}.`);
-    } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
-    } finally {
-      setSaving(false);
+      setSaving(true);
+      try {
+        const updated = await updateTenant(credentials, params.tenantId, payload);
+        setTenant(updated);
+      await loadRepositoryOptions(updated);
+        setStatusLine(`Saved ${updated.tenant_id}.`);
+      } catch (error) {
+        setStatusLine(`Save failed: ${(error as Error).message}`);
+      } finally {
+        setSaving(false);
     }
   }
 
@@ -121,6 +192,23 @@ export default function EditTenantPage() {
     }
   }
 
+  async function disconnectGitHubApp() {
+    if (!credentials) {
+      return;
+    }
+    if (!window.confirm("Disconnect GitHub App from this tenant?")) {
+      return;
+    }
+    try {
+      const updated = await disconnectGitHub(credentials, params.tenantId);
+      setTenant(updated);
+      setRepositoryOptions([]);
+      setStatusLine("GitHub disconnected for this tenant.");
+    } catch (error) {
+      setStatusLine(`Unable to disconnect GitHub: ${(error as Error).message}`);
+    }
+  }
+
   async function connectJira() {
     if (!credentials) {
       return;
@@ -130,6 +218,22 @@ export default function EditTenantPage() {
       window.location.href = result.authorize_url;
     } catch (error) {
       setStatusLine(`Unable to start Jira OAuth: ${(error as Error).message}`);
+    }
+  }
+
+  async function disconnectJiraOauth() {
+    if (!credentials) {
+      return;
+    }
+    if (!window.confirm("Disconnect Jira OAuth from this tenant?")) {
+      return;
+    }
+    try {
+      const updated = await disconnectJira(credentials, params.tenantId);
+      setTenant(updated);
+      setStatusLine("Jira disconnected for this tenant.");
+    } catch (error) {
+      setStatusLine(`Unable to disconnect Jira: ${(error as Error).message}`);
     }
   }
 
@@ -168,14 +272,6 @@ export default function EditTenantPage() {
                 Manage Secrets
               </Link>
             </Button>
-            <Button variant="outline" onClick={() => void connectJira()}>
-              <Link2 className="mr-2 h-4 w-4" />
-              Connect Jira
-            </Button>
-            <Button variant="outline" onClick={() => void connectGitHubApp()}>
-              <Link2 className="mr-2 h-4 w-4" />
-              Install GitHub App
-            </Button>
             <Button variant="secondary" onClick={() => void runHealthChecks()}>
               Run Health Checks
             </Button>
@@ -186,29 +282,81 @@ export default function EditTenantPage() {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-          <p className="font-medium text-foreground">Connection prerequisites</p>
-          <p>
-            Jira secrets:
-            {" "}
-            <code className="font-mono">MB_JIRA_CLIENT_ID</code>,
-            {" "}
-            <code className="font-mono">MB_JIRA_CLIENT_SECRET</code>
-          </p>
-          <p>
-            GitHub secrets:
-            {" "}
-            <code className="font-mono">MB_GH_APP_ID</code>,
-            {" "}
-            <code className="font-mono">MB_GH_PRIVATE_KEY</code>
-          </p>
-          <p>
-            Required API env var for install:
-            {" "}
-            <code className="font-mono">ORCHESTRATOR_GITHUB_APP_SLUG</code>
-          </p>
+        <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-foreground">
+          {statusLine}
         </div>
-        <TenantForm mode="edit" initialValues={recordToFormValues(tenant)} onSubmit={handleSave} submitting={saving} />
+        <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">Connections</p>
+          <p>Configure provider secrets in Secrets Manager, then connect Jira and GitHub below.</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-md border p-3">
+            <p className="text-sm font-medium">Jira Connection</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {tenant.jira.connection_id ? `Connected (${tenant.jira.connection_id})` : "Not connected"}
+            </p>
+            <div className="mt-3 flex gap-2">
+              {tenant.jira.connection_id ? (
+                <>
+                  <Button variant="outline" disabled>
+                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                    Connected
+                  </Button>
+                  <Button variant="outline" onClick={() => void disconnectJiraOauth()}>
+                    Disconnect
+                  </Button>
+                </>
+              ) : (
+                <Button variant="outline" onClick={() => void connectJira()}>
+                  <Link2 className="mr-2 h-4 w-4" />
+                  Connect Jira
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="rounded-md border p-3">
+            <p className="text-sm font-medium">GitHub Connection</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {tenant.github.installation_id
+                ? `Connected (installation ${tenant.github.installation_id})`
+                : "Not connected"}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {tenant.github.installation_id ? (
+                <>
+                  <Button variant="outline" disabled>
+                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                    Connected
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void refreshRepositoryOptions()}
+                    disabled={repositoriesLoading}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Refresh Repos
+                  </Button>
+                  <Button variant="outline" onClick={() => void disconnectGitHubApp()}>
+                    Disconnect
+                  </Button>
+                </>
+              ) : (
+                <Button variant="outline" onClick={() => void connectGitHubApp()}>
+                  <Link2 className="mr-2 h-4 w-4" />
+                  Install GitHub App
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+        <TenantForm
+          mode="edit"
+          initialValues={recordToFormValues(tenant)}
+          onSubmit={handleSave}
+          submitting={saving}
+          repositoryOptions={repositoryOptions}
+          repositoriesLoading={repositoriesLoading}
+        />
         {readyPreview ? (
           <Card>
             <CardHeader>
@@ -239,7 +387,6 @@ export default function EditTenantPage() {
             </CardContent>
           </Card>
         ) : null}
-        <p className="text-sm text-muted-foreground">{statusLine}</p>
       </CardContent>
     </Card>
   );

@@ -20,7 +20,6 @@ class JiraWebhookTests(unittest.TestCase):
         self.database_url = f"sqlite:///{self.temp_dir.name}/webhook_test.db"
         self.webhook_secret_env = "ORCHESTRATOR_TEST_WEBHOOK_SECRET"
         self.webhook_secret_value = "super-secret-token"
-        self.github_webhook_secret_env = "ORCHESTRATOR_TEST_GITHUB_WEBHOOK_SECRET"
         self.github_webhook_secret_value = "github-super-secret-token"
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
@@ -28,7 +27,6 @@ class JiraWebhookTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
         os.environ[self.webhook_secret_env] = self.webhook_secret_value
-        os.environ[self.github_webhook_secret_env] = self.github_webhook_secret_value
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -40,8 +38,7 @@ class JiraWebhookTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         os.environ.pop(self.webhook_secret_env, None)
-        os.environ.pop(self.github_webhook_secret_env, None)
-        os.environ.pop("ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF", None)
+        os.environ.pop("GITHUB_WEBHOOK_SECRET", None)
         os.environ.pop("ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES", None)
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()
@@ -76,10 +73,7 @@ class JiraWebhookTests(unittest.TestCase):
                 "installation_id": github_installation_id,
             },
             "repos": {
-                "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
-                "mapping_rules_by_component": {},
-                "fallback_repo": None,
+                "github_repository": "https://github.com/example/repo",
             },
             "policy": {
                 "allow_jira_transitions": False,
@@ -298,7 +292,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.json()["reason"], "accepted_no_handler")
 
     def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(self) -> None:
-        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = self.github_webhook_secret_env
+        os.environ["GITHUB_WEBHOOK_SECRET"] = self.github_webhook_secret_value
         payload = {
             "action": "opened",
             "installation": {"id": 12345},
@@ -319,7 +313,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_github_webhook_accepts_valid_signature_when_global_secret_configured(self) -> None:
-        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = self.github_webhook_secret_env
+        os.environ["GITHUB_WEBHOOK_SECRET"] = self.github_webhook_secret_value
         payload = {
             "action": "opened",
             "installation": {"id": 12345},
@@ -377,9 +371,9 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertTrue(response.json()["enqueued"])
 
     def test_github_webhook_uses_managed_global_secret_ref(self) -> None:
-        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = "secret/github-global-webhook"
+        os.environ.pop("GITHUB_WEBHOOK_SECRET", None)
         self.client.put(
-            "/api/admin/secrets/secret%2Fgithub-global-webhook",
+            "/api/admin/secrets/GITHUB_WEBHOOK_SECRET",
             json={"value": "managed-global-secret"},
             auth=("admin", "secret"),
         )

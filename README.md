@@ -21,7 +21,6 @@ export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@
 export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
 export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
-export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
 export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.1
@@ -30,12 +29,10 @@ from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
 PY
 )
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=MB_JIRA_CLIENT_ID
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=MB_JIRA_CLIENT_SECRET
 
 # Store OAuth secret values via managed secrets API/UI, not shell exports:
-# - secret ref MB_JIRA_CLIENT_ID -> Jira OAuth client id
-# - secret ref MB_JIRA_CLIENT_SECRET -> Jira OAuth client secret
+# - secret ref JIRA_OAUTH_CLIENT_ID -> Jira OAuth client id
+# - secret ref JIRA_OAUTH_CLIENT_SECRET -> Jira OAuth client secret
 
 # Optional extra Python index for pinned codex assets wheel
 # Example local package service (docker-compose):
@@ -267,7 +264,7 @@ If your admin UI is hosted on Vercel, use this Funnel URL for API callbacks only
 
 ## GitHub App setup
 The service uses one server-managed GitHub App for all tenants:
-- `ORCHESTRATOR_GITHUB_APP_SLUG`
+- secret ref `GITHUB_APP_SLUG` (GitHub App slug)
 - `ORCHESTRATOR_GITHUB_APP_ID_REF` (defaults to `secret/app-id`)
 - `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF` (defaults to `secret/private-key`)
 

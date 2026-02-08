@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 
-import type { TenantCreatePayload, TenantUpdatePayload } from "@/lib/api";
+import type { GitHubRepositoryRecord, TenantCreatePayload, TenantUpdatePayload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,8 @@ import {
 
 type TenantFormProps = {
   submitting?: boolean;
+  repositoryOptions?: GitHubRepositoryRecord[];
+  repositoriesLoading?: boolean;
 } & (
   | {
       mode: "create";
@@ -56,7 +58,14 @@ function Toggle({
   );
 }
 
-export function TenantForm({ mode, initialValues, onSubmit, submitting = false }: TenantFormProps) {
+export function TenantForm({
+  mode,
+  initialValues,
+  onSubmit,
+  submitting = false,
+  repositoryOptions = [],
+  repositoriesLoading = false
+}: TenantFormProps) {
   const [values, setValues] = useState<TenantFormValues>(initialValues ?? defaultTenantFormValues());
   const [error, setError] = useState("");
   const [textFields, setTextFields] = useState(() => formValuesToTextFields(initialValues ?? defaultTenantFormValues()));
@@ -76,11 +85,11 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
     if (!textFields.readyStatusesText.trim()) {
       return "At least one ready status is required.";
     }
-    if (!textFields.allowlistText.trim()) {
-      return "At least one repository allowlist entry is required.";
+    if (!textFields.githubRepositoryText.trim()) {
+      return "Repository selection is required.";
     }
     return "";
-  }, [mode, textFields.allowlistText, textFields.projectKeysText, textFields.readyStatusesText, values]);
+  }, [mode, textFields.githubRepositoryText, textFields.projectKeysText, textFields.readyStatusesText, values]);
 
   async function handleSubmit(): Promise<void> {
     if (validation) {
@@ -254,45 +263,30 @@ export function TenantForm({ mode, initialValues, onSubmit, submitting = false }
       <Card>
         <CardHeader>
           <CardTitle>Repository Mapping</CardTitle>
-          <CardDescription>Define the target repos and mapping rules.</CardDescription>
+          <CardDescription>Define the target repository.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-2">
-            <FieldLabel>Allowlist (one URL per line)</FieldLabel>
-            <Textarea
-              value={textFields.allowlistText}
-              onChange={(event) => setTextFields((prev) => ({ ...prev, allowlistText: event.target.value }))}
-              className="min-h-[110px]"
-              placeholder="https://github.com/example/repo"
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Rules by Jira project key (one per line: key=url)</FieldLabel>
-            <Textarea
-              value={textFields.mappingByProjectText}
-              onChange={(event) => setTextFields((prev) => ({ ...prev, mappingByProjectText: event.target.value }))}
-              className="min-h-[110px]"
-              placeholder="TP=https://github.com/example/repo"
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Rules by Jira component (one per line: component=url)</FieldLabel>
-            <Textarea
-              value={textFields.mappingByComponentText}
-              onChange={(event) => setTextFields((prev) => ({ ...prev, mappingByComponentText: event.target.value }))}
-              className="min-h-[110px]"
-              placeholder="payments=https://github.com/example/payments"
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Fallback repo (optional)</FieldLabel>
-            <Input
-              value={values.repos.fallback_repo ?? ""}
-              onChange={(event) =>
-                setValues((prev) => ({ ...prev, repos: { ...prev.repos, fallback_repo: event.target.value || null } }))
-              }
-              placeholder="https://github.com/example/default"
-            />
+            <FieldLabel>Repository</FieldLabel>
+            <select
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={textFields.githubRepositoryText}
+              onChange={(event) => setTextFields((prev) => ({ ...prev, githubRepositoryText: event.target.value }))}
+              disabled={repositoriesLoading || repositoryOptions.length === 0}
+            >
+              <option value="">
+                {repositoriesLoading
+                  ? "Loading repositories..."
+                  : repositoryOptions.length === 0
+                    ? "No repositories available"
+                    : "Select repository"}
+              </option>
+              {repositoryOptions.map((repo) => (
+                <option key={repo.html_url} value={repo.html_url}>
+                  {repo.full_name}
+                </option>
+              ))}
+            </select>
           </div>
         </CardContent>
       </Card>
