@@ -12,8 +12,9 @@ enabled = false
 
 developer_instructions = """
 
-This repo is bound to Jira project MAB only.
-Never interact with Jira issues outside MAB-*.
+This repo is multi-tenant.
+Never assume a fixed Jira project key.
+Always use runtime tenant context (for example tenant jira.project_keys) when selecting projects/issues.
 
 Always work against a single Jira issue (feature) at a time.
 

@@ -108,7 +108,7 @@ jobs:
   codex-assets-version-guard:
     name: Codex assets version guard
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
@@ -128,7 +128,7 @@ jobs:
     name: Java (lint/test)
     needs: detect
     if: needs.detect.outputs.is_java == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
@@ -159,7 +159,7 @@ jobs:
     name: Node/React (lint/test/build)
     needs: detect
     if: needs.detect.outputs.is_node == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
@@ -260,7 +260,7 @@ jobs:
     name: Python (ruff/pytest)
     needs: detect
     if: needs.detect.outputs.is_python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
@@ -309,7 +309,7 @@ jobs:
   summary:
     name: CI summary
     needs: [detect, java, node, python]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always()
     steps:
       - name: Result
