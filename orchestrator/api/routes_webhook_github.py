@@ -277,6 +277,7 @@ async def ingest_github_webhook(
         send_result = send_tenant_discord_message(
             session=session,
             tenant=tenant,
+            project=project,
             message=signal.message,
             settings=settings,
             event="review_signal",

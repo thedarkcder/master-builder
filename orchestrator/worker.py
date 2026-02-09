@@ -19,6 +19,7 @@ from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.project_policy import resolve_effective_policy
@@ -333,9 +334,13 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         send_result = send_tenant_discord_message(
             session=session,
             tenant=tenant,
+            project=resolve_project_for_run(session, run=run),
             message=stage_update["discord_message"],
             settings=settings,
             event="decision_gate_required",
+            open_thread=True,
+            thread_name=f"{run.issue_key}-decision-gate",
+            thread_intro="Reply here with GTD details, then run !retry <ISSUE_KEY>.",
         )
         _send_stage_update_to_jira(
             session=session,
@@ -353,8 +358,6 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
                 stage_update["stage"],
                 send_result.reason,
             )
-        run.status = RUN_STATUS_BLOCKED
-        run.last_error = f"Decision Gate required: {decision_gate.reason}"
         run.plan = {
             "succeeded": False,
             "attempts": 0,
@@ -364,26 +367,29 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             "stage_updates": [stage_update],
             "decision_gate": decision_gate.to_payload(),
         }
-        run.finished_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(run)
-        return run
-
-    notifier = RunStageNotifier(
-        session=session,
-        tenant=tenant,
-        run=run,
-        settings=settings,
-        send_discord_message=send_tenant_discord_message,
-        send_jira_message=_send_stage_update_to_jira,
-    )
-    start_run(session, run=run)
+        return mark_run_terminal(
+            session,
+            run_id=run.run_id,
+            terminal_status=RUN_STATUS_BLOCKED,
+            last_error=f"Decision Gate required: {decision_gate.reason}",
+        )
 
     project: Project | None = resolve_project_for_run(session, run=run)
     if project is None:
         return fail_missing_project_mapping(session, run=run)
     if project.is_archived:
         return block_archived_project(session, run=run, project=project)
+
+    notifier = RunStageNotifier(
+        session=session,
+        tenant=tenant,
+        run=run,
+        settings=settings,
+        project=project,
+        send_discord_message=send_tenant_discord_message,
+        send_jira_message=_send_stage_update_to_jira,
+    )
+    start_run(session, run=run)
 
     bind_run_project(session, run=run, project=project)
     effective_policy = resolve_effective_policy(

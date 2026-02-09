@@ -243,7 +243,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                             <SidebarMenuButton
                               asChild
                               className="py-1.5 text-xs"
-                              isActive={pathname === `/tenants/${tenantId}/projects/${project.project_id}`}
+                              isActive={pathname.startsWith(`/tenants/${tenantId}/projects/${project.project_id}`)}
                             >
                               <Link href={`/tenants/${tenantId}/projects/${project.project_id}`}>{project.name}</Link>
                             </SidebarMenuButton>

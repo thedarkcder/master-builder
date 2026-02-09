@@ -47,6 +47,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       args:
         PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your package index URL}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-api
     environment:
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
@@ -75,6 +76,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       args:
         PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your package index URL}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-worker
     depends_on:
       api:

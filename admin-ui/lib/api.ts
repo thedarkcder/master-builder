@@ -32,6 +32,7 @@ export type PolicyConfig = {
 };
 
 export type DiscordConfig = {
+  guild_id?: string | null;
   channel_id?: string | null;
   notify_events: string[];
   allowed_user_ids?: string[];
@@ -97,6 +98,13 @@ export type ProjectPolicyOverrides = Partial<
   >
 >;
 
+export type ProjectDiscordConfig = {
+  channel_id?: string | null;
+  notify_events?: string[];
+  ask_thread_channel_ids?: string[];
+  seed_followup_thread_channel_ids?: string[];
+};
+
 export type ProjectRecord = {
   project_id: string;
   tenant_id: string;
@@ -104,6 +112,9 @@ export type ProjectRecord = {
   github_repository: string;
   jira_project_key: string;
   policy_overrides: ProjectPolicyOverrides;
+  environment: Record<string, string>;
+  secret_refs: Record<string, string>;
+  discord: ProjectDiscordConfig | null;
   effective_policy: PolicyConfig;
   is_archived: boolean;
   created_at: string;
@@ -115,6 +126,9 @@ export type ProjectCreatePayload = {
   github_repository: string;
   jira_project_key: string;
   policy_overrides?: ProjectPolicyOverrides;
+  environment?: Record<string, string>;
+  secret_refs?: Record<string, string>;
+  discord?: ProjectDiscordConfig | null;
 };
 
 export type ProjectUpdatePayload = {
@@ -122,6 +136,9 @@ export type ProjectUpdatePayload = {
   github_repository: string;
   jira_project_key: string;
   policy_overrides?: ProjectPolicyOverrides;
+  environment?: Record<string, string>;
+  secret_refs?: Record<string, string>;
+  discord?: ProjectDiscordConfig | null;
   is_archived: boolean;
 };
 
@@ -188,15 +205,18 @@ export type ManagedSecretResolveResult = {
 };
 
 export type DiscordAllowlistRequestRecord = {
+  project_id: string | null;
   user_id: string;
   requested_at: string;
   channel_id: string | null;
   reason: string | null;
+  permissions?: string[];
 };
 
 export type DiscordAllowlistApprovalResult = {
   ok: boolean;
   details: string;
+  project_id: string | null;
   user_id: string;
   notified: boolean;
 };
@@ -545,22 +565,24 @@ export function listManagedSecrets(credentials: Credentials): Promise<ManagedSec
 
 export function listDiscordAllowlistRequests(
   credentials: Credentials,
-  tenantId: string
+  tenantId: string,
+  projectId: string
 ): Promise<DiscordAllowlistRequestRecord[]> {
   return request<DiscordAllowlistRequestRecord[]>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/allowlist-requests`
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/discord/allowlist-requests`
   );
 }
 
 export function approveDiscordAllowlistRequest(
   credentials: Credentials,
   tenantId: string,
+  projectId: string,
   userId: string
 ): Promise<DiscordAllowlistApprovalResult> {
   return request<DiscordAllowlistApprovalResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/allowlist-requests/${encodeURIComponent(userId)}/approve`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/discord/allowlist-requests/${encodeURIComponent(userId)}/approve`,
     {
       method: "POST"
     }

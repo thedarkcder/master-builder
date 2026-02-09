@@ -4,12 +4,14 @@ from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
+from orchestrator.api.routes_admin import _resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
@@ -406,6 +408,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_project.json()["jira_project_key"], "MBAPP")
         self.assertEqual(create_project.json()["environment"], {"APP_ENV": "prod"})
         self.assertEqual(create_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN"})
+        self.assertIsNone(create_project.json()["discord"])
 
         duplicate_repo = self.client.post(
             "/api/admin/tenants/tenant-a/projects",
@@ -438,6 +441,133 @@ class AdminApiTests(unittest.TestCase):
         self.assertTrue(update_project.json()["is_archived"])
         self.assertEqual(update_project.json()["environment"], {"APP_ENV": "stage"})
         self.assertEqual(update_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN_NEXT"})
+        self.assertIsNone(update_project.json()["discord"])
+
+    def test_project_discord_enable_provisions_channel_when_missing(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        default_project = projects_response.json()[0]
+        project_id = default_project["project_id"]
+
+        with patch(
+            "orchestrator.api.routes_admin._resolve_project_discord_channel_binding",
+            return_value={"channel_id": "discord-channel-proj-1", "notify_events": []},
+        ) as provision_mock:
+            response = self.client.put(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+                json={
+                    "name": default_project["name"],
+                    "github_repository": default_project["github_repository"],
+                    "jira_project_key": default_project["jira_project_key"],
+                    "discord": {"notify_events": []},
+                    "is_archived": False,
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["discord"]["channel_id"], "discord-channel-proj-1")
+        provision_mock.assert_called_once()
+
+    def test_update_project_preserves_discord_allowlist_fields(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        default_project = projects_response.json()[0]
+        project_id = default_project["project_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            project.discord_config = {
+                "channel_id": "discord-channel-proj-1",
+                "notify_events": ["run_started"],
+                "allowed_user_ids": ["discord-user-1"],
+                "allowlist_requests": [
+                    {
+                        "project_id": project_id,
+                        "user_id": "discord-user-2",
+                        "requested_at": "2026-02-09T12:00:00Z",
+                    }
+                ],
+            }
+            session.add(project)
+            session.commit()
+
+        with patch(
+            "orchestrator.api.routes_admin._resolve_project_discord_channel_binding",
+            side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
+        ):
+            response = self.client.put(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+                json={
+                    "name": default_project["name"],
+                    "github_repository": default_project["github_repository"],
+                    "jira_project_key": default_project["jira_project_key"],
+                    "discord": {"notify_events": ["run_failed"]},
+                    "is_archived": False,
+                },
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["discord"]["notify_events"], ["run_failed"])
+
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            discord_config = dict(project.discord_config or {})
+            self.assertEqual(discord_config.get("allowed_user_ids"), ["discord-user-1"])
+            self.assertEqual(len(discord_config.get("allowlist_requests", [])), 1)
+
+    def test_project_discord_channel_name_template_appends_project_when_template_not_project_scoped(self) -> None:
+        now = datetime.now(timezone.utc)
+        tenant = Tenant(
+            tenant_id="example",
+            name="example",
+            is_enabled=True,
+            jira_config={},
+            github_config={},
+            repos_config={},
+            policy_config={},
+            discord_config={},
+            created_at=now,
+            updated_at=now,
+        )
+        project = Project(
+            project_id="project-1",
+            tenant_id="example",
+            name="Master Builder API",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="MAB",
+            policy_overrides={},
+            environment={},
+            secret_refs={},
+            discord_config={},
+            is_archived=False,
+            created_at=now,
+            updated_at=now,
+        )
+        settings = SimpleNamespace(discord_channel_name_template="team-core")
+        channel_name = _resolve_project_discord_channel_name(settings=settings, tenant=tenant, project=project)
+        self.assertEqual(channel_name, "team-core-mab-master-builder-api")
 
     def test_list_runs_supports_project_filter(self) -> None:
         payload = self._tenant_payload()
@@ -1272,9 +1402,9 @@ class AdminApiTests(unittest.TestCase):
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            tenant = session.get(Tenant, "tenant-a")
-            self.assertIsNotNone(tenant)
-            tenant.discord_config = {
+            project = session.get(Project, "tenant-a-default")
+            self.assertIsNotNone(project)
+            project.discord_config = {
                 "channel_id": "discord-channel-1",
                 "notify_events": ["run_started"],
                 "allowlist_requests": [
@@ -1289,7 +1419,7 @@ class AdminApiTests(unittest.TestCase):
             session.commit()
 
         response = self.client.get(
-            "/api/admin/tenants/tenant-a/discord/allowlist-requests",
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/discord/allowlist-requests",
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 200)
@@ -1310,9 +1440,9 @@ class AdminApiTests(unittest.TestCase):
         session_factory = create_session_factory(self.database_url)
 
         with session_factory() as session:
-            tenant = session.get(Tenant, "tenant-a")
-            self.assertIsNotNone(tenant)
-            tenant.discord_config = {
+            project = session.get(Project, "tenant-a-default")
+            self.assertIsNotNone(project)
+            project.discord_config = {
                 "channel_id": "discord-channel-1",
                 "notify_events": ["run_started"],
                 "allowed_user_ids": [],
@@ -1335,19 +1465,17 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(seed_token_secret.status_code, 200)
 
         with patch("orchestrator.api.routes_admin.DiscordApiClient.send_direct_message", return_value={"id": "msg-1"}):
-            response = self.client.post(
-                "/api/admin/tenants/tenant-a/discord/allowlist-requests/discord-user-456/approve",
-                auth=("admin", "secret"),
-            )
+            response = self.client.post("/api/admin/tenants/tenant-a/projects/tenant-a-default/discord/allowlist-requests/discord-user-456/approve", auth=("admin", "secret"))
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertTrue(response.json()["notified"])
 
-        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
-        self.assertEqual(tenant_response.status_code, 200)
-        discord = tenant_response.json()["discord"]
-        self.assertIn("discord-user-456", discord.get("allowed_user_ids", []))
+        with session_factory() as session:
+            project = session.get(Project, "tenant-a-default")
+            self.assertIsNotNone(project)
+            allowed_user_ids = (project.discord_config or {}).get("allowed_user_ids", [])
+            self.assertIn("discord-user-456", allowed_user_ids)
 
     def test_jira_webhook_lifecycle_endpoints(self) -> None:
         payload = self._tenant_payload()

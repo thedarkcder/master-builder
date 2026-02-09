@@ -10,21 +10,19 @@ import { ProjectsManager } from "@/components/projects-manager";
 import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   archiveTenant,
-  approveDiscordAllowlistRequest,
   disconnectJira,
   getTenant,
   getJiraWebhookDiagnostics,
   listJiraProjects,
   listProjects,
   listGitHubRepositories,
-  listDiscordAllowlistRequests,
   previewReadyGate,
   provisionJiraWebhook,
   type GitHubRepositoryRecord,
-  type DiscordAllowlistRequestRecord,
   type ReadyGatePreviewRecord,
   type JiraWebhookDiagnosticsRecord,
   startJiraConnect,
@@ -62,12 +60,12 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [jiraWebhookBusy, setJiraWebhookBusy] = useState(false);
   const [githubRepositories, setGithubRepositories] = useState<GitHubRepositoryRecord[]>([]);
   const [repositoriesLoading, setRepositoriesLoading] = useState(false);
-  const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
-  const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
   const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [projectsBusy, setProjectsBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
+  const [discordEnabled, setDiscordEnabled] = useState(false);
+  const [discordServerId, setDiscordServerId] = useState("");
 
   const statusClasses = useMemo(() => {
     const normalized = statusLine.toLowerCase();
@@ -118,22 +116,11 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     try {
       const payload = await getTenant(credentials, params.tenantId);
       setTenant(payload);
+      setDiscordEnabled(Boolean(payload.discord));
+      setDiscordServerId(payload.discord?.guild_id ?? "");
       await loadJiraWebhookDiagnostics();
-      await loadGitHubRepositories({ silent: true });
-      if (payload.jira.connection_id) {
-        try {
-          const availableProjects = await listJiraProjects(credentials, payload.jira.connection_id);
-          setJiraProjects(availableProjects);
-        } catch {
-          setJiraProjects([]);
-        }
-      } else {
-        setJiraProjects([]);
-      }
       const loadedProjects = await listProjects(credentials, params.tenantId);
       setProjects(loadedProjects);
-      const requests = await listDiscordAllowlistRequests(credentials, params.tenantId);
-      setAllowlistRequests(requests);
     } catch (error) {
       setStatusLine(`Failed to load tenant: ${(error as Error).message}`);
     } finally {
@@ -211,6 +198,38 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setStatusLine(`Unable to ${action} tenant: ${(error as Error).message}`);
     } finally {
       setArchiveBusy(false);
+    }
+  }
+
+  async function saveDiscordSettings() {
+    if (!credentials || !tenant) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await updateTenant(credentials, tenant.tenant_id, {
+        name: tenant.name,
+        is_enabled: tenant.is_enabled,
+        jira: tenant.jira,
+        github: tenant.github,
+        repos: tenant.repos,
+        policy: tenant.policy,
+        discord: discordEnabled
+          ? {
+              ...(tenant.discord ?? {}),
+              guild_id: discordServerId.trim() || null,
+              notify_events: tenant.discord?.notify_events ?? [],
+            }
+          : null,
+      });
+      setTenant(updated);
+      setDiscordEnabled(Boolean(updated.discord));
+      setDiscordServerId(updated.discord?.guild_id ?? "");
+      setStatusLine("Discord tenant settings saved.");
+    } catch (error) {
+      setStatusLine(`Unable to save Discord settings: ${(error as Error).message}`);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -299,22 +318,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setStatusLine(`Unable to disconnect Jira: ${(error as Error).message}`);
     } finally {
       setJiraWebhookBusy(false);
-    }
-  }
-
-  async function handleApproveAllowlistRequest(userId: string) {
-    if (!credentials) {
-      return;
-    }
-    setAllowlistBusyUserId(userId);
-    try {
-      const result = await approveDiscordAllowlistRequest(credentials, params.tenantId, userId);
-      setStatusLine(result.details);
-      await loadTenant();
-    } catch (error) {
-      setStatusLine(`Unable to approve allowlist request: ${(error as Error).message}`);
-    } finally {
-      setAllowlistBusyUserId(null);
     }
   }
 
@@ -633,58 +636,31 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <Card>
           <CardHeader>
             <CardTitle>Discord Integration</CardTitle>
-            <CardDescription>Configure tenant Discord notifications and command permissions.</CardDescription>
+            <CardDescription>Tenant-level Discord enablement.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <TenantForm
-              mode="edit"
-              initialValues={recordToFormValues(tenant)}
-              onSubmit={handleSave}
-              submitting={saving}
-              visibleSections={{
-                identity: false,
-                jira: false,
-                github: false,
-                repository: false,
-                policy: false,
-                discord: true
-              }}
-            />
-            <div id="discord-access-requests" className="space-y-2 rounded-md border p-3 text-sm">
-              <p className="font-medium">Discord Access Requests</p>
-              <p className="text-muted-foreground">Approve pending `/request` submissions from Discord users for this tenant.</p>
-              {allowlistRequests.length === 0 ? (
-                <p className="text-muted-foreground">No pending requests.</p>
-              ) : (
-                <ul className="space-y-2">
-                  {allowlistRequests.map((request) => (
-                    <li key={request.user_id} className="rounded-md border p-3">
-                      <p>
-                        <strong>User:</strong> {request.user_id}
-                      </p>
-                      <p>
-                        <strong>Requested at:</strong> {request.requested_at}
-                      </p>
-                      <p>
-                        <strong>Reason:</strong> {request.reason ?? "-"}
-                      </p>
-                      <p>
-                        <strong>Channel:</strong> {request.channel_id ?? "-"}
-                      </p>
-                      <div className="mt-2">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          disabled={allowlistBusyUserId === request.user_id}
-                          onClick={() => void handleApproveAllowlistRequest(request.user_id)}
-                        >
-                          {allowlistBusyUserId === request.user_id ? "Approving..." : "Approve"}
-                        </Button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
+            <div className="space-y-2 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-input"
+                  checked={discordEnabled}
+                  onChange={(event) => setDiscordEnabled(event.target.checked)}
+                />
+                <span>Enable Discord</span>
+              </label>
+              <div className="space-y-1">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Server ID</p>
+                <Input
+                  value={discordServerId}
+                  onChange={(event) => setDiscordServerId(event.target.value)}
+                  placeholder="Discord guild/server ID"
+                  disabled={!discordEnabled}
+                />
+              </div>
+              <Button onClick={() => void saveDiscordSettings()} disabled={saving}>
+                {saving ? "Saving..." : "Save"}
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -778,22 +754,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 <span>Action</span>
               </div>
               <ul className="divide-y">
-                <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3">
-                  <div className="space-y-0.5">
-                    <p className="font-medium">Discord Access Requests</p>
-                    <p className="text-xs text-muted-foreground">
-                      Requests from Discord users asking to join the tenant allowlist.
-                    </p>
-                  </div>
-                  <span className="rounded-full border px-2 py-0.5 text-xs">
-                    {allowlistRequests.length} pending
-                  </span>
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/discord#discord-access-requests`}>
-                      Review
-                    </Link>
-                  </Button>
-                </li>
                 <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3">
                   <div className="space-y-0.5">
                     <p className="font-medium">Jira Webhook Delivery</p>

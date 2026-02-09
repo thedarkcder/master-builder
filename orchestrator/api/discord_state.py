@@ -52,6 +52,14 @@ def tenant_allowlisted_user_ids(tenant: Tenant) -> set[str]:
     return normalized
 
 
+def project_allowlisted_user_ids(project: Project) -> set[str]:
+    discord_config = project.discord_config or {}
+    raw_allowlist = discord_config.get("allowed_user_ids")
+    if not isinstance(raw_allowlist, list):
+        return set()
+    return {str(user_id).strip() for user_id in raw_allowlist if str(user_id).strip()}
+
+
 def tenant_allowlist_requests(tenant: Tenant) -> list[dict]:
     discord_config = tenant.discord_config or {}
     raw_requests = discord_config.get("allowlist_requests")
@@ -75,6 +83,60 @@ def tenant_allowlist_requests(tenant: Tenant) -> list[dict]:
     return normalized
 
 
+def project_allowlist_requests(project: Project) -> list[dict]:
+    discord_config = project.discord_config or {}
+    raw_requests = discord_config.get("allowlist_requests")
+    if not isinstance(raw_requests, list):
+        return []
+    normalized: list[dict] = []
+    for item in raw_requests:
+        if not isinstance(item, dict):
+            continue
+        user_id = str(item.get("user_id") or "").strip()
+        if not user_id:
+            continue
+        normalized.append(
+            {
+                "user_id": user_id,
+                "requested_at": str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
+                "channel_id": str(item.get("channel_id") or "").strip() or None,
+                "reason": str(item.get("reason") or "").strip() or None,
+                "permissions": [
+                    str(value).strip()
+                    for value in (item.get("permissions") or [])
+                    if str(value).strip()
+                ],
+            }
+        )
+    return normalized
+
+
+def resolve_project_for_discord_channel(
+    *,
+    session: Session,
+    tenant_id: str,
+    channel_id: str | None,
+) -> Project | None:
+    normalized_channel_id = str(channel_id or "").strip()
+    if not normalized_channel_id:
+        return None
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    for project in projects:
+        if normalized_channel_id in _channel_ids_from_discord_config(dict(project.discord_config or {})):
+            return project
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is not None:
+        tenant_channel_ids = _channel_ids_from_discord_config(dict(tenant.discord_config or {}))
+        if normalized_channel_id in tenant_channel_ids and len(projects) == 1:
+            return projects[0]
+    return None
+
+
 def create_allowlist_request(
     *,
     session: Session,
@@ -84,11 +146,23 @@ def create_allowlist_request(
     permissions: list[str],
     reason: str | None,
 ) -> tuple[bool, str]:
-    allowlisted_ids = tenant_allowlisted_user_ids(tenant)
-    if user_id in allowlisted_ids:
-        return False, "You are already allowlisted for sensitive commands."
+    legacy_tenant_allowlist = tenant_allowlisted_user_ids(tenant)
+    if user_id in legacy_tenant_allowlist:
+        return False, "You are already allowlisted for sensitive commands in this project."
 
-    requests = tenant_allowlist_requests(tenant)
+    project = resolve_project_for_discord_channel(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        channel_id=channel_id,
+    )
+    if project is None:
+        return False, "Allowlist requests must be sent from a mapped project Discord channel."
+
+    allowlisted_ids = project_allowlisted_user_ids(project)
+    if user_id in allowlisted_ids:
+        return False, "You are already allowlisted for sensitive commands in this project."
+
+    requests = project_allowlist_requests(project)
     existing = next((entry for entry in requests if entry.get("user_id") == user_id), None)
     now_iso = datetime.now(timezone.utc).isoformat()
     if existing:
@@ -96,7 +170,7 @@ def create_allowlist_request(
         existing["channel_id"] = channel_id
         existing["permissions"] = permissions
         existing["reason"] = reason
-        message = "Allowlist request refreshed. An admin can approve it in the tenant page."
+        message = "Allowlist request refreshed. An admin can approve it in the project Discord page."
     else:
         requests.append(
             {
@@ -107,25 +181,47 @@ def create_allowlist_request(
                 "reason": reason,
             }
         )
-        message = "Allowlist request submitted. An admin can approve it in the tenant page."
+        message = "Allowlist request submitted. An admin can approve it in the project Discord page."
 
-    discord_config = dict(tenant.discord_config or {})
+    discord_config = dict(project.discord_config or {})
     discord_config["allowlist_requests"] = requests
-    tenant.discord_config = discord_config
+    project.discord_config = discord_config
+    project.updated_at = datetime.now(timezone.utc)
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
     return True, message
 
 
-def assert_sensitive_command_permission(*, tenant: Tenant, command_name: str, user_id: str) -> None:
+def assert_sensitive_command_permission(
+    *,
+    session: Session,
+    tenant: Tenant,
+    command_name: str,
+    user_id: str,
+    channel_id: str | None,
+) -> None:
     if command_name not in SENSITIVE_COMMANDS:
         return
-    allowlist = tenant_allowlisted_user_ids(tenant)
-    if user_id not in allowlist:
+    project = resolve_project_for_discord_channel(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        channel_id=channel_id,
+    )
+    legacy_tenant_allowlist = tenant_allowlisted_user_ids(tenant)
+    if user_id in legacy_tenant_allowlist:
+        return
+    if project is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"'{command_name}' requires an allowlisted Discord user",
+            detail=f"'{command_name}' requires a project-mapped Discord channel",
         )
+    allowlist = project_allowlisted_user_ids(project)
+    if user_id in allowlist:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"'{command_name}' requires an allowlisted Discord user for this project",
+    )
 
 
 def _channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:

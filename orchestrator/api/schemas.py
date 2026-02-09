@@ -61,6 +61,7 @@ class PolicyConfig(BaseModel):
 
 
 class DiscordConfig(BaseModel):
+    guild_id: str | None = None
     channel_id: str | None = None
     channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
@@ -267,6 +268,7 @@ class DiscordCommandResponse(BaseModel):
 
 
 class DiscordAllowlistRequestRead(BaseModel):
+    project_id: str | None = None
     user_id: str
     requested_at: str
     channel_id: str | None = None
@@ -277,6 +279,7 @@ class DiscordAllowlistRequestRead(BaseModel):
 class DiscordAllowlistApprovalResult(BaseModel):
     ok: bool
     details: str
+    project_id: str | None = None
     user_id: str
     notified: bool
 
