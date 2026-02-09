@@ -6,6 +6,9 @@ from orchestrator.api.routes_discord import router as discord_router
 from orchestrator.api.routes_runs import router as runs_router
 from orchestrator.api.routes_webhook import router as webhook_router
 from orchestrator.api.routes_webhook_discord import router as webhook_discord_router
+from orchestrator.api.routes_webhook_discord_interactions import (
+    router as webhook_discord_interactions_router,
+)
 from orchestrator.api.routes_webhook_github import router as webhook_github_router
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord_commands_sync import sync_discord_guild_commands
@@ -31,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(webhook_router)
     app.include_router(webhook_discord_router)
+    app.include_router(webhook_discord_interactions_router)
     app.include_router(webhook_github_router)
     gateway_listener = DiscordGatewayListener(settings=settings)
 
