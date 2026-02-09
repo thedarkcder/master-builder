@@ -100,6 +100,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           matchPrefix: `/tenants/${tenantId}/edit/discord`
         },
         {
+          href: `/tenants/${tenantId}/edit/projects`,
+          label: "Projects",
+          icon: FolderKanban,
+          matchPrefix: `/tenants/${tenantId}/edit/projects`
+        },
+        {
           href: `/tenants/${tenantId}/edit/health`,
           label: "Health",
           icon: Activity,

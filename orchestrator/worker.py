@@ -183,16 +183,22 @@ def _send_stage_update_to_jira(
         )
 
 
-def _workflow_request_for_run(tenant: Tenant, run: Run, *, project: Project | None) -> WorkflowRequest:
+def _workflow_request_for_run(
+    tenant: Tenant,
+    run: Run,
+    *,
+    project: Project | None,
+    effective_policy: dict,
+) -> WorkflowRequest:
     max_loops = coerce_positive_int(
-        tenant.policy_config.get("max_dev_test_review_loops"),
+        effective_policy.get("max_dev_test_review_loops"),
         default=1,
     )
     max_runtime_minutes = coerce_positive_int(
-        tenant.policy_config.get("max_runtime_minutes"),
+        effective_policy.get("max_runtime_minutes"),
         default=30,
     )
-    suggested_test_commands_raw = tenant.policy_config.get("allowed_commands") or []
+    suggested_test_commands_raw = effective_policy.get("allowed_commands") or []
     suggested_test_commands: list[str] = []
     for command in suggested_test_commands_raw:
         command_text = str(command).strip()
@@ -253,6 +259,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         return None
     run = selection.run
     tenant = selection.tenant
+    effective_policy = selection.effective_policy or tenant.policy_config
 
     try:
         decision_gate = evaluate_decision_gate(
@@ -349,7 +356,12 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     bind_run_project(session, run=run, project=project)
 
     try:
-        workflow_request = _workflow_request_for_run(tenant, run, project=project)
+        workflow_request = _workflow_request_for_run(
+            tenant,
+            run,
+            project=project,
+            effective_policy=effective_policy,
+        )
     except (PermissionError, ValueError) as exc:
         return fail_guardrail_violation(session, run=run, error=str(exc))
 
