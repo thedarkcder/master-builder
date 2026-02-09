@@ -23,7 +23,7 @@ export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
-export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.1
+export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.5
 export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
 export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
 export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
@@ -235,7 +235,7 @@ Default local package service credentials:
 
 Examples:
 - Install from local package service:
-  - `pip install --extra-index-url "http://tenant:change-me@localhost:4401/simple/" master-builder-codex-assets==0.1.1`
+- `pip install --extra-index-url "http://tenant:change-me@localhost:4401/simple/" master-builder-codex-assets==0.1.5`
 - Upload with twine:
   - `python -m twine upload --repository-url "http://localhost:4401/" -u tenant -p change-me dist/codex-assets/*`
 
