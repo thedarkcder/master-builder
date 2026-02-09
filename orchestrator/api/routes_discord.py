@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.discord_command_dispatcher import dispatch_simple_discord_command
+from orchestrator.api.discord_command_bug_gap import dispatch_bug_gap_command
 from orchestrator.api.discord_command_issues import dispatch_issues_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
@@ -1526,62 +1527,19 @@ def execute_discord_command(
     if ask_response is not None:
         return ask_response
 
-    if command_name == "gap":
-        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
-        issue_key_param = str(command_params.get("issue_key") or "").strip().upper()
-        issue_key_arg = arguments[0].strip().upper() if arguments else ""
-        issue_key = issue_key_param or issue_key_arg
-        if not issue_key:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !gap <ISSUE_KEY>")
-        message, data = _run_gap_analysis(
-            session=session,
-            tenant=tenant,
-            issue_key=issue_key,
-        )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=message,
-            data=data,
-        )
-
-    if command_name == "bug":
-        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
-        summary = str(command_params.get("summary") or "").strip()
-        details = str(command_params.get("details") or "").strip()
-        related_issue_key_raw = str(command_params.get("issue_key") or "").strip().upper()
-        related_issue_key = related_issue_key_raw if ISSUE_KEY_PATTERN.match(related_issue_key_raw) else None
-        if not summary:
-            raw_body = " ".join(arguments).strip()
-            if " -- " in raw_body:
-                summary, details_tail = raw_body.split(" -- ", 1)
-                summary = summary.strip()
-                if not details:
-                    details = details_tail.strip()
-            else:
-                summary = raw_body
-        if not summary:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !bug <summary> [-- details]",
-            )
-        attachments = _normalize_discord_attachments(payload.attachments)
-        message, data = _create_discord_bug_issue(
-            session=session,
-            tenant=tenant,
-            summary=summary,
-            details=details,
-            reporter_user_id=payload.user_id.strip(),
-            channel_id=payload.channel_id,
-            related_issue_key=related_issue_key,
-            attachments=attachments,
-        )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=message,
-            data=data,
-        )
+    bug_gap_response = dispatch_bug_gap_command(
+        session=session,
+        tenant=tenant,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+        issue_key_pattern=ISSUE_KEY_PATTERN,
+        run_gap_analysis=_run_gap_analysis,
+        normalize_discord_attachments=_normalize_discord_attachments,
+        create_discord_bug_issue=_create_discord_bug_issue,
+    )
+    if bug_gap_response is not None:
+        return bug_gap_response
 
     issues_response = dispatch_issues_command(
         session=session,
