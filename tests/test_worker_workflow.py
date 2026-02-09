@@ -241,6 +241,22 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertTrue(processed.plan["decision_gate"]["triggered"])
             stage_updates = processed.plan["stage_updates"]
             self.assertEqual([entry["stage"] for entry in stage_updates], ["decision_gate_required"])
+            retry_enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-worker",
+                project_id=None,
+                issue_key="TP-302",
+                issue_summary="Clarified requirements",
+                issue_description=(
+                    "Objective: deliver requested behavior. "
+                    "Scope: explicit in/out scope. "
+                    "Acceptance Criteria: measurable checks. "
+                    "How to test: exact commands and expected outcomes. "
+                    "NFR intent: MVP."
+                ),
+                repo_url="https://github.com/example/repo",
+            )
+            self.assertTrue(retry_enqueue.enqueued)
 
     def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
         with self.session_factory() as session:

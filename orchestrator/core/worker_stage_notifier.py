@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,7 @@ class RunStageNotifier:
         tenant: Tenant,
         run: Run,
         settings: Any,
+        project: Project | None,
         send_discord_message: Callable[..., Any],
         send_jira_message: Callable[..., None],
     ) -> None:
@@ -26,6 +27,7 @@ class RunStageNotifier:
         self._tenant = tenant
         self._run = run
         self._settings = settings
+        self._project = project
         self._send_discord_message = send_discord_message
         self._send_jira_message = send_jira_message
         self.stage_updates: list[dict[str, str]] = []
@@ -35,6 +37,7 @@ class RunStageNotifier:
         send_result = self._send_discord_message(
             session=self._session,
             tenant=self._tenant,
+            project=self._project,
             message=stage_update["discord_message"],
             settings=self._settings,
             event=stage_update["stage"],
