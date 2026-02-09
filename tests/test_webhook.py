@@ -484,12 +484,16 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertTrue(response.json()["accepted"])
+        self.assertFalse(response.json()["accepted"])
         self.assertEqual(response.json()["tenant_id"], "tenant-webhook")
-        self.assertEqual(response.json()["reason"], "accepted_no_handler")
+        self.assertEqual(response.json()["reason"], "missing_pr_context")
 
     def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(self) -> None:
-        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = self.github_webhook_secret_env
+        self.client.put(
+            "/api/admin/secrets/GITHUB_WEBHOOK_SECRET",
+            json={"value": self.github_webhook_secret_value},
+            auth=("admin", "secret"),
+        )
         payload = {
             "action": "opened",
             "installation": {"id": 12345},
@@ -510,7 +514,11 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_github_webhook_accepts_valid_signature_when_global_secret_configured(self) -> None:
-        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = self.github_webhook_secret_env
+        self.client.put(
+            "/api/admin/secrets/GITHUB_WEBHOOK_SECRET",
+            json={"value": self.github_webhook_secret_value},
+            auth=("admin", "secret"),
+        )
         payload = {
             "action": "opened",
             "installation": {"id": 12345},
@@ -530,8 +538,8 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertTrue(response.json()["accepted"])
-        self.assertEqual(response.json()["reason"], "accepted_no_handler")
+        self.assertFalse(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "missing_pr_context")
 
     def test_github_webhook_enforces_payload_size_limit(self) -> None:
         os.environ["ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES"] = "20"
@@ -568,9 +576,8 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertTrue(response.json()["enqueued"])
 
     def test_github_webhook_uses_managed_global_secret_ref(self) -> None:
-        os.environ["ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF"] = "secret/github-global-webhook"
         self.client.put(
-            "/api/admin/secrets/secret%2Fgithub-global-webhook",
+            "/api/admin/secrets/GITHUB_WEBHOOK_SECRET",
             json={"value": "managed-global-secret"},
             auth=("admin", "secret"),
         )
@@ -593,7 +600,8 @@ class JiraWebhookTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertTrue(response.json()["accepted"])
+        self.assertFalse(response.json()["accepted"])
+        self.assertEqual(response.json()["reason"], "missing_pr_context")
 
     def test_discord_interaction_commands_are_deferred_and_processed_async(self) -> None:
         payload = {
