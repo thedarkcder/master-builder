@@ -22,7 +22,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (ready && credentials) {
-      router.replace("/tenants");
+      router.replace("/dashboard");
     }
   }, [credentials, ready, router]);
 
@@ -37,7 +37,7 @@ export default function LoginPage() {
         username: username.trim(),
         password
       });
-      router.push("/tenants");
+      router.push("/dashboard");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid admin credentials";
       setErrorMessage(message);

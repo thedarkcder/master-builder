@@ -24,6 +24,14 @@ type TenantFormProps = {
   submitting?: boolean;
   repositoryOptions?: GitHubRepositoryRecord[];
   repositoriesLoading?: boolean;
+  visibleSections?: {
+    identity?: boolean;
+    jira?: boolean;
+    github?: boolean;
+    repository?: boolean;
+    policy?: boolean;
+    discord?: boolean;
+  };
 } & (
   | {
       mode: "create";
@@ -43,7 +51,8 @@ export function TenantForm({
   onSubmit,
   submitting = false,
   repositoryOptions = [],
-  repositoriesLoading = false
+  repositoriesLoading = false,
+  visibleSections
 }: TenantFormProps) {
   const [values, setValues] = useState<TenantFormValues>(initialValues ?? defaultTenantFormValues());
   const [error, setError] = useState("");
@@ -56,6 +65,14 @@ export function TenantForm({
   }, [initialValues]);
 
   const submitLabel = mode === "create" ? "Create Tenant" : "Save Tenant";
+  const sections = {
+    identity: visibleSections?.identity ?? true,
+    jira: visibleSections?.jira ?? true,
+    github: visibleSections?.github ?? true,
+    repository: visibleSections?.repository ?? true,
+    policy: visibleSections?.policy ?? true,
+    discord: visibleSections?.discord ?? true
+  };
 
   function toggleDiscordNotifyEvent(eventValue: string, enabled: boolean): void {
     setValues((prev) => {
@@ -69,23 +86,23 @@ export function TenantForm({
   }
 
   const validation = useMemo(() => {
-    if (!values.name.trim()) {
+    if (sections.identity && !values.name.trim()) {
       return "Tenant name is required.";
     }
-    if (!values.jira.connection_id?.trim()) {
+    if (sections.jira && !values.jira.connection_id?.trim()) {
       return "Connect Jira before saving.";
     }
-    if (!textFields.projectKeysText.trim()) {
+    if (sections.jira && !textFields.projectKeysText.trim()) {
       return "At least one Jira project key is required.";
     }
-    if (!textFields.readyStatusesText.trim()) {
+    if (sections.jira && !textFields.readyStatusesText.trim()) {
       return "At least one ready status is required.";
     }
-    if (!textFields.githubRepositoryText.trim()) {
+    if (sections.repository && !textFields.githubRepositoryText.trim()) {
       return "Repository selection is required.";
     }
     return "";
-  }, [textFields.githubRepositoryText, textFields.projectKeysText, textFields.readyStatusesText, values]);
+  }, [sections.identity, sections.jira, sections.repository, textFields.githubRepositoryText, textFields.projectKeysText, textFields.readyStatusesText, values]);
 
   async function handleSubmit(): Promise<void> {
     if (validation) {
@@ -106,45 +123,57 @@ export function TenantForm({
     <div className="space-y-4">
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
-      <IdentitySection
-        tenantId={values.tenantId}
-        name={values.name}
-        enabled={values.isEnabled}
-        onNameChange={(name) => setValues((prev) => ({ ...prev, name }))}
-        onEnabledChange={(enabled) => setValues((prev) => ({ ...prev, isEnabled: enabled }))}
-      />
+      {sections.identity ? (
+        <IdentitySection
+          tenantId={values.tenantId}
+          name={values.name}
+          enabled={values.isEnabled}
+          onNameChange={(name) => setValues((prev) => ({ ...prev, name }))}
+          onEnabledChange={(enabled) => setValues((prev) => ({ ...prev, isEnabled: enabled }))}
+        />
+      ) : null}
 
-      <JiraSection
-        jira={values.jira}
-        projectKeysText={textFields.projectKeysText}
-        readyStatusesText={textFields.readyStatusesText}
-        onJiraChange={(jira) => setValues((prev) => ({ ...prev, jira }))}
-        onProjectKeysTextChange={(value) => setTextFields((prev) => ({ ...prev, projectKeysText: value }))}
-        onReadyStatusesTextChange={(value) => setTextFields((prev) => ({ ...prev, readyStatusesText: value }))}
-      />
+      {sections.jira ? (
+        <JiraSection
+          jira={values.jira}
+          projectKeysText={textFields.projectKeysText}
+          readyStatusesText={textFields.readyStatusesText}
+          onJiraChange={(jira) => setValues((prev) => ({ ...prev, jira }))}
+          onProjectKeysTextChange={(value) => setTextFields((prev) => ({ ...prev, projectKeysText: value }))}
+          onReadyStatusesTextChange={(value) => setTextFields((prev) => ({ ...prev, readyStatusesText: value }))}
+        />
+      ) : null}
 
-      <GitHubSection github={values.github} onGitHubChange={(github) => setValues((prev) => ({ ...prev, github }))} />
+      {sections.github ? (
+        <GitHubSection github={values.github} onGitHubChange={(github) => setValues((prev) => ({ ...prev, github }))} />
+      ) : null}
 
-      <RepositoryMappingSection
-        githubRepositoryText={textFields.githubRepositoryText}
-        repositoryOptions={repositoryOptions}
-        repositoriesLoading={repositoriesLoading}
-        onGithubRepositoryTextChange={(value) => setTextFields((prev) => ({ ...prev, githubRepositoryText: value }))}
-      />
+      {sections.repository ? (
+        <RepositoryMappingSection
+          githubRepositoryText={textFields.githubRepositoryText}
+          repositoryOptions={repositoryOptions}
+          repositoriesLoading={repositoriesLoading}
+          onGithubRepositoryTextChange={(value) => setTextFields((prev) => ({ ...prev, githubRepositoryText: value }))}
+        />
+      ) : null}
 
-      <PolicySection
-        policy={values.policy}
-        policyAllowedCommandsText={textFields.policyAllowedCommandsText}
-        onPolicyChange={(policy) => setValues((prev) => ({ ...prev, policy }))}
-        onPolicyAllowedCommandsTextChange={(value) => setTextFields((prev) => ({ ...prev, policyAllowedCommandsText: value }))}
-      />
+      {sections.policy ? (
+        <PolicySection
+          policy={values.policy}
+          policyAllowedCommandsText={textFields.policyAllowedCommandsText}
+          onPolicyChange={(policy) => setValues((prev) => ({ ...prev, policy }))}
+          onPolicyAllowedCommandsTextChange={(value) => setTextFields((prev) => ({ ...prev, policyAllowedCommandsText: value }))}
+        />
+      ) : null}
 
-      <DiscordSection
-        discordEnabled={values.discordEnabled}
-        notifyEvents={values.discord.notify_events}
-        onDiscordEnabledChange={(enabled) => setValues((prev) => ({ ...prev, discordEnabled: enabled }))}
-        onToggleDiscordNotifyEvent={toggleDiscordNotifyEvent}
-      />
+      {sections.discord ? (
+        <DiscordSection
+          discordEnabled={values.discordEnabled}
+          notifyEvents={values.discord.notify_events}
+          onDiscordEnabledChange={(enabled) => setValues((prev) => ({ ...prev, discordEnabled: enabled }))}
+          onToggleDiscordNotifyEvent={toggleDiscordNotifyEvent}
+        />
+      ) : null}
 
       <div className="flex justify-end">
         <Button onClick={handleSubmit} disabled={submitting}>
