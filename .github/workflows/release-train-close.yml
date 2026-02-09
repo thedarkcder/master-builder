@@ -175,6 +175,12 @@ jobs:
             release_range="${previous_release_tag}..origin/main"
           fi
 
+          release_commit_count="$(git rev-list --count "${release_range}")"
+          if [ "${release_commit_count}" = "0" ]; then
+            echo "No commits found in release range (${release_range}); skipping GitHub release creation."
+            exit 0
+          fi
+
           mapfile -t release_commit_subjects < <(git log --first-parent --pretty=format:'%s' "${release_range}" | sed '/^[[:space:]]*$/d')
 
           release_notes_file="$(mktemp)"
