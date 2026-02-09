@@ -167,9 +167,27 @@ jobs:
             exit 0
           fi
 
+          previous_release_tag="$(git tag --list 'v*.*.*' --sort=-v:refname | awk -v current="${RELEASE_VERSION}" '$0 != current { print; exit }')"
+
+          release_notes_file="$(mktemp)"
+          {
+            echo "## What's Changed"
+            if [ -n "${previous_release_tag}" ]; then
+              git log --first-parent --pretty=format:'- %s' "${previous_release_tag}..main"
+            else
+              git log --first-parent --pretty=format:'- %s' main
+            fi
+            echo
+            if [ -n "${previous_release_tag}" ]; then
+              echo "Full Changelog: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_release_tag}...${RELEASE_VERSION}"
+            else
+              echo "Full Changelog: https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_VERSION}"
+            fi
+          } > "${release_notes_file}"
+
           gh release create "${RELEASE_VERSION}" \
             --target main \
-            --generate-notes \
+            --notes-file "${release_notes_file}" \
             --latest
 
       - name: Ensure Jira release exists
