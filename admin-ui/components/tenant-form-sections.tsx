@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Loader2, RefreshCw } from "lucide-react";
 
 import type { GitHubRepositoryRecord } from "@/lib/api";
 import type { TenantFormValues } from "@/lib/tenant-form";
@@ -205,33 +206,49 @@ type RepositoryMappingSectionProps = {
   repositoryOptions: GitHubRepositoryRecord[];
   repositoriesLoading: boolean;
   onGithubRepositoryTextChange: (value: string) => void;
+  onRefreshRepositoryOptions?: () => void;
 };
 
 export function RepositoryMappingSection({
   githubRepositoryText,
   repositoryOptions,
   repositoriesLoading,
-  onGithubRepositoryTextChange
+  onGithubRepositoryTextChange,
+  onRefreshRepositoryOptions
 }: RepositoryMappingSectionProps) {
   return (
     <SectionFrame title="Repository Mapping" description="Define the target repository.">
       <div className="space-y-2">
         <FieldLabel>Repository</FieldLabel>
-        <select
-          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-          value={githubRepositoryText}
-          onChange={(event) => onGithubRepositoryTextChange(event.target.value)}
-          disabled={repositoriesLoading || repositoryOptions.length === 0}
-        >
-          <option value="">
-            {repositoriesLoading ? "Loading repositories..." : repositoryOptions.length === 0 ? "No repositories available" : "Select repository"}
-          </option>
-          {repositoryOptions.map((repo) => (
-            <option key={repo.html_url} value={repo.html_url}>
-              {repo.full_name}
+        <div className="flex items-center gap-2">
+          <select
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            value={githubRepositoryText}
+            onChange={(event) => onGithubRepositoryTextChange(event.target.value)}
+            disabled={repositoriesLoading || repositoryOptions.length === 0}
+          >
+            <option value="">
+              {repositoriesLoading ? "Loading repositories..." : repositoryOptions.length === 0 ? "No repositories available" : "Select repository"}
             </option>
-          ))}
-        </select>
+            {repositoryOptions.map((repo) => (
+              <option key={repo.html_url} value={repo.html_url}>
+                {repo.full_name}
+              </option>
+            ))}
+          </select>
+          {onRefreshRepositoryOptions ? (
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-input bg-background text-muted-foreground hover:bg-muted disabled:opacity-50"
+              onClick={onRefreshRepositoryOptions}
+              disabled={repositoriesLoading}
+              aria-label="Refresh repositories"
+              title="Refresh repositories"
+            >
+              {repositoriesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            </button>
+          ) : null}
+        </div>
       </div>
     </SectionFrame>
   );
