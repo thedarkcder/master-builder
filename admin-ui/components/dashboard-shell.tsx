@@ -13,8 +13,7 @@ import {
   PlugZap,
   Settings2,
   ShieldCheck,
-  MessageSquare,
-  Webhook
+  MessageSquare
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -101,12 +100,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           label: "Configuration",
           icon: Settings2,
           matchPrefix: `/tenants/${tenantId}/edit/config`
-        },
-        {
-          href: `/tenants/${tenantId}/edit/webhooks`,
-          label: "Webhooks",
-          icon: Webhook,
-          matchPrefix: `/tenants/${tenantId}/edit/webhooks`
         },
         {
           href: `/tenants/${tenantId}/edit/access`,

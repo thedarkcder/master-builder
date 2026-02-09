@@ -35,7 +35,7 @@ import {
 import { recordToFormValues } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
-type TenantEditSection = "setup" | "integrations" | "jira" | "github" | "discord" | "health" | "config" | "webhooks" | "access";
+type TenantEditSection = "setup" | "integrations" | "jira" | "github" | "discord" | "health" | "config" | "access";
 
 export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const params = useParams<{ tenantId: string }>();
@@ -370,7 +370,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <Card>
           <CardHeader>
             <CardTitle>Jira Integration</CardTitle>
-            <CardDescription>Connect and manage Jira access for this tenant.</CardDescription>
+            <CardDescription>Connect and manage Jira access and webhook lifecycle for this tenant.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <p>
@@ -387,6 +387,41 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               <Button variant="outline" disabled={jiraWebhookBusy} onClick={() => void handleDisconnectJira()}>
                 Disconnect Jira
               </Button>
+            </div>
+            <div className="space-y-2 rounded-md border p-3">
+              <p className="font-medium">Webhook Lifecycle</p>
+              <p>
+                <strong>Webhook URL:</strong> {jiraWebhook?.webhook_url ?? "Loading..."}
+              </p>
+              <p>
+                <strong>Managed webhook IDs:</strong>{" "}
+                {jiraWebhook?.managed_webhook_ids.length ? jiraWebhook.managed_webhook_ids.join(", ") : "-"}
+              </p>
+              <p>
+                <strong>Last received:</strong> {jiraWebhook?.last_received_at ?? "-"}
+              </p>
+              <p>
+                <strong>Last issue key:</strong> {jiraWebhook?.last_issue_key ?? "-"}
+              </p>
+              <p>
+                <strong>Recent delivery:</strong>{" "}
+                {jiraWebhook
+                  ? jiraWebhook.recent_delivery_ok
+                    ? `ok (within ${jiraWebhook.recent_delivery_window_minutes}m)`
+                    : `none within ${jiraWebhook.recent_delivery_window_minutes}m`
+                  : "-"}
+              </p>
+              <p>
+                <strong>Last error:</strong> {jiraWebhook?.last_error ?? "-"}
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button variant="secondary" disabled={jiraWebhookBusy} onClick={() => void handleProvisionJiraWebhook()}>
+                  Provision Webhook
+                </Button>
+                <Button variant="secondary" disabled={jiraWebhookBusy} onClick={() => void handleResetJiraWebhook()}>
+                  Reset Webhook
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -477,57 +512,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 discord: false
               }}
             />
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {section === "webhooks" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Jira Webhook Lifecycle</CardTitle>
-            <CardDescription>Provision, reset, and diagnose tenant Jira webhook delivery.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <p>
-              <strong>Webhook URL:</strong> {jiraWebhook?.webhook_url ?? "Loading..."}
-            </p>
-            <p>
-              <strong>Connected:</strong> {jiraWebhook?.connected ? "yes" : "no"}
-            </p>
-            <p>
-              <strong>Managed webhook IDs:</strong> {jiraWebhook?.managed_webhook_ids.length ? jiraWebhook.managed_webhook_ids.join(", ") : "-"}
-            </p>
-            <p>
-              <strong>Last provisioned:</strong> {jiraWebhook?.last_provisioned_at ?? "-"}
-            </p>
-            <p>
-              <strong>Last received:</strong> {jiraWebhook?.last_received_at ?? "-"}
-            </p>
-            <p>
-              <strong>Last issue key:</strong> {jiraWebhook?.last_issue_key ?? "-"}
-            </p>
-            <p>
-              <strong>Recent delivery:</strong>{" "}
-              {jiraWebhook
-                ? jiraWebhook.recent_delivery_ok
-                  ? `ok (within ${jiraWebhook.recent_delivery_window_minutes}m)`
-                  : `none within ${jiraWebhook.recent_delivery_window_minutes}m`
-                : "-"}
-            </p>
-            <p>
-              <strong>Last error:</strong> {jiraWebhook?.last_error ?? "-"}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="secondary" disabled={jiraWebhookBusy} onClick={() => void handleProvisionJiraWebhook()}>
-                Provision Webhook
-              </Button>
-              <Button variant="secondary" disabled={jiraWebhookBusy} onClick={() => void handleResetJiraWebhook()}>
-                Reset Webhook
-              </Button>
-              <Button variant="outline" disabled={jiraWebhookBusy} onClick={() => void handleDisconnectJira()}>
-                Disconnect Jira
-              </Button>
-            </div>
           </CardContent>
         </Card>
       ) : null}
