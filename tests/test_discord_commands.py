@@ -263,10 +263,10 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
             ),
             patch(
-                "orchestrator.api.routes_discord.build_codex_runtime",
+                "orchestrator.api.discord_command_ask.build_codex_runtime",
             ),
             patch(
-                "orchestrator.api.routes_discord.plan_discord_ask_intent_with_codex",
+                "orchestrator.api.discord_command_ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "command", "summary": "Queue the issue run now", "command": "!run TP-20"},
             ),
         ):
