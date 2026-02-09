@@ -46,7 +46,7 @@ class DiscordNotificationTests(unittest.TestCase):
     def test_event_enabled_sends_message(self) -> None:
         fake_client = Mock()
         with (
-            patch("orchestrator.core.discord_notifications.resolve_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord_notifications.resolve_scoped_secret_ref", return_value="bot-token"),
             patch("orchestrator.core.discord_notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(

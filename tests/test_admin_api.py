@@ -35,7 +35,7 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 
         os.environ["GITHUB_APP_ID"] = "12345"
-        os.environ["GITHUB_CLIENT_SECRET"] = "not-a-real-key-for-tests"
+        os.environ["GITHUB_APP_PRIVATE_KEY"] = "not-a-real-key-for-tests"
         os.environ["JIRA_OAUTH_CLIENT_ID"] = "jira-client-id"
         os.environ["JIRA_OAUTH_CLIENT_SECRET"] = "jira-client-secret"
 
@@ -57,7 +57,7 @@ class AdminApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         os.environ.pop("GITHUB_APP_ID", None)
-        os.environ.pop("GITHUB_CLIENT_SECRET", None)
+        os.environ.pop("GITHUB_APP_PRIVATE_KEY", None)
         os.environ.pop("JIRA_OAUTH_CLIENT_ID", None)
         os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
 
@@ -396,12 +396,16 @@ class AdminApiTests(unittest.TestCase):
                 "name": "mobile-app",
                 "github_repository": "https://github.com/example/mobile-app",
                 "jira_project_key": "MBAPP",
+                "environment": {"APP_ENV": "prod"},
+                "secret_refs": {"API_TOKEN": "RUNNER_TOKEN"},
             },
             auth=("admin", "secret"),
         )
         self.assertEqual(create_project.status_code, 201)
         project_id = create_project.json()["project_id"]
         self.assertEqual(create_project.json()["jira_project_key"], "MBAPP")
+        self.assertEqual(create_project.json()["environment"], {"APP_ENV": "prod"})
+        self.assertEqual(create_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN"})
 
         duplicate_repo = self.client.post(
             "/api/admin/tenants/tenant-a/projects",
@@ -424,12 +428,64 @@ class AdminApiTests(unittest.TestCase):
                 "name": "mobile-app-renamed",
                 "github_repository": "https://github.com/example/mobile-app-renamed",
                 "jira_project_key": "MBAPP",
+                "environment": {"APP_ENV": "stage"},
+                "secret_refs": {"API_TOKEN": "RUNNER_TOKEN_NEXT"},
                 "is_archived": True,
             },
             auth=("admin", "secret"),
         )
         self.assertEqual(update_project.status_code, 200)
         self.assertTrue(update_project.json()["is_archived"])
+        self.assertEqual(update_project.json()["environment"], {"APP_ENV": "stage"})
+        self.assertEqual(update_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN_NEXT"})
+
+    def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = "12345"
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        self.client.put(
+            "/api/admin/secrets/platform/GITHUB_APP_ID",
+            json={"value": "platform-app-id"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/secrets/platform/GITHUB_APP_PRIVATE_KEY",
+            json={"value": "platform-private-key"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/secrets/tenant/tenant-a/GITHUB_APP_ID",
+            json={"value": "tenant-app-id"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/secrets/tenant/tenant-a/GITHUB_APP_PRIVATE_KEY",
+            json={"value": "tenant-private-key"},
+            auth=("admin", "secret"),
+        )
+
+        captured: dict[str, str | None] = {}
+
+        def _fake_factory(config: dict, *, secret_lookup):  # noqa: ANN001
+            captured["app_id"] = secret_lookup(config["app_id_ref"])
+            captured["private_key"] = secret_lookup(config["private_key_ref"])
+            return object()
+
+        with patch("orchestrator.api.routes_admin.github_client_from_tenant_config", side_effect=_fake_factory):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/test-github",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["app_id"], "tenant-app-id")
+        self.assertEqual(captured["private_key"], "tenant-private-key")
 
     def test_delete_tenant(self) -> None:
         payload = self._tenant_payload()
@@ -450,7 +506,31 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(len(list_response.json()), 0)
 
-    def test_create_tenant_validates_required_project_keys(self) -> None:
+    def test_archive_and_unarchive_tenant(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self.assertTrue(create_response.json()["is_enabled"])
+
+        archive_response = self.client.post(
+            "/api/admin/tenants/tenant-a/archive",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        self.assertFalse(archive_response.json()["is_enabled"])
+
+        unarchive_response = self.client.post(
+            "/api/admin/tenants/tenant-a/unarchive",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(unarchive_response.status_code, 200)
+        self.assertTrue(unarchive_response.json()["is_enabled"])
+
+    def test_create_tenant_allows_empty_project_keys(self) -> None:
         payload = self._tenant_payload()
         payload["jira"]["project_keys"] = []
 
@@ -459,7 +539,41 @@ class AdminApiTests(unittest.TestCase):
             json=payload,
             auth=("admin", "secret"),
         )
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["jira"]["project_keys"], [])
+
+    def test_archiving_last_active_project_clears_tenant_project_keys(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        projects = projects_response.json()
+        self.assertEqual(len(projects), 1)
+        project = projects[0]
+
+        archive_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project['project_id']}",
+            json={
+                "name": project["name"],
+                "github_repository": project["github_repository"],
+                "jira_project_key": project["jira_project_key"],
+                "policy_overrides": project.get("policy_overrides", {}),
+                "is_archived": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        self.assertTrue(archive_response.json()["is_archived"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["jira"]["project_keys"], [])
 
     def test_create_tenant_allows_missing_repository_during_onboarding(self) -> None:
         payload = self._tenant_payload()
