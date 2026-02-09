@@ -139,11 +139,13 @@ def bootstrap_codex_assets(
     source_policy = source_repo / ".codex" / "POLICY.md"
     source_engineering = source_repo / ".codex" / "ENGINEERING_STANDARDS.md"
     source_decision_gate = source_repo / ".codex" / "DECISION_GATE_TEMPLATE.md"
+    source_pr_ready = source_repo / ".codex" / "PR_READY_TEMPLATES.md"
     if (
         not source_operating.exists()
         or not source_policy.exists()
         or not source_engineering.exists()
         or not source_decision_gate.exists()
+        or not source_pr_ready.exists()
     ):
         raise FileNotFoundError("Canonical .codex templates are missing required baseline docs")
 
@@ -158,6 +160,7 @@ def bootstrap_codex_assets(
         ".codex/POLICY.md": source_policy.read_text(encoding="utf-8"),
         ".codex/ENGINEERING_STANDARDS.md": source_engineering.read_text(encoding="utf-8"),
         ".codex/DECISION_GATE_TEMPLATE.md": source_decision_gate.read_text(encoding="utf-8"),
+        ".codex/PR_READY_TEMPLATES.md": source_pr_ready.read_text(encoding="utf-8"),
     }
     for skill_filename, skill_content in SKILL_TEMPLATES.items():
         mapping[f".codex/skills/{skill_filename}"] = skill_content
