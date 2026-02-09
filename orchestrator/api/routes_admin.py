@@ -63,6 +63,7 @@ JIRA_WEBHOOK_EVENTS = [
     "comment_updated",
 ]
 DISCORD_INTERNAL_CONFIG_KEYS = {
+    "allowed_user_ids",
     "allowlist_requests",
     "pending_ask_actions",
     "ask_history",
@@ -1687,7 +1688,10 @@ def update_project(
     project.policy_overrides = normalize_project_policy_overrides(payload.policy_overrides)
     project.environment = _normalize_string_map(payload.environment)
     project.secret_refs = _normalize_string_map(payload.secret_refs)
-    normalized_discord = _normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
+    normalized_discord = _with_preserved_discord_system_fields(
+        existing=dict(project.discord_config or {}),
+        proposed=_normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None),
+    )
     if payload.discord is not None:
         settings = get_settings()
         try:

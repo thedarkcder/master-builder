@@ -53,8 +53,9 @@ def send_tenant_discord_message(
     if not _event_enabled_for_project(project=project, event=event):
         return DiscordSendResult(sent=False, reason=f"event_disabled:{event or 'unknown'}")
 
-    discord_config = tenant.discord_config or {}
-    channel_id = str(discord_config.get("channel_id") or "").strip()
+    project_discord_config = project.discord_config or {} if project is not None else {}
+    tenant_discord_config = tenant.discord_config or {}
+    channel_id = str(project_discord_config.get("channel_id") or tenant_discord_config.get("channel_id") or "").strip()
     if not channel_id:
         return DiscordSendResult(sent=False, reason="channel_not_configured")
 

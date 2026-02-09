@@ -478,6 +478,65 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.json()["discord"]["channel_id"], "discord-channel-proj-1")
         provision_mock.assert_called_once()
 
+    def test_update_project_preserves_discord_allowlist_fields(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        default_project = projects_response.json()[0]
+        project_id = default_project["project_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            project.discord_config = {
+                "channel_id": "discord-channel-proj-1",
+                "notify_events": ["run_started"],
+                "allowed_user_ids": ["discord-user-1"],
+                "allowlist_requests": [
+                    {
+                        "project_id": project_id,
+                        "user_id": "discord-user-2",
+                        "requested_at": "2026-02-09T12:00:00Z",
+                    }
+                ],
+            }
+            session.add(project)
+            session.commit()
+
+        with patch(
+            "orchestrator.api.routes_admin._resolve_project_discord_channel_binding",
+            side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
+        ):
+            response = self.client.put(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+                json={
+                    "name": default_project["name"],
+                    "github_repository": default_project["github_repository"],
+                    "jira_project_key": default_project["jira_project_key"],
+                    "discord": {"notify_events": ["run_failed"]},
+                    "is_archived": False,
+                },
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["discord"]["notify_events"], ["run_failed"])
+
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            discord_config = dict(project.discord_config or {})
+            self.assertEqual(discord_config.get("allowed_user_ids"), ["discord-user-1"])
+            self.assertEqual(len(discord_config.get("allowlist_requests", [])), 1)
+
     def test_project_discord_channel_name_template_appends_project_when_template_not_project_scoped(self) -> None:
         now = datetime.now(timezone.utc)
         tenant = Tenant(

@@ -9,7 +9,7 @@ from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.storage.models import Project, Tenant
 
 
-def _tenant(*, notify_events: list[str]) -> Tenant:
+def _tenant(*, notify_events: list[str], channel_id: str = "discord-channel-1") -> Tenant:
     now = datetime.now(timezone.utc)
     return Tenant(
         tenant_id="tenant-discord-test",
@@ -19,16 +19,13 @@ def _tenant(*, notify_events: list[str]) -> Tenant:
         github_config={},
         repos_config={},
         policy_config={},
-        discord_config={
-            "channel_id": "discord-channel-1",
-            "notify_events": notify_events,
-        },
+        discord_config={"channel_id": channel_id, "notify_events": notify_events},
         created_at=now,
         updated_at=now,
     )
 
 
-def _project(*, notify_events: list[str]) -> Project:
+def _project(*, notify_events: list[str], channel_id: str | None = None) -> Project:
     now = datetime.now(timezone.utc)
     return Project(
         project_id="project-discord-test",
@@ -39,9 +36,7 @@ def _project(*, notify_events: list[str]) -> Project:
         policy_overrides={},
         environment={},
         secret_refs={},
-        discord_config={
-            "notify_events": notify_events,
-        },
+        discord_config={**({"channel_id": channel_id} if channel_id is not None else {}), "notify_events": notify_events},
         is_archived=False,
         created_at=now,
         updated_at=now,
@@ -85,6 +80,48 @@ class DiscordNotificationTests(unittest.TestCase):
         self.assertTrue(result.sent)
         self.assertEqual(result.reason, "sent")
         fake_client.post_message.assert_called_once_with(channel_id="discord-channel-1", content="hello")
+
+    def test_project_channel_is_used_when_configured(self) -> None:
+        fake_client = Mock()
+        fake_client.post_message.return_value = {"id": "msg-123"}
+        with (
+            patch("orchestrator.core.discord_notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord_notifications.DiscordApiClient", return_value=fake_client),
+        ):
+            result = send_tenant_discord_message(
+                session=None,  # type: ignore[arg-type]
+                tenant=_tenant(notify_events=["review_signal"], channel_id="tenant-channel"),
+                project=_project(notify_events=["review_signal"], channel_id="project-channel"),
+                message="hello",
+                settings=Settings(
+                    discord_bot_token_secret_ref="DISCORD_BOT_TOKEN",
+                    secrets_encryption_key="test-key",
+                ),
+                event="review_signal",
+            )
+        self.assertTrue(result.sent)
+        fake_client.post_message.assert_called_once_with(channel_id="project-channel", content="hello")
+
+    def test_tenant_channel_is_used_when_project_channel_missing(self) -> None:
+        fake_client = Mock()
+        fake_client.post_message.return_value = {"id": "msg-123"}
+        with (
+            patch("orchestrator.core.discord_notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord_notifications.DiscordApiClient", return_value=fake_client),
+        ):
+            result = send_tenant_discord_message(
+                session=None,  # type: ignore[arg-type]
+                tenant=_tenant(notify_events=["review_signal"], channel_id="tenant-channel"),
+                project=_project(notify_events=["review_signal"]),
+                message="hello",
+                settings=Settings(
+                    discord_bot_token_secret_ref="DISCORD_BOT_TOKEN",
+                    secrets_encryption_key="test-key",
+                ),
+                event="review_signal",
+            )
+        self.assertTrue(result.sent)
+        fake_client.post_message.assert_called_once_with(channel_id="tenant-channel", content="hello")
 
     def test_event_enabled_can_open_thread(self) -> None:
         fake_client = Mock()
