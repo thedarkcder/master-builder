@@ -5,7 +5,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
-from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
@@ -354,16 +353,17 @@ class DiscordCommandApiTests(unittest.TestCase):
                 }
             ]
             tenant.discord_config = discord_config
+            jira_config = dict(tenant.jira_config or {})
+            jira_config["connection_id"] = "connection-for-prune-test"
+            tenant.jira_config = jira_config
             session.commit()
 
+        collect_calls: list[str | None] = []
+
         def _collect_stub(*, scoped_issue_key, **_kwargs):  # type: ignore[no-untyped-def]
-            if scoped_issue_key == "TP-404":
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Issue TP-404 was not found for this tenant",
-                )
+            collect_calls.append(scoped_issue_key)
             return (
-                None,
+                scoped_issue_key.strip().upper() if isinstance(scoped_issue_key, str) and scoped_issue_key.strip() else None,
                 None,
                 [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
                 {"To Do": 1},
@@ -371,6 +371,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
+            patch("orchestrator.api.routes_discord._existing_issue_keys_for_tenant", return_value=set()),
             patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
             patch("orchestrator.api.routes_discord.build_codex_runtime"),
             patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer"),
@@ -387,6 +388,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         self.assertTrue(response.ok)
         self.assertEqual(response.message, "Board answer")
+        self.assertEqual(collect_calls, [None])
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
