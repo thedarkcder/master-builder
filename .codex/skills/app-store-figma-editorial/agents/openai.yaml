@@ -1,0 +1,4 @@
+interface:
+  display_name: "Store Figma Editorial"
+  short_description: "Design cinematic store slides from real screenshots."
+  default_prompt: "Compose Figma slides using real app screenshots with editorial hierarchy and compliant messaging overlays."

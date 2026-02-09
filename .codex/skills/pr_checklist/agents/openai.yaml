@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Checklist"
+  short_description: "Validate scope, tests, docs, and release readiness."
+  default_prompt: "Use $pr_checklist to verify scope, tests, documentation, and decision-gate readiness before opening a PR."
