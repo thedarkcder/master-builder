@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { TenantEditPage } from "@/components/tenant-edit-page";
 
-const ALLOWED = ["setup", "integrations", "jira", "github", "discord", "health", "config", "webhooks", "access", "notifications"] as const;
+const ALLOWED = ["setup", "integrations", "jira", "github", "discord", "health", "config", "projects", "webhooks", "access", "notifications"] as const;
 type Section = (typeof ALLOWED)[number];
 
 export default async function TenantEditSectionPage({ params }: { params: Promise<{ tenantId: string; section: string }> }) {

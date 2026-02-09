@@ -9,7 +9,7 @@ from orchestrator.core.guardrails import enforce_safe_command
 
 class JiraConfig(BaseModel):
     connection_id: str | None = None
-    project_keys: list[str] = Field(default_factory=list, min_length=1)
+    project_keys: list[str] = Field(default_factory=list)
     ready_statuses: list[str] = Field(default_factory=lambda: ["Ready for Agent"], min_length=1)
     ready_jql: str | None = None
     ready_label: str = Field(default="agent:ready", min_length=1)
@@ -105,12 +105,14 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=1)
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
+    policy_overrides: dict = Field(default_factory=dict)
 
 
 class ProjectUpdate(BaseModel):
     name: str = Field(min_length=1)
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
+    policy_overrides: dict = Field(default_factory=dict)
     is_archived: bool = False
 
 
@@ -120,6 +122,8 @@ class ProjectRead(BaseModel):
     name: str
     github_repository: str
     jira_project_key: str
+    policy_overrides: dict = Field(default_factory=dict)
+    effective_policy: PolicyConfig
     is_archived: bool
     created_at: datetime
     updated_at: datetime
