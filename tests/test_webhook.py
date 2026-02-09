@@ -324,6 +324,23 @@ class JiraWebhookTests(unittest.TestCase):
             self.assertFalse(ask_history)
 
     def test_comment_webhook_without_mb_command_is_ignored(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["ask_history"] = [
+                {
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-1",
+                    "question": "Can this run?",
+                    "answer": "Needs confirmation",
+                    "issue_key": "TP-902",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+            tenant.discord_config = discord_config
+            session.commit()
+
         payload = self._jira_issue_payload(issue_key="TP-902", status_name="To Do")
         payload["webhookEvent"] = "comment_created"
         payload["comment"] = {
@@ -346,6 +363,13 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(body["enqueued"])
         self.assertEqual(body["reason"], "comment_without_command")
         self.assertEqual(body["webhook_event"], "comment_created")
+        self.assertEqual(body["removed_history_entries"], 1)
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+            ask_history = (tenant.discord_config or {}).get("ask_history", [])
+            self.assertFalse(ask_history)
 
     def test_comment_updated_without_mb_command_is_ignored(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-903", status_name="To Do")
@@ -370,6 +394,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(body["enqueued"])
         self.assertEqual(body["reason"], "comment_without_command")
         self.assertEqual(body["webhook_event"], "comment_updated")
+        self.assertEqual(body["removed_history_entries"], 0)
 
     def test_webhook_marks_transition_into_ready_status(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
