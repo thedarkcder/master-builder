@@ -14,9 +14,6 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
-    AdminIdentityResponse,
-    AdminLoginRequest,
-    AdminLoginResponse,
     DiscordAllowlistApprovalResult,
     DiscordAllowlistRequestRead,
     GitHubRepositoryRead,
@@ -28,10 +25,6 @@ from orchestrator.api.schemas import (
     ReadyGatePreviewRead,
     ReadyIssuePreviewRead,
     JiraProjectRead,
-    ManagedSecretRead,
-    ManagedSecretResolveRequest,
-    ManagedSecretResolveResult,
-    ManagedSecretUpsert,
     ProjectCreate,
     ProjectRead,
     ProjectUpdate,
@@ -41,15 +34,10 @@ from orchestrator.api.schemas import (
     TenantRead,
     TenantUpdate,
 )
-from orchestrator.core.admin_tokens import create_admin_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
 from orchestrator.core.secret_manager import (
-    list_managed_secret_refs,
-    normalize_secret_ref,
     resolve_secret_ref,
-    resolve_secret_ref_metadata,
-    upsert_managed_secret,
 )
 from orchestrator.core.jira_oauth_state import (
     create_jira_oauth_state_token,
@@ -57,8 +45,8 @@ from orchestrator.core.jira_oauth_state import (
 )
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
-from orchestrator.core.security import require_admin, validate_admin_credentials
-from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Project, Run, Tenant
+from orchestrator.core.security import require_admin
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
@@ -79,25 +67,6 @@ DISCORD_INTERNAL_CONFIG_KEYS = {
     "ask_history",
     "ask_thread_channel_ids",
 }
-
-
-@router.post("/auth/login", response_model=AdminLoginResponse)
-def admin_login(payload: AdminLoginRequest) -> AdminLoginResponse:
-    if not validate_admin_credentials(username=payload.username, password=payload.password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
-
-    settings = get_settings()
-    token, expires_in = create_admin_access_token(
-        username=settings.admin_username,
-        secret=settings.admin_token_secret,
-        ttl_seconds=settings.admin_token_ttl_seconds,
-    )
-    return AdminLoginResponse(access_token=token, expires_in=expires_in)
-
-
-@router.get("/auth/me", response_model=AdminIdentityResponse)
-def admin_me(username: str = Depends(require_admin)) -> AdminIdentityResponse:
-    return AdminIdentityResponse(username=username)
 
 
 def _tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -335,14 +304,6 @@ def _refresh_jira_connection_tokens(
     connection.updated_at = now
     session.commit()
     return token_set.access_token
-
-
-def _secret_metadata_to_schema(metadata) -> ManagedSecretRead:  # noqa: ANN001
-    return ManagedSecretRead(
-        secret_ref=metadata.secret_ref,
-        source=metadata.source,
-        updated_at=metadata.updated_at,
-    )
 
 
 def _default_ready_jql(*, project_keys: list[str], ready_statuses: list[str]) -> str:
@@ -754,74 +715,6 @@ def _jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
     if result.details.startswith("Configured Jira connection was not found"):
         return status.HTTP_400_BAD_REQUEST
     return status.HTTP_502_BAD_GATEWAY
-
-
-@router.get("/secrets", response_model=list[ManagedSecretRead])
-def list_secrets(
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> list[ManagedSecretRead]:
-    refs = list_managed_secret_refs(session)
-    return [_secret_metadata_to_schema(metadata) for metadata in refs]
-
-
-@router.put("/secrets/{secret_ref:path}", response_model=ManagedSecretRead)
-def upsert_secret(
-    secret_ref: str,
-    payload: ManagedSecretUpsert,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ManagedSecretRead:
-    settings = get_settings()
-    try:
-        metadata = upsert_managed_secret(
-            session,
-            secret_ref=secret_ref,
-            plaintext_value=payload.value,
-            encryption_key=settings.secrets_encryption_key,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return _secret_metadata_to_schema(metadata)
-
-
-@router.post("/secrets/resolve", response_model=ManagedSecretResolveResult)
-def resolve_secret(
-    payload: ManagedSecretResolveRequest,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ManagedSecretResolveResult:
-    settings = get_settings()
-    try:
-        secret_ref = normalize_secret_ref(payload.secret_ref)
-        metadata = resolve_secret_ref_metadata(session, secret_ref=secret_ref)
-        resolved_value = resolve_secret_ref(
-            session,
-            secret_ref=secret_ref,
-            encryption_key=settings.secrets_encryption_key,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return ManagedSecretResolveResult(
-        secret_ref=secret_ref,
-        source=metadata.source,
-        resolved=bool(resolved_value),
-    )
-
-
-@router.delete("/secrets/{secret_ref:path}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_secret(
-    secret_ref: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> Response:
-    normalized_ref = normalize_secret_ref(secret_ref)
-    row = session.get(ManagedSecret, normalized_ref)
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found")
-    session.delete(row)
-    session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/jira/connect/start", response_model=JiraConnectStart)
