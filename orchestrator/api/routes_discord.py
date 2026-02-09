@@ -13,8 +13,17 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.discord_command_dispatcher import dispatch_simple_discord_command
+from orchestrator.api.discord_command_bug_gap import dispatch_bug_gap_command
+from orchestrator.api.discord_command_issues import dispatch_issues_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
+from orchestrator.api.discord_command_ask import dispatch_ask_command
+from orchestrator.api.discord_response_format import (
+    build_issue_url_list,
+    build_jira_issue_url,
+    format_issue_markdown_link,
+    format_issue_markdown_list,
+)
 from orchestrator.api.discord_state import (
     assert_channel_scope as _assert_channel_scope,
     assert_sensitive_command_permission as _assert_sensitive_command_permission,
@@ -27,7 +36,6 @@ from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_conn
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,
-    plan_discord_ask_intent_with_codex,
     plan_seed_issues_with_codex,
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
@@ -258,7 +266,10 @@ def _run_gap_analysis(
     if not next_actions:
         next_actions.append("Re-validate acceptance criteria against latest merged code before release.")
 
-    issue_label = f"[{normalized_issue_key}]({jira_url})" if jira_url else normalized_issue_key
+    issue_label = format_issue_markdown_link(
+        issue_key=normalized_issue_key,
+        browse_base_url=jira_base_url,
+    )
     lines = [
         f"Gap analysis for {issue_label}: {issue.summary}",
         f"Confidence: **{confidence}**",
@@ -786,7 +797,7 @@ def _create_discord_bug_issue(
         attachments=attachments,
     )
     browse_base_url = str(connection.site_url or "").strip().rstrip("/")
-    issue_url = f"{browse_base_url}/browse/{created_issue.key}" if browse_base_url else None
+    issue_url = build_jira_issue_url(issue_key=created_issue.key, browse_base_url=browse_base_url)
     if issue_url:
         message = f"Bug logged: [{created_issue.key}]({issue_url})"
     else:
@@ -1368,16 +1379,13 @@ def _seed_issues_with_codex(
             detail=f"Jira seed upsert produced no changes: {'; '.join(create_errors) or 'unknown error'}",
         )
     browse_base_url = str(connection.site_url or "").strip().rstrip("/")
-    def _fmt_keys(keys: list[str]) -> str:
-        if not keys:
-            return "none"
-        if not browse_base_url:
-            return ", ".join(keys)
-        return ", ".join(f"[{key}]({browse_base_url}/browse/{key})" for key in keys)
 
     message = (
-        f"Issue upsert complete. Updated {len(updated_issue_keys)}: {_fmt_keys(updated_issue_keys)}. "
-        f"Created {len(created_keys)}: {_fmt_keys(created_keys)}."
+        "Issue upsert complete. "
+        f"Updated {len(updated_issue_keys)}: "
+        f"{format_issue_markdown_list(issue_keys=updated_issue_keys, browse_base_url=browse_base_url)}. "
+        f"Created {len(created_keys)}: "
+        f"{format_issue_markdown_list(issue_keys=created_keys, browse_base_url=browse_base_url)}."
     )
     if create_errors:
         message = f"{message} (partial errors: {'; '.join(create_errors)})"
@@ -1396,13 +1404,15 @@ def _seed_issues_with_codex(
             "questions": clarification_questions,
             "prompt_markdown": prompt_markdown,
             "updated_issue_keys": updated_issue_keys,
-            "updated_issue_links": [
-                f"{browse_base_url}/browse/{issue_key}" for issue_key in updated_issue_keys if browse_base_url
-            ],
+            "updated_issue_links": build_issue_url_list(
+                issue_keys=updated_issue_keys,
+                browse_base_url=browse_base_url,
+            ),
             "created_issue_keys": created_keys,
-            "created_issue_links": [
-                f"{browse_base_url}/browse/{issue_key}" for issue_key in created_keys if browse_base_url
-            ],
+            "created_issue_links": build_issue_url_list(
+                issue_keys=created_keys,
+                browse_base_url=browse_base_url,
+            ),
             "all_issue_keys": [*updated_issue_keys, *created_keys],
             "errors": create_errors,
         },
@@ -1503,336 +1513,58 @@ def execute_discord_command(
         payload=payload,
         command_name=command_name,
         arguments=arguments,
+        jira_browse_base_url=_tenant_jira_browse_base_url(session=session, tenant=tenant),
     )
     if simple_response is not None:
         return simple_response
 
-    if command_name == "ask":
-        if not arguments:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
-            )
-        scoped_issue_key: str | None = None
-        question_tokens = arguments
-        first_token = arguments[0].strip()
-        if first_token.startswith("@"):
-            candidate_issue_key = first_token[1:].strip().upper()
-            if not ISSUE_KEY_PATTERN.match(candidate_issue_key):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Usage: !ask @ISSUE-123 <question>",
-                )
-            scoped_issue_key = candidate_issue_key
-            question_tokens = arguments[1:]
-        question = " ".join(question_tokens).strip()
-        if not question:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
-            )
-        if require_ask_confirmation:
-            normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_context(
-                session=session,
-                tenant=tenant,
-                user_id=normalized_user_id,
-                channel_id=normalized_channel_id,
-                question=question,
-                scoped_issue_key=scoped_issue_key,
-            )
-            settings = get_settings()
-            runtime = build_codex_runtime(session=session, settings=settings)
-            try:
-                intent_payload = plan_discord_ask_intent_with_codex(
-                    runtime=runtime,
-                    question=question,
-                    project_keys=[
-                        str(key).strip().upper()
-                        for key in tenant.jira_config.get("project_keys", [])
-                        if str(key).strip()
-                    ],
-                    issues=issues,
-                    status_counts=status_counts,
-                    history=history_context,
-                )
-            except CodexRuntimeError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=f"Codex board assistant is unavailable: {exc}",
-                ) from exc
+    ask_response = dispatch_ask_command(
+        session=session,
+        tenant=tenant,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+        normalized_user_id=normalized_user_id,
+        normalized_channel_id=normalized_channel_id,
+        require_ask_confirmation=require_ask_confirmation,
+        issue_key_pattern=ISSUE_KEY_PATTERN,
+        collect_ask_context_with_history_context=_collect_ask_context_with_history_context,
+        store_pending_ask_action=_store_pending_ask_action,
+        store_ask_history_entry=_store_ask_history_entry,
+        ask_board_message=_ask_board_message,
+    )
+    if ask_response is not None:
+        return ask_response
 
-            mode = str(intent_payload.get("mode") or "").strip().lower()
-            summary = str(intent_payload.get("summary") or "").strip()
-            proposed_command = str(intent_payload.get("command") or "").strip()
-            if mode == "command" and proposed_command.startswith("!") and not proposed_command.lower().startswith("!ask"):
-                pending = _store_pending_ask_action(
-                    session=session,
-                    tenant=tenant,
-                    user_id=normalized_user_id,
-                    channel_id=payload.channel_id,
-                    question=question,
-                    summary=summary or "Proposed operational action from /ask",
-                    proposed_command=proposed_command,
-                )
-                confirmation_message = summary or "I can run this action for you after approval."
-                return DiscordCommandResponse(
-                    ok=True,
-                    command=command_name,
-                    message=confirmation_message,
-                    data={
-                        "requires_confirmation": True,
-                        "request_id": pending["request_id"],
-                        "proposed_command": proposed_command,
-                        "summary": confirmation_message,
-                    },
-                )
+    bug_gap_response = dispatch_bug_gap_command(
+        session=session,
+        tenant=tenant,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+        issue_key_pattern=ISSUE_KEY_PATTERN,
+        run_gap_analysis=_run_gap_analysis,
+        normalize_discord_attachments=_normalize_discord_attachments,
+        create_discord_bug_issue=_create_discord_bug_issue,
+    )
+    if bug_gap_response is not None:
+        return bug_gap_response
 
-            message = answer_board_question_with_codex(
-                runtime=runtime,
-                question=question,
-                project_keys=[
-                    str(key).strip().upper()
-                    for key in tenant.jira_config.get("project_keys", [])
-                    if str(key).strip()
-                ],
-                issues=issues,
-                status_counts=status_counts,
-                history=history_context,
-            )
-            _store_ask_history_entry(
-                session=session,
-                tenant=tenant,
-                user_id=normalized_user_id,
-                channel_id=normalized_channel_id,
-                question=question,
-                answer=message,
-                issue_key=normalized_issue_key,
-                status_name=requested_status,
-            )
-            return DiscordCommandResponse(
-                ok=True,
-                command=command_name,
-                message=message,
-                data={
-                    "issue_key": normalized_issue_key,
-                    "status": requested_status,
-                    "status_counts": status_counts,
-                    "issues": issues,
-                    "question": question,
-                },
-            )
-
-        message, data = _ask_board_message(
-            session=session,
-            tenant=tenant,
-            user_id=normalized_user_id,
-            channel_id=normalized_channel_id,
-            question=question,
-            scoped_issue_key=scoped_issue_key,
-        )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=message,
-            data=data,
-        )
-
-    if command_name == "gap":
-        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
-        issue_key_param = str(command_params.get("issue_key") or "").strip().upper()
-        issue_key_arg = arguments[0].strip().upper() if arguments else ""
-        issue_key = issue_key_param or issue_key_arg
-        if not issue_key:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !gap <ISSUE_KEY>")
-        message, data = _run_gap_analysis(
-            session=session,
-            tenant=tenant,
-            issue_key=issue_key,
-        )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=message,
-            data=data,
-        )
-
-    if command_name == "bug":
-        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
-        summary = str(command_params.get("summary") or "").strip()
-        details = str(command_params.get("details") or "").strip()
-        related_issue_key_raw = str(command_params.get("issue_key") or "").strip().upper()
-        related_issue_key = related_issue_key_raw if ISSUE_KEY_PATTERN.match(related_issue_key_raw) else None
-        if not summary:
-            raw_body = " ".join(arguments).strip()
-            if " -- " in raw_body:
-                summary, details_tail = raw_body.split(" -- ", 1)
-                summary = summary.strip()
-                if not details:
-                    details = details_tail.strip()
-            else:
-                summary = raw_body
-        if not summary:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !bug <summary> [-- details]",
-            )
-        attachments = _normalize_discord_attachments(payload.attachments)
-        message, data = _create_discord_bug_issue(
-            session=session,
-            tenant=tenant,
-            summary=summary,
-            details=details,
-            reporter_user_id=payload.user_id.strip(),
-            channel_id=payload.channel_id,
-            related_issue_key=related_issue_key,
-            attachments=attachments,
-        )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=message,
-            data=data,
-        )
-
-    if command_name == "issues":
-        if not arguments:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
-            )
-        subcommand = arguments[0].strip().lower()
-        if subcommand == "seed":
-            prompt_markdown = " ".join(arguments[1:]).strip()
-            if not prompt_markdown:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Usage: !issues seed <markdown spec>",
-                )
-            if defer_seed_issues:
-                return DiscordCommandResponse(
-                    ok=True,
-                    command=command_name,
-                    message="Issue seeding started. I will reply in this thread with created issue links when done.",
-                    data={"deferred": True, "prompt_markdown": prompt_markdown},
-                )
-            message, data = _seed_issues_with_codex(
-                session=session,
-                tenant=tenant,
-                prompt_markdown=prompt_markdown,
-            )
-            if (
-                isinstance(payload.channel_id, str)
-                and payload.channel_id.strip()
-                and bool(data.get("requires_input"))
-            ):
-                request_id = _store_seed_followup_context(
-                    session=session,
-                    tenant=tenant,
-                    request_id=None,
-                    user_id=normalized_user_id,
-                    channel_ids=[payload.channel_id.strip()],
-                    project_key=str(data.get("project_key") or ""),
-                    issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
-                    questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
-                    prompt_markdown=str(data.get("prompt_markdown") or prompt_markdown),
-                )
-                data["followup_request_id"] = request_id
-            return DiscordCommandResponse(
-                ok=True,
-                command=command_name,
-                message=message,
-                data=data,
-            )
-
-        if subcommand == "followup":
-            followup_text = " ".join(arguments[1:]).strip()
-            if not followup_text:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Usage: !issues followup <answers>",
-                )
-            if not payload.channel_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Follow-up replies require a Discord channel context",
-                )
-            context = _find_seed_followup_context(
-                tenant=tenant,
-                channel_id=payload.channel_id,
-            )
-            if context is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="No pending issue-seed follow-up context was found for this channel",
-                )
-            context_user_id = str(context.get("user_id") or "").strip()
-            if context_user_id and context_user_id != normalized_user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only the original requester can submit this issue-seed follow-up",
-                )
-            original_prompt = str(context.get("prompt_markdown") or "").strip()
-            context_questions = [
-                str(value).strip() for value in context.get("questions", []) if str(value).strip()
-            ]
-            question_block = (
-                "\n".join(f"- {value}" for value in context_questions)
-                if context_questions
-                else "- No explicit questions were captured."
-            )
-            followup_prompt = (
-                f"{original_prompt}\n\n"
-                "Additional clarification answers from follow-up conversation:\n"
-                f"{followup_text}\n\n"
-                "Outstanding clarification questions were:\n"
-                f"{question_block}\n\n"
-                "Update existing Jira issues where possible. Do not create duplicates."
-            )
-            forced_issue_keys = [
-                str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()
-            ]
-            message, data = _seed_issues_with_codex(
-                session=session,
-                tenant=tenant,
-                prompt_markdown=followup_prompt,
-                force_issue_keys=forced_issue_keys,
-                allow_create=False,
-            )
-            if bool(data.get("requires_input")):
-                request_id = _store_seed_followup_context(
-                    session=session,
-                    tenant=tenant,
-                    request_id=str(context.get("request_id") or ""),
-                    user_id=normalized_user_id,
-                    channel_ids=list(
-                        {
-                            *(context.get("channel_ids") or []),
-                            payload.channel_id,
-                        }
-                    ),
-                    project_key=str(data.get("project_key") or context.get("project_key") or ""),
-                    issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
-                    questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
-                    prompt_markdown=str(data.get("prompt_markdown") or followup_prompt),
-                )
-                data["followup_request_id"] = request_id
-            else:
-                _clear_seed_followup_context(
-                    session=session,
-                    tenant=tenant,
-                    request_id=str(context.get("request_id") or ""),
-                )
-            return DiscordCommandResponse(
-                ok=True,
-                command=command_name,
-                message=message,
-                data=data,
-            )
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
-        )
+    issues_response = dispatch_issues_command(
+        session=session,
+        tenant=tenant,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+        normalized_user_id=normalized_user_id,
+        defer_seed_issues=defer_seed_issues,
+        seed_issues_with_codex=_seed_issues_with_codex,
+        find_seed_followup_context=_find_seed_followup_context,
+        store_seed_followup_context=_store_seed_followup_context,
+        clear_seed_followup_context=_clear_seed_followup_context,
+    )
+    if issues_response is not None:
+        return issues_response
 
     run_control_response = dispatch_run_control_command(
         session=session,

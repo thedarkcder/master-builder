@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from orchestrator.api.discord_response_format import build_jira_issue_url
 from orchestrator.api.discord_state import (
     REQUEST_PERMISSION_LABELS,
     create_allowlist_request as _create_allowlist_request,
@@ -48,6 +49,7 @@ def dispatch_simple_discord_command(
     payload: DiscordCommandRequest,
     command_name: str,
     arguments: list[str],
+    jira_browse_base_url: str | None,
 ) -> DiscordCommandResponse | None:
     if command_name == "help":
         return DiscordCommandResponse(ok=True, command=command_name, message=_command_help_message(), data=None)
@@ -147,8 +149,7 @@ def dispatch_simple_discord_command(
             .order_by(Run.created_at.desc())
             .limit(1)
         ).scalar_one_or_none()
-        jira_base = "https://example.atlassian.net"
-        jira_link = f"{jira_base}/browse/{issue_key}"
+        jira_link = build_jira_issue_url(issue_key=issue_key, browse_base_url=jira_browse_base_url)
         return DiscordCommandResponse(
             ok=True,
             command=command_name,
