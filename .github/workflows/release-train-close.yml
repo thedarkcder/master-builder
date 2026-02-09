@@ -98,14 +98,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          declare -A prs_by_issue=()
+          pr_issue_pairs="$(mktemp)"
 
           while IFS= read -r issue_key; do
             [ -z "${issue_key}" ] && continue
 
             while IFS= read -r pr_number; do
               [ -z "${pr_number}" ] && continue
-              prs_by_issue["${pr_number}"]="${issue_key}"
+              printf '%s\t%s\n' "${pr_number}" "${issue_key}" >> "${pr_issue_pairs}"
             done < <(
               gh pr list \
                 --state open \
@@ -116,25 +116,32 @@ jobs:
             )
           done < /tmp/release_issue_keys.txt
 
-          if [ "${#prs_by_issue[@]}" -eq 0 ]; then
+          if [ ! -s "${pr_issue_pairs}" ]; then
             echo "No open PRs found for release issues."
             exit 0
           fi
 
+          pr_issue_pairs_unique="${pr_issue_pairs}.uniq"
+          sort -t $'\t' -k1,1n -u "${pr_issue_pairs}" > "${pr_issue_pairs_unique}"
+
           merge_failures=()
 
-          for pr_number in $(printf '%s\n' "${!prs_by_issue[@]}" | sort -n); do
+          while IFS=$'\t' read -r pr_number issue_key; do
+            [ -z "${pr_number}" ] && continue
+
             if ! gh pr checks "${pr_number}" --required --watch --interval 20; then
-              merge_failures+=("${pr_number}:${prs_by_issue[$pr_number]}:checks")
+              merge_failures+=("${pr_number}:${issue_key}:checks")
               continue
             fi
 
             if gh pr merge "${pr_number}" --merge --delete-branch; then
-              echo "Merged PR #${pr_number} for ${prs_by_issue[$pr_number]}"
+              echo "Merged PR #${pr_number} for ${issue_key}"
             else
-              merge_failures+=("${pr_number}:${prs_by_issue[$pr_number]}:merge")
+              merge_failures+=("${pr_number}:${issue_key}:merge")
             fi
-          done
+          done < "${pr_issue_pairs_unique}"
+
+          rm -f "${pr_issue_pairs}" "${pr_issue_pairs_unique}"
 
           if [ "${#merge_failures[@]}" -gt 0 ]; then
             printf 'Failed merge/check operations: %s\n' "${merge_failures[*]}"
