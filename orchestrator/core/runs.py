@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import Run, RunLock, WebhookDelivery
+from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
@@ -158,6 +159,12 @@ def enqueue_run(
                 created_at=now,
             )
         )
+    notify_run_enqueued(
+        session,
+        tenant_id=tenant_id,
+        run_id=run.run_id,
+        issue_key=issue_key,
+    )
 
     try:
         session.commit()

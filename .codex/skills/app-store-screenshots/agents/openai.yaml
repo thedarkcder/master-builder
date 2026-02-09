@@ -1,0 +1,4 @@
+interface:
+  display_name: "App Store Screenshots"
+  short_description: "Capture stable iOS and Android store screenshots."
+  default_prompt: "Create deterministic XCUITest and Espresso flows that capture truthful store screenshots in known state."

@@ -336,6 +336,72 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(collect_calls[0], "TP-77")
         self.assertEqual(collect_calls[1], "TP-77")
 
+    def test_ask_follow_up_drops_deleted_history_issue_key(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["ask_history"] = [
+                {
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-1",
+                    "question": "What changed?",
+                    "answer": "Previous answer",
+                    "issue_key": "TP-404",
+                    "status": None,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
+            tenant.discord_config = discord_config
+            jira_config = dict(tenant.jira_config or {})
+            jira_config["connection_id"] = "connection-for-prune-test"
+            tenant.jira_config = jira_config
+            session.commit()
+
+        collect_calls: list[str | None] = []
+
+        def _collect_stub(*, scoped_issue_key, **_kwargs):  # type: ignore[no-untyped-def]
+            collect_calls.append(scoped_issue_key)
+            return (
+                scoped_issue_key.strip().upper() if isinstance(scoped_issue_key, str) and scoped_issue_key.strip() else None,
+                None,
+                [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
+                {"To Do": 1},
+            )
+
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_discord._existing_issue_keys_for_tenant", return_value=set()),
+            patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.routes_discord.build_codex_runtime"),
+            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer"),
+        ):
+            response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask what changed since last update?",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(response.message, "Board answer")
+        self.assertEqual(collect_calls, [None])
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            history_entries = [
+                entry
+                for entry in (tenant.discord_config or {}).get("ask_history", [])
+                if entry.get("user_id") == "u-viewer" and entry.get("channel_id") == "discord-channel-1"
+            ]
+        self.assertFalse(
+            any(str(entry.get("issue_key") or "").strip().upper() == "TP-404" for entry in history_entries)
+        )
+
     def test_plain_text_is_treated_as_implicit_ask_when_enabled(self) -> None:
         with (
             self.session_factory() as session,
@@ -358,6 +424,98 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.ok)
         self.assertEqual(response.command, "ask")
         self.assertEqual(response.message, "Implicit ask answer")
+
+    def test_gap_command_requires_issue_key(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!gap"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !gap", response.json()["detail"])
+
+    def test_gap_command_returns_analysis(self) -> None:
+        with patch(
+            "orchestrator.api.routes_discord._run_gap_analysis",
+            return_value=(
+                "Gap analysis for [TP-77](https://example.atlassian.net/browse/TP-77)",
+                {
+                    "issue_key": "TP-77",
+                    "jira_url": "https://example.atlassian.net/browse/TP-77",
+                    "pr_url": "https://github.com/example/repo/pull/12",
+                    "confidence": "medium",
+                },
+            ),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-1",
+                    "command": "!gap TP-77",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["command"], "gap")
+        self.assertEqual(response.json()["data"]["issue_key"], "TP-77")
+        self.assertIn("TP-77", response.json()["message"])
+
+    def test_plain_text_in_seed_followup_thread_routes_to_issues_followup(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["seed_followups"] = [
+                {
+                    "request_id": "followup-1",
+                    "user_id": "u-viewer",
+                    "channel_ids": ["discord-channel-1"],
+                    "project_key": "TP",
+                    "issue_keys": ["TP-11"],
+                    "questions": ["What is the rollout plan?"],
+                    "prompt_markdown": "Original seed prompt",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
+            discord_config["allowed_user_ids"] = ["u-viewer"]
+            tenant.discord_config = discord_config
+            session.commit()
+
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.routes_discord._seed_issues_with_codex",
+                return_value=(
+                    "Issue upsert complete. Updated 1: TP-11. Created 0: none.",
+                    {
+                        "requires_input": False,
+                        "project_key": "TP",
+                        "questions": [],
+                        "all_issue_keys": ["TP-11"],
+                    },
+                ),
+            ) as seed_mock,
+        ):
+            response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="Here are the missing rollout details",
+                ),
+                session=session,
+                allow_plain_ask=True,
+            )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(response.command, "issues")
+        self.assertIn("Issue upsert complete", response.message)
+        seed_mock.assert_called_once()
+        kwargs = seed_mock.call_args.kwargs
+        self.assertEqual(kwargs["allow_create"], False)
+        self.assertEqual(kwargs["force_issue_keys"], ["TP-11"])
+        self.assertIn("Here are the missing rollout details", kwargs["prompt_markdown"])
 
     def test_issues_seed_requires_spec(self) -> None:
         response = self.client.post(
@@ -435,6 +593,40 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("TP-1", response.json()["message"])
 
     def test_seed_issues_requests_clarifications_when_required_fields_missing(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            jira_config = dict(tenant.jira_config)
+            jira_config["connection_id"] = "conn-seed-clarify"
+            tenant.jira_config = jira_config
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="conn-seed-clarify",
+                    account_id="acct-1",
+                    account_email="dev@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://example.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted="enc",
+                    refresh_token_encrypted="enc",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeClient:
+            def search_issues_by_jql(self, **_: object) -> list[JiraIssuePreview]:  # noqa: ANN003
+                return []
+
+            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                return JiraIssueBulkCreateResult(
+                    created=[JiraIssueCreateResult(key="TP-301", issue_id="301")],
+                    errors=[],
+                )
+
         with (
             self.session_factory() as session,
             patch("orchestrator.api.routes_discord.build_codex_runtime", return_value=object()),
@@ -456,6 +648,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ],
                 },
             ),
+            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=_FakeClient()),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
@@ -465,8 +659,9 @@ class DiscordCommandApiTests(unittest.TestCase):
                 prompt_markdown="Seed issues from spec",
             )
 
-        self.assertIn("need a bit more detail", message.lower())
+        self.assertIn("need more detail", message.lower())
         self.assertTrue(data["requires_input"])
+        self.assertEqual(data["created_issue_keys"], ["TP-301"])
         self.assertIn("What is the rollout plan?", data["questions"])
         self.assertTrue(any("objective" in question.lower() for question in data["questions"]))
 

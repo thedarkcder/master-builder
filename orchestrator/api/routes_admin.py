@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -31,6 +32,9 @@ from orchestrator.api.schemas import (
     ManagedSecretResolveRequest,
     ManagedSecretResolveResult,
     ManagedSecretUpsert,
+    ProjectCreate,
+    ProjectRead,
+    ProjectUpdate,
     RepoBootstrapStateRead,
     RunRead,
     TenantCreate,
@@ -54,7 +58,7 @@ from orchestrator.core.jira_oauth_state import (
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
 from orchestrator.core.security import require_admin, validate_admin_credentials
-from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
@@ -62,7 +66,13 @@ from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-JIRA_WEBHOOK_EVENTS = ["jira:issue_created", "jira:issue_updated"]
+JIRA_WEBHOOK_EVENTS = [
+    "jira:issue_created",
+    "jira:issue_updated",
+    "jira:issue_deleted",
+    "comment_created",
+    "comment_updated",
+]
 DISCORD_INTERNAL_CONFIG_KEYS = {
     "allowlist_requests",
     "pending_ask_actions",
@@ -122,6 +132,19 @@ def _run_to_schema(run: Run) -> RunRead:
     )
 
 
+def _project_to_schema(project: Project) -> ProjectRead:
+    return ProjectRead(
+        project_id=project.project_id,
+        tenant_id=project.tenant_id,
+        name=project.name,
+        github_repository=project.github_repository,
+        jira_project_key=project.jira_project_key,
+        is_archived=project.is_archived,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+    )
+
+
 def _slugify_tenant_name(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
     return slug or "tenant"
@@ -135,6 +158,86 @@ def _allocate_tenant_id(session: Session, *, name: str) -> str:
         candidate = f"{base}-{suffix}"
         suffix += 1
     return candidate
+
+
+def _primary_jira_project_key(jira_config: dict) -> str | None:
+    project_keys = jira_config.get("project_keys")
+    if isinstance(project_keys, list):
+        for key in project_keys:
+            key_normalized = str(key).strip().upper()
+            if key_normalized:
+                return key_normalized
+    return None
+
+
+def _primary_repo_url(repos_config: dict) -> str | None:
+    candidates: list[object] = [
+        repos_config.get("github_repository"),
+        repos_config.get("fallback_repo"),
+    ]
+
+    allowlist = repos_config.get("allowlist")
+    if isinstance(allowlist, list):
+        candidates.extend(allowlist)
+
+    by_project = repos_config.get("mapping_rules_by_project_key")
+    if isinstance(by_project, dict):
+        candidates.extend(by_project.values())
+
+    by_component = repos_config.get("mapping_rules_by_component")
+    if isinstance(by_component, dict):
+        candidates.extend(by_component.values())
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        normalized = str(candidate).strip()
+        if normalized and normalized.lower() != "none":
+            return normalized
+    return None
+
+
+def _default_project_name_from_repo(*, repo_url: str, tenant_id: str) -> str:
+    normalized = repo_url.rstrip("/")
+    if normalized.endswith(".git"):
+        normalized = normalized[:-4]
+    name = normalized.rsplit("/", 1)[-1].strip()
+    return name or f"{tenant_id}-project"
+
+
+def _normalize_project_repo(repo: str) -> str:
+    return repo.strip()
+
+
+def _normalize_project_key(key: str) -> str:
+    return key.strip().upper()
+
+
+def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> None:
+    existing = session.execute(
+        select(Project).where(Project.tenant_id == tenant.tenant_id).limit(1)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+
+    repo_url = _primary_repo_url(dict(tenant.repos_config))
+    jira_project_key = _primary_jira_project_key(dict(tenant.jira_config))
+    if not repo_url or not jira_project_key:
+        return
+
+    now = datetime.now(timezone.utc)
+    session.add(
+        Project(
+            project_id=f"{tenant.tenant_id}-default",
+            tenant_id=tenant.tenant_id,
+            name=_default_project_name_from_repo(repo_url=repo_url, tenant_id=tenant.tenant_id),
+            github_repository=repo_url,
+            jira_project_key=jira_project_key,
+            is_archived=False,
+            created_at=now,
+            updated_at=now,
+        )
+    )
 
 
 def _with_managed_github_refs(raw_github_config: dict) -> dict:
@@ -1164,6 +1267,7 @@ def create_tenant(
         updated_at=now,
     )
     session.add(tenant)
+    _ensure_default_project_for_tenant(session, tenant=tenant)
     session.commit()
     session.refresh(tenant)
     return _tenant_to_schema(tenant)
@@ -1208,6 +1312,7 @@ def update_tenant(
         proposed=payload.discord.model_dump() if payload.discord else None,
     )
     tenant.updated_at = datetime.now(timezone.utc)
+    _ensure_default_project_for_tenant(session, tenant=tenant)
 
     session.commit()
     session.refresh(tenant)
@@ -1228,6 +1333,117 @@ def delete_tenant(
     session.delete(tenant)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/tenants/{tenant_id}/projects", response_model=list[ProjectRead])
+def list_projects(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[ProjectRead]:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    projects = session.execute(
+        select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at)
+    ).scalars().all()
+    return [_project_to_schema(project) for project in projects]
+
+
+@router.post("/tenants/{tenant_id}/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+def create_project(
+    tenant_id: str,
+    payload: ProjectCreate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    normalized_name = payload.name.strip()
+    normalized_repo = _normalize_project_repo(payload.github_repository)
+    normalized_jira_key = _normalize_project_key(payload.jira_project_key)
+    if not normalized_name or not normalized_repo or not normalized_jira_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project name, repository, and Jira key are required")
+
+    now = datetime.now(timezone.utc)
+    project = Project(
+        project_id=str(uuid4()),
+        tenant_id=tenant_id,
+        name=normalized_name,
+        github_repository=normalized_repo,
+        jira_project_key=normalized_jira_key,
+        is_archived=False,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(project)
+    tenant.updated_at = now
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A project with the same repository or Jira project key already exists for this tenant",
+        ) from exc
+    session.refresh(project)
+    return _project_to_schema(project)
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
+def get_project(
+    tenant_id: str,
+    project_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    project = session.get(Project, project_id)
+    if project is None or project.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return _project_to_schema(project)
+
+
+@router.put("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
+def update_project(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectUpdate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    project = session.get(Project, project_id)
+    if project is None or project.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    normalized_name = payload.name.strip()
+    normalized_repo = _normalize_project_repo(payload.github_repository)
+    normalized_jira_key = _normalize_project_key(payload.jira_project_key)
+    if not normalized_name or not normalized_repo or not normalized_jira_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project name, repository, and Jira key are required")
+
+    project.name = normalized_name
+    project.github_repository = normalized_repo
+    project.jira_project_key = normalized_jira_key
+    project.is_archived = payload.is_archived
+    project.updated_at = datetime.now(timezone.utc)
+
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is not None:
+        tenant.updated_at = project.updated_at
+
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A project with the same repository or Jira project key already exists for this tenant",
+        ) from exc
+    session.refresh(project)
+    return _project_to_schema(project)
 
 
 @router.post("/tenants/{tenant_id}/test-jira", response_model=IntegrationTestResult)
