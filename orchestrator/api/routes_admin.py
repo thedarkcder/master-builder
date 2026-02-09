@@ -28,6 +28,7 @@ from orchestrator.api.schemas import (
     ProjectCreate,
     ProjectRead,
     ProjectUpdate,
+    ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
     RunRead,
     TenantCreate,
@@ -69,6 +70,7 @@ DISCORD_INTERNAL_CONFIG_KEYS = {
     "ask_history",
     "ask_thread_channel_ids",
 }
+RELEASE_BOOTSTRAP_REQUIRED_STATUSES = ("Ready to Release", "Done")
 
 
 def _tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -1835,6 +1837,141 @@ def list_tenant_repo_bootstrap_states(
         )
         for state in states
     ]
+
+
+def _release_bootstrap_report_from_config(*, tenant_id: str, jira_config: dict) -> ReleaseBootstrapReportRead | None:
+    raw_report = jira_config.get("release_bootstrap")
+    if not isinstance(raw_report, dict):
+        return None
+    raw_checked_at = raw_report.get("checked_at")
+    checked_at = str(raw_checked_at).strip() if isinstance(raw_checked_at, str) and str(raw_checked_at).strip() else ""
+    if not checked_at:
+        return None
+    raw_checks = raw_report.get("checks")
+    checks = (
+        {str(key): bool(value) for key, value in raw_checks.items()}
+        if isinstance(raw_checks, dict)
+        else {}
+    )
+    raw_details = raw_report.get("details")
+    details = [str(item) for item in raw_details] if isinstance(raw_details, list) else []
+    return ReleaseBootstrapReportRead(
+        tenant_id=tenant_id,
+        ok=bool(raw_report.get("ok")),
+        checks=checks,
+        details=details,
+        checked_at=checked_at,
+    )
+
+
+@router.get("/tenants/{tenant_id}/release/bootstrap", response_model=ReleaseBootstrapReportRead | None)
+def get_release_bootstrap_report(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ReleaseBootstrapReportRead | None:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    return _release_bootstrap_report_from_config(tenant_id=tenant_id, jira_config=dict(tenant.jira_config or {}))
+
+
+@router.post("/tenants/{tenant_id}/release/bootstrap", response_model=ReleaseBootstrapReportRead)
+def run_release_bootstrap(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ReleaseBootstrapReportRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    checks: dict[str, bool] = {
+        "jira_connection": False,
+        "jira_project_keys": False,
+        "jira_required_statuses": False,
+        "github_installation": False,
+    }
+    details: list[str] = []
+
+    jira_config = dict(tenant.jira_config or {})
+    project_keys = jira_config.get("project_keys")
+    if isinstance(project_keys, list):
+        normalized_project_keys = [str(item).strip() for item in project_keys if str(item).strip()]
+    else:
+        normalized_project_keys = []
+    checks["jira_project_keys"] = bool(normalized_project_keys)
+    if not normalized_project_keys:
+        details.append("Missing Jira project keys.")
+
+    connection_id = jira_config.get("connection_id")
+    if not isinstance(connection_id, str) or not connection_id:
+        details.append("Jira OAuth connection is not linked.")
+        connection = None
+    else:
+        connection = session.get(JiraOAuthConnection, connection_id)
+        if connection is None:
+            details.append("Configured Jira OAuth connection was not found.")
+    checks["jira_connection"] = connection is not None
+
+    if connection is not None and normalized_project_keys:
+        settings = get_settings()
+        try:
+            access_token = _refresh_jira_connection_tokens(
+                session,
+                connection=connection,
+                settings=settings,
+                tenant_id=tenant_id,
+            )
+            client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
+            quoted_projects = ", ".join(f"\"{key}\"" for key in normalized_project_keys)
+            for required_status in RELEASE_BOOTSTRAP_REQUIRED_STATUSES:
+                jql = (
+                    f"project in ({quoted_projects}) AND status = \"{required_status}\" "
+                    "ORDER BY updated DESC"
+                )
+                client.search_issues_by_jql(
+                    access_token=access_token,
+                    cloud_id=connection.cloud_id,
+                    jql=jql,
+                    max_results=1,
+                )
+            checks["jira_required_statuses"] = True
+        except (ValueError, JiraOAuthError) as exc:
+            details.append(
+                "Jira required status validation failed "
+                f"for {', '.join(RELEASE_BOOTSTRAP_REQUIRED_STATUSES)}: {exc}"
+            )
+            checks["jira_required_statuses"] = False
+
+    github_installation_id = str(tenant.github_config.get("installation_id") or "").strip()
+    checks["github_installation"] = bool(github_installation_id)
+    if not github_installation_id:
+        details.append("GitHub App installation is not connected.")
+
+    ok = all(checks.values())
+    if ok:
+        details.append("Release bootstrap checks passed.")
+
+    checked_at = datetime.now(timezone.utc).isoformat()
+    jira_config["release_bootstrap"] = {
+        "ok": ok,
+        "checks": checks,
+        "details": details,
+        "checked_at": checked_at,
+    }
+    tenant.jira_config = jira_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+
+    return ReleaseBootstrapReportRead(
+        tenant_id=tenant_id,
+        ok=ok,
+        checks=checks,
+        details=details,
+        checked_at=checked_at,
+    )
 
 
 @router.post("/tenants/{tenant_id}/github/install/start", response_model=GitHubInstallStart)

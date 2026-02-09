@@ -216,6 +216,14 @@ class RepoBootstrapStateRead(BaseModel):
     updated_at: datetime
 
 
+class ReleaseBootstrapReportRead(BaseModel):
+    tenant_id: str
+    ok: bool
+    checks: dict[str, bool] = Field(default_factory=dict)
+    details: list[str] = Field(default_factory=list)
+    checked_at: str
+
+
 class ManagedSecretUpsert(BaseModel):
     value: str = Field(min_length=1)
 

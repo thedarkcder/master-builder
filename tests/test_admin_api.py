@@ -382,6 +382,77 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("executable only", body["guidance"])
         self.assertEqual(fake_client.last_access_token, "access-token")
 
+    def test_release_bootstrap_persists_success_report(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeJiraClient:
+            def search_issues_by_jql(  # noqa: ANN001
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                jql: str,
+                max_results: int = 20,
+            ):
+                return []
+
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeJiraClient()),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/release/bootstrap",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["checks"]["jira_connection"])
+        self.assertTrue(body["checks"]["jira_project_keys"])
+        self.assertTrue(body["checks"]["jira_required_statuses"])
+        self.assertTrue(body["checks"]["github_installation"])
+
+        persisted = self.client.get(
+            "/api/admin/tenants/tenant-a/release/bootstrap",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(persisted.status_code, 200)
+        self.assertTrue(persisted.json()["ok"])
+        self.assertEqual(persisted.json()["checks"]["jira_required_statuses"], True)
+
+    def test_release_bootstrap_reports_missing_configuration(self) -> None:
+        payload = self._tenant_payload()
+        payload["jira"]["connection_id"] = None
+        payload["jira"]["project_keys"] = []
+        payload["github"]["installation_id"] = None
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        response = self.client.post(
+            "/api/admin/tenants/tenant-a/release/bootstrap",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["ok"])
+        self.assertFalse(body["checks"]["jira_connection"])
+        self.assertFalse(body["checks"]["jira_project_keys"])
+        self.assertFalse(body["checks"]["github_installation"])
+        self.assertIn("Missing Jira project keys.", body["details"])
+
     def test_project_crud_and_uniqueness(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
