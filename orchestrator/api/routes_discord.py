@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.discord_command_dispatcher import dispatch_simple_discord_command
+from orchestrator.api.discord_command_issues import dispatch_issues_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_command_ask import dispatch_ask_command
@@ -1582,145 +1583,21 @@ def execute_discord_command(
             data=data,
         )
 
-    if command_name == "issues":
-        if not arguments:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
-            )
-        subcommand = arguments[0].strip().lower()
-        if subcommand == "seed":
-            prompt_markdown = " ".join(arguments[1:]).strip()
-            if not prompt_markdown:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Usage: !issues seed <markdown spec>",
-                )
-            if defer_seed_issues:
-                return DiscordCommandResponse(
-                    ok=True,
-                    command=command_name,
-                    message="Issue seeding started. I will reply in this thread with created issue links when done.",
-                    data={"deferred": True, "prompt_markdown": prompt_markdown},
-                )
-            message, data = _seed_issues_with_codex(
-                session=session,
-                tenant=tenant,
-                prompt_markdown=prompt_markdown,
-            )
-            if (
-                isinstance(payload.channel_id, str)
-                and payload.channel_id.strip()
-                and bool(data.get("requires_input"))
-            ):
-                request_id = _store_seed_followup_context(
-                    session=session,
-                    tenant=tenant,
-                    request_id=None,
-                    user_id=normalized_user_id,
-                    channel_ids=[payload.channel_id.strip()],
-                    project_key=str(data.get("project_key") or ""),
-                    issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
-                    questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
-                    prompt_markdown=str(data.get("prompt_markdown") or prompt_markdown),
-                )
-                data["followup_request_id"] = request_id
-            return DiscordCommandResponse(
-                ok=True,
-                command=command_name,
-                message=message,
-                data=data,
-            )
-
-        if subcommand == "followup":
-            followup_text = " ".join(arguments[1:]).strip()
-            if not followup_text:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Usage: !issues followup <answers>",
-                )
-            if not payload.channel_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Follow-up replies require a Discord channel context",
-                )
-            context = _find_seed_followup_context(
-                tenant=tenant,
-                channel_id=payload.channel_id,
-            )
-            if context is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="No pending issue-seed follow-up context was found for this channel",
-                )
-            context_user_id = str(context.get("user_id") or "").strip()
-            if context_user_id and context_user_id != normalized_user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only the original requester can submit this issue-seed follow-up",
-                )
-            original_prompt = str(context.get("prompt_markdown") or "").strip()
-            context_questions = [
-                str(value).strip() for value in context.get("questions", []) if str(value).strip()
-            ]
-            question_block = (
-                "\n".join(f"- {value}" for value in context_questions)
-                if context_questions
-                else "- No explicit questions were captured."
-            )
-            followup_prompt = (
-                f"{original_prompt}\n\n"
-                "Additional clarification answers from follow-up conversation:\n"
-                f"{followup_text}\n\n"
-                "Outstanding clarification questions were:\n"
-                f"{question_block}\n\n"
-                "Update existing Jira issues where possible. Do not create duplicates."
-            )
-            forced_issue_keys = [
-                str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()
-            ]
-            message, data = _seed_issues_with_codex(
-                session=session,
-                tenant=tenant,
-                prompt_markdown=followup_prompt,
-                force_issue_keys=forced_issue_keys,
-                allow_create=False,
-            )
-            if bool(data.get("requires_input")):
-                request_id = _store_seed_followup_context(
-                    session=session,
-                    tenant=tenant,
-                    request_id=str(context.get("request_id") or ""),
-                    user_id=normalized_user_id,
-                    channel_ids=list(
-                        {
-                            *(context.get("channel_ids") or []),
-                            payload.channel_id,
-                        }
-                    ),
-                    project_key=str(data.get("project_key") or context.get("project_key") or ""),
-                    issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
-                    questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
-                    prompt_markdown=str(data.get("prompt_markdown") or followup_prompt),
-                )
-                data["followup_request_id"] = request_id
-            else:
-                _clear_seed_followup_context(
-                    session=session,
-                    tenant=tenant,
-                    request_id=str(context.get("request_id") or ""),
-                )
-            return DiscordCommandResponse(
-                ok=True,
-                command=command_name,
-                message=message,
-                data=data,
-            )
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
-        )
+    issues_response = dispatch_issues_command(
+        session=session,
+        tenant=tenant,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+        normalized_user_id=normalized_user_id,
+        defer_seed_issues=defer_seed_issues,
+        seed_issues_with_codex=_seed_issues_with_codex,
+        find_seed_followup_context=_find_seed_followup_context,
+        store_seed_followup_context=_store_seed_followup_context,
+        clear_seed_followup_context=_clear_seed_followup_context,
+    )
+    if issues_response is not None:
+        return issues_response
 
     run_control_response = dispatch_run_control_command(
         session=session,
