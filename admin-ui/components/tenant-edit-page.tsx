@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  archiveTenant,
   approveDiscordAllowlistRequest,
   disconnectJira,
   getTenant,
@@ -31,6 +32,7 @@ import {
   resetJiraWebhook,
   testGithub,
   testJira,
+  unarchiveTenant,
   createProject,
   updateTenant,
   updateProject,
@@ -65,6 +67,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [projectsBusy, setProjectsBusy] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
 
   const statusClasses = useMemo(() => {
     const normalized = statusLine.toLowerCase();
@@ -181,6 +184,33 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       );
     } catch (error) {
       setStatusLine(`Health check failed: ${(error as Error).message}`);
+    }
+  }
+
+  async function handleArchiveToggle() {
+    if (!credentials || !tenant) {
+      return;
+    }
+    const action = tenant.is_enabled ? "archive" : "unarchive";
+    const confirmed = window.confirm(
+      tenant.is_enabled
+        ? `Archive tenant '${tenant.tenant_id}'? This disables run intake and webhook processing.`
+        : `Unarchive tenant '${tenant.tenant_id}'?`
+    );
+    if (!confirmed) {
+      return;
+    }
+    setArchiveBusy(true);
+    try {
+      const updated = tenant.is_enabled
+        ? await archiveTenant(credentials, tenant.tenant_id)
+        : await unarchiveTenant(credentials, tenant.tenant_id);
+      setTenant(updated);
+      setStatusLine(`Tenant ${action}d: ${updated.tenant_id}.`);
+    } catch (error) {
+      setStatusLine(`Unable to ${action} tenant: ${(error as Error).message}`);
+    } finally {
+      setArchiveBusy(false);
     }
   }
 
@@ -403,7 +433,17 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Edit Tenant: {tenant.tenant_id}</CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle>Edit Tenant: {tenant.tenant_id}</CardTitle>
+            <Button
+              variant={tenant.is_enabled ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => void handleArchiveToggle()}
+              disabled={archiveBusy}
+            >
+              {tenant.is_enabled ? "Archive Tenant" : "Unarchive Tenant"}
+            </Button>
+          </div>
           <CardDescription>Configure integrations, policies, and webhook operations.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -426,7 +466,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             </ol>
             <div className="flex flex-wrap gap-2 border-t pt-3">
               <Button asChild variant="outline">
-                <Link href="/secrets">
+                <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/secrets`}>
                   <KeyRound className="mr-2 h-4 w-4" />
                   Manage Secrets
                 </Link>
@@ -465,13 +505,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               <p className="text-muted-foreground">Manage notification and command settings for tenant channels.</p>
               <Button asChild variant="outline" size="sm">
                 <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/discord`}>Open Discord</Link>
-              </Button>
-            </div>
-            <div className="space-y-2 rounded-md border p-3">
-              <p className="font-medium">Projects</p>
-              <p className="text-muted-foreground">Manage repository and Jira mapping per project.</p>
-              <Button asChild variant="outline" size="sm">
-                <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/projects`}>Open Projects</Link>
               </Button>
             </div>
           </CardContent>

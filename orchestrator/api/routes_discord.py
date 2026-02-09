@@ -1494,7 +1494,7 @@ def execute_discord_command(
     if not tenant.is_enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant is disabled")
 
-    _assert_channel_scope(tenant=tenant, channel_id=payload.channel_id)
+    _assert_channel_scope(session=session, tenant=tenant, channel_id=payload.channel_id)
     raw_command = payload.command.strip()
     _, command_name, arguments = resolve_discord_command(
         tenant=tenant,
