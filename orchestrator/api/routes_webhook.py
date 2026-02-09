@@ -32,6 +32,10 @@ from orchestrator.api.routes_discord import (
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord_notifications import send_tenant_discord_message
+from orchestrator.core.project_routing import (
+    find_active_project_for_issue_key,
+    find_active_project_for_repo_full_name,
+)
 from orchestrator.core.reviewer import ReviewAgentGate
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
@@ -42,7 +46,7 @@ from orchestrator.core.runs import (
 from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthError
@@ -591,7 +595,7 @@ def _discord_issue_autocomplete_choices(
     tenant: Tenant,
     current_value: str,
 ) -> list[dict]:
-    project_jql = _project_filter_jql(tenant)
+    project_jql = _project_filter_jql(session=session, tenant=tenant)
     normalized = current_value.strip().upper()
     if normalized:
         jql = f'{project_jql} AND key ~ "{normalized}*" ORDER BY updated DESC'
@@ -1649,6 +1653,27 @@ def _extract_pull_request_targets(payload: dict) -> list[tuple[int, bool]]:
     return targets
 
 
+def _resolve_active_project_for_issue(*, session: Session, tenant_id: str, issue_key: str) -> Project | None:
+    return find_active_project_for_issue_key(
+        session,
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+    )
+
+
+def _resolve_active_project_for_repo(
+    *,
+    session: Session,
+    tenant_id: str,
+    repo_full_name: str,
+) -> Project | None:
+    return find_active_project_for_repo_full_name(
+        session,
+        tenant_id=tenant_id,
+        repo_full_name=repo_full_name,
+    )
+
+
 @router.post("/jira/webhook/{tenant_id}")
 async def ingest_jira_webhook(
     tenant_id: str,
@@ -1708,6 +1733,11 @@ async def ingest_jira_webhook(
         comment_command,
         comment_command_error,
     )
+    project = _resolve_active_project_for_issue(
+        session=session,
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+    )
 
     if webhook_event == "issue_deleted":
         removed_entries = remove_issue_key_from_tenant_ask_history(
@@ -1725,6 +1755,7 @@ async def ingest_jira_webhook(
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
+            "project_id": project.project_id if project is not None else None,
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "issue_deleted",
@@ -1742,6 +1773,7 @@ async def ingest_jira_webhook(
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
+            "project_id": project.project_id if project is not None else None,
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "invalid_comment_command",
@@ -1775,6 +1807,7 @@ async def ingest_jira_webhook(
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
+            "project_id": project.project_id if project is not None else None,
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "comment_without_command",
@@ -1819,6 +1852,7 @@ async def ingest_jira_webhook(
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
+            "project_id": project.project_id if project is not None else None,
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "comment_command_ask",
@@ -1847,6 +1881,7 @@ async def ingest_jira_webhook(
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
+            "project_id": project.project_id if project is not None else None,
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "issue_status_missing",
@@ -1864,6 +1899,7 @@ async def ingest_jira_webhook(
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
+            "project_id": project.project_id if project is not None else None,
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "issue_done",
@@ -1883,6 +1919,7 @@ async def ingest_jira_webhook(
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
+            "project_id": project.project_id if project is not None else None,
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "status_not_ready",
@@ -1893,6 +1930,24 @@ async def ingest_jira_webhook(
                 issue_status=issue_status,
                 ready_statuses=ready_statuses,
             ),
+            "webhook_event": webhook_event,
+        }
+
+    if project is None:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=project_not_mapped",
+            request_id,
+            tenant_id,
+            issue_key,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "project_id": None,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "project_not_mapped",
+            "command": comment_command,
             "webhook_event": webhook_event,
         }
 
@@ -1944,6 +1999,7 @@ async def ingest_jira_webhook(
             return {
                 "request_id": request_id,
                 "tenant_id": tenant_id,
+                "project_id": project.project_id,
                 "issue_key": issue_key,
                 "enqueued": False,
                 "reason": "no_retryable_run",
@@ -1955,9 +2011,11 @@ async def ingest_jira_webhook(
     enqueue_result = enqueue_run(
         session,
         tenant_id=tenant_id,
+        project_id=project.project_id,
         issue_key=issue_key,
         issue_summary=issue_summary,
         issue_description=resolved_issue_description,
+        repo_url=project.github_repository,
         delivery_id=delivery_id,
         max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
     )
@@ -1973,6 +2031,7 @@ async def ingest_jira_webhook(
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
+            "project_id": project.project_id,
             "issue_key": issue_key,
             "enqueued": False,
             "reason": enqueue_result.reason,
@@ -1992,6 +2051,7 @@ async def ingest_jira_webhook(
     return {
         "request_id": request_id,
         "tenant_id": tenant_id,
+        "project_id": project.project_id,
         "issue_key": issue_key,
         "enqueued": True,
         "run_id": enqueue_result.run.run_id,
@@ -2499,6 +2559,25 @@ async def ingest_github_webhook(
                 "reason": "missing_pr_context",
             },
         )
+    project = _resolve_active_project_for_repo(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        repo_full_name=repo_full_name,
+    )
+    if project is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": False,
+                "reason": "project_not_mapped",
+                "repository": repo_full_name,
+            },
+        )
 
     def secret_lookup(secret_ref: str) -> str | None:
         return resolve_secret_ref(
@@ -2530,6 +2609,7 @@ async def ingest_github_webhook(
                 "action": normalized_action,
                 "accepted": False,
                 "reason": "review_misconfigured",
+                "project_id": project.project_id,
             },
         )
 
@@ -2559,6 +2639,7 @@ async def ingest_github_webhook(
                     "action": normalized_action,
                     "accepted": False,
                     "reason": "review_evaluation_failed",
+                    "project_id": project.project_id,
                 },
             )
 
@@ -2572,6 +2653,7 @@ async def ingest_github_webhook(
         signals.append(
             {
                 "pr_number": pr_number,
+                "project_id": project.project_id,
                 "ready": signal.ready,
                 "state": signal.state,
                 "policy_pack": signal.policy_pack,
@@ -2591,6 +2673,7 @@ async def ingest_github_webhook(
             "action": normalized_action,
             "accepted": True,
             "reason": "review_processed",
+            "project_id": project.project_id,
             "signals": signals,
         },
     )

@@ -79,8 +79,8 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_enqueue_is_idempotent_for_active_issue(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(session, tenant_id="tenant-runs", issue_key="TP-901")
-            second = enqueue_run(session, tenant_id="tenant-runs", issue_key="TP-901")
+            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
+            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
 
             self.assertTrue(first.enqueued)
             self.assertFalse(second.enqueued)
@@ -96,12 +96,14 @@ class RunLifecycleTests(unittest.TestCase):
             first = enqueue_run(
                 session,
                 tenant_id="tenant-runs",
+                project_id=None,
                 issue_key="TP-902",
                 delivery_id="delivery-xyz",
             )
             second = enqueue_run(
                 session,
                 tenant_id="tenant-runs",
+                project_id=None,
                 issue_key="TP-902",
                 delivery_id="delivery-xyz",
             )
@@ -116,12 +118,14 @@ class RunLifecycleTests(unittest.TestCase):
             first = enqueue_run(
                 session,
                 tenant_id="tenant-runs",
+                project_id=None,
                 issue_key="TP-910",
                 max_concurrent_runs=1,
             )
             second = enqueue_run(
                 session,
                 tenant_id="tenant-runs",
+                project_id=None,
                 issue_key="TP-911",
                 max_concurrent_runs=1,
             )
@@ -133,7 +137,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_running_to_success_releases_lock_and_persists_timestamps(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", issue_key="TP-903")
+            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-903")
             running = mark_run_running(session, run_id=enqueue.run.run_id)
             self.assertEqual(running.status, "running")
             self.assertIsNotNone(running.started_at)
@@ -153,7 +157,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_failure_path_marks_blocked_and_cleans_up_lock(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", issue_key="TP-904")
+            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-904")
             mark_run_running(session, run_id=enqueue.run.run_id)
             blocked = mark_run_terminal(
                 session,
@@ -171,7 +175,7 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_invalid_state_transition_is_rejected(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", issue_key="TP-905")
+            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-905")
             mark_run_terminal(
                 session,
                 run_id=enqueue.run.run_id,

@@ -218,6 +218,7 @@ class ManagedSecretResolveResult(BaseModel):
 class RunRead(BaseModel):
     run_id: str
     tenant_id: str
+    project_id: str | None
     issue_key: str
     repo_url: str | None
     branch: str | None
