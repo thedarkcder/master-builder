@@ -47,6 +47,7 @@ REQUEST_PERMISSION_LABELS = {
 MAX_PENDING_ASK_ACTIONS = 50
 MAX_ASK_HISTORY_ENTRIES = 80
 MAX_ASK_HISTORY_CONTEXT = 6
+MAX_PENDING_SEED_FOLLOWUPS = 30
 
 
 def _normalize_status_name(value: str) -> str:
@@ -181,7 +182,172 @@ def _tenant_allowed_channel_ids(tenant: Tenant) -> set[str]:
             normalized = str(value or "").strip()
             if normalized:
                 allowed.add(normalized)
+    raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
+    if isinstance(raw_seed_thread_ids, list):
+        for value in raw_seed_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                allowed.add(normalized)
     return allowed
+
+
+def _tenant_seed_followups(tenant: Tenant) -> list[dict]:
+    discord_config = tenant.discord_config or {}
+    raw_entries = discord_config.get("seed_followups")
+    if not isinstance(raw_entries, list):
+        return []
+    normalized: list[dict] = []
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        request_id = str(item.get("request_id") or "").strip()
+        if not request_id:
+            continue
+        channel_ids_raw = item.get("channel_ids")
+        channel_ids = (
+            [str(value).strip() for value in channel_ids_raw if str(value).strip()]
+            if isinstance(channel_ids_raw, list)
+            else []
+        )
+        questions_raw = item.get("questions")
+        questions = (
+            [str(value).strip() for value in questions_raw if str(value).strip()]
+            if isinstance(questions_raw, list)
+            else []
+        )
+        issue_keys_raw = item.get("issue_keys")
+        issue_keys = (
+            [str(value).strip().upper() for value in issue_keys_raw if str(value).strip()]
+            if isinstance(issue_keys_raw, list)
+            else []
+        )
+        prompt_markdown = str(item.get("prompt_markdown") or "").strip()
+        if not prompt_markdown:
+            continue
+        normalized.append(
+            {
+                "request_id": request_id,
+                "user_id": str(item.get("user_id") or "").strip() or None,
+                "channel_ids": channel_ids,
+                "questions": questions,
+                "issue_keys": issue_keys,
+                "project_key": str(item.get("project_key") or "").strip().upper() or None,
+                "prompt_markdown": prompt_markdown,
+                "updated_at": str(item.get("updated_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    return normalized
+
+
+def _store_seed_followup_context(
+    *,
+    session: Session,
+    tenant: Tenant,
+    request_id: str | None,
+    user_id: str,
+    channel_ids: list[str],
+    project_key: str,
+    issue_keys: list[str],
+    questions: list[str],
+    prompt_markdown: str,
+) -> str:
+    normalized_channel_ids = [value.strip() for value in channel_ids if value and value.strip()]
+    normalized_issue_keys = [value.strip().upper() for value in issue_keys if value and value.strip()]
+    normalized_questions = [value.strip() for value in questions if value and value.strip()]
+    normalized_request_id = (request_id or "").strip() or uuid4().hex
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    entries = _tenant_seed_followups(tenant)
+    updated_entries: list[dict] = []
+    stored = False
+    for entry in entries:
+        if entry.get("request_id") != normalized_request_id:
+            updated_entries.append(entry)
+            continue
+        updated_entries.append(
+            {
+                "request_id": normalized_request_id,
+                "user_id": user_id.strip() or entry.get("user_id"),
+                "channel_ids": normalized_channel_ids or entry.get("channel_ids", []),
+                "questions": normalized_questions or entry.get("questions", []),
+                "issue_keys": normalized_issue_keys or entry.get("issue_keys", []),
+                "project_key": project_key.strip().upper() or entry.get("project_key"),
+                "prompt_markdown": prompt_markdown.strip() or entry.get("prompt_markdown", ""),
+                "updated_at": now_iso,
+            }
+        )
+        stored = True
+    if not stored:
+        updated_entries.append(
+            {
+                "request_id": normalized_request_id,
+                "user_id": user_id.strip() or None,
+                "channel_ids": normalized_channel_ids,
+                "questions": normalized_questions,
+                "issue_keys": normalized_issue_keys,
+                "project_key": project_key.strip().upper() or None,
+                "prompt_markdown": prompt_markdown.strip(),
+                "updated_at": now_iso,
+            }
+        )
+
+    discord_config = dict(tenant.discord_config or {})
+    discord_config["seed_followups"] = updated_entries[-MAX_PENDING_SEED_FOLLOWUPS:]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return normalized_request_id
+
+
+def _find_seed_followup_context(
+    *,
+    tenant: Tenant,
+    channel_id: str,
+) -> dict | None:
+    normalized_channel_id = channel_id.strip()
+    if not normalized_channel_id:
+        return None
+    entries = _tenant_seed_followups(tenant)
+    for entry in reversed(entries):
+        channel_ids = entry.get("channel_ids")
+        if not isinstance(channel_ids, list):
+            continue
+        if normalized_channel_id in channel_ids:
+            return entry
+    return None
+
+
+def _clear_seed_followup_context(
+    *,
+    session: Session,
+    tenant: Tenant,
+    request_id: str,
+) -> None:
+    normalized_request_id = request_id.strip()
+    if not normalized_request_id:
+        return
+    entries = _tenant_seed_followups(tenant)
+    kept_entries = [entry for entry in entries if entry.get("request_id") != normalized_request_id]
+    removed_entry = next((entry for entry in entries if entry.get("request_id") == normalized_request_id), None)
+
+    discord_config = dict(tenant.discord_config or {})
+    discord_config["seed_followups"] = kept_entries
+    if isinstance(removed_entry, dict):
+        raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
+        seed_thread_ids = (
+            [str(value).strip() for value in raw_seed_thread_ids if str(value).strip()]
+            if isinstance(raw_seed_thread_ids, list)
+            else []
+        )
+        removed_channels = removed_entry.get("channel_ids")
+        if isinstance(removed_channels, list):
+            removed_set = {str(value).strip() for value in removed_channels if str(value).strip()}
+            if removed_set:
+                seed_thread_ids = [value for value in seed_thread_ids if value not in removed_set]
+        discord_config["seed_followup_thread_channel_ids"] = seed_thread_ids
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
 
 
 def _format_elapsed_seconds(*, started_at: datetime | None, created_at: datetime | None) -> int:
@@ -791,6 +957,173 @@ def _collect_ask_context(
     return normalized_issue_key, requested_status, issues, status_counts
 
 
+def _drop_issue_key_from_ask_history(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str,
+    issue_key: str,
+) -> None:
+    remove_issue_key_from_tenant_ask_history(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        user_id=user_id,
+        channel_id=channel_id,
+    )
+
+
+def remove_issue_key_from_tenant_ask_history(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+    user_id: str | None = None,
+    channel_id: str | None = None,
+) -> int:
+    target_issue_key = issue_key.strip().upper()
+    if not target_issue_key:
+        return 0
+
+    entries = _tenant_ask_history(tenant)
+    kept_entries: list[dict] = []
+    removed_count = 0
+    for entry in entries:
+        entry_issue_key = str(entry.get("issue_key") or "").strip().upper()
+        matches_scope = True
+        if user_id is not None:
+            matches_scope = matches_scope and entry.get("user_id") == user_id
+        if channel_id is not None:
+            matches_scope = matches_scope and entry.get("channel_id") == channel_id
+        if matches_scope and entry_issue_key == target_issue_key:
+            removed_count += 1
+            continue
+        kept_entries.append(entry)
+
+    if removed_count == 0:
+        return 0
+
+    discord_config = dict(tenant.discord_config or {})
+    discord_config["ask_history"] = kept_entries[-MAX_ASK_HISTORY_ENTRIES:]
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return removed_count
+
+
+def _existing_issue_keys_for_tenant(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_keys: set[str],
+) -> set[str]:
+    if not issue_keys:
+        return set()
+
+    normalized_issue_keys = sorted({value.strip().upper() for value in issue_keys if value and value.strip()})[:100]
+    if not normalized_issue_keys:
+        return set()
+
+    quoted_issue_keys = ", ".join(f'"{value}"' for value in normalized_issue_keys)
+    jql = f"{_project_filter_jql(tenant)} AND key in ({quoted_issue_keys})"
+    issues = _search_jira_issues_for_tenant(
+        session=session,
+        tenant=tenant,
+        jql=jql,
+        max_results=len(normalized_issue_keys),
+    )
+    return {str(issue.key or "").strip().upper() for issue in issues if str(issue.key or "").strip()}
+
+
+def _prune_missing_issue_keys_from_ask_history(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str,
+) -> int:
+    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    if not connection_id:
+        return 0
+
+    entries = _tenant_ask_history(tenant)
+    scoped_issue_keys = {
+        str(entry.get("issue_key") or "").strip().upper()
+        for entry in entries
+        if entry.get("user_id") == user_id and entry.get("channel_id") == channel_id
+    }
+    scoped_issue_keys.discard("")
+    if not scoped_issue_keys:
+        return 0
+
+    existing_issue_keys = _existing_issue_keys_for_tenant(
+        session=session,
+        tenant=tenant,
+        issue_keys=scoped_issue_keys,
+    )
+    missing_issue_keys = scoped_issue_keys - existing_issue_keys
+    if not missing_issue_keys:
+        return 0
+
+    removed_count = 0
+    for issue_key in sorted(missing_issue_keys):
+        removed_count += remove_issue_key_from_tenant_ask_history(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
+            user_id=user_id,
+            channel_id=channel_id,
+        )
+    return removed_count
+
+
+def _collect_ask_context_with_history_context(
+    *,
+    session: Session,
+    tenant: Tenant,
+    user_id: str,
+    channel_id: str,
+    question: str,
+    scoped_issue_key: str | None,
+) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
+    history_context = _recent_ask_history(
+        tenant=tenant,
+        user_id=user_id,
+        channel_id=channel_id,
+        limit=MAX_ASK_HISTORY_CONTEXT,
+    )
+    if _prune_missing_issue_keys_from_ask_history(
+        session=session,
+        tenant=tenant,
+        user_id=user_id,
+        channel_id=channel_id,
+    ):
+        history_context = _recent_ask_history(
+            tenant=tenant,
+            user_id=user_id,
+            channel_id=channel_id,
+            limit=MAX_ASK_HISTORY_CONTEXT,
+        )
+
+    resolved_scoped_issue_key = scoped_issue_key
+    if resolved_scoped_issue_key is None:
+        for entry in reversed(history_context):
+            issue_key = str(entry.get("issue_key") or "").strip().upper()
+            if issue_key:
+                resolved_scoped_issue_key = issue_key
+                break
+
+    normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
+        session=session,
+        tenant=tenant,
+        question=question,
+        scoped_issue_key=resolved_scoped_issue_key,
+    )
+
+    return normalized_issue_key, requested_status, issues, status_counts, history_context
+
+
 def _store_pending_ask_action(
     *,
     session: Session,
@@ -934,7 +1267,14 @@ def _store_ask_history_entry(
     session.commit()
 
 
-def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown: str) -> tuple[str, dict]:
+def _seed_issues_with_codex(
+    *,
+    session: Session,
+    tenant: Tenant,
+    prompt_markdown: str,
+    force_issue_keys: list[str] | None = None,
+    allow_create: bool = True,
+) -> tuple[str, dict]:
     project_keys = _tenant_project_keys(tenant)
     if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
@@ -973,6 +1313,9 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
             if question and question not in question_set:
                 question_set.add(question)
                 clarification_questions.append(question)
+    normalized_force_issue_keys = [
+        str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()
+    ]
     issue_inputs: list[JiraIssueCreateInput] = []
     issue_requested_keys: list[str | None] = []
     for item in raw_issues[:12]:
@@ -989,6 +1332,8 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
             else []
         )
         requested_issue_key = _normalize_seed_issue_key(item.get("issue_key"))
+        if not requested_issue_key and len(normalized_force_issue_keys) > len(issue_requested_keys):
+            requested_issue_key = normalized_force_issue_keys[len(issue_requested_keys)]
         tags = _normalize_seed_issue_tags(item.get("tags"))
         labels = _normalize_seed_issue_labels(item.get("labels"))
         for tag in tags:
@@ -1024,18 +1369,6 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
 
     if not issue_inputs:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid issue drafts")
-
-    if clarification_questions:
-        prompt = "\n".join(f"{idx}. {question}" for idx, question in enumerate(clarification_questions, start=1))
-        return (
-            "I need a bit more detail before I can seed/update Jira issues. Reply with answers and run `!issues seed` again.\n"
-            f"{prompt}",
-            {
-                "requires_input": True,
-                "questions": clarification_questions,
-                "project_key": project_key,
-            },
-        )
 
     connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
     if not connection_id:
@@ -1095,7 +1428,7 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
                 project_key=project_key,
                 issues=to_create,
             )
-            if to_create
+            if to_create and allow_create
             else None
         )
     except (ValueError, JiraOAuthError) as exc:
@@ -1125,10 +1458,20 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
     )
     if create_errors:
         message = f"{message} (partial errors: {'; '.join(create_errors)})"
+    if clarification_questions:
+        prompt = "\n".join(f"{idx}. {question}" for idx, question in enumerate(clarification_questions, start=1))
+        message = (
+            f"{message}\n\nI still need more detail to finish issue quality. "
+            "Reply in the follow-up thread and I will update these tickets.\n"
+            f"{prompt}"
+        )
     return (
         message,
         {
             "project_key": project_key,
+            "requires_input": bool(clarification_questions),
+            "questions": clarification_questions,
+            "prompt_markdown": prompt_markdown,
             "updated_issue_keys": updated_issue_keys,
             "updated_issue_links": [
                 f"{browse_base_url}/browse/{issue_key}" for issue_key in updated_issue_keys if browse_base_url
@@ -1137,6 +1480,7 @@ def _seed_issues_with_codex(*, session: Session, tenant: Tenant, prompt_markdown
             "created_issue_links": [
                 f"{browse_base_url}/browse/{issue_key}" for issue_key in created_keys if browse_base_url
             ],
+            "all_issue_keys": [*updated_issue_keys, *created_keys],
             "errors": create_errors,
         },
     )
@@ -1151,25 +1495,13 @@ def _ask_board_message(
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str, dict]:
-    history_context = _recent_ask_history(
+    normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_context(
+        session=session,
         tenant=tenant,
         user_id=user_id,
         channel_id=channel_id,
-        limit=MAX_ASK_HISTORY_CONTEXT,
-    )
-    resolved_scoped_issue_key = scoped_issue_key
-    if resolved_scoped_issue_key is None:
-        for entry in reversed(history_context):
-            issue_key = str(entry.get("issue_key") or "").strip().upper()
-            if issue_key:
-                resolved_scoped_issue_key = issue_key
-                break
-
-    normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
-        session=session,
-        tenant=tenant,
         question=question,
-        scoped_issue_key=resolved_scoped_issue_key,
+        scoped_issue_key=scoped_issue_key,
     )
 
     settings = get_settings()
@@ -1375,24 +1707,13 @@ def execute_discord_command(
         normalized_user_id = payload.user_id.strip()
         normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
         if require_ask_confirmation:
-            history_context = _recent_ask_history(
+            normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_context(
+                session=session,
                 tenant=tenant,
                 user_id=normalized_user_id,
                 channel_id=normalized_channel_id,
-                limit=MAX_ASK_HISTORY_CONTEXT,
-            )
-            resolved_scoped_issue_key = scoped_issue_key
-            if resolved_scoped_issue_key is None:
-                for entry in reversed(history_context):
-                    issue_key_from_history = str(entry.get("issue_key") or "").strip().upper()
-                    if issue_key_from_history:
-                        resolved_scoped_issue_key = issue_key_from_history
-                        break
-            normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
-                session=session,
-                tenant=tenant,
                 question=question,
-                scoped_issue_key=resolved_scoped_issue_key,
+                scoped_issue_key=scoped_issue_key,
             )
             settings = get_settings()
             runtime = build_codex_runtime(session=session, settings=settings)
@@ -1530,34 +1851,143 @@ def execute_discord_command(
         )
 
     if command_name == "issues":
-        if len(arguments) < 2 or arguments[0].strip().lower() != "seed":
+        if not arguments:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !issues seed <markdown spec>",
+                detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
             )
-        prompt_markdown = " ".join(arguments[1:]).strip()
-        if not prompt_markdown:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !issues seed <markdown spec>",
+        subcommand = arguments[0].strip().lower()
+        if subcommand == "seed":
+            prompt_markdown = " ".join(arguments[1:]).strip()
+            if not prompt_markdown:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Usage: !issues seed <markdown spec>",
+                )
+            if defer_seed_issues:
+                return DiscordCommandResponse(
+                    ok=True,
+                    command=command_name,
+                    message="Issue seeding started. I will reply in this thread with created issue links when done.",
+                    data={"deferred": True, "prompt_markdown": prompt_markdown},
+                )
+            message, data = _seed_issues_with_codex(
+                session=session,
+                tenant=tenant,
+                prompt_markdown=prompt_markdown,
             )
-        if defer_seed_issues:
+            if (
+                isinstance(payload.channel_id, str)
+                and payload.channel_id.strip()
+                and bool(data.get("requires_input"))
+            ):
+                request_id = _store_seed_followup_context(
+                    session=session,
+                    tenant=tenant,
+                    request_id=None,
+                    user_id=normalized_user_id,
+                    channel_ids=[payload.channel_id.strip()],
+                    project_key=str(data.get("project_key") or ""),
+                    issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
+                    questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
+                    prompt_markdown=str(data.get("prompt_markdown") or prompt_markdown),
+                )
+                data["followup_request_id"] = request_id
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message="Issue seeding started. I will reply in this thread with created issue links when done.",
-                data={"deferred": True, "prompt_markdown": prompt_markdown},
+                message=message,
+                data=data,
             )
-        message, data = _seed_issues_with_codex(
-            session=session,
-            tenant=tenant,
-            prompt_markdown=prompt_markdown,
-        )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=message,
-            data=data,
+
+        if subcommand == "followup":
+            followup_text = " ".join(arguments[1:]).strip()
+            if not followup_text:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Usage: !issues followup <answers>",
+                )
+            if not payload.channel_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Follow-up replies require a Discord channel context",
+                )
+            context = _find_seed_followup_context(
+                tenant=tenant,
+                channel_id=payload.channel_id,
+            )
+            if context is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No pending issue-seed follow-up context was found for this channel",
+                )
+            context_user_id = str(context.get("user_id") or "").strip()
+            if context_user_id and context_user_id != normalized_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only the original requester can submit this issue-seed follow-up",
+                )
+            original_prompt = str(context.get("prompt_markdown") or "").strip()
+            context_questions = [
+                str(value).strip() for value in context.get("questions", []) if str(value).strip()
+            ]
+            question_block = (
+                "\n".join(f"- {value}" for value in context_questions)
+                if context_questions
+                else "- No explicit questions were captured."
+            )
+            followup_prompt = (
+                f"{original_prompt}\n\n"
+                "Additional clarification answers from follow-up conversation:\n"
+                f"{followup_text}\n\n"
+                "Outstanding clarification questions were:\n"
+                f"{question_block}\n\n"
+                "Update existing Jira issues where possible. Do not create duplicates."
+            )
+            forced_issue_keys = [
+                str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()
+            ]
+            message, data = _seed_issues_with_codex(
+                session=session,
+                tenant=tenant,
+                prompt_markdown=followup_prompt,
+                force_issue_keys=forced_issue_keys,
+                allow_create=False,
+            )
+            if bool(data.get("requires_input")):
+                request_id = _store_seed_followup_context(
+                    session=session,
+                    tenant=tenant,
+                    request_id=str(context.get("request_id") or ""),
+                    user_id=normalized_user_id,
+                    channel_ids=list(
+                        {
+                            *(context.get("channel_ids") or []),
+                            payload.channel_id,
+                        }
+                    ),
+                    project_key=str(data.get("project_key") or context.get("project_key") or ""),
+                    issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
+                    questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
+                    prompt_markdown=str(data.get("prompt_markdown") or followup_prompt),
+                )
+                data["followup_request_id"] = request_id
+            else:
+                _clear_seed_followup_context(
+                    session=session,
+                    tenant=tenant,
+                    request_id=str(context.get("request_id") or ""),
+                )
+            return DiscordCommandResponse(
+                ok=True,
+                command=command_name,
+                message=message,
+                data=data,
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
         )
 
     if command_name == "request":
