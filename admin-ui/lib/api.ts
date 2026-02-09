@@ -162,6 +162,7 @@ export type ReadyGatePreviewRecord = {
 export type RunRecord = {
   run_id: string;
   tenant_id: string;
+  project_id: string | null;
   issue_key: string;
   repo_url: string | null;
   branch: string | null;
@@ -327,6 +328,18 @@ export function updateTenant(
 export async function deleteTenant(credentials: Credentials, tenantId: string): Promise<void> {
   await request<void>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`, {
     method: "DELETE"
+  });
+}
+
+export function archiveTenant(credentials: Credentials, tenantId: string): Promise<TenantRecord> {
+  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/archive`, {
+    method: "POST"
+  });
+}
+
+export function unarchiveTenant(credentials: Credentials, tenantId: string): Promise<TenantRecord> {
+  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/unarchive`, {
+    method: "POST"
   });
 }
 
@@ -497,13 +510,23 @@ export function updateProject(
   );
 }
 
+export function getProject(credentials: Credentials, tenantId: string, projectId: string): Promise<ProjectRecord> {
+  return request<ProjectRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`
+  );
+}
+
 export function listRuns(
   credentials: Credentials,
-  params: { tenantId?: string; status?: string }
+  params: { tenantId?: string; projectId?: string; status?: string }
 ): Promise<RunRecord[]> {
   const query = new URLSearchParams();
   if (params.tenantId) {
     query.set("tenant_id", params.tenantId);
+  }
+  if (params.projectId) {
+    query.set("project_id", params.projectId);
   }
   if (params.status) {
     query.set("status", params.status);

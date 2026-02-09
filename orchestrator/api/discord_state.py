@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.storage.models import Tenant
+from orchestrator.storage.models import Project, Tenant
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
 PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "gap", "request", "bug"}
@@ -127,8 +128,8 @@ def assert_sensitive_command_permission(*, tenant: Tenant, command_name: str, us
         )
 
 
-def tenant_allowed_channel_ids(tenant: Tenant) -> set[str]:
-    discord_config = tenant.discord_config or {}
+def _channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    discord_config = discord_config or {}
     allowed: set[str] = set()
     configured_channel_id = str(discord_config.get("channel_id") or "").strip()
     if configured_channel_id:
@@ -149,14 +150,34 @@ def tenant_allowed_channel_ids(tenant: Tenant) -> set[str]:
     return allowed
 
 
-def assert_channel_scope(*, tenant: Tenant, channel_id: str | None) -> None:
+def project_allowed_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    allowed: set[str] = set()
+    for project in projects:
+        allowed.update(_channel_ids_from_discord_config(dict(project.discord_config or {})))
+    return allowed
+
+
+def tenant_allowed_channel_ids(*, session: Session, tenant: Tenant) -> set[str]:
+    # Project-level channel bindings take precedence, with tenant-level fallback for backward compatibility.
+    allowed = project_allowed_channel_ids(session=session, tenant_id=tenant.tenant_id)
+    allowed.update(_channel_ids_from_discord_config(dict(tenant.discord_config or {})))
+    return allowed
+
+
+def assert_channel_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> None:
     if not channel_id:
         return
-    allowed_channel_ids = tenant_allowed_channel_ids(tenant)
+    allowed_channel_ids = tenant_allowed_channel_ids(session=session, tenant=tenant)
     if allowed_channel_ids and channel_id not in allowed_channel_ids:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Command channel does not match tenant Discord channel",
+            detail="Command channel does not match project or tenant Discord channel",
         )
 
 
