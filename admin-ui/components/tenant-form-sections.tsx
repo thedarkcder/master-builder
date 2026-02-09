@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 
 import type { GitHubRepositoryRecord } from "@/lib/api";
 import type { TenantFormValues } from "@/lib/tenant-form";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -39,6 +38,18 @@ const DISCORD_NOTIFY_EVENT_OPTIONS = [
   }
 ] as const;
 
+function SectionFrame({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <div className="space-y-1">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 function FieldLabel({ children }: { children: ReactNode }) {
   return <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</label>;
 }
@@ -54,12 +65,7 @@ function Toggle({
 }) {
   return (
     <label className="flex items-center gap-2 text-sm">
-      <input
-        type="checkbox"
-        className="h-4 w-4 rounded border-input"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
+      <input type="checkbox" className="h-4 w-4 rounded border-input" checked={checked} onChange={(event) => onChange(event.target.checked)} />
       {label}
     </label>
   );
@@ -75,12 +81,8 @@ type IdentitySectionProps = {
 
 export function IdentitySection({ tenantId, name, enabled, onNameChange, onEnabledChange }: IdentitySectionProps) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Identity</CardTitle>
-        <CardDescription>Tenant identity and activation state. Tenant ID is generated from name.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 md:grid-cols-2">
+    <SectionFrame title="Identity" description="Tenant identity and activation state. Tenant ID is generated from name.">
+      <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2">
           <FieldLabel>Tenant ID</FieldLabel>
           <Input disabled value={tenantId} placeholder="generated from tenant name" />
@@ -90,8 +92,8 @@ export function IdentitySection({ tenantId, name, enabled, onNameChange, onEnabl
           <Input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="Tenant Demo" />
         </div>
         <Toggle label="Tenant enabled" checked={enabled} onChange={onEnabledChange} />
-      </CardContent>
-    </Card>
+      </div>
+    </SectionFrame>
   );
 }
 
@@ -113,12 +115,8 @@ export function JiraSection({
   onReadyStatusesTextChange
 }: JiraSectionProps) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Jira</CardTitle>
-        <CardDescription>Jira webhook and issue discovery configuration.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 md:grid-cols-2">
+    <SectionFrame title="Jira" description="Jira webhook and issue discovery configuration.">
+      <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2 md:col-span-2">
           <FieldLabel>OAuth Connection ID</FieldLabel>
           <Input value={jira.connection_id ?? ""} disabled placeholder="Connect Jira to generate a connection" />
@@ -168,8 +166,8 @@ export function JiraSection({
             placeholder="secret/jira-webhook"
           />
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SectionFrame>
   );
 }
 
@@ -180,12 +178,8 @@ type GitHubSectionProps = {
 
 export function GitHubSection({ github, onGitHubChange }: GitHubSectionProps) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>GitHub</CardTitle>
-        <CardDescription>GitHub App connection and webhook settings.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 md:grid-cols-2">
+    <SectionFrame title="GitHub" description="GitHub App connection and webhook settings.">
+      <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-2">
           <FieldLabel>Mode</FieldLabel>
           <Input value={github.mode} onChange={(event) => onGitHubChange({ ...github, mode: event.target.value })} placeholder="github_app" />
@@ -201,8 +195,8 @@ export function GitHubSection({ github, onGitHubChange }: GitHubSectionProps) {
             placeholder="secret/github-webhook"
           />
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SectionFrame>
   );
 }
 
@@ -220,36 +214,26 @@ export function RepositoryMappingSection({
   onGithubRepositoryTextChange
 }: RepositoryMappingSectionProps) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Repository Mapping</CardTitle>
-        <CardDescription>Define the target repository.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="space-y-2">
-          <FieldLabel>Repository</FieldLabel>
-          <select
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            value={githubRepositoryText}
-            onChange={(event) => onGithubRepositoryTextChange(event.target.value)}
-            disabled={repositoriesLoading || repositoryOptions.length === 0}
-          >
-            <option value="">
-              {repositoriesLoading
-                ? "Loading repositories..."
-                : repositoryOptions.length === 0
-                  ? "No repositories available"
-                  : "Select repository"}
+    <SectionFrame title="Repository Mapping" description="Define the target repository.">
+      <div className="space-y-2">
+        <FieldLabel>Repository</FieldLabel>
+        <select
+          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+          value={githubRepositoryText}
+          onChange={(event) => onGithubRepositoryTextChange(event.target.value)}
+          disabled={repositoriesLoading || repositoryOptions.length === 0}
+        >
+          <option value="">
+            {repositoriesLoading ? "Loading repositories..." : repositoryOptions.length === 0 ? "No repositories available" : "Select repository"}
+          </option>
+          {repositoryOptions.map((repo) => (
+            <option key={repo.html_url} value={repo.html_url}>
+              {repo.full_name}
             </option>
-            {repositoryOptions.map((repo) => (
-              <option key={repo.html_url} value={repo.html_url}>
-                {repo.full_name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </CardContent>
-    </Card>
+          ))}
+        </select>
+      </div>
+    </SectionFrame>
   );
 }
 
@@ -267,12 +251,8 @@ export function PolicySection({
   onPolicyAllowedCommandsTextChange
 }: PolicySectionProps) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Policy</CardTitle>
-        <CardDescription>Execution limits and safety policy.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <SectionFrame title="Policy" description="Execution limits and safety policy.">
+      <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-3">
           <div className="space-y-2">
             <FieldLabel>Max runtime (minutes)</FieldLabel>
@@ -299,15 +279,10 @@ export function PolicySection({
         </div>
         <div className="space-y-2">
           <FieldLabel>Allowed commands (one per line)</FieldLabel>
-          <Textarea
-            value={policyAllowedCommandsText}
-            onChange={(event) => onPolicyAllowedCommandsTextChange(event.target.value)}
-            placeholder="git status"
-            className="min-h-[110px]"
-          />
+          <Textarea value={policyAllowedCommandsText} onChange={(event) => onPolicyAllowedCommandsTextChange(event.target.value)} placeholder="git status" className="min-h-[110px]" />
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </SectionFrame>
   );
 }
 
@@ -325,14 +300,9 @@ export function DiscordSection({
   onToggleDiscordNotifyEvent
 }: DiscordSectionProps) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Discord (optional)</CardTitle>
-        <CardDescription>Notification events for this tenant. Channel binding is managed automatically by the backend.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <SectionFrame title="Discord (optional)" description="Notification events for this tenant. Channel binding is managed automatically by the backend.">
+      <div className="space-y-3">
         <Toggle label="Enable Discord settings" checked={discordEnabled} onChange={onDiscordEnabledChange} />
-
         {discordEnabled ? (
           <div className="space-y-2">
             <FieldLabel>Notify events</FieldLabel>
@@ -354,7 +324,7 @@ export function DiscordSection({
             </div>
           </div>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </SectionFrame>
   );
 }
