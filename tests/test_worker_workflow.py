@@ -11,7 +11,7 @@ from orchestrator.core.workflow_runner import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.worker import process_next_queued_run
 
 
@@ -113,6 +113,18 @@ class WorkerWorkflowTests(unittest.TestCase):
                         "require_agents_md": False,
                     },
                     discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="tenant-worker-default",
+                    tenant_id="tenant-worker",
+                    name="Default Project",
+                    github_repository="https://github.com/example/repo",
+                    jira_project_key="TP",
+                    is_archived=False,
                     created_at=now,
                     updated_at=now,
                 )

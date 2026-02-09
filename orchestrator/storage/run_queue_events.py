@@ -31,6 +31,7 @@ def notify_run_enqueued(
     session: Session,
     *,
     tenant_id: str,
+    project_id: str | None,
     run_id: str,
     issue_key: str,
 ) -> None:
@@ -41,6 +42,7 @@ def notify_run_enqueued(
     payload = json.dumps(
         {
             "tenant_id": tenant_id,
+            "project_id": project_id,
             "run_id": run_id,
             "issue_key": issue_key,
         },
@@ -54,8 +56,9 @@ def notify_run_enqueued(
         )
     except Exception:
         logger.exception(
-            "run_queue_notify_failed tenant_id=%s run_id=%s issue_key=%s",
+            "run_queue_notify_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s",
             tenant_id,
+            project_id,
             run_id,
             issue_key,
         )

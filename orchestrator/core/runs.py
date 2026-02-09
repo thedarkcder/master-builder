@@ -92,9 +92,11 @@ def enqueue_run(
     session: Session,
     *,
     tenant_id: str,
+    project_id: str | None,
     issue_key: str,
     issue_summary: str | None = None,
     issue_description: str | None = None,
+    repo_url: str | None = None,
     delivery_id: str | None = None,
     max_concurrent_runs: int | None = None,
 ) -> EnqueueRunResult:
@@ -134,10 +136,11 @@ def enqueue_run(
     run = Run(
         run_id=str(uuid4()),
         tenant_id=tenant_id,
+        project_id=project_id,
         issue_key=issue_key,
         issue_summary=issue_summary,
         issue_description=issue_description,
-        repo_url=None,
+        repo_url=repo_url,
         branch=None,
         pr_url=None,
         status=RUN_STATUS_QUEUED,
@@ -162,6 +165,7 @@ def enqueue_run(
     notify_run_enqueued(
         session,
         tenant_id=tenant_id,
+        project_id=project_id,
         run_id=run.run_id,
         issue_key=issue_key,
     )
