@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
+from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import cancel_run, enqueue_run
 from orchestrator.storage.models import Run, Tenant
 
@@ -45,7 +46,10 @@ def dispatch_run_control_command(
             issue_description=None,
             repo_url=project.github_repository,
             delivery_id=None,
-            max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
+            max_concurrent_runs=resolve_effective_policy(
+                tenant_policy=tenant.policy_config,
+                project_overrides=project.policy_overrides,
+            ).get("max_concurrent_runs"),
         )
         if not enqueue_result.enqueued:
             raise HTTPException(
@@ -113,7 +117,10 @@ def dispatch_run_control_command(
             issue_description=run.issue_description,
             repo_url=project.github_repository,
             delivery_id=None,
-            max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
+            max_concurrent_runs=resolve_effective_policy(
+                tenant_policy=tenant.policy_config,
+                project_overrides=project.policy_overrides,
+            ).get("max_concurrent_runs"),
         )
         if not enqueue_result.enqueued:
             raise HTTPException(

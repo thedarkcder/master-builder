@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 class QueueSelectionResult:
     run: Run | None = None
     tenant: Tenant | None = None
+    effective_policy: dict | None = None
     terminal_run: Run | None = None
 
 
@@ -59,10 +61,14 @@ def select_next_queued_run(
             session.refresh(candidate)
             return QueueSelectionResult(terminal_run=candidate)
 
-        max_concurrent_runs = coerce_positive_int(
-            candidate_tenant.policy_config.get("max_concurrent_runs"),
-            default=1,
+        project = session.get(Project, candidate.project_id) if candidate.project_id else None
+        project_overrides = project.policy_overrides if project is not None else {}
+        effective_policy = resolve_effective_policy(
+            tenant_policy=candidate_tenant.policy_config,
+            project_overrides=project_overrides,
         )
+
+        max_concurrent_runs = coerce_positive_int(effective_policy.get("max_concurrent_runs"), default=1)
         current_running = running_run_count(
             session,
             tenant_id=candidate_tenant.tenant_id,
@@ -78,6 +84,6 @@ def select_next_queued_run(
             )
             continue
 
-        return QueueSelectionResult(run=candidate, tenant=candidate_tenant)
+        return QueueSelectionResult(run=candidate, tenant=candidate_tenant, effective_policy=effective_policy)
 
     return QueueSelectionResult()

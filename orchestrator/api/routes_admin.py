@@ -36,6 +36,7 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
+from orchestrator.core.project_policy import normalize_project_policy_overrides, resolve_effective_policy
 from orchestrator.core.secret_manager import (
     resolve_secret_ref,
 )
@@ -102,13 +103,18 @@ def _run_to_schema(run: Run) -> RunRead:
     )
 
 
-def _project_to_schema(project: Project) -> ProjectRead:
+def _project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
     return ProjectRead(
         project_id=project.project_id,
         tenant_id=project.tenant_id,
         name=project.name,
         github_repository=project.github_repository,
         jira_project_key=project.jira_project_key,
+        policy_overrides=normalize_project_policy_overrides(project.policy_overrides),
+        effective_policy=resolve_effective_policy(
+            tenant_policy=tenant_policy,
+            project_overrides=project.policy_overrides,
+        ),
         is_archived=project.is_archived,
         created_at=project.created_at,
         updated_at=project.updated_at,
@@ -203,11 +209,29 @@ def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> N
             name=_default_project_name_from_repo(repo_url=repo_url, tenant_id=tenant.tenant_id),
             github_repository=repo_url,
             jira_project_key=jira_project_key,
+            policy_overrides={},
             is_archived=False,
             created_at=now,
             updated_at=now,
         )
     )
+
+
+def _sync_tenant_jira_project_keys(session: Session, *, tenant: Tenant) -> None:
+    projects = session.execute(
+        select(Project)
+        .where(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
+        .order_by(Project.created_at.asc())
+    ).scalars()
+    keys: list[str] = []
+    for project in projects:
+        normalized = _normalize_project_key(project.jira_project_key)
+        if normalized and normalized not in keys:
+            keys.append(normalized)
+    if keys:
+        jira_config = dict(tenant.jira_config)
+        jira_config["project_keys"] = keys
+        tenant.jira_config = jira_config
 
 
 def _with_managed_github_refs(raw_github_config: dict) -> dict:
@@ -1162,6 +1186,7 @@ def create_tenant(
     )
     session.add(tenant)
     _ensure_default_project_for_tenant(session, tenant=tenant)
+    _sync_tenant_jira_project_keys(session, tenant=tenant)
     session.commit()
     session.refresh(tenant)
     return _tenant_to_schema(tenant)
@@ -1207,6 +1232,7 @@ def update_tenant(
     )
     tenant.updated_at = datetime.now(timezone.utc)
     _ensure_default_project_for_tenant(session, tenant=tenant)
+    _sync_tenant_jira_project_keys(session, tenant=tenant)
 
     session.commit()
     session.refresh(tenant)
@@ -1242,7 +1268,7 @@ def list_projects(
     projects = session.execute(
         select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at)
     ).scalars().all()
-    return [_project_to_schema(project) for project in projects]
+    return [_project_to_schema(project, tenant_policy=tenant.policy_config) for project in projects]
 
 
 @router.post("/tenants/{tenant_id}/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
@@ -1269,12 +1295,14 @@ def create_project(
         name=normalized_name,
         github_repository=normalized_repo,
         jira_project_key=normalized_jira_key,
+        policy_overrides=normalize_project_policy_overrides(payload.policy_overrides),
         is_archived=False,
         created_at=now,
         updated_at=now,
     )
     session.add(project)
     tenant.updated_at = now
+    _sync_tenant_jira_project_keys(session, tenant=tenant)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -1284,7 +1312,7 @@ def create_project(
             detail="A project with the same repository or Jira project key already exists for this tenant",
         ) from exc
     session.refresh(project)
-    return _project_to_schema(project)
+    return _project_to_schema(project, tenant_policy=tenant.policy_config)
 
 
 @router.get("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
@@ -1297,7 +1325,10 @@ def get_project(
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return _project_to_schema(project)
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    return _project_to_schema(project, tenant_policy=tenant.policy_config)
 
 
 @router.put("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
@@ -1321,11 +1352,13 @@ def update_project(
     project.name = normalized_name
     project.github_repository = normalized_repo
     project.jira_project_key = normalized_jira_key
+    project.policy_overrides = normalize_project_policy_overrides(payload.policy_overrides)
     project.is_archived = payload.is_archived
     project.updated_at = datetime.now(timezone.utc)
 
     tenant = session.get(Tenant, tenant_id)
     if tenant is not None:
+        _sync_tenant_jira_project_keys(session, tenant=tenant)
         tenant.updated_at = project.updated_at
 
     try:
@@ -1337,7 +1370,9 @@ def update_project(
             detail="A project with the same repository or Jira project key already exists for this tenant",
         ) from exc
     session.refresh(project)
-    return _project_to_schema(project)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    return _project_to_schema(project, tenant_policy=tenant.policy_config)
 
 
 @router.post("/tenants/{tenant_id}/test-jira", response_model=IntegrationTestResult)

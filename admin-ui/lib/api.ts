@@ -83,6 +83,48 @@ export type JiraProjectRecord = {
   name: string;
 };
 
+export type ProjectPolicyOverrides = Partial<
+  Pick<
+    PolicyConfig,
+    | "allow_jira_transitions"
+    | "allow_pr_creation"
+    | "allow_label_mutations"
+    | "max_runtime_minutes"
+    | "max_dev_test_review_loops"
+    | "max_concurrent_runs"
+    | "allowed_commands"
+    | "require_agents_md"
+  >
+>;
+
+export type ProjectRecord = {
+  project_id: string;
+  tenant_id: string;
+  name: string;
+  github_repository: string;
+  jira_project_key: string;
+  policy_overrides: ProjectPolicyOverrides;
+  effective_policy: PolicyConfig;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectCreatePayload = {
+  name: string;
+  github_repository: string;
+  jira_project_key: string;
+  policy_overrides?: ProjectPolicyOverrides;
+};
+
+export type ProjectUpdatePayload = {
+  name: string;
+  github_repository: string;
+  jira_project_key: string;
+  policy_overrides?: ProjectPolicyOverrides;
+  is_archived: boolean;
+};
+
 export type JiraWebhookActionResult = {
   ok: boolean;
   action: string;
@@ -421,6 +463,37 @@ export function listGitHubRepositories(
   return request<GitHubRepositoryRecord[]>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/github/repositories`
+  );
+}
+
+export function listProjects(credentials: Credentials, tenantId: string): Promise<ProjectRecord[]> {
+  return request<ProjectRecord[]>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects`);
+}
+
+export function createProject(
+  credentials: Credentials,
+  tenantId: string,
+  payload: ProjectCreatePayload
+): Promise<ProjectRecord> {
+  return request<ProjectRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateProject(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectUpdatePayload
+): Promise<ProjectRecord> {
+  return request<ProjectRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
   );
 }
 

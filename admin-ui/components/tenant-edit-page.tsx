@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { KeyRound, Link2 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { ProjectsManager } from "@/components/projects-manager";
 import { TenantForm } from "@/components/tenant-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +16,8 @@ import {
   disconnectJira,
   getTenant,
   getJiraWebhookDiagnostics,
+  listJiraProjects,
+  listProjects,
   listGitHubRepositories,
   listDiscordAllowlistRequests,
   previewReadyGate,
@@ -28,14 +31,20 @@ import {
   resetJiraWebhook,
   testGithub,
   testJira,
+  createProject,
   updateTenant,
+  updateProject,
   type TenantRecord,
-  type TenantUpdatePayload
+  type TenantUpdatePayload,
+  type JiraProjectRecord,
+  type ProjectCreatePayload,
+  type ProjectRecord,
+  type ProjectUpdatePayload
 } from "@/lib/api";
 import { recordToFormValues } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
-type TenantEditSection = "setup" | "integrations" | "jira" | "github" | "discord" | "health" | "config" | "notifications";
+type TenantEditSection = "setup" | "integrations" | "jira" | "github" | "discord" | "health" | "config" | "projects" | "notifications";
 
 export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const params = useParams<{ tenantId: string }>();
@@ -53,6 +62,9 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [repositoriesLoading, setRepositoriesLoading] = useState(false);
   const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
   const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
+  const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [projectsBusy, setProjectsBusy] = useState(false);
 
   const statusClasses = useMemo(() => {
     const normalized = statusLine.toLowerCase();
@@ -105,6 +117,18 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setTenant(payload);
       await loadJiraWebhookDiagnostics();
       await loadGitHubRepositories({ silent: true });
+      if (payload.jira.connection_id) {
+        try {
+          const availableProjects = await listJiraProjects(credentials, payload.jira.connection_id);
+          setJiraProjects(availableProjects);
+        } catch {
+          setJiraProjects([]);
+        }
+      } else {
+        setJiraProjects([]);
+      }
+      const loadedProjects = await listProjects(credentials, params.tenantId);
+      setProjects(loadedProjects);
       const requests = await listDiscordAllowlistRequests(credentials, params.tenantId);
       setAllowlistRequests(requests);
     } catch (error) {
@@ -264,6 +288,59 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
   }
 
+  async function refreshProjectSources() {
+    if (!credentials) {
+      return;
+    }
+    setProjectsBusy(true);
+    try {
+      await loadGitHubRepositories({ silent: true });
+      if (tenant?.jira.connection_id) {
+        const availableProjects = await listJiraProjects(credentials, tenant.jira.connection_id);
+        setJiraProjects(availableProjects);
+      }
+      setStatusLine("Project option sources refreshed.");
+    } catch (error) {
+      setStatusLine(`Unable to refresh project options: ${(error as Error).message}`);
+    } finally {
+      setProjectsBusy(false);
+    }
+  }
+
+  async function handleCreateProject(payload: ProjectCreatePayload) {
+    if (!credentials) {
+      return;
+    }
+    setProjectsBusy(true);
+    try {
+      await createProject(credentials, params.tenantId, payload);
+      const refreshed = await listProjects(credentials, params.tenantId);
+      setProjects(refreshed);
+      setStatusLine("Project created.");
+    } catch (error) {
+      setStatusLine(`Unable to create project: ${(error as Error).message}`);
+    } finally {
+      setProjectsBusy(false);
+    }
+  }
+
+  async function handleUpdateProject(projectId: string, payload: ProjectUpdatePayload) {
+    if (!credentials) {
+      return;
+    }
+    setProjectsBusy(true);
+    try {
+      await updateProject(credentials, params.tenantId, projectId, payload);
+      const refreshed = await listProjects(credentials, params.tenantId);
+      setProjects(refreshed);
+      setStatusLine(payload.is_archived ? "Project archived." : "Project updated.");
+    } catch (error) {
+      setStatusLine(`Unable to update project: ${(error as Error).message}`);
+    } finally {
+      setProjectsBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <Card>
@@ -344,7 +421,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             <ol className="list-decimal space-y-2 pl-5">
               <li>Manage required integration secrets.</li>
               <li>Connect integrations from the dedicated Jira and GitHub pages.</li>
-              <li>Save tenant policy and repository mapping.</li>
+              <li>Create project mappings (repo + Jira key) in Projects.</li>
               <li>Run health checks and preview ready gate.</li>
             </ol>
             <div className="flex flex-wrap gap-2 border-t pt-3">
@@ -388,6 +465,13 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               <p className="text-muted-foreground">Manage notification and command settings for tenant channels.</p>
               <Button asChild variant="outline" size="sm">
                 <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/discord`}>Open Discord</Link>
+              </Button>
+            </div>
+            <div className="space-y-2 rounded-md border p-3">
+              <p className="font-medium">Projects</p>
+              <p className="text-muted-foreground">Manage repository and Jira mapping per project.</p>
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/projects`}>Open Projects</Link>
               </Button>
             </div>
           </CardContent>
@@ -459,7 +543,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         <Card>
           <CardHeader>
             <CardTitle>GitHub Integration</CardTitle>
-            <CardDescription>Connect GitHub App and choose the active repository mapping.</CardDescription>
+            <CardDescription>Connect GitHub App once for this tenant. Project mappings are managed in Projects.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
             <p>
@@ -479,17 +563,34 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               initialValues={recordToFormValues(tenant)}
               onSubmit={handleSave}
               submitting={saving}
-              repositoryOptions={githubRepositories}
-              repositoriesLoading={repositoriesLoading}
-              onRefreshRepositoryOptions={() => void loadGitHubRepositories()}
               visibleSections={{
                 identity: false,
                 jira: false,
                 github: true,
-                repository: true,
+                repository: false,
                 policy: false,
                 discord: false
               }}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {section === "projects" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Projects</CardTitle>
+            <CardDescription>Create, edit, and archive tenant projects with repo/Jira mappings.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ProjectsManager
+              projects={projects}
+              repositories={githubRepositories}
+              jiraProjects={jiraProjects}
+              busy={projectsBusy || repositoriesLoading}
+              onRefreshOptions={() => void refreshProjectSources()}
+              onCreateProject={handleCreateProject}
+              onUpdateProject={handleUpdateProject}
             />
           </CardContent>
         </Card>

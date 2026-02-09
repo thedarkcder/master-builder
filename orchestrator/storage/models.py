@@ -44,6 +44,7 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     github_repository: Mapped[str] = mapped_column(String(512), nullable=False)
     jira_project_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_overrides: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
