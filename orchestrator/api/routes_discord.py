@@ -8,19 +8,19 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.discord_command_dispatcher import dispatch_simple_discord_command
+from orchestrator.api.discord_command_parser import resolve_discord_command
+from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_state import (
-    REQUEST_PERMISSION_LABELS,
     assert_channel_scope as _assert_channel_scope,
     assert_sensitive_command_permission as _assert_sensitive_command_permission,
     clear_seed_followup_context as _clear_seed_followup_context,
-    create_allowlist_request as _create_allowlist_request,
     find_seed_followup_context as _find_seed_followup_context,
     normalize_status_name as _normalize_status_name,
-    parse_command_text as _parse_command_text,
     store_seed_followup_context as _store_seed_followup_context,
 )
 from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
@@ -37,13 +37,9 @@ from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
     RUN_STATUS_FAILED,
-    RUN_STATUS_QUEUED,
-    RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,
-    cancel_run,
-    enqueue_run,
 )
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant, WebhookDelivery
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssueDetail, JiraIssuePreview, JiraOAuthError
 
 router = APIRouter(tags=["discord"])
@@ -63,15 +59,6 @@ GAP_HEADING_STOP_WORDS = {
     "decision gate",
     "good to do",
 }
-
-
-def _format_elapsed_seconds(*, started_at: datetime | None, created_at: datetime | None) -> int:
-    anchor = started_at or created_at
-    if anchor is None:
-        return 0
-    if anchor.tzinfo is None:
-        anchor = anchor.replace(tzinfo=timezone.utc)
-    return max(0, int((datetime.now(timezone.utc) - anchor).total_seconds()))
 
 
 def _fetch_jira_issue_preview(
@@ -380,22 +367,6 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Issue is in '{issue_status}', expected one of: {display_statuses}",
         )
-
-
-def _command_help_message() -> str:
-    return (
-        "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
-        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>, !gap <ISSUE_KEY>, "
-        "!bug <summary> [details], "
-        "!issues seed <markdown spec>, !request <run_controls|seed_issues|all_sensitive> [reason]"
-    )
-
-
-def _command_policy_message() -> str:
-    return (
-        "Policy: no secrets in output, no sleep-based synchronization, tests required for behavior "
-        "changes, and Decision Gate required when requirements are ambiguous."
-    )
 
 
 def _project_filter_jql(*, session: Session, tenant: Tenant) -> str:
@@ -1515,128 +1486,26 @@ def execute_discord_command(
 
     _assert_channel_scope(tenant=tenant, channel_id=payload.channel_id)
     raw_command = payload.command.strip()
-    command_text = raw_command
-    if raw_command and not raw_command.startswith("!") and payload.channel_id:
-        followup_context = _find_seed_followup_context(tenant=tenant, channel_id=payload.channel_id)
-        if followup_context is not None:
-            command_text = f"!issues followup {raw_command}"
-    if allow_plain_ask and raw_command and not raw_command.startswith("!") and command_text == raw_command:
-        command_text = f"!ask {raw_command}"
-    command_name, arguments = _parse_command_text(command_text)
+    _, command_name, arguments = resolve_discord_command(
+        tenant=tenant,
+        raw_command=raw_command,
+        channel_id=payload.channel_id,
+        allow_plain_ask=allow_plain_ask,
+    )
     _assert_sensitive_command_permission(tenant=tenant, command_name=command_name, user_id=payload.user_id)
     normalized_user_id = payload.user_id.strip()
     normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
 
-    if command_name == "help":
-        return DiscordCommandResponse(ok=True, command=command_name, message=_command_help_message(), data=None)
-
-    if command_name == "policy":
-        return DiscordCommandResponse(ok=True, command=command_name, message=_command_policy_message(), data=None)
-
-    if command_name == "status":
-        queued_count = int(
-            session.execute(
-                select(func.count(Run.run_id)).where(
-                    Run.tenant_id == tenant_id,
-                    Run.status == RUN_STATUS_QUEUED,
-                )
-            ).scalar_one()
-        )
-        active_runs = session.execute(
-            select(Run)
-            .where(
-                Run.tenant_id == tenant_id,
-                Run.status == RUN_STATUS_RUNNING,
-            )
-            .order_by(Run.started_at.asc())
-        ).scalars().all()
-        last_webhook_seen = session.execute(
-            select(func.max(WebhookDelivery.created_at)).where(WebhookDelivery.tenant_id == tenant_id)
-        ).scalar_one()
-        active_payload = [
-            {
-                "run_id": run.run_id,
-                "issue_key": run.issue_key,
-                "status": run.status,
-                "elapsed_seconds": _format_elapsed_seconds(
-                    started_at=run.started_at,
-                    created_at=run.created_at,
-                ),
-            }
-            for run in active_runs
-        ]
-        message = (
-            f"Tenant {'enabled' if tenant.is_enabled else 'disabled'}; "
-            f"queue_depth={queued_count}; active_runs={len(active_payload)}"
-        )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=message,
-            data={
-                "webhook_last_seen": last_webhook_seen.isoformat() if last_webhook_seen else None,
-                "queue_depth": queued_count,
-                "active_runs": active_payload,
-            },
-        )
-
-    if command_name == "runs":
-        limit = 10
-        if arguments:
-            try:
-                limit = min(max(1, int(arguments[0])), 50)
-            except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid run limit") from exc
-
-        runs = session.execute(
-            select(Run)
-            .where(Run.tenant_id == tenant_id)
-            .order_by(Run.created_at.desc())
-            .limit(limit)
-        ).scalars().all()
-        run_payload = [
-            {
-                "run_id": run.run_id,
-                "issue_key": run.issue_key,
-                "status": run.status,
-                "pr_url": run.pr_url,
-                "created_at": run.created_at.isoformat() if run.created_at else None,
-            }
-            for run in runs
-        ]
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Returned {len(run_payload)} run(s)",
-            data={"runs": run_payload},
-        )
-
-    if command_name == "link":
-        if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !link <ISSUE_KEY>")
-        issue_key = arguments[0].strip().upper()
-        latest_pr = session.execute(
-            select(Run)
-            .where(
-                Run.tenant_id == tenant_id,
-                Run.issue_key == issue_key,
-                Run.pr_url.is_not(None),
-            )
-            .order_by(Run.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        jira_base = "https://master-builder.atlassian.net"
-        jira_link = f"{jira_base}/browse/{issue_key}"
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Links for {issue_key}",
-            data={
-                "issue_key": issue_key,
-                "jira_url": jira_link,
-                "pr_url": latest_pr.pr_url if latest_pr else None,
-            },
-        )
+    simple_response = dispatch_simple_discord_command(
+        session=session,
+        tenant=tenant,
+        tenant_id=tenant_id,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+    )
+    if simple_response is not None:
+        return simple_response
 
     if command_name == "ask":
         if not arguments:
@@ -1965,136 +1834,19 @@ def execute_discord_command(
             detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
         )
 
-    if command_name == "request":
-        if not arguments:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !request <run_controls|seed_issues|all_sensitive> [reason]",
-            )
-        permission = arguments[0].strip().lower()
-        reason = " ".join(arguments[1:]).strip() or None
-        if permission not in REQUEST_PERMISSION_LABELS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Permission must be one of: run_controls, seed_issues, all_sensitive",
-            )
-
-        _, message = _create_allowlist_request(
-            session=session,
-            tenant=tenant,
-            user_id=payload.user_id.strip(),
-            channel_id=payload.channel_id.strip() if payload.channel_id else None,
-            permissions=[permission],
-            reason=reason,
-        )
-        suffix = f" Requested permission: {REQUEST_PERMISSION_LABELS[permission]}."
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"{message}{suffix}",
-            data={"user_id": payload.user_id.strip(), "requested": True, "permission": permission},
-        )
-
-    if command_name == "run":
-        if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !run <ISSUE_KEY>")
-        issue_key = arguments[0].strip().upper()
-        project = _resolve_project_for_issue(
-            session=session,
-            tenant=tenant,
-            issue_key=issue_key,
-        )
-        issue_preview = _fetch_jira_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
-        _ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
-        enqueue_result = enqueue_run(
-            session,
-            tenant_id=tenant_id,
-            project_id=project.project_id,
-            issue_key=issue_key,
-            issue_summary=issue_preview.summary,
-            issue_description=None,
-            repo_url=project.github_repository,
-            delivery_id=None,
-            max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
-        )
-        if not enqueue_result.enqueued:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Run could not be queued: {enqueue_result.reason}",
-            )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Queued run {enqueue_result.run.run_id} for {issue_key}",
-            data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
-        )
-
-    if command_name == "cancel":
-        if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !cancel <RUN_ID>")
-        run_id = arguments[0].strip()
-        run = session.get(Run, run_id)
-        if run is None or run.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
-        cancelled = cancel_run(session, run_id=run_id, cancelled_by=payload.user_id)
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Cancelled run {cancelled.run_id}",
-            data={"run_id": cancelled.run_id, "status": cancelled.status},
-        )
-
-    if command_name == "retry":
-        if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !retry <ISSUE_KEY|RUN_ID>")
-        target = arguments[0].strip()
-        run = session.get(Run, target)
-        if run is None:
-            issue_key = target.upper()
-            run = session.execute(
-                select(Run)
-                .where(Run.tenant_id == tenant_id, Run.issue_key == issue_key)
-                .order_by(Run.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-        if run is None or run.tenant_id != tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No run was found for '{target}'",
-            )
-        if run.status not in RETRYABLE_STATUSES:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Run {run.run_id} is {run.status}; only failed/blocked/cancelled runs can be retried",
-            )
-        issue_preview = _fetch_jira_issue_preview(session=session, tenant=tenant, issue_key=run.issue_key)
-        _ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
-        project = _resolve_project_for_issue(
-            session=session,
-            tenant=tenant,
-            issue_key=run.issue_key,
-        )
-        enqueue_result = enqueue_run(
-            session,
-            tenant_id=tenant_id,
-            project_id=project.project_id,
-            issue_key=run.issue_key,
-            issue_summary=issue_preview.summary,
-            issue_description=run.issue_description,
-            repo_url=project.github_repository,
-            delivery_id=None,
-            max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
-        )
-        if not enqueue_result.enqueued:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Retry could not be queued: {enqueue_result.reason}",
-            )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Queued retry run {enqueue_result.run.run_id} for {run.issue_key}",
-            data={"run_id": enqueue_result.run.run_id, "issue_key": run.issue_key},
-        )
+    run_control_response = dispatch_run_control_command(
+        session=session,
+        tenant=tenant,
+        tenant_id=tenant_id,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+        retryable_statuses=RETRYABLE_STATUSES,
+        resolve_project_for_issue=_resolve_project_for_issue,
+        fetch_issue_preview=_fetch_jira_issue_preview,
+        ensure_issue_is_executable=_ensure_issue_is_executable,
+    )
+    if run_control_response is not None:
+        return run_control_response
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported command")
