@@ -1502,7 +1502,13 @@ def execute_discord_command(
         channel_id=payload.channel_id,
         allow_plain_ask=allow_plain_ask,
     )
-    _assert_sensitive_command_permission(tenant=tenant, command_name=command_name, user_id=payload.user_id)
+    _assert_sensitive_command_permission(
+        session=session,
+        tenant=tenant,
+        command_name=command_name,
+        user_id=payload.user_id,
+        channel_id=payload.channel_id,
+    )
     normalized_user_id = payload.user_id.strip()
     normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
 

@@ -16,6 +16,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.discord_commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord_gateway_listener import DiscordGatewayListener
 from orchestrator.core.logging import configure_logging
+from orchestrator.storage.migrations import run_migrations
 
 
 def create_app() -> FastAPI:
@@ -44,6 +45,8 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def _startup_discord_command_sync() -> None:
+        if settings.auto_migrate_on_startup:
+            run_migrations()
         # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
         sync_discord_guild_commands(settings=settings)
         gateway_listener.start()

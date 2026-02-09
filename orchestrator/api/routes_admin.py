@@ -49,7 +49,7 @@ from orchestrator.core.github_install_state import create_install_state_token, p
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError, DiscordTextChannel
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
@@ -104,6 +104,7 @@ def _run_to_schema(run: Run) -> RunRead:
 
 
 def _project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
+    normalized_project_discord = _normalize_project_discord_config(project.discord_config)
     return ProjectRead(
         project_id=project.project_id,
         tenant_id=project.tenant_id,
@@ -113,7 +114,7 @@ def _project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         policy_overrides=normalize_project_policy_overrides(project.policy_overrides),
         environment=dict(project.environment or {}),
         secret_refs=dict(project.secret_refs or {}),
-        discord=_normalize_project_discord_config(project.discord_config),
+        discord=normalized_project_discord if normalized_project_discord else None,
         effective_policy=resolve_effective_policy(
             tenant_policy=tenant_policy,
             project_overrides=project.policy_overrides,
@@ -234,6 +235,86 @@ def _normalize_project_discord_config(raw: dict | None) -> dict:
         if normalized_seed_threads:
             normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
 
+    return normalized
+
+
+def _sanitize_discord_channel_name(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9-]+", "-", value.strip().lower())
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
+    return normalized[:100]
+
+
+def _resolve_project_discord_channel_name(*, settings, tenant: Tenant, project: Project) -> str:  # noqa: ANN001
+    template = str(settings.discord_channel_name_template or "").strip() or "proj-{jira_project_key}-{project_name}"
+    includes_project_token = "{project_name}" in template or "{project_id}" in template
+    rendered = template.format(
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+        project_name=project.name,
+        jira_project_key=project.jira_project_key,
+    )
+    if not includes_project_token:
+        rendered = f"{rendered}-{project.jira_project_key}-{project.name}"
+    sanitized = _sanitize_discord_channel_name(rendered)
+    if sanitized:
+        return sanitized
+    fallback = _sanitize_discord_channel_name(f"proj-{project.jira_project_key}-{project.name}")
+    return fallback or f"proj-{project.jira_project_key}"[:100]
+
+
+def _resolve_project_discord_channel_binding(
+    *,
+    session: Session,
+    settings,  # noqa: ANN001
+    tenant: Tenant,
+    project: Project,
+    discord_config: dict,
+) -> dict:
+    normalized = dict(discord_config or {})
+    existing_channel_id = str(normalized.get("channel_id") or "").strip()
+    if existing_channel_id:
+        normalized["channel_id"] = existing_channel_id
+        return normalized
+
+    token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not token_ref:
+        raise ValueError("Discord bot token reference is not configured")
+    bot_token = resolve_scoped_secret_ref(
+        session,
+        secret_ref=token_ref,
+        encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+    )
+    if not bot_token:
+        raise ValueError(f"Discord bot token secret is missing: {token_ref}")
+
+    guild_id = settings.discord_guild_id.strip()
+    if not guild_id:
+        guild_ref = settings.discord_guild_id_secret_ref.strip()
+        if guild_ref:
+            guild_id = (
+                resolve_scoped_secret_ref(
+                    session,
+                    secret_ref=guild_ref,
+                    encryption_key=settings.secrets_encryption_key,
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                )
+                or ""
+            ).strip()
+    if not guild_id:
+        raise ValueError("Discord guild ID is not configured")
+
+    parent_id = settings.discord_channel_category_id.strip() or None
+    channel_name = _resolve_project_discord_channel_name(settings=settings, tenant=tenant, project=project)
+    client = DiscordApiClient(bot_token=bot_token)
+    channel: DiscordTextChannel = client.ensure_text_channel(
+        guild_id=guild_id,
+        name=channel_name,
+        parent_id=parent_id,
+    )
+    normalized["channel_id"] = channel.channel_id
     return normalized
 
 
@@ -580,7 +661,11 @@ def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dic
     return merged
 
 
-def _parse_discord_allowlist_requests(discord_config: dict | None) -> list[DiscordAllowlistRequestRead]:
+def _parse_discord_allowlist_requests(
+    discord_config: dict | None,
+    *,
+    project_id: str | None = None,
+) -> list[DiscordAllowlistRequestRead]:
     if not isinstance(discord_config, dict):
         return []
     raw = discord_config.get("allowlist_requests")
@@ -601,6 +686,7 @@ def _parse_discord_allowlist_requests(discord_config: dict | None) -> list[Disco
         )
         normalized.append(
             DiscordAllowlistRequestRead(
+                project_id=project_id,
                 user_id=user_id,
                 requested_at=str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
                 channel_id=str(item.get("channel_id") or "").strip() or None,
@@ -1179,26 +1265,28 @@ def disconnect_tenant_jira(
 
 
 @router.get(
-    "/tenants/{tenant_id}/discord/allowlist-requests",
+    "/tenants/{tenant_id}/projects/{project_id}/discord/allowlist-requests",
     response_model=list[DiscordAllowlistRequestRead],
 )
 def list_discord_allowlist_requests(
     tenant_id: str,
+    project_id: str,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[DiscordAllowlistRequestRead]:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    return _parse_discord_allowlist_requests(tenant.discord_config)
+    project = session.get(Project, project_id)
+    if project is None or project.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return _parse_discord_allowlist_requests(project.discord_config, project_id=project.project_id)
 
 
 @router.post(
-    "/tenants/{tenant_id}/discord/allowlist-requests/{user_id}/approve",
+    "/tenants/{tenant_id}/projects/{project_id}/discord/allowlist-requests/{user_id}/approve",
     response_model=DiscordAllowlistApprovalResult,
 )
 def approve_discord_allowlist_request(
     tenant_id: str,
+    project_id: str,
     user_id: str,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
@@ -1206,13 +1294,16 @@ def approve_discord_allowlist_request(
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    project = session.get(Project, project_id)
+    if project is None or project.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
     normalized_user_id = user_id.strip()
     if not normalized_user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Discord user ID is required")
 
-    discord_config = dict(tenant.discord_config or {})
-    existing_requests = _parse_discord_allowlist_requests(discord_config)
+    discord_config = dict(project.discord_config or {})
+    existing_requests = _parse_discord_allowlist_requests(discord_config, project_id=project.project_id)
     matching_request = next((item for item in existing_requests if item.user_id == normalized_user_id), None)
     if matching_request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allowlist request not found")
@@ -1231,7 +1322,8 @@ def approve_discord_allowlist_request(
         for item in existing_requests
         if item.user_id != normalized_user_id
     ]
-    tenant.discord_config = discord_config
+    project.discord_config = discord_config
+    project.updated_at = datetime.now(timezone.utc)
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
 
@@ -1248,7 +1340,7 @@ def approve_discord_allowlist_request(
     except (DiscordApiError, ValueError) as exc:
         notify_error = str(exc)
 
-    details = f"Approved allowlist request for {normalized_user_id}."
+    details = f"Approved allowlist request for {normalized_user_id} on project {project.name}."
     if notified:
         details = f"{details} Sent Discord DM confirmation."
     elif notify_error:
@@ -1259,6 +1351,7 @@ def approve_discord_allowlist_request(
     return DiscordAllowlistApprovalResult(
         ok=True,
         details=details,
+        project_id=project.project_id,
         user_id=normalized_user_id,
         notified=notified,
     )
@@ -1517,11 +1610,25 @@ def create_project(
         policy_overrides=normalize_project_policy_overrides(payload.policy_overrides),
         environment=_normalize_string_map(payload.environment),
         secret_refs=_normalize_string_map(payload.secret_refs),
-        discord_config=_normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None),
+        discord_config={},
         is_archived=False,
         created_at=now,
         updated_at=now,
     )
+    normalized_discord = _normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
+    if payload.discord is not None:
+        settings = get_settings()
+        try:
+            normalized_discord = _resolve_project_discord_channel_binding(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project=project,
+                discord_config=normalized_discord,
+            )
+        except (DiscordApiError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Unable to provision Discord channel: {exc}") from exc
+    project.discord_config = normalized_discord
     session.add(project)
     tenant.updated_at = now
     _sync_tenant_jira_project_keys(session, tenant=tenant)
@@ -1564,6 +1671,9 @@ def update_project(
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     normalized_name = payload.name.strip()
     normalized_repo = _normalize_project_repo(payload.github_repository)
@@ -1577,14 +1687,25 @@ def update_project(
     project.policy_overrides = normalize_project_policy_overrides(payload.policy_overrides)
     project.environment = _normalize_string_map(payload.environment)
     project.secret_refs = _normalize_string_map(payload.secret_refs)
-    project.discord_config = _normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
+    normalized_discord = _normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
+    if payload.discord is not None:
+        settings = get_settings()
+        try:
+            normalized_discord = _resolve_project_discord_channel_binding(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project=project,
+                discord_config=normalized_discord,
+            )
+        except (DiscordApiError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Unable to provision Discord channel: {exc}") from exc
+    project.discord_config = normalized_discord
     project.is_archived = payload.is_archived
     project.updated_at = datetime.now(timezone.utc)
 
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is not None:
-        _sync_tenant_jira_project_keys(session, tenant=tenant)
-        tenant.updated_at = project.updated_at
+    _sync_tenant_jira_project_keys(session, tenant=tenant)
+    tenant.updated_at = project.updated_at
 
     try:
         session.commit()
@@ -1595,8 +1716,6 @@ def update_project(
             detail="A project with the same repository or Jira project key already exists for this tenant",
         ) from exc
     session.refresh(project)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
     return _project_to_schema(project, tenant_policy=tenant.policy_config)
 
 

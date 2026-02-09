@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, MessageSquare } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
@@ -11,16 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import {
-  getProject,
-  getTenant,
-  listGitHubRepositories,
-  listJiraProjects,
-  listRuns,
-  updateProject,
-  type ProjectRecord,
-  type RunRecord,
-} from "@/lib/api";
+import { getProject, getTenant, listGitHubRepositories, listJiraProjects, listRuns, updateProject, type ProjectRecord, type RunRecord } from "@/lib/api";
 
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
@@ -72,7 +63,7 @@ export function TenantProjectDetailsPage() {
         github_repository: payload.github_repository,
         jira_project_key: payload.jira_project_key,
       });
-      await Promise.all([loadOptions(), loadRuns()]);
+      await loadRuns();
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load project: ${(error as Error).message}`);
@@ -124,6 +115,9 @@ export function TenantProjectDetailsPage() {
         github_repository: form.github_repository.trim(),
         jira_project_key: form.jira_project_key.trim().toUpperCase(),
         policy_overrides: project.policy_overrides,
+        environment: project.environment,
+        secret_refs: project.secret_refs,
+        discord: project.discord,
         is_archived: !project.is_archived,
       });
       setProject(updated);
@@ -155,6 +149,9 @@ export function TenantProjectDetailsPage() {
         github_repository: form.github_repository.trim(),
         jira_project_key: form.jira_project_key.trim().toUpperCase(),
         policy_overrides: project.policy_overrides,
+        environment: project.environment,
+        secret_refs: project.secret_refs,
+        discord: project.discord,
         is_archived: project.is_archived,
       });
       setProject(updated);
@@ -190,6 +187,12 @@ export function TenantProjectDetailsPage() {
               <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects`}>
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back to Projects
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/discord`}>
+                <MessageSquare className="mr-2 h-4 w-4" />
+                Discord
               </Link>
             </Button>
           </div>

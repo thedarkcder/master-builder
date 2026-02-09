@@ -18,7 +18,7 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssuePreview
 
 
@@ -842,7 +842,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
-            requests = tenant.discord_config.get("allowlist_requests", [])
+            project = session.get(Project, f"{self.tenant_id}-default")
+            self.assertIsNotNone(project)
+            requests = (project.discord_config or {}).get("allowlist_requests", [])
             self.assertEqual(len(requests), 1)
             self.assertEqual(requests[0]["user_id"], "u-viewer")
             self.assertEqual(requests[0]["permissions"], ["run_controls"])

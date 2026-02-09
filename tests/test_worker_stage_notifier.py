@@ -52,6 +52,7 @@ class WorkerStageNotifierTests(unittest.TestCase):
             tenant=tenant,
             run=run,
             settings=SimpleNamespace(),
+            project=None,
             send_discord_message=fake_discord,
             send_jira_message=fake_jira,
         )
