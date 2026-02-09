@@ -31,6 +31,7 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
         os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
         os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
+        os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 
         os.environ["GITHUB_APP_ID"] = "12345"
@@ -64,6 +65,7 @@ class AdminApiTests(unittest.TestCase):
         os.environ.pop("ORCHESTRATOR_ADMIN_UI_BASE_URL", None)
         os.environ.pop("ORCHESTRATOR_PUBLIC_API_BASE_URL", None)
         os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", None)
+        os.environ.pop("ORCHESTRATOR_GITHUB_APP_SLUG", None)
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
 
         get_settings.cache_clear()
@@ -90,7 +92,10 @@ class AdminApiTests(unittest.TestCase):
                 "installation_id": "12345",
             },
             "repos": {
-                "github_repository": "https://github.com/example/repo",
+                "allowlist": ["https://github.com/example/repo"],
+                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                "mapping_rules_by_component": {},
+                "fallback_repo": None,
             },
             "policy": {
                 "allow_jira_transitions": False,
@@ -316,7 +321,10 @@ class AdminApiTests(unittest.TestCase):
             )
         self.assertEqual(github_test.status_code, 200)
         self.assertTrue(github_test.json()["ok"])
-        self.assertIn("GitHub tenant configuration looks valid", github_test.json()["details"])
+        self.assertEqual(
+            github_test.json()["details"],
+            "GitHub tenant configuration looks valid and secret refs resolve",
+        )
 
         repo_bootstrap = self.client.get(
             "/api/admin/tenants/tenant-a/repo-bootstrap",
@@ -455,7 +463,10 @@ class AdminApiTests(unittest.TestCase):
 
     def test_create_tenant_allows_missing_repository_during_onboarding(self) -> None:
         payload = self._tenant_payload()
-        payload["repos"]["github_repository"] = None
+        payload["repos"]["allowlist"] = []
+        payload["repos"]["mapping_rules_by_project_key"] = {}
+        payload["repos"]["mapping_rules_by_component"] = {}
+        payload["repos"]["fallback_repo"] = None
 
         response = self.client.post(
             "/api/admin/tenants",
@@ -463,7 +474,8 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 201)
-        self.assertIsNone(response.json()["repos"]["github_repository"])
+        self.assertEqual(response.json()["repos"]["allowlist"], [])
+        self.assertIsNone(response.json()["repos"]["fallback_repo"])
 
     def test_create_tenant_blocks_when_codex_assets_invalid(self) -> None:
         payload = self._tenant_payload()
@@ -583,7 +595,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenants/new/github?tenant_id=tenant-a&github_install=success",
+            "/tenants/new?tenant_id=tenant-a&github_install=success",
             callback_response.headers.get("location", ""),
         )
 
@@ -699,27 +711,6 @@ class AdminApiTests(unittest.TestCase):
                     {"webhook_id": "1001"},
                 )()
 
-            def ensure_webhook(self, **_: object):  # noqa: ANN003
-                return type(
-                    "Webhook",
-                    (),
-                    {"webhook_id": "1001"},
-                )()
-
-            def ensure_webhook(self, **_: object):  # noqa: ANN003
-                return type(
-                    "Webhook",
-                    (),
-                    {"webhook_id": "1002"},
-                )()
-
-            def ensure_webhook(self, **_: object):  # noqa: ANN003
-                return type(
-                    "Webhook",
-                    (),
-                    {"webhook_id": "1001"},
-                )()
-
         with patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()):
             callback_response = self.client.get(
                 "/api/admin/jira/connect/callback",
@@ -729,7 +720,7 @@ class AdminApiTests(unittest.TestCase):
 
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenants/new/jira?jira_oauth=success&jira_connection_id=",
+            "/tenants/new?jira_oauth=success&jira_connection_id=",
             callback_response.headers.get("location", ""),
         )
 
@@ -803,7 +794,7 @@ class AdminApiTests(unittest.TestCase):
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
         self.assertTrue(tenant_response.json()["jira"]["connection_id"])
-        self.assertEqual(tenant_response.json()["jira"]["webhook_provisioning"]["ok"], True)
+        self.assertIsInstance(tenant_response.json()["jira"]["managed_webhook_ids"], list)
 
     def test_provision_tenant_jira_webhooks_success(self) -> None:
         payload = self._tenant_payload()

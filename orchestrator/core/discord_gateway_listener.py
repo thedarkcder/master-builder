@@ -5,7 +5,6 @@ import contextlib
 import json
 import logging
 import threading
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -46,7 +45,21 @@ def _tenant_allowed_channel_ids(tenant: Tenant) -> set[str]:
             normalized = str(value or "").strip()
             if normalized:
                 allowed.add(normalized)
+    raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
+    if isinstance(raw_seed_thread_ids, list):
+        for value in raw_seed_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                allowed.add(normalized)
     return allowed
+
+
+def _tenant_seed_followup_thread_ids(tenant: Tenant) -> set[str]:
+    discord_config = tenant.discord_config or {}
+    raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
+    if not isinstance(raw_seed_thread_ids, list):
+        return set()
+    return {str(value).strip() for value in raw_seed_thread_ids if str(value).strip()}
 
 
 class DiscordGatewayListener:
@@ -233,6 +246,11 @@ class DiscordGatewayListener:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
             if tenant is None:
                 return
+            seed_followup_thread_ids = _tenant_seed_followup_thread_ids(tenant)
+
+            command_text = content
+            if channel_id in seed_followup_thread_ids and not command_text.startswith("!"):
+                command_text = f"!issues followup {command_text}"
 
             message_content = f"<@{user_id}> Command failed due to an internal error."
             components: list[dict] | None = None
@@ -242,7 +260,7 @@ class DiscordGatewayListener:
                     payload=DiscordCommandRequest(
                         user_id=user_id,
                         channel_id=channel_id,
-                        command=content,
+                        command=command_text,
                         attachments=attachments,
                     ),
                     session=session,
