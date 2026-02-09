@@ -113,6 +113,7 @@ def _project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         policy_overrides=normalize_project_policy_overrides(project.policy_overrides),
         environment=dict(project.environment or {}),
         secret_refs=dict(project.secret_refs or {}),
+        discord=_normalize_project_discord_config(project.discord_config),
         effective_policy=resolve_effective_policy(
             tenant_policy=tenant_policy,
             project_overrides=project.policy_overrides,
@@ -201,6 +202,38 @@ def _normalize_string_map(raw: dict[str, str] | None) -> dict[str, str]:
         if not normalized_key or not normalized_value:
             continue
         normalized[normalized_key] = normalized_value
+    return normalized
+
+
+def _normalize_project_discord_config(raw: dict | None) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+
+    normalized: dict[str, object] = {}
+    channel_id = str(raw.get("channel_id") or "").strip()
+    if channel_id:
+        normalized["channel_id"] = channel_id
+
+    notify_events = raw.get("notify_events")
+    if isinstance(notify_events, list):
+        normalized_events = [str(value).strip() for value in notify_events if str(value).strip()]
+        if normalized_events:
+            normalized["notify_events"] = normalized_events
+
+    ask_thread_channel_ids = raw.get("ask_thread_channel_ids")
+    if isinstance(ask_thread_channel_ids, list):
+        normalized_ask_threads = [str(value).strip() for value in ask_thread_channel_ids if str(value).strip()]
+        if normalized_ask_threads:
+            normalized["ask_thread_channel_ids"] = normalized_ask_threads
+
+    seed_followup_thread_channel_ids = raw.get("seed_followup_thread_channel_ids")
+    if isinstance(seed_followup_thread_channel_ids, list):
+        normalized_seed_threads = [
+            str(value).strip() for value in seed_followup_thread_channel_ids if str(value).strip()
+        ]
+        if normalized_seed_threads:
+            normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
+
     return normalized
 
 
@@ -1391,6 +1424,7 @@ def create_project(
         policy_overrides=normalize_project_policy_overrides(payload.policy_overrides),
         environment=_normalize_string_map(payload.environment),
         secret_refs=_normalize_string_map(payload.secret_refs),
+        discord_config=_normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None),
         is_archived=False,
         created_at=now,
         updated_at=now,
@@ -1450,6 +1484,7 @@ def update_project(
     project.policy_overrides = normalize_project_policy_overrides(payload.policy_overrides)
     project.environment = _normalize_string_map(payload.environment)
     project.secret_refs = _normalize_string_map(payload.secret_refs)
+    project.discord_config = _normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
     project.is_archived = payload.is_archived
     project.updated_at = datetime.now(timezone.utc)
 

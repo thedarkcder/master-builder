@@ -16,7 +16,7 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import Settings
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Tenant
+from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 try:
@@ -33,8 +33,8 @@ INTENT_GUILD_MESSAGES = 1 << 9
 INTENT_MESSAGE_CONTENT = 1 << 15
 
 
-def _tenant_allowed_channel_ids(tenant: Tenant) -> set[str]:
-    discord_config = tenant.discord_config or {}
+def _channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    discord_config = discord_config or {}
     allowed: set[str] = set()
     configured_channel_id = str(discord_config.get("channel_id") or "").strip()
     if configured_channel_id:
@@ -51,6 +51,12 @@ def _tenant_allowed_channel_ids(tenant: Tenant) -> set[str]:
             normalized = str(value or "").strip()
             if normalized:
                 allowed.add(normalized)
+    return allowed
+
+
+def _tenant_allowed_channel_ids(tenant: Tenant, *, project_channel_ids: set[str]) -> set[str]:
+    allowed = set(project_channel_ids)
+    allowed.update(_channel_ids_from_discord_config(dict(tenant.discord_config or {})))
     return allowed
 
 
@@ -307,7 +313,19 @@ class DiscordGatewayListener:
 
     def _find_tenant_for_channel(self, *, session, channel_id: str) -> Tenant | None:  # noqa: ANN001
         tenants = session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
-        matches = [tenant for tenant in tenants if channel_id in _tenant_allowed_channel_ids(tenant)]
+        active_projects = session.execute(select(Project).where(Project.is_archived.is_(False))).scalars().all()
+        project_channel_ids_by_tenant: dict[str, set[str]] = {}
+        for project in active_projects:
+            tenant_channels = project_channel_ids_by_tenant.setdefault(project.tenant_id, set())
+            tenant_channels.update(_channel_ids_from_discord_config(dict(project.discord_config or {})))
+        matches = [
+            tenant
+            for tenant in tenants
+            if channel_id in _tenant_allowed_channel_ids(
+                tenant,
+                project_channel_ids=project_channel_ids_by_tenant.get(tenant.tenant_id, set()),
+            )
+        ]
         if len(matches) != 1:
             return None
         return matches[0]
