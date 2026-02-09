@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from orchestrator.tools.jira_oauth_models import JiraOAuthError
+
+_TRANSIENT_WEBHOOK_ERROR_CODES = {502, 503, 504}
+_TRANSIENT_WEBHOOK_MAX_ATTEMPTS = 3
 
 
 class JiraOAuthWebhookManager:
@@ -13,6 +17,25 @@ class JiraOAuthWebhookManager:
     ) -> None:
         self._request_json = request_json
 
+    def _request_json_with_retries(
+        self,
+        method: str,
+        url: str,
+        access_token: str,
+        payload: dict[str, Any] | None,
+    ) -> dict[str, Any] | list[Any]:
+        last_error: JiraOAuthError | None = None
+        for _attempt in range(_TRANSIENT_WEBHOOK_MAX_ATTEMPTS):
+            try:
+                return self._request_json(method, url, access_token, payload)
+            except JiraOAuthError as exc:
+                last_error = exc
+                if not _is_transient_webhook_error(exc):
+                    raise
+        if last_error is not None:
+            raise last_error
+        raise JiraOAuthError("Webhook request failed without a captured error")
+
     def register_webhook(
         self,
         *,
@@ -22,7 +45,7 @@ class JiraOAuthWebhookManager:
         jql_filter: str,
         events: list[str],
     ) -> list[int]:
-        payload = self._request_json(
+        payload = self._request_json_with_retries(
             "POST",
             f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
             access_token,
@@ -50,7 +73,7 @@ class JiraOAuthWebhookManager:
         access_token: str,
         cloud_id: str,
     ) -> list[dict[str, Any]]:
-        payload = self._request_json(
+        payload = self._request_json_with_retries(
             "GET",
             f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
             access_token,
@@ -72,7 +95,7 @@ class JiraOAuthWebhookManager:
     ) -> None:
         if not webhook_ids:
             return
-        self._request_json(
+        self._request_json_with_retries(
             "DELETE",
             f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/webhook",
             access_token,
@@ -105,6 +128,14 @@ def _extract_created_webhook_ids(payload: dict[str, Any] | list[Any]) -> list[in
                 elif isinstance(item, str) and item.isdigit():
                     normalized_ids.append(int(item))
     return normalized_ids
+
+
+def _is_transient_webhook_error(exc: JiraOAuthError) -> bool:
+    message = str(exc)
+    code_matches = re.findall(r"\b(\d{3})\b", message)
+    if not code_matches:
+        return False
+    return any(int(code) in _TRANSIENT_WEBHOOK_ERROR_CODES for code in code_matches)
 
 
 def _summarize_webhook_registration_failure(payload: dict[str, Any] | list[Any]) -> str:

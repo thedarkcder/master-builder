@@ -79,6 +79,63 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["id"], 1001)
 
+    def test_register_webhook_retries_on_transient_gateway_error(self) -> None:
+        with patch.object(
+            self.client,
+            "_request_json",
+            side_effect=[
+                JiraOAuthError("Jira API request failed (502): Bad Gateway"),
+                {"createdWebhookId": 1003},
+            ],
+        ) as request_mock:
+            result = self.client.register_webhook(
+                access_token="token",
+                cloud_id="cloud",
+                callback_url="https://example.test/jira/webhook/tenant-a",
+                jql_filter='project = "MAB"',
+                events=["jira:issue_created"],
+            )
+
+        self.assertEqual(result, [1003])
+        self.assertEqual(request_mock.call_count, 2)
+
+    def test_register_webhook_retries_on_transient_gateway_error_colon_format(self) -> None:
+        with patch.object(
+            self.client,
+            "_request_json",
+            side_effect=[
+                JiraOAuthError("Unable to provision Jira webhook: 502: Bad Gateway"),
+                {"createdWebhookId": 1004},
+            ],
+        ) as request_mock:
+            result = self.client.register_webhook(
+                access_token="token",
+                cloud_id="cloud",
+                callback_url="https://example.test/jira/webhook/tenant-a",
+                jql_filter='project = "MAB"',
+                events=["jira:issue_created"],
+            )
+
+        self.assertEqual(result, [1004])
+        self.assertEqual(request_mock.call_count, 2)
+
+    def test_register_webhook_does_not_retry_non_transient_error(self) -> None:
+        with patch.object(
+            self.client,
+            "_request_json",
+            side_effect=JiraOAuthError("Jira API request failed (400): Invalid payload"),
+        ) as request_mock:
+            with self.assertRaisesRegex(JiraOAuthError, "Invalid payload"):
+                self.client.register_webhook(
+                    access_token="token",
+                    cloud_id="cloud",
+                    callback_url="https://example.test/jira/webhook/tenant-a",
+                    jql_filter='project = "MAB"',
+                    events=["jira:issue_created"],
+                )
+
+        self.assertEqual(request_mock.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

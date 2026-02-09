@@ -27,7 +27,7 @@ export function GitHubStep({
         </p>
         <p>
           Required secret refs in <strong>Secrets</strong>: <code className="font-mono">GITHUB_APP_ID</code>,{" "}
-          <code className="font-mono">GITHUB_CLIENT_SECRET</code>
+          <code className="font-mono">GITHUB_APP_PRIVATE_KEY</code>
         </p>
         <p>
           Optional webhook secret ref: <code className="font-mono">GITHUB_WEBHOOK_SECRET</code>

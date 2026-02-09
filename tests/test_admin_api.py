@@ -15,7 +15,7 @@ from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -438,6 +438,85 @@ class AdminApiTests(unittest.TestCase):
         self.assertTrue(update_project.json()["is_archived"])
         self.assertEqual(update_project.json()["environment"], {"APP_ENV": "stage"})
         self.assertEqual(update_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN_NEXT"})
+
+    def test_list_runs_supports_project_filter(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "mobile-app",
+                "github_repository": "https://github.com/example/mobile-app",
+                "jira_project_key": "MBAPP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        created_project_id = create_project.json()["project_id"]
+
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Run(
+                        run_id="run-default-project",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-1",
+                        issue_summary="Default project run",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/repo",
+                        branch=None,
+                        pr_url=None,
+                        status="queued",
+                        last_error=None,
+                        plan=None,
+                        created_at=now,
+                        started_at=None,
+                        finished_at=None,
+                    ),
+                    Run(
+                        run_id="run-created-project",
+                        tenant_id="tenant-a",
+                        project_id=created_project_id,
+                        issue_key="MBAPP-2",
+                        issue_summary="Created project run",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="running",
+                        last_error=None,
+                        plan=None,
+                        created_at=now + timedelta(seconds=1),
+                        started_at=now + timedelta(seconds=1),
+                        finished_at=None,
+                    ),
+                ]
+            )
+            session.commit()
+
+        all_runs_response = self.client.get("/api/admin/runs?tenant_id=tenant-a", auth=("admin", "secret"))
+        self.assertEqual(all_runs_response.status_code, 200)
+        self.assertEqual({run["run_id"] for run in all_runs_response.json()}, {"run-default-project", "run-created-project"})
+
+        project_runs_response = self.client.get(
+            f"/api/admin/runs?tenant_id=tenant-a&project_id={created_project_id}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(project_runs_response.status_code, 200)
+        filtered_runs = project_runs_response.json()
+        self.assertEqual(len(filtered_runs), 1)
+        self.assertEqual(filtered_runs[0]["run_id"], "run-created-project")
+        self.assertEqual(filtered_runs[0]["project_id"], created_project_id)
 
     def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
         payload = self._tenant_payload()
@@ -1346,6 +1425,60 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(tenant_response.status_code, 200)
         self.assertIsNone(tenant_response.json()["jira"]["connection_id"])
         self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [])
+
+    def test_reset_tenant_jira_webhooks_recovers_single_url_conflict(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        deleted_batches: list[list[int]] = []
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.register_attempts = 0
+
+            def register_webhook(self, **_: object) -> list[int]:  # noqa: ANN003
+                self.register_attempts += 1
+                if self.register_attempts == 1:
+                    raise ValueError(
+                        "Webhook registration did not return any webhook IDs "
+                        "(webhookRegistrationResult errors: Only a single URL per user is allowed to be "
+                        "registered via REST API. The currently used URL: "
+                        "https://master-builder-api.tail544bb4.ts.net/jira/webhook/girlpower)"
+                    )
+                return [33003]
+
+            def list_webhooks(self, **_: object) -> list[dict]:  # noqa: ANN003
+                return [
+                    {
+                        "id": 31001,
+                        "url": "https://master-builder-api.tail544bb4.ts.net/jira/webhook/girlpower",
+                    }
+                ]
+
+            def delete_webhooks(self, *, access_token: str, cloud_id: str, webhook_ids: list[int]) -> None:  # noqa: ANN001
+                deleted_batches.append(list(webhook_ids))
+
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["action"], "reset")
+        self.assertEqual(response.json()["webhook_ids"], [33003])
+        self.assertEqual(deleted_batches, [[31001]])
+        self.assertIn("Deleted 1 conflicting Jira webhook URL subscription(s).", response.json()["details"])
 
 
 if __name__ == "__main__":

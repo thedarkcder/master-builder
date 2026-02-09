@@ -83,11 +83,11 @@ def github_client_from_tenant_config(
     if mode != "github_app":
         raise ValueError("Only github_app mode is supported")
 
-    app_id_ref = str(tenant_github_config.get("app_id_ref") or "")
-    private_key_ref = str(tenant_github_config.get("private_key_ref") or "")
+    app_id_ref = str(tenant_github_config.get("app_id_ref") or "GITHUB_APP_ID")
+    private_key_ref = str(tenant_github_config.get("private_key_ref") or "GITHUB_APP_PRIVATE_KEY")
     installation_id = str(tenant_github_config.get("installation_id") or "")
 
-    if not app_id_ref or not private_key_ref or not installation_id:
+    if not installation_id:
         raise ValueError("Missing github_app required config fields")
 
     resolver = secret_lookup or os.environ.get
