@@ -15,7 +15,7 @@ from orchestrator.api.routes_webhook import (
 )
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
-from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(tags=["discord-webhook"])
@@ -49,10 +49,11 @@ async def ingest_discord_webhook(
     command_secret_ref = str(discord_config.get("command_secret_ref") or "").strip()
     if command_secret_ref:
         presented_token = _extract_webhook_token(request)
-        expected_token = resolve_secret_ref(
+        expected_token = resolve_scoped_secret_ref(
             session,
             secret_ref=command_secret_ref,
             encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant_id,
         )
         if not expected_token:
             raise HTTPException(

@@ -85,6 +85,54 @@ def resolve_secret_ref(
     return os.environ.get(normalized_ref)
 
 
+def scoped_secret_ref_candidates(
+    *,
+    secret_ref: str,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+) -> list[str]:
+    normalized_ref = normalize_secret_ref(secret_ref)
+    candidates: list[str] = []
+
+    def _append(value: str) -> None:
+        if value not in candidates:
+            candidates.append(value)
+
+    normalized_tenant_id = tenant_id.strip() if tenant_id and tenant_id.strip() else None
+    normalized_project_id = project_id.strip() if project_id and project_id.strip() else None
+
+    if normalized_tenant_id and normalized_project_id:
+        _append(f"project/{normalized_tenant_id}/{normalized_project_id}/{normalized_ref}")
+    if normalized_tenant_id:
+        _append(f"tenant/{normalized_tenant_id}/{normalized_ref}")
+    _append(f"platform/{normalized_ref}")
+    _append(normalized_ref)
+    return candidates
+
+
+def resolve_scoped_secret_ref(
+    session: Session,
+    *,
+    secret_ref: str,
+    encryption_key: str,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+) -> str | None:
+    for candidate in scoped_secret_ref_candidates(
+        secret_ref=secret_ref,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    ):
+        value = resolve_secret_ref(
+            session,
+            secret_ref=candidate,
+            encryption_key=encryption_key,
+        )
+        if value:
+            return value
+    return None
+
+
 def resolve_secret_ref_metadata(
     session: Session,
     *,
