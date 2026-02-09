@@ -21,6 +21,7 @@ from orchestrator.core.enforcement_context import build_agent_enforcement_contex
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.project_routing import find_active_project_for_issue_key
+from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.signal_templates import (
@@ -383,12 +384,12 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             issue_key=run.issue_key,
         )
     if project is None:
-        run.status = RUN_STATUS_FAILED
-        run.last_error = f"No active project mapping found for issue {run.issue_key}"
-        run.finished_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(run)
-        return run
+        return mark_run_terminal(
+            session,
+            run_id=run.run_id,
+            terminal_status=RUN_STATUS_FAILED,
+            last_error=f"No active project mapping found for issue {run.issue_key}",
+        )
     if project.is_archived:
         run.status = RUN_STATUS_BLOCKED
         run.last_error = f"Project {project.project_id} is archived; run blocked"
