@@ -1572,6 +1572,8 @@ def execute_discord_command(
         command_text = f"!ask {raw_command}"
     command_name, arguments = _parse_command_text(command_text)
     _assert_sensitive_command_permission(tenant=tenant, command_name=command_name, user_id=payload.user_id)
+    normalized_user_id = payload.user_id.strip()
+    normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
 
     if command_name == "help":
         return DiscordCommandResponse(ok=True, command=command_name, message=_command_help_message(), data=None)
@@ -1708,8 +1710,6 @@ def execute_discord_command(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
             )
-        normalized_user_id = payload.user_id.strip()
-        normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
         if require_ask_confirmation:
             normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_context(
                 session=session,
