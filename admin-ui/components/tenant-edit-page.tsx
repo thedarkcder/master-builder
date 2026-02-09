@@ -293,6 +293,21 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const githubInstalled = Boolean(tenant.github.installation_id && tenant.github.installation_id.trim());
   const githubButtonLabel = githubInstalled ? "Reconnect GitHub App" : "Install GitHub App";
   const jiraConnected = Boolean(tenant.jira.connection_id && tenant.jira.connection_id.trim());
+  const jiraWebhookStatus = !jiraConnected
+    ? { label: "not connected", detail: "Jira is not connected for this tenant." }
+    : jiraWebhook?.last_error
+      ? { label: "error", detail: jiraWebhook.last_error }
+      : jiraWebhook?.recent_delivery_ok
+        ? {
+            label: "ok",
+            detail: `Recent webhook delivery confirmed within ${jiraWebhook.recent_delivery_window_minutes} minutes.`
+          }
+        : {
+            label: "warning",
+            detail: jiraWebhook
+              ? `No webhook delivery within ${jiraWebhook.recent_delivery_window_minutes} minutes.`
+              : "Webhook diagnostics are loading."
+          };
 
   return (
     <div className="space-y-4">
@@ -629,6 +644,16 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                     <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/discord#discord-access-requests`}>
                       Review
                     </Link>
+                  </Button>
+                </li>
+                <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3">
+                  <div className="space-y-0.5">
+                    <p className="font-medium">Jira Webhook Delivery</p>
+                    <p className="text-xs text-muted-foreground">{jiraWebhookStatus.detail}</p>
+                  </div>
+                  <span className="rounded-full border px-2 py-0.5 text-xs">{jiraWebhookStatus.label}</span>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/jira`}>Review</Link>
                   </Button>
                 </li>
               </ul>
