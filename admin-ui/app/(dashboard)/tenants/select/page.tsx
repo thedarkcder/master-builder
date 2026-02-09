@@ -14,7 +14,7 @@ export default function SelectTenantPage() {
   const { credentials, ready } = useAuth();
   const [tenants, setTenants] = useState<TenantRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [statusLine, setStatusLine] = useState("Load tenants to start.");
+  const [statusLine, setStatusLine] = useState("");
 
   async function loadTenants() {
     if (!credentials) {
@@ -24,7 +24,7 @@ export default function SelectTenantPage() {
     try {
       const payload = await listTenants(credentials);
       setTenants(payload);
-      setStatusLine(`Loaded ${payload.length} tenant(s).`);
+      setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load tenants: ${(error as Error).message}`);
     } finally {
@@ -45,12 +45,13 @@ export default function SelectTenantPage() {
       <div className="mx-auto w-full max-w-2xl">
         <Card>
           <CardHeader className="space-y-3">
-            <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Step 1 of 2</p>
             <div className="space-y-1">
               <CardTitle className="text-2xl">Select Tenant</CardTitle>
               <CardDescription>Choose an account to open its admin workspace.</CardDescription>
             </div>
-            <p className={hasError ? "text-sm text-red-700" : "text-sm text-muted-foreground"}>{statusLine}</p>
+            {statusLine ? (
+              <p className={hasError ? "text-sm text-red-700" : "text-sm text-muted-foreground"}>{statusLine}</p>
+            ) : null}
           </CardHeader>
           <CardContent className="space-y-3">
             {loading ? (

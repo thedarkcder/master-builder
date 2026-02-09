@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import type { ComponentType } from "react";
 import {
   Activity,
@@ -42,7 +43,6 @@ type NavItem = {
 const globalNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/tenants/select", label: "Select Tenant", icon: Building2 },
-  { href: "/tenants", label: "Tenants", icon: Building2 },
   { href: "/runs", label: "Runs", icon: Activity },
   { href: "/secrets", label: "Secrets", icon: KeyRound }
 ];
@@ -52,11 +52,20 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { credentials, ready, logout } = useAuth();
 
+  useEffect(() => {
+    if (ready && !credentials) {
+      logout();
+      router.replace("/login");
+    }
+  }, [credentials, logout, ready, router]);
+
   if (!ready) {
     return <main className="p-8 text-sm text-muted-foreground">Loading session...</main>;
   }
 
-  if (!credentials) return null;
+  if (!credentials) {
+    return <main className="p-8 text-sm text-muted-foreground">Redirecting to login...</main>;
+  }
 
   if (pathname === "/tenants/select") {
     return <div className="min-h-screen bg-background">{children}</div>;

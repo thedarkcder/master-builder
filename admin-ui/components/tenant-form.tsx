@@ -24,6 +24,7 @@ type TenantFormProps = {
   submitting?: boolean;
   repositoryOptions?: GitHubRepositoryRecord[];
   repositoriesLoading?: boolean;
+  onRefreshRepositoryOptions?: () => void;
   visibleSections?: {
     identity?: boolean;
     jira?: boolean;
@@ -52,6 +53,7 @@ export function TenantForm({
   submitting = false,
   repositoryOptions = [],
   repositoriesLoading = false,
+  onRefreshRepositoryOptions,
   visibleSections
 }: TenantFormProps) {
   const [values, setValues] = useState<TenantFormValues>(initialValues ?? defaultTenantFormValues());
@@ -154,6 +156,7 @@ export function TenantForm({
           repositoryOptions={repositoryOptions}
           repositoriesLoading={repositoriesLoading}
           onGithubRepositoryTextChange={(value) => setTextFields((prev) => ({ ...prev, githubRepositoryText: value }))}
+          onRefreshRepositoryOptions={onRefreshRepositoryOptions}
         />
       ) : null}
 

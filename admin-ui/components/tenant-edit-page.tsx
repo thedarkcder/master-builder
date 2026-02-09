@@ -74,6 +74,27 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
   }
 
+  async function loadGitHubRepositories({ silent = false }: { silent?: boolean } = {}) {
+    if (!credentials) {
+      return;
+    }
+    setRepositoriesLoading(true);
+    try {
+      const repos = await listGitHubRepositories(credentials, params.tenantId);
+      setGithubRepositories(repos);
+      if (!silent) {
+        setStatusLine(`Loaded ${repos.length} repository option(s) from GitHub installation.`);
+      }
+    } catch {
+      setGithubRepositories([]);
+      if (!silent) {
+        setStatusLine("Unable to load repositories from GitHub installation.");
+      }
+    } finally {
+      setRepositoriesLoading(false);
+    }
+  }
+
   async function loadTenant() {
     if (!credentials) {
       return;
@@ -83,15 +104,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       const payload = await getTenant(credentials, params.tenantId);
       setTenant(payload);
       await loadJiraWebhookDiagnostics();
-      setRepositoriesLoading(true);
-      try {
-        const repos = await listGitHubRepositories(credentials, params.tenantId);
-        setGithubRepositories(repos);
-      } catch {
-        setGithubRepositories([]);
-      } finally {
-        setRepositoriesLoading(false);
-      }
+      await loadGitHubRepositories({ silent: true });
       const requests = await listDiscordAllowlistRequests(credentials, params.tenantId);
       setAllowlistRequests(requests);
     } catch (error) {
@@ -403,7 +416,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 Disconnect Jira
               </Button>
             </div>
-            <div className="space-y-2 rounded-md border p-3">
+            <div className="space-y-2 border-t pt-3">
               <p className="font-medium">Webhook Lifecycle</p>
               <p>
                 <strong>Webhook URL:</strong> {jiraWebhook?.webhook_url ?? "Loading..."}
@@ -468,6 +481,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               submitting={saving}
               repositoryOptions={githubRepositories}
               repositoriesLoading={repositoriesLoading}
+              onRefreshRepositoryOptions={() => void loadGitHubRepositories()}
               visibleSections={{
                 identity: false,
                 jira: false,
