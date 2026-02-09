@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import type { ComponentType } from "react";
 import {
   Activity,
+  Bell,
   Building2,
   FolderKanban,
   KeyRound,
@@ -102,10 +103,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           matchPrefix: `/tenants/${tenantId}/edit/config`
         },
         {
-          href: `/tenants/${tenantId}/edit/access`,
-          label: "Access Requests",
-          icon: KeyRound,
-          matchPrefix: `/tenants/${tenantId}/edit/access`
+          href: `/tenants/${tenantId}/edit/notifications`,
+          label: "Notifications",
+          icon: Bell,
+          matchPrefix: `/tenants/${tenantId}/edit/notifications`
         }
       ]
     : [];
