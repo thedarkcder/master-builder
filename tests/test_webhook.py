@@ -805,6 +805,26 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(command_params["issue_key"], "TP-11")
         self.assertEqual(attachments[0]["filename"], "att-1.png")
 
+    def test_parse_discord_gap_interaction_includes_issue_key_param(self) -> None:
+        payload = {
+            "type": 2,
+            "channel_id": "discord-channel-1",
+            "member": {"user": {"id": "discord-user-1"}},
+            "data": {
+                "name": "gap",
+                "options": [
+                    {"type": 3, "name": "issue_key", "value": "TP-44"},
+                ],
+            },
+        }
+
+        user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload)
+        self.assertEqual(user_id, "discord-user-1")
+        self.assertEqual(channel_id, "discord-channel-1")
+        self.assertEqual(command_text, "!gap TP-44")
+        self.assertEqual(command_params, {"issue_key": "TP-44"})
+        self.assertEqual(attachments, [])
+
     def test_discord_reply_button_component_returns_modal(self) -> None:
         payload = {
             "type": 3,
