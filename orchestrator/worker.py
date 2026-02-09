@@ -5,7 +5,7 @@ import contextlib
 import logging
 import signal
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,18 +20,21 @@ from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.signal_templates import (
     format_stage_discord_update,
     format_stage_jira_update,
 )
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
 from orchestrator.storage.run_queue_events import (
     RUN_QUEUE_NOTIFY_CHANNEL,
     is_postgres_database_url,
     postgres_dsn_from_database_url,
 )
+from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
 
 try:
     import psycopg
@@ -46,6 +49,127 @@ RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
 RUN_STATUS_CANCELLED = "cancelled"
+JIRA_STAGE_COMMENT_EVENTS = {"decision_gate_required", "run_failed"}
+
+
+def _resolve_required_secret(session: Session, *, ref_name: str, settings) -> str:  # noqa: ANN001
+    value = resolve_secret_ref(
+        session,
+        secret_ref=ref_name,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if not value:
+        raise ValueError(f"Missing secret value for ref '{ref_name}'")
+    return value
+
+
+def _jira_oauth_client(*, session: Session, settings) -> JiraOAuthClient:  # noqa: ANN001
+    client_id = _resolve_required_secret(session, ref_name=settings.jira_oauth_client_id_ref, settings=settings)
+    client_secret = _resolve_required_secret(
+        session,
+        ref_name=settings.jira_oauth_client_secret_ref,
+        settings=settings,
+    )
+    redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/jira/connect/callback"
+    return JiraOAuthClient(
+        JiraOAuthClientConfig(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+        )
+    )
+
+
+def _refresh_jira_connection_tokens(
+    session: Session,
+    *,
+    connection: JiraOAuthConnection,
+    settings,
+) -> str:  # noqa: ANN001
+    now = datetime.now(timezone.utc)
+    if connection.access_token_expires_at - now > timedelta(seconds=60):
+        return decrypt_value(
+            ciphertext=connection.access_token_encrypted,
+            encryption_key=settings.secrets_encryption_key,
+        )
+
+    client = _jira_oauth_client(session=session, settings=settings)
+    refresh_token = decrypt_value(
+        ciphertext=connection.refresh_token_encrypted,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    token_set = client.refresh_tokens(refresh_token=refresh_token)
+    connection.access_token_encrypted = encrypt_value(
+        plaintext=token_set.access_token,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    connection.refresh_token_encrypted = encrypt_value(
+        plaintext=token_set.refresh_token,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    connection.access_token_expires_at = token_set.expires_at
+    connection.scopes = token_set.scopes
+    connection.updated_at = now
+    session.commit()
+    return token_set.access_token
+
+
+def _send_stage_update_to_jira(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str | None,
+    stage: str,
+    message: str,
+    settings,
+) -> None:  # noqa: ANN001
+    if not issue_key or not message.strip():
+        return
+    if stage not in JIRA_STAGE_COMMENT_EVENTS:
+        return
+
+    jira_config = tenant.jira_config or {}
+    connection_id = str(jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        logger.info(
+            "worker_jira_stage_update_not_sent tenant_id=%s issue_key=%s stage=%s reason=missing_connection",
+            tenant.tenant_id,
+            issue_key,
+            stage,
+        )
+        return
+
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        logger.info(
+            "worker_jira_stage_update_not_sent tenant_id=%s issue_key=%s stage=%s reason=connection_not_found",
+            tenant.tenant_id,
+            issue_key,
+            stage,
+        )
+        return
+
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        client.add_issue_comment(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            issue_id_or_key=issue_key,
+            comment=message,
+        )
+    except (JiraOAuthError, ValueError) as exc:
+        logger.warning(
+            "worker_jira_stage_update_send_failed tenant_id=%s issue_key=%s stage=%s error=%s",
+            tenant.tenant_id,
+            issue_key,
+            stage,
+            exc,
+        )
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
@@ -195,6 +319,14 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             settings=settings,
             event="decision_gate_required",
         )
+        _send_stage_update_to_jira(
+            session=session,
+            tenant=tenant,
+            issue_key=run.issue_key,
+            stage=stage_update["stage"],
+            message=stage_update["jira_message"],
+            settings=settings,
+        )
         if not send_result.sent:
             logger.info(
                 "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
@@ -260,6 +392,14 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
                 stage_update["stage"],
                 send_result.reason,
             )
+        _send_stage_update_to_jira(
+            session=session,
+            tenant=tenant,
+            issue_key=run.issue_key,
+            stage=stage_update["stage"],
+            message=stage_update["jira_message"],
+            settings=settings,
+        )
 
     append_stage_update(
         {
