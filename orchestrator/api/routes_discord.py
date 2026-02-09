@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.discord_command_dispatcher import dispatch_simple_discord_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
+from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_state import (
     assert_channel_scope as _assert_channel_scope,
     assert_sensitive_command_permission as _assert_sensitive_command_permission,
@@ -37,8 +38,6 @@ from orchestrator.core.runs import (
     RUN_STATUS_CANCELLED,
     RUN_STATUS_FAILED,
     RUN_STATUS_SUCCEEDED,
-    cancel_run,
-    enqueue_run,
 )
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssueDetail, JiraIssuePreview, JiraOAuthError
@@ -1835,106 +1834,19 @@ def execute_discord_command(
             detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
         )
 
-    if command_name == "run":
-        if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !run <ISSUE_KEY>")
-        issue_key = arguments[0].strip().upper()
-        project = _resolve_project_for_issue(
-            session=session,
-            tenant=tenant,
-            issue_key=issue_key,
-        )
-        issue_preview = _fetch_jira_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
-        _ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
-        enqueue_result = enqueue_run(
-            session,
-            tenant_id=tenant_id,
-            project_id=project.project_id,
-            issue_key=issue_key,
-            issue_summary=issue_preview.summary,
-            issue_description=None,
-            repo_url=project.github_repository,
-            delivery_id=None,
-            max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
-        )
-        if not enqueue_result.enqueued:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Run could not be queued: {enqueue_result.reason}",
-            )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Queued run {enqueue_result.run.run_id} for {issue_key}",
-            data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
-        )
-
-    if command_name == "cancel":
-        if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !cancel <RUN_ID>")
-        run_id = arguments[0].strip()
-        run = session.get(Run, run_id)
-        if run is None or run.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
-        cancelled = cancel_run(session, run_id=run_id, cancelled_by=payload.user_id)
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Cancelled run {cancelled.run_id}",
-            data={"run_id": cancelled.run_id, "status": cancelled.status},
-        )
-
-    if command_name == "retry":
-        if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !retry <ISSUE_KEY|RUN_ID>")
-        target = arguments[0].strip()
-        run = session.get(Run, target)
-        if run is None:
-            issue_key = target.upper()
-            run = session.execute(
-                select(Run)
-                .where(Run.tenant_id == tenant_id, Run.issue_key == issue_key)
-                .order_by(Run.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-        if run is None or run.tenant_id != tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No run was found for '{target}'",
-            )
-        if run.status not in RETRYABLE_STATUSES:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Run {run.run_id} is {run.status}; only failed/blocked/cancelled runs can be retried",
-            )
-        issue_preview = _fetch_jira_issue_preview(session=session, tenant=tenant, issue_key=run.issue_key)
-        _ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
-        project = _resolve_project_for_issue(
-            session=session,
-            tenant=tenant,
-            issue_key=run.issue_key,
-        )
-        enqueue_result = enqueue_run(
-            session,
-            tenant_id=tenant_id,
-            project_id=project.project_id,
-            issue_key=run.issue_key,
-            issue_summary=issue_preview.summary,
-            issue_description=run.issue_description,
-            repo_url=project.github_repository,
-            delivery_id=None,
-            max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
-        )
-        if not enqueue_result.enqueued:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Retry could not be queued: {enqueue_result.reason}",
-            )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Queued retry run {enqueue_result.run.run_id} for {run.issue_key}",
-            data={"run_id": enqueue_result.run.run_id, "issue_key": run.issue_key},
-        )
+    run_control_response = dispatch_run_control_command(
+        session=session,
+        tenant=tenant,
+        tenant_id=tenant_id,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+        retryable_statuses=RETRYABLE_STATUSES,
+        resolve_project_for_issue=_resolve_project_for_issue,
+        fetch_issue_preview=_fetch_jira_issue_preview,
+        ensure_issue_is_executable=_ensure_issue_is_executable,
+    )
+    if run_control_response is not None:
+        return run_control_response
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported command")
