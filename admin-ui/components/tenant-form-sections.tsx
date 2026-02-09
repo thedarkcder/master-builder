@@ -181,13 +181,6 @@ export function GitHubSection({ github, onGitHubChange }: GitHubSectionProps) {
   return (
     <SectionFrame title="GitHub" description="GitHub App connection and webhook settings.">
       <div className="grid gap-3 md:grid-cols-2">
-        <div className="space-y-2">
-          <FieldLabel>Mode</FieldLabel>
-          <Input value={github.mode} onChange={(event) => onGitHubChange({ ...github, mode: event.target.value })} placeholder="github_app" />
-        </div>
-        <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground md:col-span-2">
-          Installation ID is set by the Connect GitHub App flow. App credentials are managed server-side.
-        </div>
         <div className="space-y-2 md:col-span-2">
           <FieldLabel>Webhook secret ref (optional)</FieldLabel>
           <Input

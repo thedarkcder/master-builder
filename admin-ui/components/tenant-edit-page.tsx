@@ -416,7 +416,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 Disconnect Jira
               </Button>
             </div>
-            <div className="space-y-2 rounded-md border p-3">
+            <div className="space-y-2 border-t pt-3">
               <p className="font-medium">Webhook Lifecycle</p>
               <p>
                 <strong>Webhook URL:</strong> {jiraWebhook?.webhook_url ?? "Loading..."}
