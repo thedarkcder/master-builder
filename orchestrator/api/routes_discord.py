@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -26,16 +27,17 @@ from orchestrator.core.runs import (
     RUN_STATUS_FAILED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
+    RUN_STATUS_SUCCEEDED,
     cancel_run,
     enqueue_run,
 )
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant, WebhookDelivery
-from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssueDetail, JiraIssuePreview, JiraOAuthError
 
 router = APIRouter(tags=["discord"])
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
-PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "request", "bug"}
+PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "gap", "request", "bug"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
@@ -48,6 +50,16 @@ MAX_PENDING_ASK_ACTIONS = 50
 MAX_ASK_HISTORY_ENTRIES = 80
 MAX_ASK_HISTORY_CONTEXT = 6
 MAX_PENDING_SEED_FOLLOWUPS = 30
+GAP_HEADING_STOP_WORDS = {
+    "objective",
+    "scope",
+    "scope in",
+    "scope out",
+    "how to test",
+    "notes",
+    "decision gate",
+    "good to do",
+}
 
 
 def _normalize_status_name(value: str) -> str:
@@ -405,6 +417,210 @@ def _fetch_jira_issue_preview(
     return issues[0]
 
 
+def _fetch_jira_issue_detail(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+) -> JiraIssueDetail:
+    settings = get_settings()
+    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Jira OAuth connection is not linked for this tenant",
+        )
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configured Jira connection was not found",
+        )
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        return client.get_issue_detail(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            issue_id_or_key=issue_key,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to query Jira issue details: {exc}",
+        ) from exc
+
+
+def _tenant_repo_url(tenant: Tenant) -> str | None:
+    repo_url = str((tenant.repos_config or {}).get("github_repository") or "").strip()
+    return repo_url or None
+
+
+def _tenant_jira_browse_base_url(*, session: Session, tenant: Tenant) -> str | None:
+    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        return None
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        return None
+    normalized_site_url = str(connection.site_url or "").strip().rstrip("/")
+    return normalized_site_url or None
+
+
+def _extract_acceptance_criteria_from_description(description: str) -> list[str]:
+    lines = [line.strip() for line in description.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    acceptance_lines: list[str] = []
+    in_acceptance_section = False
+    for line in lines:
+        normalized = line.lower().rstrip(":")
+        if not in_acceptance_section and normalized == "acceptance criteria":
+            in_acceptance_section = True
+            continue
+        if in_acceptance_section:
+            if normalized in GAP_HEADING_STOP_WORDS:
+                break
+            cleaned = line.lstrip("-*• ").strip()
+            if cleaned:
+                acceptance_lines.append(cleaned)
+            continue
+        if normalized.startswith("acceptance criteria"):
+            remainder = line.split(":", 1)[1].strip() if ":" in line else ""
+            if remainder:
+                acceptance_lines.append(remainder)
+                in_acceptance_section = True
+
+    if acceptance_lines:
+        return acceptance_lines[:8]
+
+    fallback: list[str] = []
+    for line in lines:
+        normalized = line.lower()
+        if any(token in normalized for token in ("must", "should", "returns", "include", "supports")):
+            fallback.append(line.lstrip("-*• ").strip())
+    return fallback[:5]
+
+
+def _gap_confidence(*, has_acceptance: bool, has_successful_run: bool, has_pr: bool) -> str:
+    score = int(has_acceptance) + int(has_successful_run) + int(has_pr)
+    if score >= 3:
+        return "high"
+    if score == 2:
+        return "medium"
+    return "low"
+
+
+def _run_gap_analysis(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+) -> tuple[str, dict]:
+    normalized_issue_key = issue_key.strip().upper()
+    if not ISSUE_KEY_PATTERN.match(normalized_issue_key):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !gap <ISSUE_KEY>")
+
+    issue = _fetch_jira_issue_detail(session=session, tenant=tenant, issue_key=normalized_issue_key)
+    acceptance = _extract_acceptance_criteria_from_description(issue.description)
+    latest_run = session.execute(
+        select(Run)
+        .where(Run.tenant_id == tenant.tenant_id, Run.issue_key == normalized_issue_key)
+        .order_by(Run.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    jira_base_url = _tenant_jira_browse_base_url(session=session, tenant=tenant)
+    jira_url = f"{jira_base_url}/browse/{normalized_issue_key}" if jira_base_url else None
+    repo_url = _tenant_repo_url(tenant)
+    repo_issue_search_url = f"{repo_url}/search?q={quote_plus(normalized_issue_key)}" if repo_url else None
+    pr_url = str(latest_run.pr_url or "").strip() if latest_run else ""
+    has_successful_run = latest_run is not None and latest_run.status == RUN_STATUS_SUCCEEDED
+    has_pr = bool(pr_url)
+    confidence = _gap_confidence(
+        has_acceptance=bool(acceptance),
+        has_successful_run=has_successful_run,
+        has_pr=has_pr,
+    )
+
+    gaps: list[str] = []
+    if not acceptance:
+        gaps.append("Acceptance criteria are missing or unclear in Jira description.")
+    if latest_run is None:
+        gaps.append("No run has been executed yet for this issue.")
+    elif latest_run.status != RUN_STATUS_SUCCEEDED:
+        gaps.append(f"Latest run `{latest_run.run_id}` is `{latest_run.status}` (not `succeeded`).")
+    if not pr_url:
+        gaps.append("No PR is linked to the latest run.")
+
+    next_actions: list[str] = []
+    if not acceptance:
+        next_actions.append("Update Jira with explicit acceptance criteria bullets.")
+    if latest_run is None or latest_run.status != RUN_STATUS_SUCCEEDED:
+        next_actions.append(f"Run `!run {normalized_issue_key}` and resolve failures.")
+    if not pr_url:
+        next_actions.append("Create or link a PR that implements the issue scope.")
+    if not next_actions:
+        next_actions.append("Re-validate acceptance criteria against latest merged code before release.")
+
+    issue_label = f"[{normalized_issue_key}]({jira_url})" if jira_url else normalized_issue_key
+    lines = [
+        f"Gap analysis for {issue_label}: {issue.summary}",
+        f"Confidence: **{confidence}**",
+        "",
+        "Evidence:",
+    ]
+    if latest_run is None:
+        lines.append("- Latest run: none")
+    else:
+        lines.append(
+            f"- Latest run: `{latest_run.run_id}` ({latest_run.status})"
+            + (f" | PR: [open]({pr_url})" if pr_url else "")
+        )
+    if repo_issue_search_url:
+        lines.append(f"- Code reference: [repo search for {normalized_issue_key}]({repo_issue_search_url})")
+
+    lines.extend(["", "Acceptance Criteria:"])
+    if acceptance:
+        for criterion in acceptance[:6]:
+            criterion_search = f"{repo_url}/search?q={quote_plus(criterion)}" if repo_url else None
+            if criterion_search:
+                lines.append(f"- {criterion} ([code search]({criterion_search}))")
+            else:
+                lines.append(f"- {criterion}")
+    else:
+        lines.append("- None detected in Jira description.")
+
+    lines.extend(["", "Gaps:"])
+    if gaps:
+        lines.extend([f"- {gap}" for gap in gaps])
+    else:
+        lines.append("- No obvious gaps detected from Jira + latest run metadata.")
+
+    lines.extend(["", "Next actions:"])
+    lines.extend([f"- {action}" for action in next_actions[:4]])
+
+    return (
+        "\n".join(lines),
+        {
+            "issue_key": normalized_issue_key,
+            "jira_url": jira_url,
+            "pr_url": pr_url or None,
+            "repo_search_url": repo_issue_search_url,
+            "latest_run_id": latest_run.run_id if latest_run else None,
+            "latest_run_status": latest_run.status if latest_run else None,
+            "acceptance_criteria": acceptance,
+            "gaps": gaps,
+            "confidence": confidence,
+        },
+    )
+
+
 def _search_jira_issues_for_tenant(
     *,
     session: Session,
@@ -466,7 +682,8 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
 def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
-        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>, !bug <summary> [details], "
+        "!retry <ISSUE_KEY|RUN_ID>, !policy, !link <ISSUE_KEY>, !ask <question>, !gap <ISSUE_KEY>, "
+        "!bug <summary> [details], "
         "!issues seed <markdown spec>, !request <run_controls|seed_issues|all_sensitive> [reason]"
     )
 
@@ -1808,6 +2025,25 @@ def execute_discord_command(
             channel_id=normalized_channel_id,
             question=question,
             scoped_issue_key=scoped_issue_key,
+        )
+        return DiscordCommandResponse(
+            ok=True,
+            command=command_name,
+            message=message,
+            data=data,
+        )
+
+    if command_name == "gap":
+        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
+        issue_key_param = str(command_params.get("issue_key") or "").strip().upper()
+        issue_key_arg = arguments[0].strip().upper() if arguments else ""
+        issue_key = issue_key_param or issue_key_arg
+        if not issue_key:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !gap <ISSUE_KEY>")
+        message, data = _run_gap_analysis(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
         )
         return DiscordCommandResponse(
             ok=True,

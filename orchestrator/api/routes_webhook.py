@@ -670,6 +670,11 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, di
         target = _discord_option_value(options, name="target")
         if target:
             command_text = f"{command_text} {target}"
+    elif normalized_command == "gap":
+        issue_key = _discord_option_value(options, name="issue_key")
+        if issue_key:
+            command_text = f"{command_text} {issue_key}"
+            command_params = {"issue_key": issue_key}
     elif normalized_command == "issues":
         subcommands = options if isinstance(options, list) else []
         for option in subcommands:
@@ -1044,7 +1049,7 @@ def _build_command_followup_message(
     elif command_name in {"run", "retry"}:
         lines[0] = f"{lines[0]} Run queued."
     elif response_message:
-        if command_name == "ask":
+        if command_name in {"ask", "gap"}:
             response_message = _linkify_issue_mentions(response_message)
         lines[0] = f"{lines[0]} {response_message}"
 
@@ -2033,7 +2038,7 @@ async def ingest_discord_interaction(
             return _discord_autocomplete_response(choices=[])
         focused_name, focused_value = focused
         supports_issue_autocomplete = (
-            (command_name in {"run", "link"} and focused_name == "issue_key")
+            (command_name in {"run", "link", "gap"} and focused_name == "issue_key")
             or (command_name in {"retry"} and focused_name == "target")
             or (command_name in {"ask"} and focused_name == "issue_key")
         )
