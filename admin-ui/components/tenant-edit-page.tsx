@@ -35,7 +35,7 @@ import {
 import { recordToFormValues } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
-type TenantEditSection = "setup" | "integrations" | "jira" | "github" | "discord" | "health" | "config" | "access";
+type TenantEditSection = "setup" | "integrations" | "jira" | "github" | "discord" | "health" | "config" | "notifications";
 
 export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const params = useParams<{ tenantId: string }>();
@@ -472,7 +472,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             <CardTitle>Discord Integration</CardTitle>
             <CardDescription>Configure tenant Discord notifications and command permissions.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <TenantForm
               mode="edit"
               initialValues={recordToFormValues(tenant)}
@@ -487,6 +487,42 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 discord: true
               }}
             />
+            <div id="discord-access-requests" className="space-y-2 rounded-md border p-3 text-sm">
+              <p className="font-medium">Discord Access Requests</p>
+              <p className="text-muted-foreground">Approve pending `/request` submissions from Discord users for this tenant.</p>
+              {allowlistRequests.length === 0 ? (
+                <p className="text-muted-foreground">No pending requests.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {allowlistRequests.map((request) => (
+                    <li key={request.user_id} className="rounded-md border p-3">
+                      <p>
+                        <strong>User:</strong> {request.user_id}
+                      </p>
+                      <p>
+                        <strong>Requested at:</strong> {request.requested_at}
+                      </p>
+                      <p>
+                        <strong>Reason:</strong> {request.reason ?? "-"}
+                      </p>
+                      <p>
+                        <strong>Channel:</strong> {request.channel_id ?? "-"}
+                      </p>
+                      <div className="mt-2">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={allowlistBusyUserId === request.user_id}
+                          onClick={() => void handleApproveAllowlistRequest(request.user_id)}
+                        >
+                          {allowlistBusyUserId === request.user_id ? "Approving..." : "Approve"}
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -565,45 +601,38 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         </Card>
       ) : null}
 
-      {section === "access" ? (
+      {section === "notifications" ? (
         <Card>
           <CardHeader>
-            <CardTitle>Discord Access Requests</CardTitle>
-            <CardDescription>Approve pending /request submissions from Discord users for this tenant.</CardDescription>
+            <CardTitle>Notifications</CardTitle>
+            <CardDescription>Review important tenant events and required actions in one place.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {allowlistRequests.length === 0 ? (
-              <p className="text-muted-foreground">No pending requests.</p>
-            ) : (
-              <ul className="space-y-2">
-                {allowlistRequests.map((request) => (
-                  <li key={request.user_id} className="rounded-md border p-3">
-                    <p>
-                      <strong>User:</strong> {request.user_id}
+          <CardContent className="space-y-3 text-sm">
+            <div className="rounded-md border">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <span>Notification</span>
+                <span>Status</span>
+                <span>Action</span>
+              </div>
+              <ul className="divide-y">
+                <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3">
+                  <div className="space-y-0.5">
+                    <p className="font-medium">Discord Access Requests</p>
+                    <p className="text-xs text-muted-foreground">
+                      Requests from Discord users asking to join the tenant allowlist.
                     </p>
-                    <p>
-                      <strong>Requested at:</strong> {request.requested_at}
-                    </p>
-                    <p>
-                      <strong>Reason:</strong> {request.reason ?? "-"}
-                    </p>
-                    <p>
-                      <strong>Channel:</strong> {request.channel_id ?? "-"}
-                    </p>
-                    <div className="mt-2">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={allowlistBusyUserId === request.user_id}
-                        onClick={() => void handleApproveAllowlistRequest(request.user_id)}
-                      >
-                        {allowlistBusyUserId === request.user_id ? "Approving..." : "Approve"}
-                      </Button>
-                    </div>
-                  </li>
-                ))}
+                  </div>
+                  <span className="rounded-full border px-2 py-0.5 text-xs">
+                    {allowlistRequests.length} pending
+                  </span>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/discord#discord-access-requests`}>
+                      Review
+                    </Link>
+                  </Button>
+                </li>
               </ul>
-            )}
+            </div>
           </CardContent>
         </Card>
       ) : null}
