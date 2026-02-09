@@ -888,6 +888,40 @@ class JiraWebhookTests(unittest.TestCase):
         thread_send_mock.assert_not_called()
         interaction_send_mock.assert_not_called()
 
+    def test_discord_issues_followup_creates_seed_thread_for_clarifications(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.routes_webhook.execute_discord_command",
+                return_value=DiscordCommandResponse(
+                    ok=True,
+                    command="issues",
+                    message="Issue upsert complete. I still need more detail.",
+                    data={
+                        "requires_input": True,
+                        "followup_request_id": "req-123",
+                        "questions": ["What rollout plan should we use?"],
+                    },
+                ),
+            ),
+            patch("orchestrator.api.routes_webhook._send_discord_seed_followup_with_thread") as seed_thread_send_mock,
+            patch("orchestrator.api.routes_webhook._send_discord_thread_followup") as thread_send_mock,
+            patch("orchestrator.api.routes_webhook._send_discord_interaction_followup") as interaction_send_mock,
+        ):
+            asyncio.run(
+                _run_discord_command_followup(
+                    tenant_id="tenant-webhook",
+                    user_id="discord-user-1",
+                    channel_id="discord-channel-1",
+                    command_text="!issues seed Build API and worker stories",
+                    application_id="discord-app-1",
+                    interaction_token="interaction-token-1",
+                )
+            )
+
+        seed_thread_send_mock.assert_called_once()
+        thread_send_mock.assert_not_called()
+        interaction_send_mock.assert_not_called()
+
     def test_find_tenant_for_discord_channel_matches_registered_thread_channel(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-webhook")
@@ -899,5 +933,19 @@ class JiraWebhookTests(unittest.TestCase):
             session.commit()
 
             matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-thread-123")
+            self.assertIsNotNone(matched)
+            self.assertEqual(matched.tenant_id, "tenant-webhook")
+
+    def test_find_tenant_for_discord_channel_matches_seed_followup_thread_channel(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["channel_id"] = "discord-channel-1"
+            discord_config["seed_followup_thread_channel_ids"] = ["discord-thread-seed-1"]
+            tenant.discord_config = discord_config
+            session.commit()
+
+            matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-thread-seed-1")
             self.assertIsNotNone(matched)
             self.assertEqual(matched.tenant_id, "tenant-webhook")

@@ -499,6 +499,40 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("TP-1", response.json()["message"])
 
     def test_seed_issues_requests_clarifications_when_required_fields_missing(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            jira_config = dict(tenant.jira_config)
+            jira_config["connection_id"] = "conn-seed-clarify"
+            tenant.jira_config = jira_config
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="conn-seed-clarify",
+                    account_id="acct-1",
+                    account_email="dev@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://master-builder.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted="enc",
+                    refresh_token_encrypted="enc",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeClient:
+            def search_issues_by_jql(self, **_: object) -> list[JiraIssuePreview]:  # noqa: ANN003
+                return []
+
+            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                return JiraIssueBulkCreateResult(
+                    created=[JiraIssueCreateResult(key="TP-301", issue_id="301")],
+                    errors=[],
+                )
+
         with (
             self.session_factory() as session,
             patch("orchestrator.api.routes_discord.build_codex_runtime", return_value=object()),
@@ -520,6 +554,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ],
                 },
             ),
+            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=_FakeClient()),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
@@ -529,8 +565,9 @@ class DiscordCommandApiTests(unittest.TestCase):
                 prompt_markdown="Seed issues from spec",
             )
 
-        self.assertIn("need a bit more detail", message.lower())
+        self.assertIn("need more detail", message.lower())
         self.assertTrue(data["requires_input"])
+        self.assertEqual(data["created_issue_keys"], ["TP-301"])
         self.assertIn("What is the rollout plan?", data["questions"])
         self.assertTrue(any("objective" in question.lower() for question in data["questions"]))
 
