@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.runs import enqueue_run
 from orchestrator.core.workflow_runner import (
     PmPlan,
     WorkflowDiagnostics,
@@ -11,7 +12,7 @@ from orchestrator.core.workflow_runner import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, RunLock, Tenant
 from orchestrator.worker import process_next_queued_run
 
 
@@ -240,3 +241,35 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertTrue(processed.plan["decision_gate"]["triggered"])
             stage_updates = processed.plan["stage_updates"]
             self.assertEqual([entry["stage"] for entry in stage_updates], ["decision_gate_required"])
+
+    def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
+        with self.session_factory() as session:
+            enqueue_result = enqueue_run(
+                session,
+                tenant_id="tenant-worker",
+                project_id=None,
+                issue_key="ZZ-101",
+                issue_summary="Missing project mapping",
+                issue_description=(
+                    "Objective: validate missing project behavior. "
+                    "Scope: worker should fail safely. "
+                    "Acceptance Criteria: lock removed. "
+                    "How to test: process queued run and verify lock is cleared. "
+                    "NFR intent: MVP."
+                ),
+                repo_url="https://github.com/example/repo",
+            )
+            self.assertTrue(enqueue_result.enqueued)
+            run_id = enqueue_result.run.run_id
+
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, _SuccessRunner())
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "failed")
+            self.assertEqual(
+                processed.last_error,
+                "No active project mapping found for issue ZZ-101",
+            )
+            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "ZZ-101"})
+            self.assertIsNone(lock)
