@@ -53,20 +53,7 @@ jobs:
           if [ -n "${WORKFLOW_RELEASE_VERSION:-}" ]; then
             release_version="${WORKFLOW_RELEASE_VERSION}"
           else
-            release_version="$(python - <<'PY'
-            from orchestrator.core.release_train import next_release_version_from_tags
-            import subprocess
-
-            result = subprocess.run(
-                ["git", "tag", "--list", "v*.*.*", "--sort=-v:refname"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-            print(next_release_version_from_tags(tags))
-            PY
-            )"
+            release_version="$(python -c "from orchestrator.core.release_train import next_release_version_from_tags; import subprocess; result = subprocess.run(['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'], check=True, capture_output=True, text=True); tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]; print(next_release_version_from_tags(tags))")"
           fi
           echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
 
