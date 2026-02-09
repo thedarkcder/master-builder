@@ -172,6 +172,52 @@ jobs:
             --generate-notes \
             --latest
 
+      - name: Ensure Jira release exists
+        shell: bash
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_BASE_URL}" ] || \
+             [ -z "${JIRA_EMAIL}" ] || \
+             [ -z "${JIRA_API_TOKEN}" ] || \
+             [ -z "${JIRA_PROJECT_KEY}" ]; then
+            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
+            exit 1
+          fi
+
+          if [ -z "${RELEASE_VERSION}" ]; then
+            echo "Missing release version."
+            exit 1
+          fi
+
+          args=(
+            scripts/release_train_sync.py
+            release
+            --jira-base-url "${JIRA_BASE_URL}"
+            --jira-email "${JIRA_EMAIL}"
+            --jira-api-token "${JIRA_API_TOKEN}"
+            --project-key "${JIRA_PROJECT_KEY}"
+            --release-version "${RELEASE_VERSION}"
+          )
+
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=(--jira-cloud-id "${JIRA_CLOUD_ID}")
+          fi
+
+          if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+
+          python "${args[@]}"
+
       - name: Transition release-train Jira issues to Done
         if: steps.issue-keys.outputs.issue_count != '0'
         shell: bash
