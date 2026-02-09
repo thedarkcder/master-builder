@@ -20,6 +20,7 @@ from orchestrator.core.codex_agents import (
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
+from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
@@ -29,7 +30,7 @@ from orchestrator.core.runs import (
     cancel_run,
     enqueue_run,
 )
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant, WebhookDelivery
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant, WebhookDelivery
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
 
 router = APIRouter(tags=["discord"])
@@ -478,8 +479,10 @@ def _command_policy_message() -> str:
     )
 
 
-def _project_filter_jql(tenant: Tenant) -> str:
-    keys = [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
+def _project_filter_jql(*, session: Session, tenant: Tenant) -> str:
+    keys = [project.jira_project_key for project in _tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
+    if not keys:
+        keys = [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
     if not keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
     if len(keys) == 1:
@@ -488,8 +491,38 @@ def _project_filter_jql(tenant: Tenant) -> str:
     return f"project in ({joined})"
 
 
-def _tenant_project_keys(tenant: Tenant) -> list[str]:
+def _tenant_project_keys(*, session: Session, tenant: Tenant) -> list[str]:
+    keys = [project.jira_project_key for project in _tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
+    if keys:
+        return keys
     return [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
+
+
+def _tenant_active_projects(*, session: Session, tenant_id: str) -> list[Project]:
+    return session.execute(
+        select(Project)
+        .where(Project.tenant_id == tenant_id, Project.is_archived.is_(False))
+        .order_by(Project.created_at.asc())
+    ).scalars().all()
+
+
+def _resolve_project_for_issue(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+) -> Project:
+    project = find_active_project_for_issue_key(
+        session,
+        tenant_id=tenant.tenant_id,
+        issue_key=issue_key,
+    )
+    if project is not None:
+        return project
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"No active project mapping found for issue {issue_key}",
+    )
 
 
 def _normalize_seed_issue_labels(raw_labels: object) -> list[str]:
@@ -797,7 +830,7 @@ def _create_discord_bug_issue(
     related_issue_key: str | None,
     attachments: list[dict[str, str]],
 ) -> tuple[str, dict]:
-    project_keys = _tenant_project_keys(tenant)
+    project_keys = _tenant_project_keys(session=session, tenant=tenant)
     if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
     project_key = project_keys[0]
@@ -894,7 +927,7 @@ def _collect_ask_context(
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str | None, str | None, list[dict], dict[str, int]]:
-    project_jql = _project_filter_jql(tenant)
+    project_jql = _project_filter_jql(session=session, tenant=tenant)
     if scoped_issue_key:
         normalized_issue_key = scoped_issue_key.strip().upper()
         jira_issues = _search_jira_issues_for_tenant(
@@ -1026,7 +1059,7 @@ def _existing_issue_keys_for_tenant(
         return set()
 
     quoted_issue_keys = ", ".join(f'"{value}"' for value in normalized_issue_keys)
-    jql = f"{_project_filter_jql(tenant)} AND key in ({quoted_issue_keys})"
+    jql = f"{_project_filter_jql(session=session, tenant=tenant)} AND key in ({quoted_issue_keys})"
     issues = _search_jira_issues_for_tenant(
         session=session,
         tenant=tenant,
@@ -1275,7 +1308,7 @@ def _seed_issues_with_codex(
     force_issue_keys: list[str] | None = None,
     allow_create: bool = True,
 ) -> tuple[str, dict]:
-    project_keys = _tenant_project_keys(tenant)
+    project_keys = _tenant_project_keys(session=session, tenant=tenant)
     if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
 
@@ -2024,14 +2057,21 @@ def execute_discord_command(
         if len(arguments) != 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !run <ISSUE_KEY>")
         issue_key = arguments[0].strip().upper()
+        project = _resolve_project_for_issue(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
+        )
         issue_preview = _fetch_jira_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
         _ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
         enqueue_result = enqueue_run(
             session,
             tenant_id=tenant_id,
+            project_id=project.project_id,
             issue_key=issue_key,
             issue_summary=issue_preview.summary,
             issue_description=None,
+            repo_url=project.github_repository,
             delivery_id=None,
             max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
         )
@@ -2087,12 +2127,19 @@ def execute_discord_command(
             )
         issue_preview = _fetch_jira_issue_preview(session=session, tenant=tenant, issue_key=run.issue_key)
         _ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
+        project = _resolve_project_for_issue(
+            session=session,
+            tenant=tenant,
+            issue_key=run.issue_key,
+        )
         enqueue_result = enqueue_run(
             session,
             tenant_id=tenant_id,
+            project_id=project.project_id,
             issue_key=run.issue_key,
             issue_summary=issue_preview.summary,
             issue_description=run.issue_description,
+            repo_url=project.github_repository,
             delivery_id=None,
             max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
         )

@@ -84,6 +84,12 @@ class Run(Base):
         nullable=False,
         index=True,
     )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     issue_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     issue_description: Mapped[str | None] = mapped_column(Text, nullable=True)
