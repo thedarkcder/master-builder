@@ -111,6 +111,8 @@ def _project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         github_repository=project.github_repository,
         jira_project_key=project.jira_project_key,
         policy_overrides=normalize_project_policy_overrides(project.policy_overrides),
+        environment=dict(project.environment or {}),
+        secret_refs=dict(project.secret_refs or {}),
         effective_policy=resolve_effective_policy(
             tenant_policy=tenant_policy,
             project_overrides=project.policy_overrides,
@@ -189,6 +191,19 @@ def _normalize_project_key(key: str) -> str:
     return key.strip().upper()
 
 
+def _normalize_string_map(raw: dict[str, str] | None) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in raw.items():
+        normalized_key = str(key).strip()
+        normalized_value = str(value).strip()
+        if not normalized_key or not normalized_value:
+            continue
+        normalized[normalized_key] = normalized_value
+    return normalized
+
+
 def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> None:
     existing = session.execute(
         select(Project).where(Project.tenant_id == tenant.tenant_id).limit(1)
@@ -210,6 +225,8 @@ def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> N
             github_repository=repo_url,
             jira_project_key=jira_project_key,
             policy_overrides={},
+            environment={},
+            secret_refs={},
             is_archived=False,
             created_at=now,
             updated_at=now,
@@ -289,6 +306,29 @@ def _resolve_secret_ref(session: Session, *, ref_name: str, settings) -> str:  #
     if not value:
         raise ValueError(f"Missing secret value for ref '{ref_name}'")
     return value
+
+
+def _resolve_scoped_secret_ref(
+    session: Session,
+    *,
+    ref_name: str,
+    settings,  # noqa: ANN001
+    tenant_id: str | None = None,
+) -> str | None:
+    candidates: list[str] = []
+    if tenant_id:
+        candidates.append(f"tenant/{tenant_id}/{ref_name}")
+    candidates.append(f"platform/{ref_name}")
+    candidates.append(ref_name)
+    for candidate in candidates:
+        value = resolve_secret_ref(
+            session,
+            secret_ref=candidate,
+            encryption_key=settings.secrets_encryption_key,
+        )
+        if value:
+            return value
+    return None
 
 
 def _jira_oauth_client(*, session: Session, settings) -> JiraOAuthClient:  # noqa: ANN001
@@ -1358,6 +1398,38 @@ def delete_tenant(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/tenants/{tenant_id}/archive", response_model=TenantRead)
+def archive_tenant(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    tenant.is_enabled = False
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+    return _tenant_to_schema(tenant)
+
+
+@router.post("/tenants/{tenant_id}/unarchive", response_model=TenantRead)
+def unarchive_tenant(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    tenant.is_enabled = True
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+    return _tenant_to_schema(tenant)
+
+
 @router.get("/tenants/{tenant_id}/projects", response_model=list[ProjectRead])
 def list_projects(
     tenant_id: str,
@@ -1399,6 +1471,8 @@ def create_project(
         github_repository=normalized_repo,
         jira_project_key=normalized_jira_key,
         policy_overrides=normalize_project_policy_overrides(payload.policy_overrides),
+        environment=_normalize_string_map(payload.environment),
+        secret_refs=_normalize_string_map(payload.secret_refs),
         is_archived=False,
         created_at=now,
         updated_at=now,
@@ -1456,6 +1530,8 @@ def update_project(
     project.github_repository = normalized_repo
     project.jira_project_key = normalized_jira_key
     project.policy_overrides = normalize_project_policy_overrides(payload.policy_overrides)
+    project.environment = _normalize_string_map(payload.environment)
+    project.secret_refs = _normalize_string_map(payload.secret_refs)
     project.is_archived = payload.is_archived
     project.updated_at = datetime.now(timezone.utc)
 
@@ -1552,10 +1628,11 @@ def test_github_connection(
         settings = get_settings()
         github_client_from_tenant_config(
             _with_managed_github_refs(github),
-            secret_lookup=lambda ref: resolve_secret_ref(
+            secret_lookup=lambda ref: _resolve_scoped_secret_ref(
                 session,
-                secret_ref=ref,
-                encryption_key=settings.secrets_encryption_key,
+                ref_name=ref,
+                settings=settings,
+                tenant_id=tenant_id,
             ),
         )
     except ValueError as exc:
@@ -1695,10 +1772,11 @@ def list_tenant_github_repositories(
         settings = get_settings()
         client = github_client_from_tenant_config(
             _with_managed_github_refs(github),
-            secret_lookup=lambda ref: resolve_secret_ref(
+            secret_lookup=lambda ref: _resolve_scoped_secret_ref(
                 session,
-                secret_ref=ref,
-                encryption_key=settings.secrets_encryption_key,
+                ref_name=ref,
+                settings=settings,
+                tenant_id=tenant_id,
             ),
         )
         repositories = client.list_installation_repositories()

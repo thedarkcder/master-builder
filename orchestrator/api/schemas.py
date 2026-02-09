@@ -106,6 +106,8 @@ class ProjectCreate(BaseModel):
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
     policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
 
 
 class ProjectUpdate(BaseModel):
@@ -113,6 +115,8 @@ class ProjectUpdate(BaseModel):
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
     policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
     is_archived: bool = False
 
 
@@ -123,6 +127,8 @@ class ProjectRead(BaseModel):
     github_repository: str
     jira_project_key: str
     policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
     effective_policy: PolicyConfig
     is_archived: bool
     created_at: datetime

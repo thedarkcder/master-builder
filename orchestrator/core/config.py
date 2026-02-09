@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     github_install_state_secret: str = "local-dev-change-me"
     github_app_slug: str = ""
     github_app_id_ref: str = "GITHUB_APP_ID"
-    github_private_key_ref: str = "GITHUB_CLIENT_SECRET"
+    github_private_key_ref: str = "GITHUB_APP_PRIVATE_KEY"
     public_api_base_url: str = "http://localhost:4000"
     jira_oauth_state_secret: str = "local-dev-change-me"
     jira_oauth_client_id_ref: str = "JIRA_OAUTH_CLIENT_ID"
