@@ -108,6 +108,19 @@ def build_discord_guild_commands() -> list[dict]:
             ],
         },
         {
+            "name": "gap",
+            "description": "Compare Jira acceptance criteria vs current code signals",
+            "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "issue_key",
+                    "description": "Jira issue key, e.g. MAB-24",
+                    "required": True,
+                    "autocomplete": True,
+                }
+            ],
+        },
+        {
             "name": "bug",
             "description": "Create a Jira bug from Discord context",
             "options": [

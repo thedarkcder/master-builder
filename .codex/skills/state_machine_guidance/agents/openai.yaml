@@ -1,0 +1,4 @@
+interface:
+  display_name: "State Machine Guidance"
+  short_description: "Model workflows with explicit states and events."
+  default_prompt: "Use $state_machine_guidance to model multi-step workflows with explicit states and events instead of timer-based waits."
