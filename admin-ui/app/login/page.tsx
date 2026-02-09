@@ -76,7 +76,7 @@ export default function LoginPage() {
                 required
               />
             </div>
-            <Button className="w-full" type="submit" disabled={!ready || isSubmitting}>
+            <Button className="w-full" type="submit" disabled={isSubmitting}>
               Sign In
             </Button>
             {errorMessage ? (
