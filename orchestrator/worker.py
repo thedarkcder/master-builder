@@ -21,6 +21,7 @@ from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.core.secrets import decrypt_value, encrypt_value
+from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.signal_templates import (
     format_stage_discord_update,
     format_stage_jira_update,
@@ -354,6 +355,10 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         return block_archived_project(session, run=run, project=project)
 
     bind_run_project(session, run=run, project=project)
+    effective_policy = resolve_effective_policy(
+        tenant_policy=tenant.policy_config,
+        project_overrides=project.policy_overrides,
+    )
 
     try:
         workflow_request = _workflow_request_for_run(

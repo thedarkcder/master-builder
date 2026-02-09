@@ -218,20 +218,30 @@ def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> N
 
 
 def _sync_tenant_jira_project_keys(session: Session, *, tenant: Tenant) -> None:
-    projects = session.execute(
+    persisted_projects = session.execute(
         select(Project)
         .where(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
         .order_by(Project.created_at.asc())
-    ).scalars()
+    ).scalars().all()
+    pending_projects = [
+        project
+        for project in session.new
+        if isinstance(project, Project)
+        and project.tenant_id == tenant.tenant_id
+        and not project.is_archived
+    ]
+    persisted_ids = {item.project_id for item in persisted_projects}
+    projects = persisted_projects + [project for project in pending_projects if project.project_id not in persisted_ids]
     keys: list[str] = []
     for project in projects:
+        if project.is_archived:
+            continue
         normalized = _normalize_project_key(project.jira_project_key)
         if normalized and normalized not in keys:
             keys.append(normalized)
-    if keys:
-        jira_config = dict(tenant.jira_config)
-        jira_config["project_keys"] = keys
-        tenant.jira_config = jira_config
+    jira_config = dict(tenant.jira_config)
+    jira_config["project_keys"] = keys
+    tenant.jira_config = jira_config
 
 
 def _with_managed_github_refs(raw_github_config: dict) -> dict:
