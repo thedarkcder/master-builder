@@ -19,7 +19,7 @@ from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
-from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.signal_templates import (
@@ -64,23 +64,46 @@ RUN_STATUS_CANCELLED = "cancelled"
 JIRA_STAGE_COMMENT_EVENTS = {"decision_gate_required", "run_failed"}
 
 
-def _resolve_required_secret(session: Session, *, ref_name: str, settings) -> str:  # noqa: ANN001
-    value = resolve_secret_ref(
+def _resolve_required_secret(
+    session: Session,
+    *,
+    ref_name: str,
+    settings,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+) -> str:  # noqa: ANN001
+    value = resolve_scoped_secret_ref(
         session,
         secret_ref=ref_name,
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant_id,
+        project_id=project_id,
     )
     if not value:
         raise ValueError(f"Missing secret value for ref '{ref_name}'")
     return value
 
 
-def _jira_oauth_client(*, session: Session, settings) -> JiraOAuthClient:  # noqa: ANN001
-    client_id = _resolve_required_secret(session, ref_name=settings.jira_oauth_client_id_ref, settings=settings)
+def _jira_oauth_client(
+    *,
+    session: Session,
+    settings,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+) -> JiraOAuthClient:  # noqa: ANN001
+    client_id = _resolve_required_secret(
+        session,
+        ref_name=settings.jira_oauth_client_id_ref,
+        settings=settings,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
     client_secret = _resolve_required_secret(
         session,
         ref_name=settings.jira_oauth_client_secret_ref,
         settings=settings,
+        tenant_id=tenant_id,
+        project_id=project_id,
     )
     redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/jira/connect/callback"
     return JiraOAuthClient(
@@ -97,6 +120,8 @@ def _refresh_jira_connection_tokens(
     *,
     connection: JiraOAuthConnection,
     settings,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
 ) -> str:  # noqa: ANN001
     now = datetime.now(timezone.utc)
     if connection.access_token_expires_at - now > timedelta(seconds=60):
@@ -105,7 +130,12 @@ def _refresh_jira_connection_tokens(
             encryption_key=settings.secrets_encryption_key,
         )
 
-    client = _jira_oauth_client(session=session, settings=settings)
+    client = _jira_oauth_client(
+        session=session,
+        settings=settings,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
     refresh_token = decrypt_value(
         ciphertext=connection.refresh_token_encrypted,
         encryption_key=settings.secrets_encryption_key,
@@ -166,8 +196,9 @@ def _send_stage_update_to_jira(
             session,
             connection=connection,
             settings=settings,
+            tenant_id=tenant.tenant_id,
         )
-        client = _jira_oauth_client(session=session, settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
         client.add_issue_comment(
             access_token=access_token,
             cloud_id=connection.cloud_id,

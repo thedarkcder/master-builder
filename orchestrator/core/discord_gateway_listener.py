@@ -14,7 +14,7 @@ from orchestrator.api.routes_discord import execute_discord_command
 from orchestrator.api.routes_webhook import _ask_confirmation_components, _build_command_followup_message
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import Settings
-from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -114,7 +114,7 @@ class DiscordGatewayListener:
 
     def _resolve_bot_token(self, *, token_ref: str) -> str:
         with self._session_factory() as session:
-            value = resolve_secret_ref(
+            value = resolve_scoped_secret_ref(
                 session,
                 secret_ref=token_ref,
                 encryption_key=self._settings.secrets_encryption_key,

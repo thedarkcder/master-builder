@@ -41,7 +41,7 @@ from orchestrator.core.runs import (
     RUN_STATUS_FAILED,
     enqueue_run,
 )
-from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
@@ -369,10 +369,13 @@ def _resolve_discord_interactions_public_key(
     session: Session,
     settings,
 ) -> bytes:  # noqa: ANN001
-    raw_public_key = resolve_secret_ref(
-        session,
-        secret_ref=DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF,
-        encryption_key=settings.secrets_encryption_key,
+    raw_public_key = (
+        resolve_scoped_secret_ref(
+            session,
+            secret_ref=DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF,
+            encryption_key=settings.secrets_encryption_key,
+        )
+        or ""
     ).strip()
     if not raw_public_key:
         raise HTTPException(
@@ -869,10 +872,11 @@ def _validate_webhook_auth(
     if not webhook_secret_ref:
         return
 
-    expected_token = resolve_secret_ref(
+    expected_token = resolve_scoped_secret_ref(
         session,
         secret_ref=str(webhook_secret_ref),
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not expected_token:
         logger.error(
@@ -922,7 +926,7 @@ def _resolve_global_github_webhook_secret(
     session: Session,
     settings,
 ) -> str | None:  # noqa: ANN001
-    secret_value = resolve_secret_ref(
+    secret_value = resolve_scoped_secret_ref(
         session,
         secret_ref=GLOBAL_GITHUB_WEBHOOK_SECRET_REF,
         encryption_key=settings.secrets_encryption_key,
@@ -943,10 +947,11 @@ def _resolve_tenant_github_webhook_secret(
     if not webhook_secret_ref:
         return None
 
-    secret_value = resolve_secret_ref(
+    secret_value = resolve_scoped_secret_ref(
         session,
         secret_ref=str(webhook_secret_ref),
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not secret_value:
         logger.error(
@@ -1214,10 +1219,11 @@ def _send_discord_thread_followup(
     token_ref = settings.discord_bot_token_secret_ref.strip()
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_secret_ref(
+    bot_token = resolve_scoped_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
@@ -1243,10 +1249,11 @@ def _send_discord_ask_response_with_thread(
     token_ref = settings.discord_bot_token_secret_ref.strip()
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_secret_ref(
+    bot_token = resolve_scoped_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
@@ -1298,10 +1305,11 @@ def _send_discord_seed_followup_with_thread(
     token_ref = settings.discord_bot_token_secret_ref.strip()
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_secret_ref(
+    bot_token = resolve_scoped_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")

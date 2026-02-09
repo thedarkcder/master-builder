@@ -342,10 +342,16 @@ Notes:
    - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
 
 ## GitHub App setup
-The service uses one server-managed GitHub App for all tenants:
+GitHub App credentials resolve with scoped fallback in this order:
+1. `project/{tenant_id}/{project_id}/{ref}`
+2. `tenant/{tenant_id}/{ref}`
+3. `platform/{ref}`
+4. `{ref}` (legacy direct ref / env var)
+
+Default refs:
 - secret ref `GITHUB_APP_SLUG` (GitHub App slug)
-- `ORCHESTRATOR_GITHUB_APP_ID_REF` (defaults to `secret/app-id`)
-- `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF` (defaults to `secret/private-key`)
+- `ORCHESTRATOR_GITHUB_APP_ID_REF` (defaults to `GITHUB_APP_ID`)
+- `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF` (defaults to `GITHUB_APP_PRIVATE_KEY`)
 
 Tenants only store GitHub mode + installation state (`installation_id`).
 

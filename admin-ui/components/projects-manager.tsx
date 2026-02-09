@@ -165,7 +165,11 @@ export function ProjectsManager({
         {projects.map((project) => {
           const editing = editingId === project.project_id;
           return (
-            <li key={project.project_id} className={cn("rounded-md border p-3", project.is_archived ? "bg-muted/30" : "")}>
+            <li
+              key={project.project_id}
+              id={`project-${project.project_id}`}
+              className={cn("rounded-md border p-3", project.is_archived ? "bg-muted/30" : "")}
+            >
               {editing ? (
                 <div className="grid gap-2 md:grid-cols-3">
                   <Input value={editDraft.name} onChange={(event) => setEditDraft((prev) => ({ ...prev, name: event.target.value }))} />
