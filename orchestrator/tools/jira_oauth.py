@@ -44,6 +44,14 @@ class JiraIssuePreview:
 
 
 @dataclass(frozen=True)
+class JiraIssueDetail:
+    key: str
+    summary: str
+    status: str
+    description: str
+
+
+@dataclass(frozen=True)
 class JiraIssueCreateInput:
     summary: str
     description: str | dict[str, Any]
@@ -300,6 +308,53 @@ class JiraOAuthClient:
 
             results.append(JiraIssuePreview(key=key, summary=summary, status=status_name))
         return results
+
+    def get_issue_detail(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> JiraIssueDetail:
+        normalized_issue = issue_id_or_key.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue detail fetch")
+
+        query = urlencode({"fields": "summary,status,description"})
+        payload = self._get_json(
+            (
+                f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
+                f"{quote(normalized_issue, safe='')}?{query}"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, dict):
+            raise JiraOAuthError("Issue detail response was not an object")
+
+        key_raw = payload.get("key")
+        key = str(key_raw).strip() if isinstance(key_raw, str) and key_raw.strip() else normalized_issue
+
+        fields = payload.get("fields")
+        if not isinstance(fields, dict):
+            fields = {}
+
+        summary_raw = fields.get("summary")
+        summary = summary_raw.strip() if isinstance(summary_raw, str) and summary_raw.strip() else key
+
+        status_name = "Unknown"
+        status_obj = fields.get("status")
+        if isinstance(status_obj, dict):
+            status_raw = status_obj.get("name")
+            if isinstance(status_raw, str) and status_raw.strip():
+                status_name = status_raw.strip()
+
+        description = _adf_to_plain_text(fields.get("description")).strip()
+        return JiraIssueDetail(
+            key=key,
+            summary=summary,
+            status=status_name,
+            description=description,
+        )
 
     def create_issues_bulk(
         self,
@@ -603,6 +658,35 @@ def _to_adf_description(text: str | dict[str, Any]) -> dict[str, Any]:
         "version": 1,
         "content": paragraphs,
     }
+
+
+def _adf_to_plain_text(node: object) -> str:
+    if isinstance(node, str):
+        return node
+    if not isinstance(node, dict):
+        if isinstance(node, list):
+            return "\n".join(part for part in (_adf_to_plain_text(item) for item in node) if part).strip()
+        return ""
+
+    node_type = str(node.get("type") or "").strip().lower()
+    if node_type == "text":
+        text = node.get("text")
+        return text if isinstance(text, str) else ""
+
+    content = node.get("content")
+    if isinstance(content, list):
+        rendered = [_adf_to_plain_text(item).strip() for item in content]
+        rendered = [part for part in rendered if part]
+        if not rendered:
+            return ""
+        if node_type in {"doc", "bulletlist", "orderedlist"}:
+            return "\n".join(rendered).strip()
+        if node_type == "listitem":
+            return "\n".join(rendered).strip()
+        if node_type in {"heading", "paragraph"}:
+            return " ".join(rendered).strip()
+        return " ".join(rendered).strip()
+    return ""
 
 
 def _parse_issue_type_names_from_payload(payload: dict | list) -> list[str]:

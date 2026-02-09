@@ -27,6 +27,7 @@ from orchestrator.api.routes_discord import (
     _search_jira_issues_for_tenant,
     consume_pending_ask_action,
     execute_discord_command,
+    remove_issue_key_from_tenant_ask_history,
 )
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
@@ -58,10 +59,22 @@ HTTP_413_TOO_LARGE = getattr(
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "ask"}
+JIRA_COMMENT_EVENTS = {"comment_created", "comment_updated"}
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")
 ASK_REPLY_MODAL_CUSTOM_ID_PATTERN = re.compile(r"^ask\.reply\.([0-9]{15,25})$")
 ASK_REPLY_OPEN_CUSTOM_ID = "ask.reply.open"
+
+
+def _normalize_jira_webhook_event(raw_value: object) -> str | None:
+    if not isinstance(raw_value, str):
+        return None
+    normalized = raw_value.strip().lower()
+    if not normalized:
+        return None
+    if normalized.startswith("jira:"):
+        normalized = normalized[len("jira:") :]
+    return normalized
 
 
 def _max_webhook_body_bytes() -> int:
@@ -452,6 +465,12 @@ def _tenant_discord_channel_ids(tenant: Tenant) -> set[str]:
             normalized = str(value or "").strip()
             if normalized:
                 channel_ids.add(normalized)
+    raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
+    if isinstance(raw_seed_thread_ids, list):
+        for value in raw_seed_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
     return channel_ids
 
 
@@ -651,6 +670,11 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, di
         target = _discord_option_value(options, name="target")
         if target:
             command_text = f"{command_text} {target}"
+    elif normalized_command == "gap":
+        issue_key = _discord_option_value(options, name="issue_key")
+        if issue_key:
+            command_text = f"{command_text} {issue_key}"
+            command_params = {"issue_key": issue_key}
     elif normalized_command == "issues":
         subcommands = options if isinstance(options, list) else []
         for option in subcommands:
@@ -1025,7 +1049,7 @@ def _build_command_followup_message(
     elif command_name in {"run", "retry"}:
         lines[0] = f"{lines[0]} Run queued."
     elif response_message:
-        if command_name == "ask":
+        if command_name in {"ask", "gap"}:
             response_message = _linkify_issue_mentions(response_message)
         lines[0] = f"{lines[0]} {response_message}"
 
@@ -1240,6 +1264,92 @@ def _send_discord_ask_response_with_thread(
     )
 
 
+def _send_discord_seed_followup_with_thread(
+    *,
+    session: Session,
+    settings,
+    tenant: Tenant,
+    channel_id: str,
+    user_id: str,
+    content: str,
+    request_id: str,
+    questions: list[str],
+) -> None:  # noqa: ANN001
+    token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not token_ref:
+        raise RuntimeError("Discord bot token secret ref is not configured")
+    bot_token = resolve_secret_ref(
+        session,
+        secret_ref=token_ref,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if not bot_token:
+        raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
+
+    client = DiscordApiClient(bot_token=bot_token)
+    posted = client.post_message(channel_id=channel_id, content=content)
+    posted_message_id = str(posted.get("id") or "").strip()
+    if not posted_message_id:
+        raise RuntimeError("Discord message post succeeded but response did not include message ID")
+
+    thread_name = f"{tenant.tenant_id}-issues-{posted_message_id[-6:]}".replace(" ", "-")
+    thread_channel_id = client.create_thread_from_message(
+        channel_id=channel_id,
+        message_id=posted_message_id,
+        name=thread_name[:100],
+    )
+
+    discord_config = dict(tenant.discord_config or {})
+    raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
+    seed_thread_ids = (
+        [str(value).strip() for value in raw_seed_thread_ids if str(value).strip()]
+        if isinstance(raw_seed_thread_ids, list)
+        else []
+    )
+    if thread_channel_id not in seed_thread_ids:
+        seed_thread_ids.append(thread_channel_id)
+    discord_config["seed_followup_thread_channel_ids"] = seed_thread_ids[-200:]
+
+    raw_seed_followups = discord_config.get("seed_followups")
+    if isinstance(raw_seed_followups, list):
+        updated_followups: list[dict] = []
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for item in raw_seed_followups:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("request_id") or "").strip() != request_id:
+                updated_followups.append(item)
+                continue
+            raw_channel_ids = item.get("channel_ids")
+            channel_ids = (
+                [str(value).strip() for value in raw_channel_ids if str(value).strip()]
+                if isinstance(raw_channel_ids, list)
+                else []
+            )
+            if channel_id not in channel_ids:
+                channel_ids.append(channel_id)
+            if thread_channel_id not in channel_ids:
+                channel_ids.append(thread_channel_id)
+            item["channel_ids"] = channel_ids
+            item["updated_at"] = now_iso
+            updated_followups.append(item)
+        discord_config["seed_followups"] = updated_followups
+
+    tenant.discord_config = discord_config
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+    numbered_questions = [f"{idx}. {value}" for idx, value in enumerate(questions, start=1) if value.strip()]
+    question_block = "\n".join(numbered_questions) if numbered_questions else "No additional questions."
+    client.post_message(
+        channel_id=thread_channel_id,
+        content=(
+            f"<@{user_id}> Continue here with details so I can refine and update the seeded tickets.\n"
+            f"{question_block}"
+        ),
+    )
+
+
 async def _run_discord_command_followup(
     *,
     tenant_id: str,
@@ -1314,6 +1424,37 @@ async def _run_discord_command_followup(
                                     user_id,
                                 )
                                 components = _ask_reply_components()
+                        elif (
+                            command_response.command == "issues"
+                            and bool(data.get("requires_input"))
+                            and not reply_to_message_id
+                        ):
+                            followup_request_id = str(data.get("followup_request_id") or "").strip()
+                            question_values = data.get("questions")
+                            questions = (
+                                [str(value).strip() for value in question_values if str(value).strip()]
+                                if isinstance(question_values, list)
+                                else []
+                            )
+                            if followup_request_id:
+                                try:
+                                    _send_discord_seed_followup_with_thread(
+                                        session=session,
+                                        settings=settings,
+                                        tenant=tenant,
+                                        channel_id=channel_id,
+                                        user_id=user_id,
+                                        content=content,
+                                        request_id=followup_request_id,
+                                        questions=questions,
+                                    )
+                                    sent_to_thread = True
+                                except (DiscordApiError, RuntimeError, ValueError):
+                                    logger.exception(
+                                        "discord_seed_followup_thread_send_failed tenant_id=%s user_id=%s",
+                                        tenant_id,
+                                        user_id,
+                                    )
                 except HTTPException as exc:
                     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                     content = f"<@{user_id}> Command failed: {detail}"
@@ -1544,6 +1685,7 @@ async def ingest_jira_webhook(
     )
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
+    webhook_event = _normalize_jira_webhook_event(payload.get("webhookEvent"))
 
     issue_key, labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
         _extract_issue_payload(payload)
@@ -1557,14 +1699,38 @@ async def ingest_jira_webhook(
         issue_key=issue_key,
     )
     logger.info(
-        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s comment_command=%s comment_command_error=%s",
+        "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s webhook_event=%s comment_command=%s comment_command_error=%s",
         request_id,
         tenant_id,
         issue_key,
         delivery_id,
+        webhook_event,
         comment_command,
         comment_command_error,
     )
+
+    if webhook_event == "issue_deleted":
+        removed_entries = remove_issue_key_from_tenant_ask_history(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
+        )
+        logger.info(
+            "jira_webhook_issue_deleted request_id=%s tenant_id=%s issue_key=%s removed_history_entries=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            removed_entries,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "issue_deleted",
+            "removed_history_entries": removed_entries,
+            "webhook_event": webhook_event,
+        }
 
     if comment_command_error:
         logger.info(
@@ -1579,6 +1745,41 @@ async def ingest_jira_webhook(
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "invalid_comment_command",
+            "webhook_event": webhook_event,
+        }
+
+    comment_event_removed_entries = 0
+    if webhook_event in JIRA_COMMENT_EVENTS:
+        comment_event_removed_entries = remove_issue_key_from_tenant_ask_history(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
+        )
+        logger.info(
+            "jira_webhook_comment_event_memory_cleared request_id=%s tenant_id=%s issue_key=%s webhook_event=%s removed_history_entries=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            webhook_event,
+            comment_event_removed_entries,
+        )
+
+    if webhook_event in JIRA_COMMENT_EVENTS and comment_command is None:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=comment_without_command webhook_event=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            webhook_event,
+        )
+        return {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "issue_key": issue_key,
+            "enqueued": False,
+            "reason": "comment_without_command",
+            "webhook_event": webhook_event,
+            "removed_history_entries": comment_event_removed_entries,
         }
 
     if comment_command == "ask":
@@ -1625,6 +1826,7 @@ async def ingest_jira_webhook(
             "question": question,
             "comment_posted": posted,
             "comment_error": post_error,
+            "webhook_event": webhook_event,
         }
 
     configured_ready_statuses = tenant.jira_config.get("ready_statuses")
@@ -1648,6 +1850,7 @@ async def ingest_jira_webhook(
             "issue_key": issue_key,
             "enqueued": False,
             "reason": "issue_status_missing",
+            "webhook_event": webhook_event,
         }
 
     if issue_status_category_key == "done":
@@ -1665,6 +1868,7 @@ async def ingest_jira_webhook(
             "enqueued": False,
             "reason": "issue_done",
             "issue_status": issue_status,
+            "webhook_event": webhook_event,
         }
 
     normalized_ready_statuses = {status.casefold() for status in ready_statuses}
@@ -1689,6 +1893,7 @@ async def ingest_jira_webhook(
                 issue_status=issue_status,
                 ready_statuses=ready_statuses,
             ),
+            "webhook_event": webhook_event,
         }
 
     from_status, to_status = _extract_status_transition(payload)
@@ -1743,6 +1948,7 @@ async def ingest_jira_webhook(
                 "enqueued": False,
                 "reason": "no_retryable_run",
                 "trigger_reason": trigger_reason,
+                "webhook_event": webhook_event,
             }
         resolved_issue_description = retry_source_run.issue_description
 
@@ -1773,6 +1979,7 @@ async def ingest_jira_webhook(
             "run_id": enqueue_result.run.run_id,
             "trigger_reason": trigger_reason,
             "command": comment_command,
+            "webhook_event": webhook_event,
         }
     logger.info(
         "jira_webhook_enqueued request_id=%s tenant_id=%s issue_key=%s run_id=%s",
@@ -1790,6 +1997,7 @@ async def ingest_jira_webhook(
         "run_id": enqueue_result.run.run_id,
         "trigger_reason": trigger_reason,
         "command": comment_command,
+        "webhook_event": webhook_event,
     }
 
 
@@ -1830,7 +2038,7 @@ async def ingest_discord_interaction(
             return _discord_autocomplete_response(choices=[])
         focused_name, focused_value = focused
         supports_issue_autocomplete = (
-            (command_name in {"run", "link"} and focused_name == "issue_key")
+            (command_name in {"run", "link", "gap"} and focused_name == "issue_key")
             or (command_name in {"retry"} and focused_name == "target")
             or (command_name in {"ask"} and focused_name == "issue_key")
         )

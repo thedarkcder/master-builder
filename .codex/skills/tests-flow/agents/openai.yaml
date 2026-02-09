@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tests Flow"
+  short_description: "Run targeted and full suites with deterministic reporting."
+  default_prompt: "Use $tests-flow to map changed behavior to targeted and full-suite tests, run them, and report exact outcomes."

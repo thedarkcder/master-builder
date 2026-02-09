@@ -1,0 +1,4 @@
+interface:
+  display_name: "Security Sanity"
+  short_description: "Catch secrets, PII, auth, and logging regressions."
+  default_prompt: "Use $security_sanity to review changes for secrets, PII, auth, input validation, and logging regressions."

@@ -151,10 +151,12 @@ def build_agent_enforcement_context(
         for relative_path in REQUIRED_GUIDANCE_FILES
     }
     policy_pack_payload = _load_policy_pack_payload(repo_root=repo_root)
-    assets_version = validate_enforcement_assets(
-        repo_root=repo_root,
-        required_assets_version=required_assets_version,
-    )
+    assets_version = codex_assets_version(repo_root=repo_root)
+    expected_version = (required_assets_version or "").strip()
+    if expected_version and assets_version != expected_version:
+        raise EnforcementAssetsError(
+            f"Codex assets version mismatch: required={expected_version}, found={assets_version}"
+        )
 
     context_parts = ["Run enforcement context (must apply):", f"Codex assets version: {assets_version}"]
     for relative_path, content in guidance_text.items():

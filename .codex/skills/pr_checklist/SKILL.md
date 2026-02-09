@@ -10,6 +10,8 @@ Before opening PR, confirm:
 ## Scope and quality
 - [ ] Diff is minimal and on-topic
 - [ ] No unrelated formatting/refactors
+- [ ] Latest `staging` (stage) is merged into the branch and conflicts are resolved
+- [ ] Latest `main` (main) is merged into the staging branch and conflicts are resolved
 - [ ] No placeholders/TODO stubs in production paths
 - [ ] No sleeps/timers used for synchronization
 
