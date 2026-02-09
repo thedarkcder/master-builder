@@ -1027,16 +1027,12 @@ def _existing_issue_keys_for_tenant(
 
     quoted_issue_keys = ", ".join(f'"{value}"' for value in normalized_issue_keys)
     jql = f"{_project_filter_jql(tenant)} AND key in ({quoted_issue_keys})"
-    try:
-        issues = _search_jira_issues_for_tenant(
-            session=session,
-            tenant=tenant,
-            jql=jql,
-            max_results=len(normalized_issue_keys),
-        )
-    except HTTPException:
-        # If Jira lookup is temporarily unavailable, keep history intact instead of failing /ask.
-        return set(normalized_issue_keys)
+    issues = _search_jira_issues_for_tenant(
+        session=session,
+        tenant=tenant,
+        jql=jql,
+        max_results=len(normalized_issue_keys),
+    )
     return {str(issue.key or "").strip().upper() for issue in issues if str(issue.key or "").strip()}
 
 
@@ -1047,6 +1043,10 @@ def _prune_missing_issue_keys_from_ask_history(
     user_id: str,
     channel_id: str,
 ) -> int:
+    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    if not connection_id:
+        return 0
+
     entries = _tenant_ask_history(tenant)
     scoped_issue_keys = {
         str(entry.get("issue_key") or "").strip().upper()
@@ -1107,46 +1107,19 @@ def _collect_ask_context_with_history_context(
         )
 
     resolved_scoped_issue_key = scoped_issue_key
-    history_issue_key: str | None = None
     if resolved_scoped_issue_key is None:
         for entry in reversed(history_context):
             issue_key = str(entry.get("issue_key") or "").strip().upper()
             if issue_key:
                 resolved_scoped_issue_key = issue_key
-                history_issue_key = issue_key
                 break
 
-    try:
-        normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
-            session=session,
-            tenant=tenant,
-            question=question,
-            scoped_issue_key=resolved_scoped_issue_key,
-        )
-    except HTTPException as exc:
-        # If a history-derived issue was deleted in Jira, clear stale memory and continue with board context.
-        if history_issue_key and exc.status_code == status.HTTP_404_NOT_FOUND:
-            _drop_issue_key_from_ask_history(
-                session=session,
-                tenant=tenant,
-                user_id=user_id,
-                channel_id=channel_id,
-                issue_key=history_issue_key,
-            )
-            normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
-                session=session,
-                tenant=tenant,
-                question=question,
-                scoped_issue_key=None,
-            )
-            history_context = _recent_ask_history(
-                tenant=tenant,
-                user_id=user_id,
-                channel_id=channel_id,
-                limit=MAX_ASK_HISTORY_CONTEXT,
-            )
-        else:
-            raise
+    normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
+        session=session,
+        tenant=tenant,
+        question=question,
+        scoped_issue_key=resolved_scoped_issue_key,
+    )
 
     return normalized_issue_key, requested_status, issues, status_counts, history_context
 
@@ -1434,23 +1407,6 @@ def _seed_issues_with_codex(
                 requested_issue_key=requested_issue_key,
                 matched_issue_keys=matched_issue_keys,
             )
-            if matched is None and not allow_create and normalized_force_issue_keys:
-                fallback_key = (
-                    normalized_force_issue_keys[idx]
-                    if idx < len(normalized_force_issue_keys)
-                    else None
-                )
-                if fallback_key:
-                    fallback_match = next(
-                        (
-                            candidate
-                            for candidate in existing_issues
-                            if candidate.key == fallback_key and candidate.key not in matched_issue_keys
-                        ),
-                        None,
-                    )
-                    if fallback_match is not None:
-                        matched = fallback_match
             if matched is None:
                 to_create.append(issue_input)
                 continue

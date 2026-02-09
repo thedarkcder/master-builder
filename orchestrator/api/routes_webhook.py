@@ -66,6 +66,17 @@ ASK_REPLY_MODAL_CUSTOM_ID_PATTERN = re.compile(r"^ask\.reply\.([0-9]{15,25})$")
 ASK_REPLY_OPEN_CUSTOM_ID = "ask.reply.open"
 
 
+def _normalize_jira_webhook_event(raw_value: object) -> str | None:
+    if not isinstance(raw_value, str):
+        return None
+    normalized = raw_value.strip().lower()
+    if not normalized:
+        return None
+    if normalized.startswith("jira:"):
+        normalized = normalized[len("jira:") :]
+    return normalized
+
+
 def _max_webhook_body_bytes() -> int:
     raw_value = os.environ.get("ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES", str(DEFAULT_WEBHOOK_MAX_BODY_BYTES))
     try:
@@ -1669,12 +1680,7 @@ async def ingest_jira_webhook(
     )
 
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
-    raw_webhook_event = payload.get("webhookEvent")
-    webhook_event = (
-        str(raw_webhook_event).strip().lower()
-        if isinstance(raw_webhook_event, str) and str(raw_webhook_event).strip()
-        else None
-    )
+    webhook_event = _normalize_jira_webhook_event(payload.get("webhookEvent"))
 
     issue_key, labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
         _extract_issue_payload(payload)
@@ -1698,7 +1704,7 @@ async def ingest_jira_webhook(
         comment_command_error,
     )
 
-    if webhook_event == "jira:issue_deleted":
+    if webhook_event == "issue_deleted":
         removed_entries = remove_issue_key_from_tenant_ask_history(
             session=session,
             tenant=tenant,
@@ -1753,6 +1759,21 @@ async def ingest_jira_webhook(
             "reason": "comment_without_command",
             "webhook_event": webhook_event,
         }
+
+    if webhook_event in JIRA_COMMENT_EVENTS and comment_command in {"run", "retry"}:
+        removed_entries = remove_issue_key_from_tenant_ask_history(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
+        )
+        logger.info(
+            "jira_webhook_comment_command_memory_cleared request_id=%s tenant_id=%s issue_key=%s command=%s removed_history_entries=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            comment_command,
+            removed_entries,
+        )
 
     if comment_command == "ask":
         question = (comment_command_argument or "").strip()
