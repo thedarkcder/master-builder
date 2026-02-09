@@ -239,6 +239,22 @@ Examples:
 - Upload with twine:
   - `python -m twine upload --repository-url "http://localhost:4401/" -u tenant -p change-me dist/codex-assets/*`
 
+### Worker build toolchains
+The worker image now includes:
+- Java 17 JDK
+- Android SDK command-line tools (`platform-tools`, `build-tools;34.0.0`, `platforms;android-34`)
+- Node/npm, `ripgrep`, and Codex CLI
+
+Quick checks:
+```bash
+docker compose run --rm worker java -version
+docker compose run --rm worker sdkmanager --version
+```
+
+Swift/iOS note:
+- `xcodebuild` (iOS/macOS builds) cannot run in this Linux worker container.
+- Use a macOS self-hosted runner/container host for iOS build/test steps.
+
 ### Tailscale Funnel URL
 Start API and Tailscale sidecar:
 ```bash
