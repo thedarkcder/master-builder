@@ -119,6 +119,7 @@ def _run_to_schema(run: Run) -> RunRead:
     return RunRead(
         run_id=run.run_id,
         tenant_id=run.tenant_id,
+        project_id=run.project_id,
         issue_key=run.issue_key,
         repo_url=run.repo_url,
         branch=run.branch,

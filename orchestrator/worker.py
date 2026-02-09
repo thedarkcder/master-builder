@@ -20,6 +20,8 @@ from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.project_routing import find_active_project_for_issue_key
+from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.secret_manager import resolve_secret_ref
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.signal_templates import (
@@ -28,7 +30,7 @@ from orchestrator.core.signal_templates import (
 )
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.storage.run_queue_events import (
     RUN_QUEUE_NOTIFY_CHANNEL,
     is_postgres_database_url,
@@ -191,7 +193,7 @@ def _running_run_count(session: Session, *, tenant_id: str) -> int:
     )
 
 
-def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
+def _workflow_request_for_run(tenant: Tenant, run: Run, *, project: Project | None) -> WorkflowRequest:
     max_loops = _coerce_positive_int(
         tenant.policy_config.get("max_dev_test_review_loops"),
         default=1,
@@ -210,16 +212,28 @@ def _workflow_request_for_run(tenant: Tenant, run: Run) -> WorkflowRequest:
     settings = get_settings()
     enforcement_context = _cached_enforcement_context(settings.required_codex_assets_version or "")
 
+    issue_description = run.issue_description or ""
+    if project is not None:
+        project_context = (
+            "\n\nProject routing context:\n"
+            f"- project_id: {project.project_id}\n"
+            f"- project_name: {project.name}\n"
+            f"- github_repository: {project.github_repository}\n"
+            f"- jira_project_key: {project.jira_project_key}\n"
+        )
+        issue_description = f"{issue_description}{project_context}".strip()
+    else:
+        issue_description = issue_description.strip()
+    issue_description_with_enforcement = (
+        f"{issue_description}\n\n{enforcement_context}" if issue_description else enforcement_context
+    )
+
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
         run_id=run.run_id,
         issue_key=run.issue_key,
         issue_summary=run.issue_summary or f"Execute {run.issue_key}",
-        issue_description=(
-            f"{run.issue_description}\n\n{enforcement_context}"
-            if (run.issue_description or "").strip()
-            else enforcement_context
-        ),
+        issue_description=issue_description_with_enforcement,
         max_dev_test_review_loops=max_loops,
         max_runtime_minutes=max_runtime_minutes,
         suggested_test_commands=suggested_test_commands,
@@ -358,8 +372,41 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     if tenant is None:
         raise RuntimeError("Tenant resolution failed for queued run")
 
+    project: Project | None = None
+    if run.project_id:
+        project = session.get(Project, run.project_id)
+        if project is not None and project.tenant_id != run.tenant_id:
+            project = None
+    if project is None:
+        project = find_active_project_for_issue_key(
+            session,
+            tenant_id=run.tenant_id,
+            issue_key=run.issue_key,
+        )
+    if project is None:
+        return mark_run_terminal(
+            session,
+            run_id=run.run_id,
+            terminal_status=RUN_STATUS_FAILED,
+            last_error=f"No active project mapping found for issue {run.issue_key}",
+        )
+    if project.is_archived:
+        run.status = RUN_STATUS_BLOCKED
+        run.last_error = f"Project {project.project_id} is archived; run blocked"
+        run.finished_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(run)
+        return run
+
+    if run.project_id != project.project_id:
+        run.project_id = project.project_id
+    if not run.repo_url:
+        run.repo_url = project.github_repository
+    session.commit()
+    session.refresh(run)
+
     try:
-        workflow_request = _workflow_request_for_run(tenant, run)
+        workflow_request = _workflow_request_for_run(tenant, run, project=project)
     except (PermissionError, ValueError) as exc:
         run.status = RUN_STATUS_FAILED
         run.last_error = f"Guardrail policy violation: {exc}"

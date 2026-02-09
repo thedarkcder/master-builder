@@ -60,7 +60,9 @@ def _handle_run(*, tenant_id: str, issue_key: str) -> int:
         result = enqueue_run(
             session,
             tenant_id=tenant_id,
+            project_id=None,
             issue_key=issue_key,
+            repo_url=None,
         )
         print(
             json.dumps(
