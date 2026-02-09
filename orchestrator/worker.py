@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.codex_agents import CodexWorkflowAgents
@@ -28,6 +27,8 @@ from orchestrator.core.signal_templates import (
     format_stage_discord_update,
     format_stage_jira_update,
 )
+from orchestrator.core.worker_queue_selector import coerce_positive_int, select_next_queued_run
+from orchestrator.core.worker_stage_notifier import RunStageNotifier
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
@@ -174,31 +175,12 @@ def _send_stage_update_to_jira(
         )
 
 
-def _coerce_positive_int(value: object, *, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(1, parsed)
-
-
-def _running_run_count(session: Session, *, tenant_id: str) -> int:
-    return int(
-        session.execute(
-            select(func.count(Run.run_id)).where(
-                Run.tenant_id == tenant_id,
-                Run.status == RUN_STATUS_RUNNING,
-            )
-        ).scalar_one()
-    )
-
-
 def _workflow_request_for_run(tenant: Tenant, run: Run, *, project: Project | None) -> WorkflowRequest:
-    max_loops = _coerce_positive_int(
+    max_loops = coerce_positive_int(
         tenant.policy_config.get("max_dev_test_review_loops"),
         default=1,
     )
-    max_runtime_minutes = _coerce_positive_int(
+    max_runtime_minutes = coerce_positive_int(
         tenant.policy_config.get("max_runtime_minutes"),
         default=30,
     )
@@ -251,43 +233,18 @@ def _cached_enforcement_context(required_assets_version: str) -> str:
 
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
     settings = get_settings()
-    queued_runs = session.execute(
-        select(Run).where(Run.status == RUN_STATUS_QUEUED).order_by(Run.created_at.asc())
-    ).scalars().all()
-    run: Run | None = None
-    tenant: Tenant | None = None
-
-    for candidate in queued_runs:
-        candidate_tenant = session.get(Tenant, candidate.tenant_id)
-        if candidate_tenant is None:
-            candidate.status = RUN_STATUS_FAILED
-            candidate.last_error = "Tenant not found for queued run"
-            candidate.finished_at = datetime.now(timezone.utc)
-            session.commit()
-            session.refresh(candidate)
-            return candidate
-
-        max_concurrent_runs = _coerce_positive_int(
-            candidate_tenant.policy_config.get("max_concurrent_runs"),
-            default=1,
-        )
-        running_count = _running_run_count(session, tenant_id=candidate_tenant.tenant_id)
-        if running_count >= max_concurrent_runs:
-            logger.info(
-                "worker_skipping_run_due_to_concurrency_limit tenant_id=%s issue_key=%s running=%s max=%s",
-                candidate_tenant.tenant_id,
-                candidate.issue_key,
-                running_count,
-                max_concurrent_runs,
-            )
-            continue
-
-        run = candidate
-        tenant = candidate_tenant
-        break
-
-    if run is None:
+    selection = select_next_queued_run(
+        session,
+        queued_status=RUN_STATUS_QUEUED,
+        running_status=RUN_STATUS_RUNNING,
+        failed_status=RUN_STATUS_FAILED,
+    )
+    if selection.terminal_run is not None:
+        return selection.terminal_run
+    if selection.run is None or selection.tenant is None:
         return None
+    run = selection.run
+    tenant = selection.tenant
 
     try:
         decision_gate = evaluate_decision_gate(
@@ -365,12 +322,17 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         session.refresh(run)
         return run
 
+    notifier = RunStageNotifier(
+        session=session,
+        tenant=tenant,
+        run=run,
+        settings=settings,
+        send_discord_message=send_tenant_discord_message,
+        send_jira_message=_send_stage_update_to_jira,
+    )
     run.status = RUN_STATUS_RUNNING
     run.started_at = datetime.now(timezone.utc)
     session.commit()
-
-    if tenant is None:
-        raise RuntimeError("Tenant resolution failed for queued run")
 
     project: Project | None = None
     if run.project_id:
@@ -415,40 +377,12 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         session.refresh(run)
         return run
 
-    stage_updates: list[dict[str, str]] = []
     jira_issue_url = (
         f"https://master-builder.atlassian.net/browse/{run.issue_key}"
         if run.issue_key
         else None
     )
-
-    def append_stage_update(stage_update: dict[str, str]) -> None:
-        stage_updates.append(stage_update)
-        send_result = send_tenant_discord_message(
-            session=session,
-            tenant=tenant,
-            message=stage_update["discord_message"],
-            settings=settings,
-            event=stage_update["stage"],
-        )
-        if not send_result.sent:
-            logger.info(
-                "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
-                run.tenant_id,
-                run.run_id,
-                stage_update["stage"],
-                send_result.reason,
-            )
-        _send_stage_update_to_jira(
-            session=session,
-            tenant=tenant,
-            issue_key=run.issue_key,
-            stage=stage_update["stage"],
-            message=stage_update["jira_message"],
-            settings=settings,
-        )
-
-    append_stage_update(
+    notifier.append(
         {
             "stage": "lock_acquired",
             "tenant_id": run.tenant_id,
@@ -480,7 +414,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             "summary": ["Run cancelled during execution"],
             "test_guidance": [],
             "pr_url": run.pr_url,
-            "stage_updates": stage_updates,
+            "stage_updates": notifier.stage_updates,
         }
         if run.finished_at is None:
             run.finished_at = datetime.now(timezone.utc)
@@ -489,7 +423,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         return run
     plan_payload = workflow_result.to_plan_payload()
     if workflow_result.plan is not None:
-        append_stage_update(
+        notifier.append(
             {
                 "stage": "plan_posted",
                 "tenant_id": run.tenant_id,
@@ -512,7 +446,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             }
         )
     if workflow_result.pr_url:
-        append_stage_update(
+        notifier.append(
             {
                 "stage": "pr_opened",
                 "tenant_id": run.tenant_id,
@@ -542,7 +476,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             if workflow_result.diagnostics is not None
             else "Workflow failed without diagnostics"
         )
-        append_stage_update(
+        notifier.append(
             {
                 "stage": "run_failed",
                 "tenant_id": run.tenant_id,
@@ -575,7 +509,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             }
         )
 
-    plan_payload["stage_updates"] = stage_updates
+    plan_payload["stage_updates"] = notifier.stage_updates
     run.plan = plan_payload
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)
