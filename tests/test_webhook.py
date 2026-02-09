@@ -428,6 +428,48 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.json()["reason"], "duplicate_delivery")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
 
+    def test_webhook_ignores_backlog_followup_issue_created_event(self) -> None:
+        payload = self._jira_issue_payload(
+            issue_key="TP-130",
+            labels=["backlog-only"],
+            status_name="Ready for Agent",
+        )
+        payload["webhookEvent"] = "jira:issue_created"
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "backlog_followup_issue_created")
+        self.assertEqual(response.json()["webhook_event"], "issue_created")
+
+    def test_webhook_allows_manual_run_command_for_backlog_followup_label(self) -> None:
+        payload = self._jira_issue_payload(
+            issue_key="TP-131",
+            labels=["backlog-only"],
+            status_name="Ready for Agent",
+        )
+        payload["webhookEvent"] = "comment_updated"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-1"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "/mb run"}],
+                    }
+                ],
+            },
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+        self.assertEqual(response.json()["command"], "run")
+
     def test_parse_jira_comment_command_supports_ask_with_inline_and_multiline_text(self) -> None:
         inline_payload = {
             "comment": {

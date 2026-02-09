@@ -75,6 +75,7 @@ class JiraWebhookContext:
     payload: dict
     webhook_event: str | None
     issue_key: str
+    issue_labels: list[str]
     issue_status: str | None
     issue_status_category_key: str | None
     issue_summary: str | None
@@ -1761,7 +1762,7 @@ async def _stage_parse_jira_webhook_context(
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
     webhook_event = _normalize_jira_webhook_event(payload.get("webhookEvent"))
 
-    issue_key, _labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
+    issue_key, issue_labels, issue_status, issue_status_category_key, issue_summary, issue_description = (
         _extract_issue_payload(payload)
     )
     comment_command, comment_command_argument, comment_command_error = _parse_jira_comment_command(payload)
@@ -1794,6 +1795,7 @@ async def _stage_parse_jira_webhook_context(
         payload=payload,
         webhook_event=webhook_event,
         issue_key=issue_key,
+        issue_labels=issue_labels,
         issue_status=issue_status,
         issue_status_category_key=issue_status_category_key,
         issue_summary=issue_summary,
@@ -1954,6 +1956,29 @@ def _stage_handle_comment_ask_command(
     )
 
 
+def _stage_handle_backlog_followup_issue_created(
+    *,
+    context: JiraWebhookContext,
+) -> dict | None:
+    if context.webhook_event != "issue_created":
+        return None
+    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels}
+    if "backlog-only" not in normalized_labels:
+        return None
+    logger.info(
+        "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=backlog_followup_issue_created",
+        context.request_id,
+        context.tenant_id,
+        context.issue_key,
+    )
+    return _jira_webhook_response(
+        context,
+        enqueued=False,
+        reason="backlog_followup_issue_created",
+        webhook_event=context.webhook_event,
+    )
+
+
 def _resolve_ready_statuses_for_tenant(tenant: Tenant) -> list[str]:
     configured_ready_statuses = tenant.jira_config.get("ready_statuses")
     if isinstance(configured_ready_statuses, list):
@@ -2022,6 +2047,10 @@ async def ingest_jira_webhook(
     )
     if comment_ask_response is not None:
         return comment_ask_response
+
+    backlog_followup_response = _stage_handle_backlog_followup_issue_created(context=context)
+    if backlog_followup_response is not None:
+        return backlog_followup_response
 
     ready_statuses = _resolve_ready_statuses_for_tenant(tenant)
     if context.issue_status is None:
