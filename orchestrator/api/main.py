@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from orchestrator.api.routes_admin import router as admin_router
+from orchestrator.api.routes_admin_auth import router as admin_auth_router
+from orchestrator.api.routes_admin_secrets import router as admin_secrets_router
 from orchestrator.api.routes_discord import router as discord_router
 from orchestrator.api.routes_runs import router as runs_router
 from orchestrator.api.routes_webhook import router as webhook_router
@@ -25,6 +27,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(admin_router)
+    app.include_router(admin_auth_router)
+    app.include_router(admin_secrets_router)
     app.include_router(discord_router)
     app.include_router(runs_router)
     app.include_router(webhook_router)
