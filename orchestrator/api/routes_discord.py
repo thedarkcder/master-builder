@@ -18,6 +18,12 @@ from orchestrator.api.discord_command_issues import dispatch_issues_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_command_ask import dispatch_ask_command
+from orchestrator.api.discord_response_format import (
+    build_issue_url_list,
+    build_jira_issue_url,
+    format_issue_markdown_link,
+    format_issue_markdown_list,
+)
 from orchestrator.api.discord_state import (
     assert_channel_scope as _assert_channel_scope,
     assert_sensitive_command_permission as _assert_sensitive_command_permission,
@@ -260,7 +266,10 @@ def _run_gap_analysis(
     if not next_actions:
         next_actions.append("Re-validate acceptance criteria against latest merged code before release.")
 
-    issue_label = f"[{normalized_issue_key}]({jira_url})" if jira_url else normalized_issue_key
+    issue_label = format_issue_markdown_link(
+        issue_key=normalized_issue_key,
+        browse_base_url=jira_base_url,
+    )
     lines = [
         f"Gap analysis for {issue_label}: {issue.summary}",
         f"Confidence: **{confidence}**",
@@ -788,7 +797,7 @@ def _create_discord_bug_issue(
         attachments=attachments,
     )
     browse_base_url = str(connection.site_url or "").strip().rstrip("/")
-    issue_url = f"{browse_base_url}/browse/{created_issue.key}" if browse_base_url else None
+    issue_url = build_jira_issue_url(issue_key=created_issue.key, browse_base_url=browse_base_url)
     if issue_url:
         message = f"Bug logged: [{created_issue.key}]({issue_url})"
     else:
@@ -1370,16 +1379,13 @@ def _seed_issues_with_codex(
             detail=f"Jira seed upsert produced no changes: {'; '.join(create_errors) or 'unknown error'}",
         )
     browse_base_url = str(connection.site_url or "").strip().rstrip("/")
-    def _fmt_keys(keys: list[str]) -> str:
-        if not keys:
-            return "none"
-        if not browse_base_url:
-            return ", ".join(keys)
-        return ", ".join(f"[{key}]({browse_base_url}/browse/{key})" for key in keys)
 
     message = (
-        f"Issue upsert complete. Updated {len(updated_issue_keys)}: {_fmt_keys(updated_issue_keys)}. "
-        f"Created {len(created_keys)}: {_fmt_keys(created_keys)}."
+        "Issue upsert complete. "
+        f"Updated {len(updated_issue_keys)}: "
+        f"{format_issue_markdown_list(issue_keys=updated_issue_keys, browse_base_url=browse_base_url)}. "
+        f"Created {len(created_keys)}: "
+        f"{format_issue_markdown_list(issue_keys=created_keys, browse_base_url=browse_base_url)}."
     )
     if create_errors:
         message = f"{message} (partial errors: {'; '.join(create_errors)})"
@@ -1398,13 +1404,15 @@ def _seed_issues_with_codex(
             "questions": clarification_questions,
             "prompt_markdown": prompt_markdown,
             "updated_issue_keys": updated_issue_keys,
-            "updated_issue_links": [
-                f"{browse_base_url}/browse/{issue_key}" for issue_key in updated_issue_keys if browse_base_url
-            ],
+            "updated_issue_links": build_issue_url_list(
+                issue_keys=updated_issue_keys,
+                browse_base_url=browse_base_url,
+            ),
             "created_issue_keys": created_keys,
-            "created_issue_links": [
-                f"{browse_base_url}/browse/{issue_key}" for issue_key in created_keys if browse_base_url
-            ],
+            "created_issue_links": build_issue_url_list(
+                issue_keys=created_keys,
+                browse_base_url=browse_base_url,
+            ),
             "all_issue_keys": [*updated_issue_keys, *created_keys],
             "errors": create_errors,
         },
@@ -1505,6 +1513,7 @@ def execute_discord_command(
         payload=payload,
         command_name=command_name,
         arguments=arguments,
+        jira_browse_base_url=_tenant_jira_browse_base_url(session=session, tenant=tenant),
     )
     if simple_response is not None:
         return simple_response
