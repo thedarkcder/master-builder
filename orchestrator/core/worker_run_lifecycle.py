@@ -48,12 +48,12 @@ def fail_missing_project_mapping(session: Session, *, run: Run) -> Run:
 
 
 def block_archived_project(session: Session, *, run: Run, project: Project) -> Run:
-    run.status = RUN_STATUS_BLOCKED
-    run.last_error = f"Project {project.project_id} is archived; run blocked"
-    run.finished_at = datetime.now(timezone.utc)
-    session.commit()
-    session.refresh(run)
-    return run
+    return mark_run_terminal(
+        session,
+        run_id=run.run_id,
+        terminal_status=RUN_STATUS_BLOCKED,
+        last_error=f"Project {project.project_id} is archived; run blocked",
+    )
 
 
 def bind_run_project(session: Session, *, run: Run, project: Project) -> Run:
@@ -67,12 +67,12 @@ def bind_run_project(session: Session, *, run: Run, project: Project) -> Run:
 
 
 def fail_guardrail_violation(session: Session, *, run: Run, error: str) -> Run:
-    run.status = RUN_STATUS_FAILED
-    run.last_error = f"Guardrail policy violation: {error}"
-    run.finished_at = datetime.now(timezone.utc)
-    session.commit()
-    session.refresh(run)
-    return run
+    return mark_run_terminal(
+        session,
+        run_id=run.run_id,
+        terminal_status=RUN_STATUS_FAILED,
+        last_error=f"Guardrail policy violation: {error}",
+    )
 
 
 def finalize_cancelled_run(

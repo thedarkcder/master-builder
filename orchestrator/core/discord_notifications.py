@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.config import Settings
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
-from orchestrator.storage.models import Tenant
+from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 logger = logging.getLogger(__name__)
@@ -20,13 +20,15 @@ class DiscordSendResult:
     channel_id: str | None = None
 
 
-def _event_enabled_for_tenant(*, tenant: Tenant, event: str | None) -> bool:
+def _event_enabled_for_project(*, project: Project | None, event: str | None) -> bool:
     if event is None:
         return True
     normalized = event.strip()
     if not normalized:
         return True
-    discord_config = tenant.discord_config or {}
+    if project is None:
+        return True
+    discord_config = project.discord_config or {}
     configured_events = discord_config.get("notify_events")
     if not isinstance(configured_events, list):
         return False
@@ -38,17 +40,22 @@ def send_tenant_discord_message(
     *,
     session: Session,
     tenant: Tenant,
+    project: Project | None = None,
     message: str,
     settings: Settings,
     event: str | None = None,
+    open_thread: bool = False,
+    thread_name: str | None = None,
+    thread_intro: str | None = None,
 ) -> DiscordSendResult:
     if not message.strip():
         return DiscordSendResult(sent=False, reason="empty_message")
-    if not _event_enabled_for_tenant(tenant=tenant, event=event):
+    if not _event_enabled_for_project(project=project, event=event):
         return DiscordSendResult(sent=False, reason=f"event_disabled:{event or 'unknown'}")
 
-    discord_config = tenant.discord_config or {}
-    channel_id = str(discord_config.get("channel_id") or "").strip()
+    project_discord_config = project.discord_config or {} if project is not None else {}
+    tenant_discord_config = tenant.discord_config or {}
+    channel_id = str(project_discord_config.get("channel_id") or tenant_discord_config.get("channel_id") or "").strip()
     if not channel_id:
         return DiscordSendResult(sent=False, reason="channel_not_configured")
 
@@ -67,7 +74,20 @@ def send_tenant_discord_message(
 
     try:
         client = DiscordApiClient(bot_token=bot_token)
-        client.post_message(channel_id=channel_id, content=message)
+        posted = client.post_message(channel_id=channel_id, content=message)
+        if open_thread:
+            posted_message_id = str(posted.get("id") or "").strip()
+            if not posted_message_id:
+                raise ValueError("Discord message post succeeded but response did not include message ID")
+            safe_thread_name = (thread_name or f"{tenant.tenant_id}-update-{posted_message_id[-6:]}").replace(" ", "-")[:100]
+            thread_channel_id = client.create_thread_from_message(
+                channel_id=channel_id,
+                message_id=posted_message_id,
+                name=safe_thread_name,
+            )
+            intro = (thread_intro or "").strip()
+            if intro:
+                client.post_message(channel_id=thread_channel_id, content=intro)
     except (DiscordApiError, ValueError) as exc:
         logger.warning(
             "discord_message_send_failed tenant_id=%s channel_id=%s error=%s",

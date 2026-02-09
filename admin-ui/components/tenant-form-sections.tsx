@@ -301,16 +301,20 @@ type DiscordSectionProps = {
   notifyEvents: string[];
   onDiscordEnabledChange: (enabled: boolean) => void;
   onToggleDiscordNotifyEvent: (eventValue: string, enabled: boolean) => void;
+  title?: string;
+  description?: string;
 };
 
 export function DiscordSection({
   discordEnabled,
   notifyEvents,
   onDiscordEnabledChange,
-  onToggleDiscordNotifyEvent
+  onToggleDiscordNotifyEvent,
+  title = "Discord (optional)",
+  description = "Notification events for this tenant. Channel binding is managed automatically by the backend."
 }: DiscordSectionProps) {
   return (
-    <SectionFrame title="Discord (optional)" description="Notification events for this tenant. Channel binding is managed automatically by the backend.">
+    <SectionFrame title={title} description={description}>
       <div className="space-y-3">
         <Toggle label="Enable Discord settings" checked={discordEnabled} onChange={onDiscordEnabledChange} />
         {discordEnabled ? (
