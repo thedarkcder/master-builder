@@ -7,7 +7,7 @@ ENV ORCHESTRATOR_ADMIN_USERNAME=admin
 ENV ORCHESTRATOR_ADMIN_PASSWORD=change-me
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
 ENV ANDROID_HOME=/opt/android-sdk
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools"
 
 ARG PIP_EXTRA_INDEX_URL=""
@@ -27,13 +27,9 @@ RUN apt-get update && \
       git \
       nodejs \
       npm \
-      openjdk-17-jdk \
+      default-jdk-headless \
       ripgrep \
       unzip && \
-    arch="$(dpkg --print-architecture)" && \
-    if [ -d "/usr/lib/jvm/java-17-openjdk-${arch}" ] && [ ! -e "/usr/lib/jvm/java-17-openjdk" ]; then \
-      ln -s "/usr/lib/jvm/java-17-openjdk-${arch}" /usr/lib/jvm/java-17-openjdk; \
-    fi && \
     mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" && \
     curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_VERSION}_latest.zip" \
       -o /tmp/android-cmdline-tools.zip && \
