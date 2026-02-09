@@ -1564,7 +1564,11 @@ def execute_discord_command(
     _assert_channel_scope(tenant=tenant, channel_id=payload.channel_id)
     raw_command = payload.command.strip()
     command_text = raw_command
-    if allow_plain_ask and raw_command and not raw_command.startswith("!"):
+    if raw_command and not raw_command.startswith("!") and payload.channel_id:
+        followup_context = _find_seed_followup_context(tenant=tenant, channel_id=payload.channel_id)
+        if followup_context is not None:
+            command_text = f"!issues followup {raw_command}"
+    if allow_plain_ask and raw_command and not raw_command.startswith("!") and command_text == raw_command:
         command_text = f"!ask {raw_command}"
     command_name, arguments = _parse_command_text(command_text)
     _assert_sensitive_command_permission(tenant=tenant, command_name=command_name, user_id=payload.user_id)
