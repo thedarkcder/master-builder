@@ -1347,6 +1347,60 @@ class AdminApiTests(unittest.TestCase):
         self.assertIsNone(tenant_response.json()["jira"]["connection_id"])
         self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [])
 
+    def test_reset_tenant_jira_webhooks_recovers_single_url_conflict(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        deleted_batches: list[list[int]] = []
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.register_attempts = 0
+
+            def register_webhook(self, **_: object) -> list[int]:  # noqa: ANN003
+                self.register_attempts += 1
+                if self.register_attempts == 1:
+                    raise ValueError(
+                        "Webhook registration did not return any webhook IDs "
+                        "(webhookRegistrationResult errors: Only a single URL per user is allowed to be "
+                        "registered via REST API. The currently used URL: "
+                        "https://master-builder-api.tail544bb4.ts.net/jira/webhook/girlpower)"
+                    )
+                return [33003]
+
+            def list_webhooks(self, **_: object) -> list[dict]:  # noqa: ANN003
+                return [
+                    {
+                        "id": 31001,
+                        "url": "https://master-builder-api.tail544bb4.ts.net/jira/webhook/girlpower",
+                    }
+                ]
+
+            def delete_webhooks(self, *, access_token: str, cloud_id: str, webhook_ids: list[int]) -> None:  # noqa: ANN001
+                deleted_batches.append(list(webhook_ids))
+
+        with (
+            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["action"], "reset")
+        self.assertEqual(response.json()["webhook_ids"], [33003])
+        self.assertEqual(deleted_batches, [[31001]])
+        self.assertIn("Deleted 1 conflicting Jira webhook URL subscription(s).", response.json()["details"])
+
 
 if __name__ == "__main__":
     unittest.main()
