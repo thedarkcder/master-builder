@@ -132,10 +132,10 @@ def _extract_created_webhook_ids(payload: dict[str, Any] | list[Any]) -> list[in
 
 def _is_transient_webhook_error(exc: JiraOAuthError) -> bool:
     message = str(exc)
-    code_match = re.search(r"\((\d{3})\)", message)
-    if code_match is None:
+    code_matches = re.findall(r"\b(\d{3})\b", message)
+    if not code_matches:
         return False
-    return int(code_match.group(1)) in _TRANSIENT_WEBHOOK_ERROR_CODES
+    return any(int(code) in _TRANSIENT_WEBHOOK_ERROR_CODES for code in code_matches)
 
 
 def _summarize_webhook_registration_failure(payload: dict[str, Any] | list[Any]) -> str:
