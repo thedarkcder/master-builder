@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+
+from orchestrator.core.project_routing import find_active_project_for_issue_key
+from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.workflow_runner import WorkflowResult
+from orchestrator.storage.models import Project, Run
+
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_SUCCEEDED = "succeeded"
+RUN_STATUS_FAILED = "failed"
+RUN_STATUS_BLOCKED = "blocked"
+
+
+def start_run(session: Session, *, run: Run) -> Run:
+    run.status = RUN_STATUS_RUNNING
+    run.started_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def resolve_project_for_run(session: Session, *, run: Run) -> Project | None:
+    project: Project | None = None
+    if run.project_id:
+        project = session.get(Project, run.project_id)
+        if project is not None and project.tenant_id != run.tenant_id:
+            project = None
+    if project is None:
+        project = find_active_project_for_issue_key(
+            session,
+            tenant_id=run.tenant_id,
+            issue_key=run.issue_key,
+        )
+    return project
+
+
+def fail_missing_project_mapping(session: Session, *, run: Run) -> Run:
+    return mark_run_terminal(
+        session,
+        run_id=run.run_id,
+        terminal_status=RUN_STATUS_FAILED,
+        last_error=f"No active project mapping found for issue {run.issue_key}",
+    )
+
+
+def block_archived_project(session: Session, *, run: Run, project: Project) -> Run:
+    run.status = RUN_STATUS_BLOCKED
+    run.last_error = f"Project {project.project_id} is archived; run blocked"
+    run.finished_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def bind_run_project(session: Session, *, run: Run, project: Project) -> Run:
+    if run.project_id != project.project_id:
+        run.project_id = project.project_id
+    if not run.repo_url:
+        run.repo_url = project.github_repository
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def fail_guardrail_violation(session: Session, *, run: Run, error: str) -> Run:
+    run.status = RUN_STATUS_FAILED
+    run.last_error = f"Guardrail policy violation: {error}"
+    run.finished_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def finalize_cancelled_run(
+    session: Session,
+    *,
+    run: Run,
+    stage_updates: list[dict[str, str]],
+) -> Run:
+    run.plan = {
+        "succeeded": False,
+        "attempts": 0,
+        "summary": ["Run cancelled during execution"],
+        "test_guidance": [],
+        "pr_url": run.pr_url,
+        "stage_updates": stage_updates,
+    }
+    if run.finished_at is None:
+        run.finished_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def finalize_workflow_result(
+    session: Session,
+    *,
+    run: Run,
+    workflow_result: WorkflowResult,
+    stage_updates: list[dict[str, str]],
+) -> Run:
+    plan_payload = workflow_result.to_plan_payload()
+    plan_payload["stage_updates"] = stage_updates
+    run.plan = plan_payload
+    run.pr_url = workflow_result.pr_url
+    run.finished_at = datetime.now(timezone.utc)
+    if workflow_result.succeeded:
+        run.status = RUN_STATUS_SUCCEEDED
+        run.last_error = None
+    else:
+        run.status = RUN_STATUS_FAILED
+        if workflow_result.diagnostics is not None:
+            run.last_error = workflow_result.diagnostics.message
+        else:
+            run.last_error = "Workflow failed without diagnostics"
+
+    session.commit()
+    session.refresh(run)
+    return run
