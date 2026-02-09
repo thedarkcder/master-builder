@@ -1748,6 +1748,22 @@ async def ingest_jira_webhook(
             "webhook_event": webhook_event,
         }
 
+    comment_event_removed_entries = 0
+    if webhook_event in JIRA_COMMENT_EVENTS:
+        comment_event_removed_entries = remove_issue_key_from_tenant_ask_history(
+            session=session,
+            tenant=tenant,
+            issue_key=issue_key,
+        )
+        logger.info(
+            "jira_webhook_comment_event_memory_cleared request_id=%s tenant_id=%s issue_key=%s webhook_event=%s removed_history_entries=%s",
+            request_id,
+            tenant_id,
+            issue_key,
+            webhook_event,
+            comment_event_removed_entries,
+        )
+
     if webhook_event in JIRA_COMMENT_EVENTS and comment_command is None:
         logger.info(
             "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=comment_without_command webhook_event=%s",
@@ -1763,22 +1779,8 @@ async def ingest_jira_webhook(
             "enqueued": False,
             "reason": "comment_without_command",
             "webhook_event": webhook_event,
+            "removed_history_entries": comment_event_removed_entries,
         }
-
-    if webhook_event in JIRA_COMMENT_EVENTS and comment_command in {"run", "retry"}:
-        removed_entries = remove_issue_key_from_tenant_ask_history(
-            session=session,
-            tenant=tenant,
-            issue_key=issue_key,
-        )
-        logger.info(
-            "jira_webhook_comment_command_memory_cleared request_id=%s tenant_id=%s issue_key=%s command=%s removed_history_entries=%s",
-            request_id,
-            tenant_id,
-            issue_key,
-            comment_command,
-            removed_entries,
-        )
 
     if comment_command == "ask":
         question = (comment_command_argument or "").strip()
