@@ -1,0 +1,4 @@
+interface:
+  display_name: "App Store Copy"
+  short_description: "Compliant ASO copy and screenshot headlines."
+  default_prompt: "Generate iOS and Google Play listing copy with headline variants using the app-store-copy workflow."
