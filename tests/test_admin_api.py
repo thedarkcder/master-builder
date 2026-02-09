@@ -450,7 +450,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(len(list_response.json()), 0)
 
-    def test_create_tenant_validates_required_project_keys(self) -> None:
+    def test_create_tenant_allows_empty_project_keys(self) -> None:
         payload = self._tenant_payload()
         payload["jira"]["project_keys"] = []
 
@@ -459,7 +459,41 @@ class AdminApiTests(unittest.TestCase):
             json=payload,
             auth=("admin", "secret"),
         )
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["jira"]["project_keys"], [])
+
+    def test_archiving_last_active_project_clears_tenant_project_keys(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        projects = projects_response.json()
+        self.assertEqual(len(projects), 1)
+        project = projects[0]
+
+        archive_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project['project_id']}",
+            json={
+                "name": project["name"],
+                "github_repository": project["github_repository"],
+                "jira_project_key": project["jira_project_key"],
+                "policy_overrides": project.get("policy_overrides", {}),
+                "is_archived": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        self.assertTrue(archive_response.json()["is_archived"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["jira"]["project_keys"], [])
 
     def test_create_tenant_allows_missing_repository_during_onboarding(self) -> None:
         payload = self._tenant_payload()
