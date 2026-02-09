@@ -245,12 +245,11 @@ async def ingest_github_webhook(
         )
 
     signals: list[dict[str, object]] = []
-    for pr_number, review_summary_present in pr_targets:
+    for pr_number, _review_summary_present in pr_targets:
         try:
             signal = reviewer_gate.evaluate_pr(
                 repo_full_name=repo_full_name,
                 pr_number=pr_number,
-                review_summary_present=review_summary_present,
             )
         except (GitHubApiError, ValueError) as exc:
             logger.warning(
