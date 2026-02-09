@@ -68,6 +68,13 @@ class DiscordConfig(BaseModel):
     allowlist_requests: list[dict] = Field(default_factory=list)
 
 
+class ProjectDiscordConfig(BaseModel):
+    channel_id: str | None = None
+    notify_events: list[str] = Field(default_factory=list)
+    ask_thread_channel_ids: list[str] = Field(default_factory=list)
+    seed_followup_thread_channel_ids: list[str] = Field(default_factory=list)
+
+
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1)
     is_enabled: bool = True
@@ -106,6 +113,9 @@ class ProjectCreate(BaseModel):
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
     policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
+    discord: ProjectDiscordConfig | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -113,6 +123,9 @@ class ProjectUpdate(BaseModel):
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
     policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
+    discord: ProjectDiscordConfig | None = None
     is_archived: bool = False
 
 
@@ -123,6 +136,9 @@ class ProjectRead(BaseModel):
     github_repository: str
     jira_project_key: str
     policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
+    discord: ProjectDiscordConfig | None = None
     effective_policy: PolicyConfig
     is_archived: bool
     created_at: datetime

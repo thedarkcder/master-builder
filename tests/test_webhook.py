@@ -24,7 +24,7 @@ from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant
 
 
 class JiraWebhookTests(unittest.TestCase):
@@ -1076,5 +1076,24 @@ class JiraWebhookTests(unittest.TestCase):
             session.commit()
 
             matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-thread-seed-1")
+            self.assertIsNotNone(matched)
+            self.assertEqual(matched.tenant_id, "tenant-webhook")
+
+    def test_find_tenant_for_discord_channel_matches_project_discord_channel(self) -> None:
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project).where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.is_archived.is_(False),
+                )
+            ).scalar_one_or_none()
+            self.assertIsNotNone(project)
+            project.discord_config = {
+                "channel_id": "discord-project-channel-1",
+                "ask_thread_channel_ids": ["discord-project-thread-1"],
+            }
+            session.commit()
+
+            matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-project-thread-1")
             self.assertIsNotNone(matched)
             self.assertEqual(matched.tenant_id, "tenant-webhook")

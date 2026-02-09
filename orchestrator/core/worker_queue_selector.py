@@ -8,7 +8,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.core.worker_run_lifecycle import resolve_project_for_run
+from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def select_next_queued_run(
             session.refresh(candidate)
             return QueueSelectionResult(terminal_run=candidate)
 
-        project = session.get(Project, candidate.project_id) if candidate.project_id else None
+        project = resolve_project_for_run(session, run=candidate)
         project_overrides = project.policy_overrides if project is not None else {}
         effective_policy = resolve_effective_policy(
             tenant_policy=candidate_tenant.policy_config,

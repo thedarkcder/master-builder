@@ -41,7 +41,7 @@ from orchestrator.core.runs import (
     RUN_STATUS_FAILED,
     enqueue_run,
 )
-from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
@@ -369,10 +369,13 @@ def _resolve_discord_interactions_public_key(
     session: Session,
     settings,
 ) -> bytes:  # noqa: ANN001
-    raw_public_key = resolve_secret_ref(
-        session,
-        secret_ref=DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF,
-        encryption_key=settings.secrets_encryption_key,
+    raw_public_key = (
+        resolve_scoped_secret_ref(
+            session,
+            secret_ref=DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF,
+            encryption_key=settings.secrets_encryption_key,
+        )
+        or ""
     ).strip()
     if not raw_public_key:
         raise HTTPException(
@@ -464,18 +467,41 @@ def _find_tenant_for_discord_channel(
     channel_id: str,
 ) -> Tenant | None:
     tenants = session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
+    active_projects = session.execute(select(Project).where(Project.is_archived.is_(False))).scalars().all()
+    project_channel_ids_by_tenant: dict[str, set[str]] = {}
+    for project in active_projects:
+        tenant_channels = project_channel_ids_by_tenant.setdefault(project.tenant_id, set())
+        discord_config = dict(project.discord_config or {})
+        configured_channel_id = str(discord_config.get("channel_id") or "").strip()
+        if configured_channel_id:
+            tenant_channels.add(configured_channel_id)
+        raw_thread_ids = discord_config.get("ask_thread_channel_ids")
+        if isinstance(raw_thread_ids, list):
+            for value in raw_thread_ids:
+                normalized = str(value or "").strip()
+                if normalized:
+                    tenant_channels.add(normalized)
+        raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
+        if isinstance(raw_seed_thread_ids, list):
+            for value in raw_seed_thread_ids:
+                normalized = str(value or "").strip()
+                if normalized:
+                    tenant_channels.add(normalized)
     matches: list[Tenant] = []
     for tenant in tenants:
-        if channel_id in _tenant_discord_channel_ids(tenant):
+        if channel_id in _tenant_discord_channel_ids(
+            tenant=tenant,
+            project_channel_ids=project_channel_ids_by_tenant.get(tenant.tenant_id, set()),
+        ):
             matches.append(tenant)
     if len(matches) != 1:
         return None
     return matches[0]
 
 
-def _tenant_discord_channel_ids(tenant: Tenant) -> set[str]:
+def _tenant_discord_channel_ids(*, tenant: Tenant, project_channel_ids: set[str]) -> set[str]:
     discord_config = tenant.discord_config or {}
-    channel_ids: set[str] = set()
+    channel_ids: set[str] = set(project_channel_ids)
     configured_channel_id = str(discord_config.get("channel_id") or "").strip()
     if configured_channel_id:
         channel_ids.add(configured_channel_id)
@@ -869,10 +895,11 @@ def _validate_webhook_auth(
     if not webhook_secret_ref:
         return
 
-    expected_token = resolve_secret_ref(
+    expected_token = resolve_scoped_secret_ref(
         session,
         secret_ref=str(webhook_secret_ref),
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not expected_token:
         logger.error(
@@ -922,7 +949,7 @@ def _resolve_global_github_webhook_secret(
     session: Session,
     settings,
 ) -> str | None:  # noqa: ANN001
-    secret_value = resolve_secret_ref(
+    secret_value = resolve_scoped_secret_ref(
         session,
         secret_ref=GLOBAL_GITHUB_WEBHOOK_SECRET_REF,
         encryption_key=settings.secrets_encryption_key,
@@ -943,10 +970,11 @@ def _resolve_tenant_github_webhook_secret(
     if not webhook_secret_ref:
         return None
 
-    secret_value = resolve_secret_ref(
+    secret_value = resolve_scoped_secret_ref(
         session,
         secret_ref=str(webhook_secret_ref),
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not secret_value:
         logger.error(
@@ -1214,10 +1242,11 @@ def _send_discord_thread_followup(
     token_ref = settings.discord_bot_token_secret_ref.strip()
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_secret_ref(
+    bot_token = resolve_scoped_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
@@ -1243,10 +1272,11 @@ def _send_discord_ask_response_with_thread(
     token_ref = settings.discord_bot_token_secret_ref.strip()
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_secret_ref(
+    bot_token = resolve_scoped_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
@@ -1298,10 +1328,11 @@ def _send_discord_seed_followup_with_thread(
     token_ref = settings.discord_bot_token_secret_ref.strip()
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_secret_ref(
+    bot_token = resolve_scoped_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")

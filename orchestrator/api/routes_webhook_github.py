@@ -23,7 +23,7 @@ from orchestrator.api.routes_webhook import (
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.reviewer import ReviewAgentGate
-from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 
 router = APIRouter(tags=["github-webhook"])
@@ -209,10 +209,12 @@ async def ingest_github_webhook(
         )
 
     def secret_lookup(secret_ref: str) -> str | None:
-        return resolve_secret_ref(
+        return resolve_scoped_secret_ref(
             session,
             secret_ref=secret_ref,
             encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
         )
 
     try:

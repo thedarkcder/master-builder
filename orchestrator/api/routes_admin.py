@@ -38,7 +38,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
 from orchestrator.core.project_policy import normalize_project_policy_overrides, resolve_effective_policy
 from orchestrator.core.secret_manager import (
-    resolve_secret_ref,
+    resolve_scoped_secret_ref,
 )
 from orchestrator.core.jira_oauth_state import (
     create_jira_oauth_state_token,
@@ -111,6 +111,9 @@ def _project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         github_repository=project.github_repository,
         jira_project_key=project.jira_project_key,
         policy_overrides=normalize_project_policy_overrides(project.policy_overrides),
+        environment=dict(project.environment or {}),
+        secret_refs=dict(project.secret_refs or {}),
+        discord=_normalize_project_discord_config(project.discord_config),
         effective_policy=resolve_effective_policy(
             tenant_policy=tenant_policy,
             project_overrides=project.policy_overrides,
@@ -189,6 +192,51 @@ def _normalize_project_key(key: str) -> str:
     return key.strip().upper()
 
 
+def _normalize_string_map(raw: dict[str, str] | None) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in raw.items():
+        normalized_key = str(key).strip()
+        normalized_value = str(value).strip()
+        if not normalized_key or not normalized_value:
+            continue
+        normalized[normalized_key] = normalized_value
+    return normalized
+
+
+def _normalize_project_discord_config(raw: dict | None) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+
+    normalized: dict[str, object] = {}
+    channel_id = str(raw.get("channel_id") or "").strip()
+    if channel_id:
+        normalized["channel_id"] = channel_id
+
+    notify_events = raw.get("notify_events")
+    if isinstance(notify_events, list):
+        normalized_events = [str(value).strip() for value in notify_events if str(value).strip()]
+        if normalized_events:
+            normalized["notify_events"] = normalized_events
+
+    ask_thread_channel_ids = raw.get("ask_thread_channel_ids")
+    if isinstance(ask_thread_channel_ids, list):
+        normalized_ask_threads = [str(value).strip() for value in ask_thread_channel_ids if str(value).strip()]
+        if normalized_ask_threads:
+            normalized["ask_thread_channel_ids"] = normalized_ask_threads
+
+    seed_followup_thread_channel_ids = raw.get("seed_followup_thread_channel_ids")
+    if isinstance(seed_followup_thread_channel_ids, list):
+        normalized_seed_threads = [
+            str(value).strip() for value in seed_followup_thread_channel_ids if str(value).strip()
+        ]
+        if normalized_seed_threads:
+            normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
+
+    return normalized
+
+
 def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> None:
     existing = session.execute(
         select(Project).where(Project.tenant_id == tenant.tenant_id).limit(1)
@@ -210,6 +258,8 @@ def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> N
             github_repository=repo_url,
             jira_project_key=jira_project_key,
             policy_overrides={},
+            environment={},
+            secret_refs={},
             is_archived=False,
             created_at=now,
             updated_at=now,
@@ -280,21 +330,46 @@ def _validate_codex_assets_for_tenant_init() -> None:
         ) from exc
 
 
-def _resolve_secret_ref(session: Session, *, ref_name: str, settings) -> str:  # noqa: ANN001
-    value = resolve_secret_ref(
+def _resolve_secret_ref(
+    session: Session,
+    *,
+    ref_name: str,
+    settings,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+) -> str:  # noqa: ANN001
+    value = resolve_scoped_secret_ref(
         session,
-        secret_ref=ref_name,
+        secret_ref=str(ref_name),
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant_id,
+        project_id=project_id,
     )
     if not value:
         raise ValueError(f"Missing secret value for ref '{ref_name}'")
     return value
 
 
-def _jira_oauth_client(*, session: Session, settings) -> JiraOAuthClient:  # noqa: ANN001
-    client_id = _resolve_secret_ref(session, ref_name=settings.jira_oauth_client_id_ref, settings=settings)
+def _jira_oauth_client(
+    *,
+    session: Session,
+    settings,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+) -> JiraOAuthClient:  # noqa: ANN001
+    client_id = _resolve_secret_ref(
+        session,
+        ref_name=settings.jira_oauth_client_id_ref,
+        settings=settings,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
     client_secret = _resolve_secret_ref(
-        session, ref_name=settings.jira_oauth_client_secret_ref, settings=settings
+        session,
+        ref_name=settings.jira_oauth_client_secret_ref,
+        settings=settings,
+        tenant_id=tenant_id,
+        project_id=project_id,
     )
     redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/jira/connect/callback"
     return JiraOAuthClient(
@@ -311,6 +386,7 @@ def _refresh_jira_connection_tokens(
     *,
     connection: JiraOAuthConnection,
     settings,
+    tenant_id: str | None = None,
 ) -> str:  # noqa: ANN001
     now = datetime.now(timezone.utc)
     if connection.access_token_expires_at - now > timedelta(seconds=60):
@@ -319,7 +395,7 @@ def _refresh_jira_connection_tokens(
             encryption_key=settings.secrets_encryption_key,
         )
 
-    client = _jira_oauth_client(session=session, settings=settings)
+    client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
     refresh_token = decrypt_value(
         ciphertext=connection.refresh_token_encrypted,
         encryption_key=settings.secrets_encryption_key,
@@ -381,6 +457,17 @@ def _is_jira_webhook_limit_error(exc: Exception) -> bool:
     return "maximum of 5 webhooks is allowed per app per user" in str(exc).lower()
 
 
+def _is_jira_webhook_single_url_error(exc: Exception) -> bool:
+    return "only a single url per user is allowed to be registered via rest api" in str(exc).lower()
+
+
+def _extract_jira_webhook_conflict_url(exc: Exception) -> str | None:
+    match = re.search(r"currently used url:\s*(https?://\S+)", str(exc), flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return match.group(1).rstrip(").,; ")
+
+
 def _cleanup_unmanaged_jira_webhooks_for_connection(
     *,
     session: Session,
@@ -410,6 +497,53 @@ def _cleanup_unmanaged_jira_webhooks_for_connection(
         webhook_ids=stale_ids,
     )
     return len(stale_ids), f"Deleted {len(stale_ids)} unmanaged Jira webhook(s)."
+
+
+def _cleanup_conflicting_jira_webhook_url(
+    *,
+    session: Session,
+    client: JiraOAuthClient,
+    access_token: str,
+    cloud_id: str,
+    callback_url: str,
+    conflicting_url: str | None,
+) -> tuple[int, str]:
+    target_urls = {
+        callback_url.strip().lower().rstrip("/"),
+    }
+    if conflicting_url:
+        target_urls.add(conflicting_url.strip().lower().rstrip("/"))
+
+    webhooks = client.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+    delete_ids: list[int] = []
+    for item in webhooks:
+        webhook_id = _parse_jira_webhook_id(item.get("id"))
+        webhook_url = str(item.get("url") or "").strip().lower().rstrip("/")
+        if webhook_id is None or not webhook_url:
+            continue
+        if webhook_url in target_urls:
+            delete_ids.append(webhook_id)
+
+    if not delete_ids:
+        return 0, "No conflicting Jira webhook URL was found to delete."
+
+    client.delete_webhooks(
+        access_token=access_token,
+        cloud_id=cloud_id,
+        webhook_ids=delete_ids,
+    )
+    touched_tenants = 0
+    for webhook_id in delete_ids:
+        touched_tenants += _remove_managed_webhook_id_from_tenants(
+            session=session,
+            webhook_id=webhook_id,
+        )
+    tenant_note = (
+        f" Removed stale managed reference from {touched_tenants} tenant(s)."
+        if touched_tenants > 0
+        else ""
+    )
+    return len(delete_ids), f"Deleted {len(delete_ids)} conflicting Jira webhook URL subscription(s).{tenant_note}"
 
 
 def _remove_managed_webhook_id_from_tenants(*, session: Session, webhook_id: int) -> int:
@@ -482,15 +616,17 @@ def _notify_discord_allowlist_approved(
     *,
     session: Session,
     settings,
+    tenant_id: str,
     user_id: str,
 ) -> bool:  # noqa: ANN001
     bot_token_ref = settings.discord_bot_token_secret_ref.strip()
     if not bot_token_ref:
         return False
-    bot_token = resolve_secret_ref(
+    bot_token = resolve_scoped_secret_ref(
         session,
         secret_ref=bot_token_ref,
         encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant_id,
     )
     if not bot_token:
         return False
@@ -555,8 +691,9 @@ def _delete_jira_webhooks(
             session,
             connection=connection,
             settings=settings,
+            tenant_id=tenant.tenant_id,
         )
-        client = _jira_oauth_client(session=session, settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
         client.delete_webhooks(
             access_token=access_token,
             cloud_id=connection.cloud_id,
@@ -625,8 +762,9 @@ def _provision_jira_webhook(
         session,
         connection=connection,
         settings=settings,
+        tenant_id=tenant.tenant_id,
     )
-    client = _jira_oauth_client(session=session, settings=settings)
+    client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
     callback_url = _jira_webhook_callback_url(settings=settings, tenant_id=tenant.tenant_id)
     jql_filter = _jira_webhook_filter_jql(jira_config)
     webhook_ids: list[int] | None = None
@@ -712,6 +850,41 @@ def _provision_jira_webhook(
                     webhook_ids=_parse_managed_webhook_ids(jira_config),
                 )
         if webhook_ids is None:
+            if _is_jira_webhook_single_url_error(exc):
+                try:
+                    conflicting_url = _extract_jira_webhook_conflict_url(exc)
+                    deleted_count, cleanup_details = _cleanup_conflicting_jira_webhook_url(
+                        session=session,
+                        client=client,
+                        access_token=access_token,
+                        cloud_id=connection.cloud_id,
+                        callback_url=callback_url,
+                        conflicting_url=conflicting_url,
+                    )
+                    if deleted_count > 0:
+                        cleanup_note = cleanup_details
+                        webhook_ids = client.register_webhook(
+                            access_token=access_token,
+                            cloud_id=connection.cloud_id,
+                            callback_url=callback_url,
+                            jql_filter=jql_filter,
+                            events=JIRA_WEBHOOK_EVENTS,
+                        )
+                except (ValueError, JiraOAuthError) as cleanup_exc:
+                    jira_config["webhook_last_error"] = (
+                        "Failed to provision Jira webhook: "
+                        f"{exc}. URL-conflict cleanup failed: {cleanup_exc}"
+                    )
+                    tenant.jira_config = jira_config
+                    tenant.updated_at = datetime.now(timezone.utc)
+                    session.commit()
+                    return JiraWebhookActionResult(
+                        ok=False,
+                        action=action_name,
+                        details=jira_config["webhook_last_error"],
+                        webhook_ids=_parse_managed_webhook_ids(jira_config),
+                    )
+        if webhook_ids is None:
             jira_config["webhook_last_error"] = f"Failed to provision Jira webhook: {exc}"
             tenant.jira_config = jira_config
             tenant.updated_at = datetime.now(timezone.utc)
@@ -775,7 +948,7 @@ def start_jira_connect(
         tenant_id=tenant_id,
     )
     try:
-        client = _jira_oauth_client(session=session, settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     authorize_url = client.build_authorize_url(state=state_token)
@@ -798,7 +971,7 @@ def jira_connect_callback(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     try:
-        client = _jira_oauth_client(session=session, settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings, tenant_id=state.tenant_id)
         token_set = client.exchange_code(code=code)
         resources = client.list_accessible_resources(access_token=token_set.access_token)
     except (ValueError, JiraOAuthError) as exc:
@@ -1069,6 +1242,7 @@ def approve_discord_allowlist_request(
         notified = _notify_discord_allowlist_approved(
             session=session,
             settings=settings,
+            tenant_id=tenant_id,
             user_id=normalized_user_id,
         )
     except (DiscordApiError, ValueError) as exc:
@@ -1132,8 +1306,9 @@ def preview_tenant_ready_gate(
             session,
             connection=connection,
             settings=settings,
+            tenant_id=tenant_id,
         )
-        client = _jira_oauth_client(session=session, settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
         issues = client.search_issues_by_jql(
             access_token=access_token,
             cloud_id=connection.cloud_id,
@@ -1265,6 +1440,40 @@ def delete_tenant(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/tenants/{tenant_id}/archive", response_model=TenantRead)
+def archive_tenant(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    tenant.is_enabled = False
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+    return _tenant_to_schema(tenant)
+
+
+@router.post("/tenants/{tenant_id}/unarchive", response_model=TenantRead)
+def unarchive_tenant(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantRead:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    tenant.is_enabled = True
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+    return _tenant_to_schema(tenant)
+
+
 @router.get("/tenants/{tenant_id}/projects", response_model=list[ProjectRead])
 def list_projects(
     tenant_id: str,
@@ -1306,6 +1515,9 @@ def create_project(
         github_repository=normalized_repo,
         jira_project_key=normalized_jira_key,
         policy_overrides=normalize_project_policy_overrides(payload.policy_overrides),
+        environment=_normalize_string_map(payload.environment),
+        secret_refs=_normalize_string_map(payload.secret_refs),
+        discord_config=_normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None),
         is_archived=False,
         created_at=now,
         updated_at=now,
@@ -1363,6 +1575,9 @@ def update_project(
     project.github_repository = normalized_repo
     project.jira_project_key = normalized_jira_key
     project.policy_overrides = normalize_project_policy_overrides(payload.policy_overrides)
+    project.environment = _normalize_string_map(payload.environment)
+    project.secret_refs = _normalize_string_map(payload.secret_refs)
+    project.discord_config = _normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
     project.is_archived = payload.is_archived
     project.updated_at = datetime.now(timezone.utc)
 
@@ -1415,8 +1630,9 @@ def test_jira_connection(
             session,
             connection=connection,
             settings=settings,
+            tenant_id=tenant_id,
         )
-        client = _jira_oauth_client(session=session, settings=settings)
+        client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
         projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
     except (ValueError, JiraOAuthError) as exc:
         return IntegrationTestResult(ok=False, details=f"Jira OAuth validation failed: {exc}")
@@ -1459,10 +1675,11 @@ def test_github_connection(
         settings = get_settings()
         github_client_from_tenant_config(
             _with_managed_github_refs(github),
-            secret_lookup=lambda ref: resolve_secret_ref(
+            secret_lookup=lambda ref: resolve_scoped_secret_ref(
                 session,
                 secret_ref=ref,
                 encryption_key=settings.secrets_encryption_key,
+                tenant_id=tenant_id,
             ),
         )
     except ValueError as exc:
@@ -1602,10 +1819,11 @@ def list_tenant_github_repositories(
         settings = get_settings()
         client = github_client_from_tenant_config(
             _with_managed_github_refs(github),
-            secret_lookup=lambda ref: resolve_secret_ref(
+            secret_lookup=lambda ref: resolve_scoped_secret_ref(
                 session,
                 secret_ref=ref,
                 encryption_key=settings.secrets_encryption_key,
+                tenant_id=tenant_id,
             ),
         )
         repositories = client.list_installation_repositories()
@@ -1628,6 +1846,7 @@ def list_tenant_github_repositories(
 @router.get("/runs", response_model=list[RunRead])
 def list_runs(
     tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     from_time: datetime | None = Query(default=None, alias="from"),
     to_time: datetime | None = Query(default=None, alias="to"),
@@ -1638,6 +1857,8 @@ def list_runs(
 
     if tenant_id:
         query = query.where(Run.tenant_id == tenant_id)
+    if project_id:
+        query = query.where(Run.project_id == project_id)
     if status_filter:
         query = query.where(Run.status == status_filter)
     if from_time:
