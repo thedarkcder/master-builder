@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
@@ -14,7 +15,7 @@ from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -261,6 +262,15 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.json()["tenant_id"], "tenant-a")
         self.assertEqual(create_response.json()["jira"]["ready_statuses"], ["Ready for Agent"])
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            projects = session.execute(
+                select(Project).where(Project.tenant_id == "tenant-a")
+            ).scalars().all()
+            self.assertEqual(len(projects), 1)
+            self.assertEqual(projects[0].project_id, "tenant-a-default")
+            self.assertEqual(projects[0].github_repository, "https://github.com/example/repo")
+            self.assertEqual(projects[0].jira_project_key, "TP")
 
         list_response = self.client.get("/api/admin/tenants", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)
@@ -369,6 +379,57 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["eligible_issues"][0]["key"], "TP-101")
         self.assertIn("executable only", body["guidance"])
         self.assertEqual(fake_client.last_access_token, "access-token")
+
+    def test_project_crud_and_uniqueness(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "mobile-app",
+                "github_repository": "https://github.com/example/mobile-app",
+                "jira_project_key": "MBAPP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+        self.assertEqual(create_project.json()["jira_project_key"], "MBAPP")
+
+        duplicate_repo = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "dup",
+                "github_repository": "https://github.com/example/mobile-app",
+                "jira_project_key": "MBAPP2",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(duplicate_repo.status_code, 409)
+
+        list_projects = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(list_projects.status_code, 200)
+        self.assertEqual(len(list_projects.json()), 2)
+
+        update_project = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            json={
+                "name": "mobile-app-renamed",
+                "github_repository": "https://github.com/example/mobile-app-renamed",
+                "jira_project_key": "MBAPP",
+                "is_archived": True,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_project.status_code, 200)
+        self.assertTrue(update_project.json()["is_archived"])
 
     def test_delete_tenant(self) -> None:
         payload = self._tenant_payload()

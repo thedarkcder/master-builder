@@ -32,6 +32,7 @@ class GithubConfig(BaseModel):
 
 
 class ReposConfig(BaseModel):
+    github_repository: str | None = None
     allowlist: list[str] = Field(default_factory=list)
     mapping_rules_by_project_key: dict[str, str] = Field(default_factory=dict)
     mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
@@ -96,6 +97,30 @@ class TenantRead(BaseModel):
     repos: ReposConfig
     policy: PolicyConfig
     discord: DiscordConfig | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1)
+    github_repository: str = Field(min_length=1)
+    jira_project_key: str = Field(min_length=1)
+
+
+class ProjectUpdate(BaseModel):
+    name: str = Field(min_length=1)
+    github_repository: str = Field(min_length=1)
+    jira_project_key: str = Field(min_length=1)
+    is_archived: bool = False
+
+
+class ProjectRead(BaseModel):
+    project_id: str
+    tenant_id: str
+    name: str
+    github_repository: str
+    jira_project_key: str
+    is_archived: bool
     created_at: datetime
     updated_at: datetime
 
