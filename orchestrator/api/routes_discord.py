@@ -15,6 +15,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.discord_command_dispatcher import dispatch_simple_discord_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
+from orchestrator.api.discord_command_ask import dispatch_ask_command
 from orchestrator.api.discord_state import (
     assert_channel_scope as _assert_channel_scope,
     assert_sensitive_command_permission as _assert_sensitive_command_permission,
@@ -27,7 +28,6 @@ from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_conn
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,
-    plan_discord_ask_intent_with_codex,
     plan_seed_issues_with_codex,
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
@@ -1507,135 +1507,23 @@ def execute_discord_command(
     if simple_response is not None:
         return simple_response
 
-    if command_name == "ask":
-        if not arguments:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
-            )
-        scoped_issue_key: str | None = None
-        question_tokens = arguments
-        first_token = arguments[0].strip()
-        if first_token.startswith("@"):
-            candidate_issue_key = first_token[1:].strip().upper()
-            if not ISSUE_KEY_PATTERN.match(candidate_issue_key):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Usage: !ask @ISSUE-123 <question>",
-                )
-            scoped_issue_key = candidate_issue_key
-            question_tokens = arguments[1:]
-        question = " ".join(question_tokens).strip()
-        if not question:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
-            )
-        if require_ask_confirmation:
-            normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_context(
-                session=session,
-                tenant=tenant,
-                user_id=normalized_user_id,
-                channel_id=normalized_channel_id,
-                question=question,
-                scoped_issue_key=scoped_issue_key,
-            )
-            settings = get_settings()
-            runtime = build_codex_runtime(session=session, settings=settings)
-            try:
-                intent_payload = plan_discord_ask_intent_with_codex(
-                    runtime=runtime,
-                    question=question,
-                    project_keys=[
-                        str(key).strip().upper()
-                        for key in tenant.jira_config.get("project_keys", [])
-                        if str(key).strip()
-                    ],
-                    issues=issues,
-                    status_counts=status_counts,
-                    history=history_context,
-                )
-            except CodexRuntimeError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=f"Codex board assistant is unavailable: {exc}",
-                ) from exc
-
-            mode = str(intent_payload.get("mode") or "").strip().lower()
-            summary = str(intent_payload.get("summary") or "").strip()
-            proposed_command = str(intent_payload.get("command") or "").strip()
-            if mode == "command" and proposed_command.startswith("!") and not proposed_command.lower().startswith("!ask"):
-                pending = _store_pending_ask_action(
-                    session=session,
-                    tenant=tenant,
-                    user_id=normalized_user_id,
-                    channel_id=payload.channel_id,
-                    question=question,
-                    summary=summary or "Proposed operational action from /ask",
-                    proposed_command=proposed_command,
-                )
-                confirmation_message = summary or "I can run this action for you after approval."
-                return DiscordCommandResponse(
-                    ok=True,
-                    command=command_name,
-                    message=confirmation_message,
-                    data={
-                        "requires_confirmation": True,
-                        "request_id": pending["request_id"],
-                        "proposed_command": proposed_command,
-                        "summary": confirmation_message,
-                    },
-                )
-
-            message = answer_board_question_with_codex(
-                runtime=runtime,
-                question=question,
-                project_keys=[
-                    str(key).strip().upper()
-                    for key in tenant.jira_config.get("project_keys", [])
-                    if str(key).strip()
-                ],
-                issues=issues,
-                status_counts=status_counts,
-                history=history_context,
-            )
-            _store_ask_history_entry(
-                session=session,
-                tenant=tenant,
-                user_id=normalized_user_id,
-                channel_id=normalized_channel_id,
-                question=question,
-                answer=message,
-                issue_key=normalized_issue_key,
-                status_name=requested_status,
-            )
-            return DiscordCommandResponse(
-                ok=True,
-                command=command_name,
-                message=message,
-                data={
-                    "issue_key": normalized_issue_key,
-                    "status": requested_status,
-                    "status_counts": status_counts,
-                    "issues": issues,
-                    "question": question,
-                },
-            )
-
-        message, data = _ask_board_message(
-            session=session,
-            tenant=tenant,
-            user_id=normalized_user_id,
-            channel_id=normalized_channel_id,
-            question=question,
-            scoped_issue_key=scoped_issue_key,
-        )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=message,
-            data=data,
-        )
+    ask_response = dispatch_ask_command(
+        session=session,
+        tenant=tenant,
+        payload=payload,
+        command_name=command_name,
+        arguments=arguments,
+        normalized_user_id=normalized_user_id,
+        normalized_channel_id=normalized_channel_id,
+        require_ask_confirmation=require_ask_confirmation,
+        issue_key_pattern=ISSUE_KEY_PATTERN,
+        collect_ask_context_with_history_context=_collect_ask_context_with_history_context,
+        store_pending_ask_action=_store_pending_ask_action,
+        store_ask_history_entry=_store_ask_history_entry,
+        ask_board_message=_ask_board_message,
+    )
+    if ask_response is not None:
+        return ask_response
 
     if command_name == "gap":
         command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
