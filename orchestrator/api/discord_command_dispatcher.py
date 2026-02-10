@@ -37,7 +37,7 @@ def _command_help_message() -> str:
 def _command_policy_message() -> str:
     return (
         "Default policy: PR creation allowed; label updates allowed; Jira transitions disabled unless enabled. "
-        "Use !status for tenant queue visibility."
+        "Use !status for queue visibility (scoped to the current project channel when mapped)."
     )
 
 
@@ -50,6 +50,7 @@ def dispatch_simple_discord_command(
     command_name: str,
     arguments: list[str],
     jira_browse_base_url: str | None,
+    scoped_project_id: str | None = None,
 ) -> DiscordCommandResponse | None:
     if command_name == "help":
         return DiscordCommandResponse(ok=True, command=command_name, message=_command_help_message(), data=None)
@@ -58,22 +59,25 @@ def dispatch_simple_discord_command(
         return DiscordCommandResponse(ok=True, command=command_name, message=_command_policy_message(), data=None)
 
     if command_name == "status":
-        queued_count = int(
-            session.execute(
-                select(func.count(Run.run_id)).where(
-                    Run.tenant_id == tenant_id,
-                    Run.status == RUN_STATUS_QUEUED,
-                )
-            ).scalar_one()
+        queued_query = select(func.count(Run.run_id)).where(
+            Run.tenant_id == tenant_id,
+            Run.status == RUN_STATUS_QUEUED,
         )
-        active_runs = session.execute(
+        if scoped_project_id is not None:
+            queued_query = queued_query.where(Run.project_id == scoped_project_id)
+        queued_count = int(session.execute(queued_query).scalar_one())
+
+        active_query = (
             select(Run)
             .where(
                 Run.tenant_id == tenant_id,
                 Run.status == RUN_STATUS_RUNNING,
             )
             .order_by(Run.started_at.asc())
-        ).scalars().all()
+        )
+        if scoped_project_id is not None:
+            active_query = active_query.where(Run.project_id == scoped_project_id)
+        active_runs = session.execute(active_query).scalars().all()
         last_webhook_seen = session.execute(
             select(func.max(WebhookDelivery.created_at)).where(WebhookDelivery.tenant_id == tenant_id)
         ).scalar_one()
@@ -112,12 +116,11 @@ def dispatch_simple_discord_command(
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid run limit") from exc
 
-        runs = session.execute(
-            select(Run)
-            .where(Run.tenant_id == tenant_id)
-            .order_by(Run.created_at.desc())
-            .limit(limit)
-        ).scalars().all()
+        runs_query = select(Run).where(Run.tenant_id == tenant_id)
+        if scoped_project_id is not None:
+            runs_query = runs_query.where(Run.project_id == scoped_project_id)
+        runs_query = runs_query.order_by(Run.created_at.desc()).limit(limit)
+        runs = session.execute(runs_query).scalars().all()
         run_payload = [
             {
                 "run_id": run.run_id,

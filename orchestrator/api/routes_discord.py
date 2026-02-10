@@ -426,6 +426,33 @@ def _tenant_project_keys(*, session: Session, tenant: Tenant) -> list[str]:
     return [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
 
 
+def _scoped_project_keys_for_channel(*, session: Session, tenant: Tenant, channel_id: str | None) -> list[str]:
+    normalized_channel_id = str(channel_id or "").strip()
+    if normalized_channel_id:
+        scope = _channel_scope_repository.resolve_project_scope(
+            session=session,
+            tenant=tenant,
+            channel_id=normalized_channel_id,
+        )
+        if scope is not None and scope.jira_project_key:
+            return [scope.jira_project_key]
+    return _tenant_project_keys(session=session, tenant=tenant)
+
+
+def _scoped_project_id_for_channel(*, session: Session, tenant: Tenant, channel_id: str | None) -> str | None:
+    normalized_channel_id = str(channel_id or "").strip()
+    if not normalized_channel_id:
+        return None
+    scope = _channel_scope_repository.resolve_project_scope(
+        session=session,
+        tenant=tenant,
+        channel_id=normalized_channel_id,
+    )
+    if scope is None:
+        return None
+    return scope.project_id
+
+
 def _tenant_active_projects(*, session: Session, tenant_id: str) -> list[Project]:
     return session.execute(
         select(Project)
@@ -1437,6 +1464,11 @@ def execute_discord_command(
     )
 
     def _simple_handler(command_context: CommandExecutionContext) -> DiscordCommandResponse | None:
+        scoped_project_id = _scoped_project_id_for_channel(
+            session=command_context.session,
+            tenant=command_context.tenant,
+            channel_id=command_context.payload.channel_id,
+        )
         return dispatch_simple_discord_command(
             session=command_context.session,
             tenant=command_context.tenant,
@@ -1445,9 +1477,15 @@ def execute_discord_command(
             command_name=command_context.command_name,
             arguments=list(command_context.arguments),
             jira_browse_base_url=_tenant_jira_browse_base_url(session=command_context.session, tenant=command_context.tenant),
+            scoped_project_id=scoped_project_id,
         )
 
     def _ask_handler(command_context: CommandExecutionContext) -> DiscordCommandResponse | None:
+        scoped_project_keys = _scoped_project_keys_for_channel(
+            session=command_context.session,
+            tenant=command_context.tenant,
+            channel_id=command_context.payload.channel_id,
+        )
         return dispatch_ask_command(
             session=command_context.session,
             tenant=command_context.tenant,
@@ -1462,6 +1500,7 @@ def execute_discord_command(
             store_pending_ask_action=_store_pending_ask_action,
             store_ask_history_entry=_store_ask_history_entry,
             ask_board_message=_ask_board_message,
+            scoped_project_keys=scoped_project_keys,
         )
 
     def _bug_gap_handler(command_context: CommandExecutionContext) -> DiscordCommandResponse | None:
