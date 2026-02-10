@@ -84,6 +84,7 @@ from orchestrator.api.discord_ask_memory import (
     tenant_ask_history as _tenant_ask_history_impl,
 )
 from orchestrator.api.discord_followup_format import resolve_tenant_jira_browse_base_url
+from orchestrator.api.discord_ask_board_service import ask_board_message as _ask_board_message_impl
 from orchestrator.api.discord_seed_issue_service import seed_issues_with_codex as _seed_issues_with_codex_impl
 from orchestrator.api.jira_oauth_connection_service import resolve_tenant_jira_connection
 from orchestrator.api.command_executor_registry import register_tenant_command_executor
@@ -584,63 +585,22 @@ def _ask_board_message(
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str, dict]:
-    normalized_issue_key, requested_status, issues, status_counts, history_context = _collect_ask_context_with_history_context(
+    return _ask_board_message_impl(
         session=session,
         tenant=tenant,
         user_id=user_id,
         channel_id=channel_id,
         question=question,
         scoped_issue_key=scoped_issue_key,
-    )
-
-    settings = get_settings()
-    runtime = build_codex_runtime(session=session, settings=settings)
-    scoped_project_keys = _tenant_project_keys(session=session, tenant=tenant)
-    normalized_scope_channel_id = _normalize_scope_channel_id(channel_id)
-    if normalized_scope_channel_id:
-        scope = _channel_scope_repository.resolve_project_scope(
-            session=session,
-            tenant=tenant,
-            channel_id=normalized_scope_channel_id,
-        )
-        if scope is not None:
-            scoped_project_keys = [scope.jira_project_key]
-    try:
-        message = answer_board_question_with_codex(
-            runtime=runtime,
-            question=question,
-            project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
-            issues=issues,
-            status_counts=status_counts,
-            history=history_context,
-        )
-    except CodexRuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Codex board assistant is unavailable: {exc}",
-        ) from exc
-
-    _store_ask_history_entry(
-        session=session,
-        tenant=tenant,
-        user_id=user_id,
-        channel_id=channel_id,
-        question=question,
-        answer=message,
-        issue_key=normalized_issue_key,
-        status_name=requested_status,
-    )
-
-    return (
-        message,
-        {
-            "issue_key": normalized_issue_key,
-            "status": requested_status,
-            "status_counts": status_counts,
-            "issues": issues,
-            "question": question,
-            "memory_entries_used": len(history_context),
-        },
+        collect_ask_context_with_history_context_fn=_collect_ask_context_with_history_context,
+        get_settings_fn=get_settings,
+        build_codex_runtime_fn=build_codex_runtime,
+        tenant_project_keys_fn=_tenant_project_keys,
+        normalize_scope_channel_id_fn=_normalize_scope_channel_id,
+        channel_scope_repository=_channel_scope_repository,
+        answer_board_question_with_codex_fn=answer_board_question_with_codex,
+        codex_runtime_error_type=CodexRuntimeError,
+        store_ask_history_entry_fn=_store_ask_history_entry,
     )
 
 
