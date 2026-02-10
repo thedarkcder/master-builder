@@ -117,6 +117,27 @@ class DiscordCommandApiTests(unittest.TestCase):
             )
             session.commit()
 
+    def _create_project(self, *, project_id: str, jira_project_key: str, channel_id: str) -> None:
+        with self.session_factory() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                Project(
+                    project_id=project_id,
+                    tenant_id=self.tenant_id,
+                    name=project_id,
+                    github_repository=f"https://github.com/example/{project_id}",
+                    jira_project_key=jira_project_key,
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={"channel_id": channel_id, "notify_events": []},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
     def test_help_command_returns_supported_commands(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
@@ -237,6 +258,52 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("run_already_active", response.json()["detail"])
         self.assertIn("run-active-2", response.json()["detail"])
+
+    def test_link_rejects_issue_outside_mapped_project_scope(self) -> None:
+        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-other-1", "command": "!link TP-20"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("outside the mapped project scope", response.json()["detail"])
+
+    def test_run_rejects_issue_outside_mapped_project_scope(self) -> None:
+        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        with patch(
+            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={"user_id": "u-admin", "channel_id": "discord-other-1", "command": "!run TP-20"},
+            )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("outside the mapped project scope", response.json()["detail"])
+
+    def test_retry_rejects_run_outside_mapped_project_scope(self) -> None:
+        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        self._queue_run(run_id="run-tp-1", issue_key="TP-30", status="failed", project_id=f"{self.tenant_id}-default")
+        with patch(
+            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={"user_id": "u-admin", "channel_id": "discord-other-1", "command": "!retry run-tp-1"},
+            )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("outside the mapped project scope", response.json()["detail"])
+
+    def test_cancel_rejects_run_outside_mapped_project_scope(self) -> None:
+        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        self._queue_run(run_id="run-tp-cancel", issue_key="TP-31", status="queued", project_id=f"{self.tenant_id}-default")
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-admin", "channel_id": "discord-other-1", "command": "!cancel run-tp-cancel"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_ask_command_requires_question(self) -> None:
         response = self.client.post(

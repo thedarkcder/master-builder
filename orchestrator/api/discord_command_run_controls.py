@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
+from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import cancel_run, enqueue_run
 from orchestrator.storage.models import Run, Tenant
@@ -30,6 +31,7 @@ def dispatch_run_control_command(
     payload: DiscordCommandRequest,
     command_name: str,
     arguments: list[str],
+    scope: CommandScope,
     retryable_statuses: set[str],
     resolve_project_for_issue: Callable[..., Any],
     fetch_issue_preview: Callable[..., Any],
@@ -44,6 +46,11 @@ def dispatch_run_control_command(
             tenant=tenant,
             issue_key=issue_key,
         )
+        if scope.project_keys and project.jira_project_key not in set(scope.project_keys):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Issue {issue_key} is outside the mapped project scope",
+            )
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
         ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
         enqueue_result = enqueue_run(
@@ -83,6 +90,11 @@ def dispatch_run_control_command(
         run = session.get(Run, run_id)
         if run is None or run.tenant_id != tenant_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
+        if scope.project_id and run.project_id != scope.project_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Run {run_id} is outside the mapped project scope",
+            )
         cancelled = cancel_run(session, run_id=run_id, cancelled_by=payload.user_id)
         return DiscordCommandResponse(
             ok=True,
@@ -109,6 +121,11 @@ def dispatch_run_control_command(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No run was found for '{target}'",
             )
+        if scope.project_id and run.project_id != scope.project_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Run {run.run_id} is outside the mapped project scope",
+            )
         if run.status not in retryable_statuses:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -121,6 +138,11 @@ def dispatch_run_control_command(
             tenant=tenant,
             issue_key=run.issue_key,
         )
+        if scope.project_keys and project.jira_project_key not in set(scope.project_keys):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Issue {run.issue_key} is outside the mapped project scope",
+            )
         enqueue_result = enqueue_run(
             session,
             tenant_id=tenant_id,

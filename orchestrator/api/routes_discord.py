@@ -1502,6 +1502,7 @@ def execute_discord_command(
                 payload=ctx.payload,
                 command_name=ctx.command_name,
                 arguments=list(ctx.arguments),
+                scope=ctx.scope,
                 retryable_statuses=RETRYABLE_STATUSES,
                 resolve_project_for_issue=_resolve_project_for_issue,
                 fetch_issue_preview=_fetch_jira_issue_preview,
