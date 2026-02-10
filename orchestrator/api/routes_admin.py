@@ -27,6 +27,12 @@ from orchestrator.api.admin_jira_webhook_helpers import (
     parse_jira_webhook_id as _parse_jira_webhook_id,
     parse_managed_webhook_ids as _parse_managed_webhook_ids,
 )
+from orchestrator.api.admin_jira_webhook_cleanup import (
+    all_managed_webhook_ids as _all_managed_webhook_ids_impl,
+    cleanup_conflicting_jira_webhook_url as _cleanup_conflicting_jira_webhook_url_impl,
+    cleanup_unmanaged_jira_webhooks_for_connection as _cleanup_unmanaged_jira_webhooks_for_connection_impl,
+    remove_managed_webhook_id_from_tenants as _remove_managed_webhook_id_from_tenants_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -259,13 +265,10 @@ def _refresh_jira_connection_tokens(
 
 
 def _all_managed_webhook_ids(session: Session) -> set[int]:
-    managed: set[int] = set()
-    tenants = session.execute(select(Tenant.jira_config)).all()
-    for (jira_config_raw,) in tenants:
-        if not isinstance(jira_config_raw, dict):
-            continue
-        managed.update(_parse_managed_webhook_ids(jira_config_raw))
-    return managed
+    return _all_managed_webhook_ids_impl(
+        session=session,
+        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
+    )
 
 
 def _cleanup_unmanaged_jira_webhooks_for_connection(
@@ -275,28 +278,14 @@ def _cleanup_unmanaged_jira_webhooks_for_connection(
     access_token: str,
     cloud_id: str,
 ) -> tuple[int, str]:
-    webhooks = client.list_webhooks(access_token=access_token, cloud_id=cloud_id)
-    if not webhooks:
-        return 0, "No existing Jira webhooks were listed for this app/user."
-
-    managed_ids = _all_managed_webhook_ids(session)
-    stale_ids: list[int] = []
-    for item in webhooks:
-        webhook_id = _parse_jira_webhook_id(item.get("id"))
-        if webhook_id is None:
-            continue
-        if webhook_id not in managed_ids:
-            stale_ids.append(webhook_id)
-
-    if not stale_ids:
-        return 0, "No unmanaged Jira webhooks were found to clean up."
-
-    client.delete_webhooks(
+    return _cleanup_unmanaged_jira_webhooks_for_connection_impl(
+        session=session,
+        client=client,
         access_token=access_token,
         cloud_id=cloud_id,
-        webhook_ids=stale_ids,
+        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
+        parse_jira_webhook_id_fn=_parse_jira_webhook_id,
     )
-    return len(stale_ids), f"Deleted {len(stale_ids)} unmanaged Jira webhook(s)."
 
 
 def _cleanup_conflicting_jira_webhook_url(
@@ -308,61 +297,24 @@ def _cleanup_conflicting_jira_webhook_url(
     callback_url: str,
     conflicting_url: str | None,
 ) -> tuple[int, str]:
-    target_urls = {
-        callback_url.strip().lower().rstrip("/"),
-    }
-    if conflicting_url:
-        target_urls.add(conflicting_url.strip().lower().rstrip("/"))
-
-    webhooks = client.list_webhooks(access_token=access_token, cloud_id=cloud_id)
-    delete_ids: list[int] = []
-    for item in webhooks:
-        webhook_id = _parse_jira_webhook_id(item.get("id"))
-        webhook_url = str(item.get("url") or "").strip().lower().rstrip("/")
-        if webhook_id is None or not webhook_url:
-            continue
-        if webhook_url in target_urls:
-            delete_ids.append(webhook_id)
-
-    if not delete_ids:
-        return 0, "No conflicting Jira webhook URL was found to delete."
-
-    client.delete_webhooks(
+    return _cleanup_conflicting_jira_webhook_url_impl(
+        session=session,
+        client=client,
         access_token=access_token,
         cloud_id=cloud_id,
-        webhook_ids=delete_ids,
+        callback_url=callback_url,
+        conflicting_url=conflicting_url,
+        parse_jira_webhook_id_fn=_parse_jira_webhook_id,
+        remove_managed_webhook_id_from_tenants_fn=_remove_managed_webhook_id_from_tenants,
     )
-    touched_tenants = 0
-    for webhook_id in delete_ids:
-        touched_tenants += _remove_managed_webhook_id_from_tenants(
-            session=session,
-            webhook_id=webhook_id,
-        )
-    tenant_note = (
-        f" Removed stale managed reference from {touched_tenants} tenant(s)."
-        if touched_tenants > 0
-        else ""
-    )
-    return len(delete_ids), f"Deleted {len(delete_ids)} conflicting Jira webhook URL subscription(s).{tenant_note}"
 
 
 def _remove_managed_webhook_id_from_tenants(*, session: Session, webhook_id: int) -> int:
-    removed_count = 0
-    tenants = session.execute(select(Tenant)).scalars().all()
-    for tenant in tenants:
-        jira_config = tenant.jira_config
-        if not isinstance(jira_config, dict):
-            continue
-        managed_ids = _parse_managed_webhook_ids(jira_config)
-        if webhook_id not in managed_ids:
-            continue
-        updated_ids = [item for item in managed_ids if item != webhook_id]
-        updated_config = dict(jira_config)
-        updated_config["managed_webhook_ids"] = updated_ids
-        tenant.jira_config = updated_config
-        tenant.updated_at = datetime.now(timezone.utc)
-        removed_count += 1
-    return removed_count
+    return _remove_managed_webhook_id_from_tenants_impl(
+        session=session,
+        webhook_id=webhook_id,
+        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
+    )
 
 
 def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:
