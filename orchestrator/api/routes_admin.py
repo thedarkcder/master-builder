@@ -33,6 +33,11 @@ from orchestrator.api.admin_jira_webhook_cleanup import (
     cleanup_unmanaged_jira_webhooks_for_connection as _cleanup_unmanaged_jira_webhooks_for_connection_impl,
     remove_managed_webhook_id_from_tenants as _remove_managed_webhook_id_from_tenants_impl,
 )
+from orchestrator.api.admin_jira_oauth_helpers import (
+    jira_oauth_client as _jira_oauth_client_impl,
+    refresh_jira_connection_tokens as _refresh_jira_connection_tokens_impl,
+    resolve_secret_ref as _resolve_secret_ref_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -84,13 +89,13 @@ from orchestrator.core.jira_oauth_state import (
     create_jira_oauth_state_token,
     parse_jira_oauth_state_token,
 )
-from orchestrator.core.secrets import decrypt_value, encrypt_value
+from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
-from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
+from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -186,16 +191,13 @@ def _resolve_secret_ref(
     tenant_id: str | None = None,
     project_id: str | None = None,
 ) -> str:  # noqa: ANN001
-    value = resolve_scoped_secret_ref(
+    return _resolve_secret_ref_impl(
         session,
-        secret_ref=str(ref_name),
-        encryption_key=settings.secrets_encryption_key,
+        ref_name=ref_name,
+        settings=settings,
         tenant_id=tenant_id,
         project_id=project_id,
     )
-    if not value:
-        raise ValueError(f"Missing secret value for ref '{ref_name}'")
-    return value
 
 
 def _jira_oauth_client(
@@ -205,27 +207,11 @@ def _jira_oauth_client(
     tenant_id: str | None = None,
     project_id: str | None = None,
 ) -> JiraOAuthClient:  # noqa: ANN001
-    client_id = _resolve_secret_ref(
-        session,
-        ref_name=settings.jira_oauth_client_id_ref,
+    return _jira_oauth_client_impl(
+        session=session,
         settings=settings,
         tenant_id=tenant_id,
         project_id=project_id,
-    )
-    client_secret = _resolve_secret_ref(
-        session,
-        ref_name=settings.jira_oauth_client_secret_ref,
-        settings=settings,
-        tenant_id=tenant_id,
-        project_id=project_id,
-    )
-    redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/jira/connect/callback"
-    return JiraOAuthClient(
-        JiraOAuthClientConfig(
-            client_id=client_id,
-            client_secret=client_secret,
-            redirect_uri=redirect_uri,
-        )
     )
 
 
@@ -236,32 +222,13 @@ def _refresh_jira_connection_tokens(
     settings,
     tenant_id: str | None = None,
 ) -> str:  # noqa: ANN001
-    now = datetime.now(timezone.utc)
-    if connection.access_token_expires_at - now > timedelta(seconds=60):
-        return decrypt_value(
-            ciphertext=connection.access_token_encrypted,
-            encryption_key=settings.secrets_encryption_key,
-        )
-
-    client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
-    refresh_token = decrypt_value(
-        ciphertext=connection.refresh_token_encrypted,
-        encryption_key=settings.secrets_encryption_key,
+    return _refresh_jira_connection_tokens_impl(
+        session,
+        connection=connection,
+        settings=settings,
+        tenant_id=tenant_id,
+        jira_oauth_client_fn=_jira_oauth_client,
     )
-    token_set = client.refresh_tokens(refresh_token=refresh_token)
-    connection.access_token_encrypted = encrypt_value(
-        plaintext=token_set.access_token,
-        encryption_key=settings.secrets_encryption_key,
-    )
-    connection.refresh_token_encrypted = encrypt_value(
-        plaintext=token_set.refresh_token,
-        encryption_key=settings.secrets_encryption_key,
-    )
-    connection.access_token_expires_at = token_set.expires_at
-    connection.scopes = token_set.scopes
-    connection.updated_at = now
-    session.commit()
-    return token_set.access_token
 
 
 def _all_managed_webhook_ids(session: Session) -> set[int]:
