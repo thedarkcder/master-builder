@@ -67,6 +67,10 @@ from orchestrator.api.admin_github_helpers import (
     start_github_install as _start_github_install_impl,
 )
 from orchestrator.api.admin_runs_query import build_runs_query as _build_runs_query_impl
+from orchestrator.api.admin_runs_service import (
+    get_run as _get_run_impl,
+    list_runs as _list_runs_impl,
+)
 from orchestrator.api.admin_jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
     jira_webhook_action_status_code as _jira_webhook_action_status_code_impl,
@@ -892,15 +896,16 @@ def list_runs(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[RunRead]:
-    query = _build_runs_query_impl(
+    return _list_runs_impl(
+        session=session,
         tenant_id=tenant_id,
         project_id=project_id,
         status_filter=status_filter,
         from_time=from_time,
         to_time=to_time,
+        build_runs_query_fn=_build_runs_query_impl,
+        run_to_schema_fn=_run_to_schema,
     )
-    runs = session.execute(query).scalars().all()
-    return [_run_to_schema(run) for run in runs]
 
 
 @router.get("/runs/{run_id}", response_model=RunRead)
@@ -909,8 +914,9 @@ def get_run(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> RunRead:
-    run = session.get(Run, run_id)
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-
-    return _run_to_schema(run)
+    return _get_run_impl(
+        session=session,
+        run_id=run_id,
+        run_model=Run,
+        run_to_schema_fn=_run_to_schema,
+    )
