@@ -29,6 +29,7 @@ from orchestrator.api.routes_discord import (
     execute_discord_command,
     remove_issue_key_from_tenant_ask_history,
 )
+from orchestrator.api.discord_reply_transport import DiscordReplyTransport
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhook_followup_service import DiscordWebhookFollowupService
 from orchestrator.core.config import get_settings
@@ -1259,6 +1260,19 @@ def _send_discord_thread_followup(
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
     client = DiscordApiClient(bot_token=bot_token)
+    discord_config = dict(tenant.discord_config or {})
+    known_thread_ids: set[str] = set()
+    for key in ("ask_thread_channel_ids", "seed_followup_thread_channel_ids"):
+        values = discord_config.get(key)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            normalized = str(value or "").strip()
+            if normalized:
+                known_thread_ids.add(normalized)
+    if channel_id in known_thread_ids:
+        client.post_message(channel_id=channel_id, content=content, components=components)
+        return
     thread_name = f"{tenant.tenant_id}-{reply_to_message_id[-6:]}".replace(" ", "-")
     try:
         thread_channel_id = client.ensure_thread_for_message(
@@ -1434,10 +1448,12 @@ async def _run_discord_command_followup(
         build_command_followup_message=_build_command_followup_message,
         ask_confirmation_components=_ask_confirmation_components,
         ask_reply_components=_ask_reply_components,
-        send_discord_ask_response_with_thread=_send_discord_ask_response_with_thread,
-        send_discord_seed_followup_with_thread=_send_discord_seed_followup_with_thread,
-        send_discord_thread_followup=_send_discord_thread_followup,
-        send_discord_interaction_followup=_send_discord_interaction_followup,
+        reply_transport=DiscordReplyTransport(
+            send_interaction_followup=_send_discord_interaction_followup,
+            send_thread_reply=_send_discord_thread_followup,
+            send_ask_with_thread=_send_discord_ask_response_with_thread,
+            send_seed_with_thread=_send_discord_seed_followup_with_thread,
+        ),
         consume_pending_ask_action=consume_pending_ask_action,
     )
     await service.run_discord_command_followup(
@@ -1471,10 +1487,12 @@ async def _run_discord_ask_confirmation_followup(
         build_command_followup_message=_build_command_followup_message,
         ask_confirmation_components=_ask_confirmation_components,
         ask_reply_components=_ask_reply_components,
-        send_discord_ask_response_with_thread=_send_discord_ask_response_with_thread,
-        send_discord_seed_followup_with_thread=_send_discord_seed_followup_with_thread,
-        send_discord_thread_followup=_send_discord_thread_followup,
-        send_discord_interaction_followup=_send_discord_interaction_followup,
+        reply_transport=DiscordReplyTransport(
+            send_interaction_followup=_send_discord_interaction_followup,
+            send_thread_reply=_send_discord_thread_followup,
+            send_ask_with_thread=_send_discord_ask_response_with_thread,
+            send_seed_with_thread=_send_discord_seed_followup_with_thread,
+        ),
         consume_pending_ask_action=consume_pending_ask_action,
     )
     await service.run_discord_ask_confirmation_followup(

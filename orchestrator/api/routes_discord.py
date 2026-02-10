@@ -1502,11 +1502,20 @@ def _ask_board_message(
 
     settings = get_settings()
     runtime = build_codex_runtime(session=session, settings=settings)
+    scoped_project_keys = _tenant_project_keys(session=session, tenant=tenant)
+    if channel_id:
+        scope = _channel_scope_repository.resolve_project_scope(
+            session=session,
+            tenant=tenant,
+            channel_id=channel_id,
+        )
+        if scope is not None:
+            scoped_project_keys = [scope.jira_project_key]
     try:
         message = answer_board_question_with_codex(
             runtime=runtime,
             question=question,
-            project_keys=[str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()],
+            project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
             issues=issues,
             status_counts=status_counts,
             history=history_context,

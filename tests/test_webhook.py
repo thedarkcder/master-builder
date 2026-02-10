@@ -1119,6 +1119,36 @@ class JiraWebhookTests(unittest.TestCase):
                 components=None,
             )
 
+    def test_send_discord_thread_followup_posts_directly_for_known_thread_channel(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+            discord_config = dict(tenant.discord_config or {})
+            discord_config["ask_thread_channel_ids"] = ["discord-thread-1"]
+            tenant.discord_config = discord_config
+            session.commit()
+
+            fake_client = MagicMock()
+            with (
+                patch("orchestrator.api.routes_webhook.resolve_scoped_secret_ref", return_value="bot-token"),
+                patch("orchestrator.api.routes_webhook.DiscordApiClient", return_value=fake_client),
+            ):
+                _send_discord_thread_followup(
+                    session=session,
+                    settings=get_settings(),
+                    tenant=tenant,
+                    channel_id="discord-thread-1",
+                    reply_to_message_id="123456789012345678",
+                    content="reply content",
+                )
+
+            fake_client.ensure_thread_for_message.assert_not_called()
+            fake_client.post_message.assert_called_once_with(
+                channel_id="discord-thread-1",
+                content="reply content",
+                components=None,
+            )
+
     def test_discord_issues_followup_creates_seed_thread_for_clarifications(self) -> None:
         with (
             patch(
