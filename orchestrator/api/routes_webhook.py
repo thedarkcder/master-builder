@@ -37,7 +37,7 @@ from orchestrator.api.discord_ask_context import (
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth_client
 from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
-from orchestrator.api.command_entrypoint import execute_tenant_discord_command
+from orchestrator.api.command_entrypoint import execute_tenant_jira_comment_command
 from orchestrator.api.discord_reply_transport import DiscordReplyTransport
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhook_followup_service import DiscordWebhookFollowupService
@@ -63,7 +63,7 @@ router = APIRouter(tags=["jira-webhook"])
 
 # Backward-compatible alias for existing tests/patch paths while command
 # execution import paths are migrated to the shared entrypoint module.
-execute_discord_command = execute_tenant_discord_command
+execute_discord_command = execute_tenant_jira_comment_command
 
 logger = logging.getLogger(__name__)
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
@@ -1585,7 +1585,6 @@ def _stage_handle_comment_ask_command(
                 channel_id=None,
                 command=f"!ask @{context.issue_key} {question}",
             ),
-            ingress_source="jira_comment",
         )
         response_text = ask_response.message.strip()
         if not response_text:

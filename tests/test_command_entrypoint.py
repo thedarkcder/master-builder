@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from orchestrator.api.command_entrypoint import execute_tenant_discord_command
+from orchestrator.api.command_entrypoint import execute_tenant_discord_ingress_command, execute_tenant_jira_comment_command
 from orchestrator.api.command_executor_registry import clear_tenant_command_executor, register_tenant_command_executor
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 
@@ -50,6 +51,30 @@ class CommandEntrypointTests(unittest.TestCase):
         self.assertTrue(kwargs["require_ask_confirmation"])
         self.assertTrue(kwargs["allow_plain_ask"])
         self.assertEqual(kwargs["ingress_source"], "discord")
+
+    def test_execute_tenant_discord_ingress_command_forces_discord_source(self) -> None:
+        response = DiscordCommandResponse(ok=True, command="status", message="ok", data={})
+        executor = MagicMock(return_value=response)
+        register_tenant_command_executor(executor)
+
+        execute_tenant_discord_ingress_command(
+            tenant_id="tenant-a",
+            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
+            session=MagicMock(),
+        )
+        self.assertEqual(executor.call_args.kwargs["ingress_source"], "discord")
+
+    def test_execute_tenant_jira_comment_command_forces_jira_comment_source(self) -> None:
+        response = DiscordCommandResponse(ok=True, command="ask", message="ok", data={})
+        executor = MagicMock(return_value=response)
+        register_tenant_command_executor(executor)
+
+        execute_tenant_jira_comment_command(
+            tenant_id="tenant-a",
+            payload=DiscordCommandRequest(user_id="u1", channel_id=None, command="!ask test"),
+            session=MagicMock(),
+        )
+        self.assertEqual(executor.call_args.kwargs["ingress_source"], "jira_comment")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.command_entrypoint import execute_tenant_discord_command
+from orchestrator.api.command_entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhook_payload_utils import (
     extract_webhook_token as _extract_webhook_token,
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Backward-compatible alias for existing tests/patch paths while command
 # execution import paths are migrated to the shared entrypoint module.
-execute_discord_command = execute_tenant_discord_command
+execute_discord_command = execute_tenant_discord_ingress_command
 
 
 @router.post("/discord/webhook/{tenant_id}")
@@ -98,7 +98,6 @@ async def ingest_discord_webhook(
         ),
         session=session,
         allow_plain_ask=True,
-        ingress_source="discord",
     )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
