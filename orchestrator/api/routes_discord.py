@@ -6,7 +6,6 @@ from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -29,7 +28,19 @@ from orchestrator.api.discord_ask_context import (
 )
 from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
-from orchestrator.api.discord_ask_history_service import DiscordAskHistoryService
+from orchestrator.api.discord_ask_memory import (
+    MAX_ASK_HISTORY_CONTEXT as ASK_HISTORY_CONTEXT_LIMIT,
+    collect_ask_context_with_history_context as _collect_ask_context_with_history_context_impl,
+    consume_pending_ask_action as _consume_pending_ask_action_impl,
+    drop_issue_key_from_ask_history as _drop_issue_key_from_ask_history_impl,
+    existing_issue_keys_for_tenant as _existing_issue_keys_for_tenant_impl,
+    prune_missing_issue_keys_from_ask_history as _prune_missing_issue_keys_from_ask_history_impl,
+    recent_ask_history as _recent_ask_history_impl,
+    remove_issue_key_from_tenant_ask_history,
+    store_ask_history_entry as _store_ask_history_entry_impl,
+    store_pending_ask_action as _store_pending_ask_action_impl,
+    tenant_ask_history as _tenant_ask_history_impl,
+)
 from orchestrator.api.discord_response_format import (
     build_issue_url_list,
     build_jira_issue_url,
@@ -78,14 +89,7 @@ _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
 
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
-MAX_PENDING_ASK_ACTIONS = 50
-MAX_ASK_HISTORY_ENTRIES = 80
-MAX_ASK_HISTORY_CONTEXT = 6
-_ask_history_service = DiscordAskHistoryService(
-    max_pending_actions=MAX_PENDING_ASK_ACTIONS,
-    max_history_entries=MAX_ASK_HISTORY_ENTRIES,
-    max_history_context=MAX_ASK_HISTORY_CONTEXT,
-)
+MAX_ASK_HISTORY_CONTEXT = ASK_HISTORY_CONTEXT_LIMIT
 DM_SCOPE_SENTINEL_CHANNEL_IDS = {"__dm__", "__dm", "dm"}
 GAP_HEADING_STOP_WORDS = {
     "objective",
@@ -814,29 +818,12 @@ def _drop_issue_key_from_ask_history(
     channel_id: str,
     issue_key: str,
 ) -> None:
-    remove_issue_key_from_tenant_ask_history(
+    _drop_issue_key_from_ask_history_impl(
         session=session,
         tenant=tenant,
-        issue_key=issue_key,
         user_id=user_id,
         channel_id=channel_id,
-    )
-
-
-def remove_issue_key_from_tenant_ask_history(
-    *,
-    session: Session,
-    tenant: Tenant,
-    issue_key: str,
-    user_id: str | None = None,
-    channel_id: str | None = None,
-) -> int:
-    return _ask_history_service.remove_issue_key_from_ask_history(
-        session=session,
-        tenant=tenant,
         issue_key=issue_key,
-        user_id=user_id,
-        channel_id=channel_id,
     )
 
 
@@ -872,7 +859,7 @@ def _prune_missing_issue_keys_from_ask_history(
     user_id: str,
     channel_id: str,
 ) -> int:
-    return _ask_history_service.prune_missing_issue_keys_from_ask_history(
+    return _prune_missing_issue_keys_from_ask_history_impl(
         session=session,
         tenant=tenant,
         user_id=user_id,
@@ -890,7 +877,7 @@ def _collect_ask_context_with_history_context(
     question: str,
     scoped_issue_key: str | None,
 ) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
-    return _ask_history_service.collect_ask_context_with_history_context(
+    return _collect_ask_context_with_history_context_impl(
         session=session,
         tenant=tenant,
         user_id=user_id,
@@ -912,11 +899,9 @@ def _store_pending_ask_action(
     summary: str,
     proposed_command: str,
 ) -> dict:
-    request_id = uuid4().hex
-    return _ask_history_service.store_pending_ask_action(
+    return _store_pending_ask_action_impl(
         session=session,
         tenant=tenant,
-        request_id=request_id,
         user_id=user_id,
         channel_id=channel_id,
         question=question,
@@ -931,7 +916,7 @@ def consume_pending_ask_action(
     tenant: Tenant,
     request_id: str,
 ) -> dict | None:
-    return _ask_history_service.consume_pending_ask_action(
+    return _consume_pending_ask_action_impl(
         session=session,
         tenant=tenant,
         request_id=request_id,
@@ -939,7 +924,7 @@ def consume_pending_ask_action(
 
 
 def _tenant_ask_history(tenant: Tenant) -> list[dict]:
-    return _ask_history_service.tenant_ask_history(tenant=tenant)
+    return _tenant_ask_history_impl(tenant=tenant)
 
 
 def _recent_ask_history(
@@ -949,7 +934,7 @@ def _recent_ask_history(
     channel_id: str,
     limit: int = MAX_ASK_HISTORY_CONTEXT,
 ) -> list[dict]:
-    return _ask_history_service.recent_ask_history(
+    return _recent_ask_history_impl(
         tenant=tenant,
         user_id=user_id,
         channel_id=channel_id,
@@ -968,7 +953,7 @@ def _store_ask_history_entry(
     issue_key: str | None,
     status_name: str | None,
 ) -> None:
-    _ask_history_service.store_ask_history_entry(
+    _store_ask_history_entry_impl(
         session=session,
         tenant=tenant,
         user_id=user_id,
