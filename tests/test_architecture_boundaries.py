@@ -21,9 +21,6 @@ LEGACY_ROUTE_IMPORT_ALLOWLIST = {
     },
 }
 NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
-    "orchestrator/api/command_entrypoint.py": {
-        "orchestrator.api.routes_discord",
-    },
     "orchestrator/api/main.py": {
         "orchestrator.api.routes_admin",
         "orchestrator.api.routes_admin_auth",

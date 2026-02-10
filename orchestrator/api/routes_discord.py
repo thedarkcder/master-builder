@@ -28,6 +28,7 @@ from orchestrator.api.discord_response_format import (
     format_issue_markdown_link,
     format_issue_markdown_list,
 )
+from orchestrator.api.command_executor_registry import register_tenant_command_executor
 from orchestrator.api.discord_state import (
     assert_channel_scope as _assert_channel_scope,
     assert_sensitive_command_permission as _assert_sensitive_command_permission,
@@ -1577,3 +1578,6 @@ def execute_discord_command(
         return dispatch_registered_command(context=context, registry=handler_registry)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+register_tenant_command_executor(execute_discord_command)
