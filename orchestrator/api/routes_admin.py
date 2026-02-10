@@ -13,6 +13,16 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.admin_project_service import AdminProjectService
+from orchestrator.api.admin_jira_webhook_helpers import (
+    default_ready_jql as _default_ready_jql,
+    extract_jira_webhook_conflict_url as _extract_jira_webhook_conflict_url,
+    is_jira_webhook_limit_error as _is_jira_webhook_limit_error,
+    is_jira_webhook_single_url_error as _is_jira_webhook_single_url_error,
+    jira_webhook_callback_url as _jira_webhook_callback_url,
+    jira_webhook_filter_jql as _jira_webhook_filter_jql,
+    parse_jira_webhook_id as _parse_jira_webhook_id,
+    parse_managed_webhook_ids as _parse_managed_webhook_ids,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -405,25 +415,6 @@ def _refresh_jira_connection_tokens(
     return token_set.access_token
 
 
-def _default_ready_jql(*, project_keys: list[str], ready_statuses: list[str]) -> str:
-    quoted_projects = ", ".join(f"\"{key}\"" for key in project_keys)
-    quoted_statuses = ", ".join(f"\"{status}\"" for status in ready_statuses)
-    return f"project in ({quoted_projects}) AND status in ({quoted_statuses}) ORDER BY updated DESC"
-
-
-def _parse_managed_webhook_ids(jira_config: dict) -> list[int]:
-    raw_ids = jira_config.get("managed_webhook_ids")
-    if not isinstance(raw_ids, list):
-        return []
-    normalized: list[int] = []
-    for item in raw_ids:
-        if isinstance(item, int):
-            normalized.append(item)
-        elif isinstance(item, str) and item.isdigit():
-            normalized.append(int(item))
-    return normalized
-
-
 def _all_managed_webhook_ids(session: Session) -> set[int]:
     managed: set[int] = set()
     tenants = session.execute(select(Tenant.jira_config)).all()
@@ -432,29 +423,6 @@ def _all_managed_webhook_ids(session: Session) -> set[int]:
             continue
         managed.update(_parse_managed_webhook_ids(jira_config_raw))
     return managed
-
-
-def _parse_jira_webhook_id(value: object) -> int | None:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
-
-
-def _is_jira_webhook_limit_error(exc: Exception) -> bool:
-    return "maximum of 5 webhooks is allowed per app per user" in str(exc).lower()
-
-
-def _is_jira_webhook_single_url_error(exc: Exception) -> bool:
-    return "only a single url per user is allowed to be registered via rest api" in str(exc).lower()
-
-
-def _extract_jira_webhook_conflict_url(exc: Exception) -> str | None:
-    match = re.search(r"currently used url:\s*(https?://\S+)", str(exc), flags=re.IGNORECASE)
-    if match is None:
-        return None
-    return match.group(1).rstrip(").,; ")
 
 
 def _cleanup_unmanaged_jira_webhooks_for_connection(
@@ -630,21 +598,6 @@ def _notify_discord_allowlist_approved(
         content="Your allowlist request has been approved. You can now run sensitive commands for this tenant.",
     )
     return True
-
-
-def _jira_webhook_callback_url(*, settings, tenant_id: str) -> str:  # noqa: ANN001
-    return f"{settings.public_api_base_url.rstrip('/')}/jira/webhook/{quote(tenant_id, safe='')}"
-
-
-def _jira_webhook_filter_jql(jira_config: dict) -> str:
-    project_keys = jira_config.get("project_keys")
-    if not isinstance(project_keys, list) or not project_keys:
-        raise ValueError("Missing Jira project_keys")
-    quoted_projects = ", ".join(f"\"{str(key).strip()}\"" for key in project_keys if str(key).strip())
-    if not quoted_projects:
-        raise ValueError("Missing Jira project_keys")
-    # Keep webhook subscriptions broad so events are always delivered; runtime status gates decide executability.
-    return f"project in ({quoted_projects}) ORDER BY updated DESC"
 
 
 def _delete_jira_webhooks(
