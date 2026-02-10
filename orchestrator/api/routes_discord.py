@@ -67,6 +67,9 @@ from orchestrator.api.discord_scope_service import (
     resolve_command_scope as _resolve_command_scope_impl,
     resolve_project_for_issue as _resolve_project_for_issue_impl,
 )
+from orchestrator.api.discord_execution_policy import (
+    ensure_issue_is_executable as _ensure_issue_is_executable_impl,
+)
 from orchestrator.api.discord_ask_memory import (
     MAX_ASK_HISTORY_CONTEXT as ASK_HISTORY_CONTEXT_LIMIT,
     collect_ask_context_with_history_context as _collect_ask_context_with_history_context_impl,
@@ -177,21 +180,11 @@ def _run_gap_analysis(
 
 
 def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
-    executable_statuses = ["To Do"]
-    configured_ready_statuses = tenant.jira_config.get("ready_statuses")
-    if isinstance(configured_ready_statuses, list):
-        executable_statuses.extend(
-            status_name.strip()
-            for status_name in (str(value) for value in configured_ready_statuses)
-            if status_name.strip()
-        )
-    normalized_executable_statuses = {_normalize_status_name(value) for value in executable_statuses}
-    if _normalize_status_name(issue_status) not in normalized_executable_statuses:
-        display_statuses = ", ".join(sorted(set(executable_statuses)))
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Issue is in '{issue_status}', expected one of: {display_statuses}",
-        )
+    _ensure_issue_is_executable_impl(
+        issue_status=issue_status,
+        tenant=tenant,
+        normalize_status_name_fn=_normalize_status_name,
+    )
 
 
 def _resolve_command_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> CommandScope:
