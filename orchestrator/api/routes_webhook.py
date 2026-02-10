@@ -47,6 +47,7 @@ from orchestrator.core.project_routing import (
     find_active_project_for_issue_key,
     find_active_project_for_repo_full_name,
 )
+from orchestrator.core.discord_channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
@@ -418,37 +419,7 @@ def _find_tenant_for_discord_channel(
     session: Session,
     channel_id: str,
 ) -> Tenant | None:
-    tenants = session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
-    active_projects = session.execute(select(Project).where(Project.is_archived.is_(False))).scalars().all()
-    project_channel_ids_by_tenant: dict[str, set[str]] = {}
-    for project in active_projects:
-        tenant_channels = project_channel_ids_by_tenant.setdefault(project.tenant_id, set())
-        discord_config = dict(project.discord_config or {})
-        configured_channel_id = str(discord_config.get("channel_id") or "").strip()
-        if configured_channel_id:
-            tenant_channels.add(configured_channel_id)
-        raw_thread_ids = discord_config.get("ask_thread_channel_ids")
-        if isinstance(raw_thread_ids, list):
-            for value in raw_thread_ids:
-                normalized = str(value or "").strip()
-                if normalized:
-                    tenant_channels.add(normalized)
-        raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
-        if isinstance(raw_seed_thread_ids, list):
-            for value in raw_seed_thread_ids:
-                normalized = str(value or "").strip()
-                if normalized:
-                    tenant_channels.add(normalized)
-    matches: list[Tenant] = []
-    for tenant in tenants:
-        if channel_id in _tenant_discord_channel_ids(
-            tenant=tenant,
-            project_channel_ids=project_channel_ids_by_tenant.get(tenant.tenant_id, set()),
-        ):
-            matches.append(tenant)
-    if len(matches) != 1:
-        return None
-    return matches[0]
+    return resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
 
 
 def _tenant_discord_channel_ids(*, tenant: Tenant, project_channel_ids: set[str]) -> set[str]:

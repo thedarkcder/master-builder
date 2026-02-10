@@ -23,6 +23,7 @@ from orchestrator.api.routes_webhook import (
     _run_discord_command_followup,
 )
 from orchestrator.api.schemas import DiscordCommandResponse
+from orchestrator.core.discord_channel_tenant_index import invalidate_discord_channel_tenant_index
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -49,6 +50,7 @@ class JiraWebhookTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        invalidate_discord_channel_tenant_index()
         run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
 
@@ -64,6 +66,7 @@ class JiraWebhookTests(unittest.TestCase):
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
+        invalidate_discord_channel_tenant_index()
 
     def _create_tenant(
         self,
@@ -1310,3 +1313,27 @@ class JiraWebhookTests(unittest.TestCase):
             matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-project-thread-1")
             self.assertIsNotNone(matched)
             self.assertEqual(matched.tenant_id, "tenant-webhook")
+
+    def test_find_tenant_for_discord_channel_returns_none_when_channel_is_shared(self) -> None:
+        self._create_tenant("tenant-webhook-2")
+        with self.session_factory() as session:
+            project_one = session.execute(
+                select(Project).where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.is_archived.is_(False),
+                )
+            ).scalar_one_or_none()
+            project_two = session.execute(
+                select(Project).where(
+                    Project.tenant_id == "tenant-webhook-2",
+                    Project.is_archived.is_(False),
+                )
+            ).scalar_one_or_none()
+            assert project_one is not None
+            assert project_two is not None
+            project_one.discord_config = {"channel_id": "discord-shared-channel"}
+            project_two.discord_config = {"channel_id": "discord-shared-channel"}
+            session.commit()
+
+            matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-shared-channel")
+            self.assertIsNone(matched)
