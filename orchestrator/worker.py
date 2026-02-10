@@ -6,16 +6,16 @@ import signal
 
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord_notifications import send_tenant_discord_message
+from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.logging import configure_logging
-from orchestrator.core.worker_execution_service import (
+from orchestrator.core.worker.execution_service import (
     process_next_queued_run_with_dependencies as _process_next_queued_run_with_dependencies,
 )
-from orchestrator.core.worker_queue_listener import (
+from orchestrator.core.worker.queue_listener import (
     RunQueueNotificationBridge,
     wait_for_wake_or_stop,
 )
-from orchestrator.core.worker_runtime_factory import build_workflow_runner_for_session
+from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.run_queue_events import (
     RUN_QUEUE_NOTIFY_CHANNEL,

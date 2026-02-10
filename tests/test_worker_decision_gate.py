@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.worker_decision_gate import apply_decision_gate
+from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.storage.models import JiraOAuthConnection
 
 
@@ -106,8 +106,8 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
         return SimpleNamespace(sent=True, reason="sent")
 
     with (
-        patch("orchestrator.core.worker_decision_gate.resolve_project_for_run", return_value=None),
-        patch("orchestrator.core.worker_decision_gate.mark_run_terminal", return_value=run),
+        patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None),
+        patch("orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run),
     ):
         terminal, meta = apply_decision_gate(
             session=session,

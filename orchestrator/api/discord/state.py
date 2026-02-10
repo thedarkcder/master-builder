@@ -12,7 +12,7 @@ from orchestrator.api.discord.state_repository import (
     save_seed_followups,
     tenant_allowed_channel_ids,
 )
-from orchestrator.core.discord_policy import (
+from orchestrator.core.discord.policy import (
     can_execute_sensitive_command,
     is_channel_allowed,
     normalize_allowlist_requests,

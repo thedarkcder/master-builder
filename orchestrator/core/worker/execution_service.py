@@ -6,12 +6,12 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import evaluate_decision_gate
-from orchestrator.core.discord_notifications import send_tenant_discord_message
+from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.worker_decision_gate import apply_decision_gate
-from orchestrator.core.worker_jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
-from orchestrator.core.worker_queue_selector import select_next_queued_run
-from orchestrator.core.worker_run_lifecycle import (
+from orchestrator.core.worker.decision_gate import apply_decision_gate
+from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
+from orchestrator.core.worker.queue_selector import select_next_queued_run
+from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
     fail_guardrail_violation,
@@ -21,16 +21,16 @@ from orchestrator.core.worker_run_lifecycle import (
     resolve_project_for_run,
     start_run,
 )
-from orchestrator.core.worker_stage_events import (
+from orchestrator.core.worker.stage_events import (
     lock_acquired_update,
     plan_posted_update,
     pr_opened_update,
     run_failed_update,
 )
-from orchestrator.core.worker_workflow_request_service import (
+from orchestrator.core.worker.workflow_request_service import (
     build_workflow_request_for_run as _build_workflow_request_for_run,
 )
-from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
+from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
 from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ def _workflow_request_for_run(
 
 
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
-    from orchestrator.core.worker_process_service import process_next_queued_run as _process_next_queued_run_impl
+    from orchestrator.core.worker.process_service import process_next_queued_run as _process_next_queued_run_impl
 
     return _process_next_queued_run_impl(
         session=session,
@@ -119,7 +119,7 @@ def process_next_queued_run_with_dependencies(
     runner: WorkflowRunner,
     send_discord_message_fn=send_tenant_discord_message,
 ) -> Run | None:
-    from orchestrator.core.worker_process_service import process_next_queued_run as _process_next_queued_run_impl
+    from orchestrator.core.worker.process_service import process_next_queued_run as _process_next_queued_run_impl
 
     return _process_next_queued_run_impl(
         session=session,

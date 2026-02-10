@@ -5,8 +5,8 @@ from pathlib import Path
 
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
-from orchestrator.core.worker_queue_selector import coerce_positive_int
-from orchestrator.core.workflow_runner import WorkflowRequest
+from orchestrator.core.worker.queue_selector import coerce_positive_int
+from orchestrator.core.workflow.runner import WorkflowRequest
 from orchestrator.storage.models import Project, Run, Tenant
 
 
@@ -65,7 +65,12 @@ def build_workflow_request_for_run(
 
 @lru_cache(maxsize=1)
 def _cached_enforcement_context(required_assets_version: str) -> str:
-    repo_root = Path(__file__).resolve().parents[2]
+    module_path = Path(__file__).resolve()
+    repo_root = module_path.parent
+    for candidate in [repo_root, *repo_root.parents]:
+        if (candidate / ".codex").exists():
+            repo_root = candidate
+            break
     return build_agent_enforcement_context(
         repo_root=repo_root,
         required_assets_version=required_assets_version or None,

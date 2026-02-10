@@ -7,7 +7,7 @@ from threading import Lock
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.discord_policy import channel_ids_from_discord_config
+from orchestrator.core.discord.policy import channel_ids_from_discord_config
 from orchestrator.storage.models import Project, Tenant
 
 

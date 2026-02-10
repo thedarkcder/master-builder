@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from orchestrator.core.worker_stage_notifier import RunStageNotifier
+from orchestrator.core.worker.stage_notifier import RunStageNotifier
 from orchestrator.storage.models import Run, Tenant
 
 

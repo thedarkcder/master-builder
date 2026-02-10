@@ -1,4 +1,4 @@
-from orchestrator.core.discord_policy import (
+from orchestrator.core.discord.policy import (
     can_execute_sensitive_command,
     channel_ids_from_discord_config,
     is_channel_allowed,

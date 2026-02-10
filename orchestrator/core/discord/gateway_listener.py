@@ -18,7 +18,7 @@ from orchestrator.api.discord.followup_format import (
     resolve_tenant_jira_browse_base_url,
 )
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.core.discord_channel_tenant_index import resolve_tenant_for_discord_channel
+from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.config import Settings
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory

@@ -18,8 +18,8 @@ from orchestrator.api.routes.webhook_discord_interactions import (
 )
 from orchestrator.api.routes.webhook_github import router as webhook_github_router
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord_commands_sync import sync_discord_guild_commands
-from orchestrator.core.discord_gateway_listener import DiscordGatewayListener
+from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
+from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
 from orchestrator.core.logging import configure_logging
 from orchestrator.storage.migrations import run_migrations
 

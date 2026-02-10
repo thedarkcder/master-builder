@@ -7,7 +7,7 @@ from orchestrator.api.discord.ask_context import (
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
 )
-from orchestrator.core.discord_channel_tenant_index import resolve_tenant_for_discord_channel
+from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.storage.models import Tenant
 
 

@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.worker_run_lifecycle import resolve_project_for_run
+from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
