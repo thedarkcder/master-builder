@@ -74,6 +74,7 @@ class DiscordWebhookFollowupService:
                             session=session,
                             defer_seed_issues=False,
                             require_ask_confirmation=True,
+                            ingress_source="discord",
                         )
                         data = command_response.data if isinstance(command_response.data, dict) else {}
                         requires_confirmation = (
@@ -256,6 +257,7 @@ class DiscordWebhookFollowupService:
                                         session=session,
                                         defer_seed_issues=False,
                                         require_ask_confirmation=False,
+                                        ingress_source="discord",
                                     )
                                     content = self._build_command_followup_message(
                                         session=session,

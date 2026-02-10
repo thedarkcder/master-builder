@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+
+@dataclass(frozen=True)
+class CommandScope:
+    project_id: str | None = None
+    project_keys: tuple[str, ...] = ()
+    channel_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -15,6 +22,8 @@ class CommandExecutionContext:
     normalized_user_id: str
     normalized_channel_id: str
     flags: dict[str, bool]
+    ingress_source: str = "discord"
+    scope: CommandScope = field(default_factory=CommandScope)
 
 
 class CommandHandler(Protocol):

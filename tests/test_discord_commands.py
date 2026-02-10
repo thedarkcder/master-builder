@@ -332,6 +332,14 @@ class DiscordCommandApiTests(unittest.TestCase):
             with self.assertRaises(HTTPException):
                 _project_filter_jql(session=session, tenant=tenant, channel_id="discord-unmapped")
             self.assertIn(
+                _project_filter_jql(session=session, tenant=tenant, channel_id="__dm__"),
+                {'project in ("TP", "OTH")', 'project in ("OTH", "TP")'},
+            )
+            self.assertIn(
+                _project_filter_jql(session=session, tenant=tenant, channel_id="dm"),
+                {'project in ("TP", "OTH")', 'project in ("OTH", "TP")'},
+            )
+            self.assertIn(
                 _project_filter_jql(session=session, tenant=tenant),
                 {'project in ("TP", "OTH")', 'project in ("OTH", "TP")'},
             )
@@ -693,6 +701,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             json={"user_id": "u-viewer", "channel_id": "discord-channel-2", "command": "!status"},
         )
         self.assertEqual(status_response.status_code, 200)
+        self.assertNotIn("webhook_last_seen", status_response.json()["data"])
         self.assertEqual(status_response.json()["data"]["queue_depth"], 1)
         self.assertEqual(len(status_response.json()["data"]["active_runs"]), 1)
         self.assertEqual(status_response.json()["data"]["active_runs"][0]["issue_key"], "OTH-11")
@@ -708,6 +717,41 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertNotIn("TP-10", run_issue_keys)
         self.assertNotIn("TP-11", run_issue_keys)
 
+    def test_status_and_runs_with_dm_channel_use_tenant_scope(self) -> None:
+        create_project = self.client.post(
+            f"/api/admin/tenants/{self.tenant_id}/projects",
+            json={
+                "name": "Other Project",
+                "github_repository": "https://github.com/example/other",
+                "jira_project_key": "OTH",
+                "discord": {"channel_id": "discord-channel-2", "notify_events": []},
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        other_project_id = create_project.json()["project_id"]
+
+        self._queue_run(run_id="run-default-queued", issue_key="TP-10", status="queued")
+        self._queue_run(run_id="run-other-running", issue_key="OTH-11", status="running", project_id=other_project_id)
+
+        status_response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": None, "command": "!status"},
+        )
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["data"]["queue_depth"], 1)
+        self.assertEqual(len(status_response.json()["data"]["active_runs"]), 1)
+        self.assertEqual(status_response.json()["data"]["active_runs"][0]["issue_key"], "OTH-11")
+
+        runs_response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": None, "command": "!runs 10"},
+        )
+        self.assertEqual(runs_response.status_code, 200)
+        run_issue_keys = {entry["issue_key"] for entry in runs_response.json()["data"]["runs"]}
+        self.assertIn("TP-10", run_issue_keys)
+        self.assertIn("OTH-11", run_issue_keys)
+
     def test_ask_command_surfaces_jira_provider_outage(self) -> None:
         with patch(
             "orchestrator.api.routes_discord._search_jira_issues_for_tenant",
@@ -719,6 +763,23 @@ class DiscordCommandApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 502)
         self.assertIn("Failed to query Jira board", response.json()["detail"])
+
+    def test_ask_command_with_dm_channel_uses_tenant_scope(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.routes_discord._search_jira_issues_for_tenant",
+                return_value=[JiraIssuePreview(key="TP-50", summary="DM issue", status="To Do")],
+            ),
+            patch("orchestrator.api.routes_discord.build_codex_runtime"),
+            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="DM scoped answer"),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={"user_id": "u-viewer", "channel_id": None, "command": "!ask what is on the board"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message"], "DM scoped answer")
 
     def test_ask_follow_up_drops_deleted_history_issue_key(self) -> None:
         with self.session_factory() as session:

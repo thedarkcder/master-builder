@@ -12,8 +12,9 @@ from orchestrator.api.discord_state import (
     create_allowlist_request as _create_allowlist_request,
 )
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
+from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.runs import RUN_STATUS_QUEUED, RUN_STATUS_RUNNING
-from orchestrator.storage.models import Run, Tenant, WebhookDelivery
+from orchestrator.storage.models import Run, Tenant
 
 
 def _format_elapsed_seconds(*, started_at: datetime | None, created_at: datetime | None) -> int:
@@ -50,7 +51,7 @@ def dispatch_simple_discord_command(
     command_name: str,
     arguments: list[str],
     jira_browse_base_url: str | None,
-    scoped_project_id: str | None = None,
+    scope: CommandScope,
 ) -> DiscordCommandResponse | None:
     if command_name == "help":
         return DiscordCommandResponse(ok=True, command=command_name, message=_command_help_message(), data=None)
@@ -63,8 +64,8 @@ def dispatch_simple_discord_command(
             Run.tenant_id == tenant_id,
             Run.status == RUN_STATUS_QUEUED,
         )
-        if scoped_project_id is not None:
-            queued_query = queued_query.where(Run.project_id == scoped_project_id)
+        if scope.project_id is not None:
+            queued_query = queued_query.where(Run.project_id == scope.project_id)
         queued_count = int(session.execute(queued_query).scalar_one())
 
         active_query = (
@@ -75,12 +76,9 @@ def dispatch_simple_discord_command(
             )
             .order_by(Run.started_at.asc())
         )
-        if scoped_project_id is not None:
-            active_query = active_query.where(Run.project_id == scoped_project_id)
+        if scope.project_id is not None:
+            active_query = active_query.where(Run.project_id == scope.project_id)
         active_runs = session.execute(active_query).scalars().all()
-        last_webhook_seen = session.execute(
-            select(func.max(WebhookDelivery.created_at)).where(WebhookDelivery.tenant_id == tenant_id)
-        ).scalar_one()
         active_payload = [
             {
                 "run_id": run.run_id,
@@ -102,7 +100,6 @@ def dispatch_simple_discord_command(
             command=command_name,
             message=message,
             data={
-                "webhook_last_seen": last_webhook_seen.isoformat() if last_webhook_seen else None,
                 "queue_depth": queued_count,
                 "active_runs": active_payload,
             },
@@ -117,8 +114,8 @@ def dispatch_simple_discord_command(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid run limit") from exc
 
         runs_query = select(Run).where(Run.tenant_id == tenant_id)
-        if scoped_project_id is not None:
-            runs_query = runs_query.where(Run.project_id == scoped_project_id)
+        if scope.project_id is not None:
+            runs_query = runs_query.where(Run.project_id == scope.project_id)
         runs_query = runs_query.order_by(Run.created_at.desc()).limit(limit)
         runs = session.execute(runs_query).scalars().all()
         run_payload = [
