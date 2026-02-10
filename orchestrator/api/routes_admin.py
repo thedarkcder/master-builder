@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -53,6 +52,10 @@ from orchestrator.api.admin_release_bootstrap_helpers import (
     compute_release_bootstrap_result as _compute_release_bootstrap_result_impl,
     release_bootstrap_report_from_config as _release_bootstrap_report_from_config_impl,
 )
+from orchestrator.api.admin_jira_connect_flow import (
+    build_jira_connect_start as _build_jira_connect_start_impl,
+    handle_jira_connect_callback as _handle_jira_connect_callback_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -100,11 +103,6 @@ from orchestrator.core.project_policy import normalize_project_policy_overrides
 from orchestrator.core.secret_manager import (
     resolve_scoped_secret_ref,
 )
-from orchestrator.core.jira_oauth_state import (
-    create_jira_oauth_state_token,
-    parse_jira_oauth_state_token,
-)
-from orchestrator.core.secrets import encrypt_value
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
@@ -570,28 +568,13 @@ def start_jira_connect(
     session: Session = Depends(get_session),
     _: str = Depends(require_admin),
 ) -> JiraConnectStart:
-    if return_to == "edit" and not tenant_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="tenant_id is required when return_to=edit",
-        )
-    if tenant_id and session.get(Tenant, tenant_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    settings = get_settings()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-    state_token = create_jira_oauth_state_token(
-        exp=expires_at,
-        secret=settings.jira_oauth_state_secret,
+    return _build_jira_connect_start_impl(
         return_to=return_to,
         tenant_id=tenant_id,
+        session=session,
+        settings=get_settings(),
+        jira_oauth_client_fn=_jira_oauth_client,
     )
-    try:
-        client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    authorize_url = client.build_authorize_url(state=state_token)
-    return JiraConnectStart(authorize_url=authorize_url, expires_at=expires_at)
 
 
 @router.get("/jira/connect/callback", include_in_schema=False)
@@ -600,72 +583,13 @@ def jira_connect_callback(
     state_token: str = Query(..., alias="state"),
     session: Session = Depends(get_session),
 ) -> RedirectResponse:
-    settings = get_settings()
-    try:
-        state = parse_jira_oauth_state_token(
-            token=state_token,
-            secret=settings.jira_oauth_state_secret,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    try:
-        client = _jira_oauth_client(session=session, settings=settings, tenant_id=state.tenant_id)
-        token_set = client.exchange_code(code=code)
-        resources = client.list_accessible_resources(access_token=token_set.access_token)
-    except (ValueError, JiraOAuthError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    if not resources:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No Jira resources were granted by OAuth",
-        )
-    resource = resources[0]
-    now = datetime.now(timezone.utc)
-    connection = JiraOAuthConnection(
-        connection_id=str(uuid4()),
-        account_id="unknown",
-        account_email=None,
-        cloud_id=resource.cloud_id,
-        site_url=resource.site_url,
-        scopes=token_set.scopes,
-        access_token_encrypted=encrypt_value(
-            plaintext=token_set.access_token,
-            encryption_key=settings.secrets_encryption_key,
-        ),
-        refresh_token_encrypted=encrypt_value(
-            plaintext=token_set.refresh_token,
-            encryption_key=settings.secrets_encryption_key,
-        ),
-        access_token_expires_at=token_set.expires_at,
-        created_at=now,
-        updated_at=now,
+    redirect_url = _handle_jira_connect_callback_impl(
+        code=code,
+        state_token=state_token,
+        session=session,
+        settings=get_settings(),
+        jira_oauth_client_fn=_jira_oauth_client,
     )
-    session.add(connection)
-    session.flush()
-
-    if state.return_to == "edit" and state.tenant_id:
-        tenant = session.get(Tenant, state.tenant_id)
-        if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-        jira_config = dict(tenant.jira_config)
-        jira_config["connection_id"] = connection.connection_id
-        tenant.jira_config = jira_config
-        tenant.updated_at = now
-
-    session.commit()
-
-    if state.return_to == "edit" and state.tenant_id:
-        redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(state.tenant_id, safe='')}/edit"
-            f"?jira_oauth=success&jira_connection_id={quote(connection.connection_id, safe='')}"
-        )
-    else:
-        redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new"
-            f"?jira_oauth=success&jira_connection_id={quote(connection.connection_id, safe='')}"
-        )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
 
