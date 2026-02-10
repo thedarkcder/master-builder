@@ -61,6 +61,7 @@ from orchestrator.api.admin_github_helpers import (
     list_tenant_github_repositories as _list_tenant_github_repositories_impl,
     start_github_install as _start_github_install_impl,
 )
+from orchestrator.api.admin_runs_query import build_runs_query as _build_runs_query_impl
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -1319,19 +1320,13 @@ def list_runs(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[RunRead]:
-    query = select(Run).order_by(Run.created_at.desc())
-
-    if tenant_id:
-        query = query.where(Run.tenant_id == tenant_id)
-    if project_id:
-        query = query.where(Run.project_id == project_id)
-    if status_filter:
-        query = query.where(Run.status == status_filter)
-    if from_time:
-        query = query.where(Run.created_at >= from_time)
-    if to_time:
-        query = query.where(Run.created_at <= to_time)
-
+    query = _build_runs_query_impl(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        status_filter=status_filter,
+        from_time=from_time,
+        to_time=to_time,
+    )
     runs = session.execute(query).scalars().all()
     return [_run_to_schema(run) for run in runs]
 
