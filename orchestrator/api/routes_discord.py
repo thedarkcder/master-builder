@@ -19,6 +19,8 @@ from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_command_ask import dispatch_ask_command
 from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
+from orchestrator.api.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
+from orchestrator.api.discord_ask_history_service import DiscordAskHistoryService
 from orchestrator.api.discord_response_format import (
     build_issue_url_list,
     build_jira_issue_url,
@@ -65,6 +67,11 @@ ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 MAX_PENDING_ASK_ACTIONS = 50
 MAX_ASK_HISTORY_ENTRIES = 80
 MAX_ASK_HISTORY_CONTEXT = 6
+_ask_history_service = DiscordAskHistoryService(
+    max_pending_actions=MAX_PENDING_ASK_ACTIONS,
+    max_history_entries=MAX_ASK_HISTORY_ENTRIES,
+    max_history_context=MAX_ASK_HISTORY_CONTEXT,
+)
 GAP_HEADING_STOP_WORDS = {
     "objective",
     "scope",
@@ -630,25 +637,7 @@ def _build_seed_issue_description(
 
 
 def _normalize_discord_attachments(raw_attachments: object) -> list[dict[str, str]]:
-    if not isinstance(raw_attachments, list):
-        return []
-    normalized: list[dict[str, str]] = []
-    for item in raw_attachments:
-        if not isinstance(item, dict):
-            continue
-        url = str(item.get("url") or "").strip()
-        if not url:
-            continue
-        filename = str(item.get("filename") or "").strip() or "attachment"
-        content_type = str(item.get("content_type") or "").strip()
-        normalized.append(
-            {
-                "url": url,
-                "filename": filename,
-                "content_type": content_type,
-            }
-        )
-    return normalized[:5]
+    return normalize_discord_attachments(raw_attachments)
 
 
 def _build_discord_bug_description(
@@ -660,27 +649,14 @@ def _build_discord_bug_description(
     related_issue_key: str | None,
     attachments: list[dict[str, str]],
 ) -> str:
-    lines = [
-        "Reported via Discord",
-        f"- Reporter: {reporter_user_id}",
-        f"- Channel: {channel_id or 'unknown'}",
-        f"- Reported at: {datetime.now(timezone.utc).isoformat()}",
-    ]
-    if related_issue_key:
-        lines.append(f"- Related issue: {related_issue_key}")
-    lines.extend(["", "Summary", summary.strip(), "", "Context"])
-    lines.append(details.strip() or "No additional context provided.")
-    if attachments:
-        lines.extend(["", "Attachments"])
-        for attachment in attachments:
-            filename = attachment.get("filename") or "attachment"
-            url = attachment.get("url") or ""
-            content_type = attachment.get("content_type") or ""
-            if content_type:
-                lines.append(f"- [{filename}]({url}) ({content_type})")
-            else:
-                lines.append(f"- [{filename}]({url})")
-    return "\n".join(lines)
+    return build_discord_bug_description(
+        summary=summary,
+        details=details,
+        reporter_user_id=reporter_user_id,
+        channel_id=channel_id,
+        related_issue_key=related_issue_key,
+        attachments=attachments,
+    )
 
 
 def _resolve_discord_channel_name(
@@ -976,34 +952,13 @@ def remove_issue_key_from_tenant_ask_history(
     user_id: str | None = None,
     channel_id: str | None = None,
 ) -> int:
-    target_issue_key = issue_key.strip().upper()
-    if not target_issue_key:
-        return 0
-
-    entries = _tenant_ask_history(tenant)
-    kept_entries: list[dict] = []
-    removed_count = 0
-    for entry in entries:
-        entry_issue_key = str(entry.get("issue_key") or "").strip().upper()
-        matches_scope = True
-        if user_id is not None:
-            matches_scope = matches_scope and entry.get("user_id") == user_id
-        if channel_id is not None:
-            matches_scope = matches_scope and entry.get("channel_id") == channel_id
-        if matches_scope and entry_issue_key == target_issue_key:
-            removed_count += 1
-            continue
-        kept_entries.append(entry)
-
-    if removed_count == 0:
-        return 0
-
-    discord_config = dict(tenant.discord_config or {})
-    discord_config["ask_history"] = kept_entries[-MAX_ASK_HISTORY_ENTRIES:]
-    tenant.discord_config = discord_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    return removed_count
+    return _ask_history_service.remove_issue_key_from_ask_history(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        user_id=user_id,
+        channel_id=channel_id,
+    )
 
 
 def _existing_issue_keys_for_tenant(
@@ -1038,40 +993,13 @@ def _prune_missing_issue_keys_from_ask_history(
     user_id: str,
     channel_id: str,
 ) -> int:
-    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
-    if not connection_id:
-        return 0
-
-    entries = _tenant_ask_history(tenant)
-    scoped_issue_keys = {
-        str(entry.get("issue_key") or "").strip().upper()
-        for entry in entries
-        if entry.get("user_id") == user_id and entry.get("channel_id") == channel_id
-    }
-    scoped_issue_keys.discard("")
-    if not scoped_issue_keys:
-        return 0
-
-    existing_issue_keys = _existing_issue_keys_for_tenant(
+    return _ask_history_service.prune_missing_issue_keys_from_ask_history(
         session=session,
         tenant=tenant,
+        user_id=user_id,
         channel_id=channel_id,
-        issue_keys=scoped_issue_keys,
+        existing_issue_keys_fn=_existing_issue_keys_for_tenant,
     )
-    missing_issue_keys = scoped_issue_keys - existing_issue_keys
-    if not missing_issue_keys:
-        return 0
-
-    removed_count = 0
-    for issue_key in sorted(missing_issue_keys):
-        removed_count += remove_issue_key_from_tenant_ask_history(
-            session=session,
-            tenant=tenant,
-            issue_key=issue_key,
-            user_id=user_id,
-            channel_id=channel_id,
-        )
-    return removed_count
 
 
 def _collect_ask_context_with_history_context(
@@ -1083,42 +1011,16 @@ def _collect_ask_context_with_history_context(
     question: str,
     scoped_issue_key: str | None,
 ) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
-    history_context = _recent_ask_history(
-        tenant=tenant,
-        user_id=user_id,
-        channel_id=channel_id,
-        limit=MAX_ASK_HISTORY_CONTEXT,
-    )
-    if _prune_missing_issue_keys_from_ask_history(
+    return _ask_history_service.collect_ask_context_with_history_context(
         session=session,
         tenant=tenant,
         user_id=user_id,
-        channel_id=channel_id,
-    ):
-        history_context = _recent_ask_history(
-            tenant=tenant,
-            user_id=user_id,
-            channel_id=channel_id,
-            limit=MAX_ASK_HISTORY_CONTEXT,
-        )
-
-    resolved_scoped_issue_key = scoped_issue_key
-    if resolved_scoped_issue_key is None:
-        for entry in reversed(history_context):
-            issue_key = str(entry.get("issue_key") or "").strip().upper()
-            if issue_key:
-                resolved_scoped_issue_key = issue_key
-                break
-
-    normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
-        session=session,
-        tenant=tenant,
         channel_id=channel_id,
         question=question,
-        scoped_issue_key=resolved_scoped_issue_key,
+        scoped_issue_key=scoped_issue_key,
+        collect_ask_context_fn=_collect_ask_context,
+        existing_issue_keys_fn=_existing_issue_keys_for_tenant,
     )
-
-    return normalized_issue_key, requested_status, issues, status_counts, history_context
 
 
 def _store_pending_ask_action(
@@ -1131,30 +1033,17 @@ def _store_pending_ask_action(
     summary: str,
     proposed_command: str,
 ) -> dict:
-    discord_config = dict(tenant.discord_config or {})
-    raw_pending = discord_config.get("pending_ask_actions")
-    pending = [entry for entry in raw_pending if isinstance(entry, dict)] if isinstance(raw_pending, list) else []
     request_id = uuid4().hex
-    created_at = datetime.now(timezone.utc).isoformat()
-    pending.append(
-        {
-            "request_id": request_id,
-            "user_id": user_id.strip(),
-            "channel_id": channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
-            "question": question.strip(),
-            "summary": summary.strip(),
-            "proposed_command": proposed_command.strip(),
-            "created_at": created_at,
-        }
+    return _ask_history_service.store_pending_ask_action(
+        session=session,
+        tenant=tenant,
+        request_id=request_id,
+        user_id=user_id,
+        channel_id=channel_id,
+        question=question,
+        summary=summary,
+        proposed_command=proposed_command,
     )
-    discord_config["pending_ask_actions"] = pending[-MAX_PENDING_ASK_ACTIONS:]
-    tenant.discord_config = discord_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    return {
-        "request_id": request_id,
-        "created_at": created_at,
-    }
 
 
 def consume_pending_ask_action(
@@ -1163,57 +1052,15 @@ def consume_pending_ask_action(
     tenant: Tenant,
     request_id: str,
 ) -> dict | None:
-    normalized_request_id = request_id.strip()
-    if not normalized_request_id:
-        return None
-    discord_config = dict(tenant.discord_config or {})
-    raw_pending = discord_config.get("pending_ask_actions")
-    pending = [entry for entry in raw_pending if isinstance(entry, dict)] if isinstance(raw_pending, list) else []
-    matched: dict | None = None
-    kept: list[dict] = []
-    for entry in pending:
-        entry_id = str(entry.get("request_id") or "").strip()
-        if matched is None and entry_id == normalized_request_id:
-            matched = entry
-            continue
-        kept.append(entry)
-    if matched is None:
-        return None
-    discord_config["pending_ask_actions"] = kept
-    tenant.discord_config = discord_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    return matched
+    return _ask_history_service.consume_pending_ask_action(
+        session=session,
+        tenant=tenant,
+        request_id=request_id,
+    )
 
 
 def _tenant_ask_history(tenant: Tenant) -> list[dict]:
-    discord_config = tenant.discord_config or {}
-    raw_history = discord_config.get("ask_history")
-    if not isinstance(raw_history, list):
-        return []
-    normalized: list[dict] = []
-    for entry in raw_history:
-        if not isinstance(entry, dict):
-            continue
-        user_id = str(entry.get("user_id") or "").strip()
-        channel_id = str(entry.get("channel_id") or "").strip()
-        question = str(entry.get("question") or "").strip()
-        answer = str(entry.get("answer") or "").strip()
-        if not user_id or not channel_id or not question or not answer:
-            continue
-        normalized.append(
-            {
-                "user_id": user_id,
-                "channel_id": channel_id,
-                "question": question,
-                "answer": answer,
-                "issue_key": str(entry.get("issue_key") or "").strip().upper() or None,
-                "status": str(entry.get("status") or "").strip() or None,
-                "created_at": str(entry.get("created_at") or "").strip()
-                or datetime.now(timezone.utc).isoformat(),
-            }
-        )
-    return normalized
+    return _ask_history_service.tenant_ask_history(tenant=tenant)
 
 
 def _recent_ask_history(
@@ -1223,15 +1070,12 @@ def _recent_ask_history(
     channel_id: str,
     limit: int = MAX_ASK_HISTORY_CONTEXT,
 ) -> list[dict]:
-    entries = _tenant_ask_history(tenant)
-    scoped = [
-        entry
-        for entry in entries
-        if entry.get("user_id") == user_id and entry.get("channel_id") == channel_id
-    ]
-    if not scoped:
-        return []
-    return scoped[-max(1, limit) :]
+    return _ask_history_service.recent_ask_history(
+        tenant=tenant,
+        user_id=user_id,
+        channel_id=channel_id,
+        limit=limit,
+    )
 
 
 def _store_ask_history_entry(
@@ -1245,23 +1089,16 @@ def _store_ask_history_entry(
     issue_key: str | None,
     status_name: str | None,
 ) -> None:
-    discord_config = dict(tenant.discord_config or {})
-    entries = _tenant_ask_history(tenant)
-    entries.append(
-        {
-            "user_id": user_id,
-            "channel_id": channel_id,
-            "question": question.strip(),
-            "answer": answer.strip(),
-            "issue_key": issue_key.strip().upper() if isinstance(issue_key, str) and issue_key.strip() else None,
-            "status": status_name.strip() if isinstance(status_name, str) and status_name.strip() else None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+    _ask_history_service.store_ask_history_entry(
+        session=session,
+        tenant=tenant,
+        user_id=user_id,
+        channel_id=channel_id,
+        question=question,
+        answer=answer,
+        issue_key=issue_key,
+        status_name=status_name,
     )
-    discord_config["ask_history"] = entries[-MAX_ASK_HISTORY_ENTRIES:]
-    tenant.discord_config = discord_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
 
 
 def _seed_issues_with_codex(
