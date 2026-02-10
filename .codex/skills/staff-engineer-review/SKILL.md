@@ -1,6 +1,6 @@
 ---
 name: staff-engineer-review
-description: Autonomous Staff Engineering review protocol for design and implementation requests in any language or stack. Enforces problem framing, architectural judgment, contract semantics, risk analysis, simplicity checks, and a final proceed/constraint/decision-gate verdict before coding.
+description: Autonomous Staff Engineering review protocol for design and implementation requests in any language or stack. Enforces problem framing, architectural judgment, contract semantics, domain invariants, authorization boundaries, lifecycle rules, operational integrity, and a final proceed/constraint/decision-gate verdict before coding.
 ---
 
 # Skill: Staff Engineering Review (Autonomous & Mandatory)
@@ -41,27 +41,32 @@ Produce output using these sections in this exact order:
 4. Assumptions (explicit defaults + why safe)
 5. Contract matrix (inputs × expected behavior, incl. before/after)
 6. Call-path impact scan (who calls this, with what shapes)
-7. Proposed design (bullets with component placement)
-8. Patterns used (with alternatives rejected)
-9. Patterns not used
-10. Change surface (files/modules/contracts)
-11. Failure modes (detection + recovery)
-12. Tests (invariants -> specific tests)
-13. Verdict (exactly one)
+7. Domain term contracts (loaded names → canonical meaning → proof)
+8. Authorization & data-access contract
+9. Lifecycle & state matrix
+10. Proposed design (bullets with component placement)
+11. Patterns used (with alternatives rejected)
+12. Patterns not used
+13. Change surface (files/modules/contracts)
+14. Load shape & query plan
+15. Failure modes (detection + recovery)
+16. Operational integrity (rollback, dependencies, concurrency)
+17. Tests (invariants → specific tests)
+18. Verdict (exactly one)
 
-Do not skip sections. Keep each section concise and complete.
+Do not skip sections.
 
 ---
 
-## Phase 1: Problem Framing (Staff Mindset)
+## Phase 1: Problem Framing
 
 ### 1) Define the real problem
-- Determine the problem in one sentence **without implementation terms**.
-- Identify what breaks if implemented incorrectly.
-- If the problem cannot be stated without code concepts, trigger Decision Gate.
+- One sentence, no implementation terms.
+- State what breaks if wrong.
+- If impossible → Decision Gate.
 
 ### 2) Classify the problem type
-Choose exactly one dominant type:
+Choose one:
 - Simple CRUD
 - Business rule enforcement
 - Workflow / long-running process
@@ -70,241 +75,215 @@ Choose exactly one dominant type:
 - Reliability / correctness concern
 - UX / interaction flow
 
-If multiple types apply, select the dominant one and justify internally.
-
-### 3) Determine non-negotiable invariants
-Infer 2–5 invariants (business, technical, or compliance).
-
-Examples:
-- A customer is never charged twice.
-- A lender decision is traceable.
-- State transitions are monotonic.
-
-If no clear invariants exist, explicitly call out overengineering risk.
+### 3) Determine invariants
+Infer 2–5 non-negotiable invariants.
+If none exist → call out overengineering risk.
 
 ---
 
 ## Phase 2: Architectural Judgment
 
-### 4) Decide core logic placement
-Determine where each concern lives:
-- Decision logic → Domain or Application
+### 4) Decide logic placement
+- Decisions → Domain / Application
 - Orchestration → Application
 - Side effects → Infrastructure
-- Translation → Web/API layer
+- Translation → Web/API
 
-If placement cannot be decided confidently, trigger Decision Gate.
-
-### 5) Choose minimal justified patterns
-Select the minimum required from:
-- Transaction script
-- Domain model
-- State machine
-- Event-driven
-- Request/response
-- Batch / async
-- Cache-aside
-- Retry-with-idempotency
-
-For each selected pattern:
-- Why it is necessary for this problem.
-- Why alternatives were rejected.
-
-“Consistency” or “used elsewhere” is not valid justification.
+### 5) Choose minimal patterns
+Select only what’s required. Justify rejections.
 
 ### 6) Explicitly reject at least one pattern
-Name at least one pattern **not used** and why it would be harmful or unnecessary here.
-
-This enforces architectural restraint.
+Name one and explain why it’s not appropriate.
 
 ---
 
-## Phase 2.1: Contract & Call-Path Semantics (Mandatory)
+## Phase 2.1: Contract & Call-Path Semantics
 
-This phase prevents semantic regressions caused by refactors, normalization, sentinels, defaults, or shared helpers.
-It is executed autonomously. Decision Gate is required only when safe behavior cannot be inferred.
+### Contract matrix
+- Enumerate buckets: None/null, sentinel, valid, invalid/unmapped.
+- For each: scope, status, side effects.
+- Mark behavior as unchanged / intentional change / unintentional → Decision Gate.
 
-### 2.1a) Build a Contract Matrix (Equivalence Buckets)
+### Sentinel semantics
+- If representation changes affect truthiness or branching → Decision Gate.
 
-Identify relevant input dimensions (e.g. None vs empty vs sentinel vs valid vs invalid; mapped vs unmapped).
-Create equivalence buckets and expected behavior for each, including:
-- scope/interpretation (tenant-level, unscoped, project-scoped, etc.)
-- status code / error class
-- side effects (none / write / event emitted)
-- observability expectations
+### Call-path scan
+- List all entrypoints using modified helpers.
+- Document input shapes and semantic drift.
 
-**Hard requirements:**
-- Minimum 4 buckets when normalization, scoping, auth, or routing is involved.
-- Must include: `None/null`, sentinel/default, valid value, invalid/unmapped value.
+---
 
-**Behavioral equivalence rule (critical):**
-For each bucket, explicitly state whether behavior is:
-- unchanged from before this change,
-- intentionally changed (and why),
-- unintentionally changed → **Decision Gate required**.
+## Phase 2.2: Domain Term Contracts & Scope Integrity
 
-### 2.1b) Sentinel & Default Semantics Check
+- Identify loaded terms: active, current, enabled, scoped, authorized, archived, etc.
+- Define canonical meaning.
+- Prove enforcement.
+- If name lies → fix, rename, or Decision Gate.
+- Detect scope/visibility widening and require tests.
 
-If any code converts one representation into another (e.g. `None → "dm"`, `"" → "unknown"`, missing → default):
-- Determine whether downstream logic treats the new representation differently (branching, scoping, auth, error mapping).
-- Confirm semantic equivalence is preserved.
+---
 
-**Hard rule:**
-If representation change alters truthiness or branch selection, contract matrix **must** include before/after behavior.
+## Phase 2.3: Authorization & Data Access
 
-### 2.1c) Call-Path Impact Scan (Transitive Semantics)
+For each entrypoint:
+- Acting principal
+- Permissions enforced
+- Tenant/project boundaries
+- Leakage prevention
 
-If modifying a shared helper, normalization function, or scope resolver:
-- Identify all call sites or entrypoints.
-- For each call site, document input shapes it can supply.
-- Determine whether any call site crosses a semantic boundary due to the change.
+If weakened or unclear → Decision Gate.
 
-If a call site’s input shape is unknown:
-- infer from code/tests/search,
-- if still unclear and external behavior could change → **Decision Gate**.
+---
+
+## Phase 2.4: Lifecycle & State Matrix
+
+For entities involved:
+- List lifecycle states.
+- Define included/excluded states.
+- Archived/retired appearing unintentionally = bug.
 
 ---
 
 ## Phase 3: Change Surface & Risk
 
-### 7) Determine change surface
-List:
-- Files/modules touched
-- External contracts affected
-- Migration or rollout implications
+### Change surface
+- Files/modules
+- Contracts
+- Rollout/migration needs
 
-If surface is large, justify why or propose a smaller first step.
-
-If an external contract changes (HTTP/event/schema), also include:
-- before vs after contract
-- compatibility strategy (versioning, defaults, migration)
-- rollout plan if needed
+### Failure modes
+Include:
+- partial failures
+- dependency failures
+- retry/idempotency
+- observability gaps
+- scope/visibility drift
 
 ---
 
-### 8) Analyze production failure scenarios
-For each risk, determine:
-- failure mode
-- detection mechanism
-- recovery or mitigation
+## Phase 3.1: Load Shape & Query Plan  
+**Required if any of the following are true:**
+- search / autocomplete
+- webhooks
+- shared helper used by multiple entrypoints
+- high-QPS or user-facing latency path
 
-Include:
-- partial failures
-- retry/idempotency risks
-- observability gaps
+Define:
+- expected QPS & burstiness
+- query complexity / indexes
+- fan-out risk
+- hard limits
+- caching strategy
 
-“Unlikely” is not a reason to skip analysis.
+---
+
+## Phase 3.2: Operational Integrity  
+**Required if ANY of the following are true:**
+- data writes or side effects
+- external dependencies
+- auth/scope behavior changes
+- shared helper refactor
+- high-QPS endpoints
+
+### Rollback & data repair
+- Rollback strategy (code + config/flags).
+- Non-reversible effects.
+- Detection + repair plan.
+
+### Dependency contract
+For each dependency:
+- timeouts
+- retries
+- idempotency
+- rate limits
+- degradation strategy
+
+### Concurrency model
+Define correctness under:
+- duplicate requests
+- replayed events
+- out-of-order delivery
+- concurrent updates
+
+State invariants + control mechanism.
 
 ---
 
 ## Phase 4: Simplicity & Future Cost
 
-### 9) Project six-month evolution
-Determine:
-- most likely part to change
-- intentionally rigid part
-- key assumptions
+### Six-month view
+- Likely to change
+- Intentionally rigid
+- Key assumptions
 
-If everything is flexible → call out vagueness risk.  
-If everything is rigid → call out brittleness risk.
-
-### 10) Explain in 60 seconds
-Produce a 3–5 sentence explanation:
-- plain language
-- no acronyms unless unavoidable
-- no framework names unless essential
-
-If explanation is unclear, refine design before coding.
+### Explain in 60 seconds
+Plain language. If unclear → refine.
 
 ---
 
 ## Phase 5: Enforcement Checks (Non-negotiable)
 
-Before marking PR-ready, enforce all of the following:
+### Structural
+- Thin controllers
+- One endpoint → one use case
 
-### Structural rules
-- Controllers are thin (translation only).
-- Default: one endpoint → one use case.
-- Exception: if multiple use cases are required, create a dedicated orchestration use case; controller still calls one use case.
+### Dependency
+- Domain imports nothing outward
+- Application imports no Web/Infra concretions
+- Web imports no ORM/repos
+- Infra depends on ports only
 
-### Dependency rules
-- Domain must not import Application, Web/API, or Infrastructure packages.
-- Application must not import Web framework types or Infrastructure concretions.
-- Web/API layer must not import ORM or repository implementations.
-- Infrastructure may depend on Application ports and external libraries only.
+### Semantics
+- Contract matrix present
+- Sentinel semantics preserved
+- Domain terms truthful
+- Lifecycle rules enforced
+- Auth boundaries intact
+- Scope not widened unintentionally
 
-### Contract & semantics rules
-- Contract matrix exists for any PR touching normalization, scoping, auth, routing, or shared helpers.
-- Contract matrix includes explicit before/after behavior per bucket.
-- Sentinel/default conversions preserve semantics or trigger Decision Gate.
-- Call-path impact scan lists all affected entrypoints and confirms no semantic drift.
+### Operational integrity
+- Rollback & repair defined
+- Dependency contracts explicit
+- Concurrency model defined
+- Persistence enforces critical invariants where applicable
 
-### Logic & quality rules
-- No duplicated business logic.
-- No forbidden concurrency patterns.
-- No speculative abstractions.
+### Quality
+- No duplicated business logic
+- No forbidden concurrency
+- No speculative abstractions
 
-### Test proof requirement
-For each invariant, list at least one proving test:
-`Invariant -> Test name -> What it asserts`
+### Tests
+For each invariant:
+`Invariant → Test → Assertion`
 
-If any enforcement check fails, refactor **before** feature work.
+If any fail → refactor before feature work.
 
 ---
 
-## Phase 6: Staff Review Verdict (Operational)
+## Phase 6: Staff Review Verdict
 
-End with exactly one verdict:
+End with exactly one:
 
-- ✅ **Proceed — design is appropriate and scoped**
-- ⚠️ **Proceed with constraints** — list constraints (e.g. feature flag, staged rollout)
-- ❌ **Decision Gate required** — explain why and list questions
+- ✅ Proceed — design is appropriate and scoped
+- ⚠️ Proceed with constraints — list constraints
+- ❌ Decision Gate required — explain why
 
 Hard rule:
-- If verdict is not `✅ Proceed — design is appropriate and scoped`, the only allowed next action is Decision Gate output. No code may be written.
+If verdict ≠ ✅, **no code may be written**.
 
 ---
 
-## Engineering Heuristics (Judgment, Not Hard Rules)
+## Engineering Heuristics (Judgment, Not Rules)
 
-If a heuristic is violated, explain why.
-
-### When to use a domain model
-Use when:
-- invariants must never be broken,
-- the same rule appears in 2+ use cases,
-- incorrect behavior has real business or compliance cost.
-
-Otherwise prefer transaction scripts.
-
-### When to introduce a new abstraction
-Use when:
-- it removes duplication **and** reduces cognitive load,
-- it has one stable responsibility,
-- it can be named clearly in one sentence.
-
-If naming is hard, treat abstraction as premature.
-
-### When not to add a pattern
-Avoid when:
-- it exists only for consistency,
-- the team cannot explain it in two sentences,
-- it optimizes a hypothetical future.
-
-### When to refactor
-Refactor when:
-- change friction is visible now,
-- the same bug appears twice,
-- test setup dominates test intent.
-
-Refactor protocol:
-- add characterization tests first for preserved behavior,
-- refactor in small, verifiable steps,its not ange unless trivial.
-
-### Logic placement reminder
+- Prefer transaction scripts unless invariants demand domain model
+- Naming is a contract
+- Abstractions must reduce cognitive load
+- Avoid optimizing hypothetical futures
+- Refactor only with characterization tests
 - Decisions → Domain
 - Orchestration → Application
 - Translation → Web/API
 - Side effects → Infrastructure
 
-If logic does not clearly fit, trigger Decision Gate.
+If logic does not clearly fit → Decision Gate.
+reiew 
