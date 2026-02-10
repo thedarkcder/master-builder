@@ -42,6 +42,9 @@ from orchestrator.api.admin_discord_allowlist_helpers import (
     notify_discord_allowlist_approved as _notify_discord_allowlist_approved_impl,
     parse_discord_allowlist_requests as _parse_discord_allowlist_requests_impl,
 )
+from orchestrator.api.admin_jira_webhook_delete import (
+    delete_jira_webhooks as _delete_jira_webhooks_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -337,60 +340,14 @@ def _delete_jira_webhooks(
     tenant: Tenant,
     settings,  # noqa: ANN001
 ) -> tuple[bool, str, list[int]]:
-    jira_config = dict(tenant.jira_config)
-    connection_id = jira_config.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
-        jira_config["managed_webhook_ids"] = []
-        jira_config["webhook_last_error"] = None
-        tenant.jira_config = jira_config
-        tenant.updated_at = datetime.now(timezone.utc)
-        session.commit()
-        return True, "No Jira connection linked; cleared local webhook metadata.", []
-
-    webhook_ids = _parse_managed_webhook_ids(jira_config)
-    if not webhook_ids:
-        jira_config["webhook_last_error"] = None
-        tenant.jira_config = jira_config
-        tenant.updated_at = datetime.now(timezone.utc)
-        session.commit()
-        return True, "No managed Jira webhook IDs stored; nothing to delete.", []
-
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        jira_config["managed_webhook_ids"] = []
-        jira_config["webhook_last_error"] = "Configured Jira connection was not found during webhook deletion"
-        tenant.jira_config = jira_config
-        tenant.updated_at = datetime.now(timezone.utc)
-        session.commit()
-        return False, "Configured Jira connection was not found.", webhook_ids
-
-    try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-            tenant_id=tenant.tenant_id,
-        )
-        client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
-        client.delete_webhooks(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
-            webhook_ids=webhook_ids,
-        )
-    except (ValueError, JiraOAuthError) as exc:
-        error_message = f"Failed to delete Jira webhooks: {exc}"
-        jira_config["webhook_last_error"] = error_message
-        tenant.jira_config = jira_config
-        tenant.updated_at = datetime.now(timezone.utc)
-        session.commit()
-        return False, error_message, webhook_ids
-
-    jira_config["managed_webhook_ids"] = []
-    jira_config["webhook_last_error"] = None
-    tenant.jira_config = jira_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    return True, f"Deleted {len(webhook_ids)} Jira webhook(s).", webhook_ids
+    return _delete_jira_webhooks_impl(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
+        refresh_jira_connection_tokens_fn=_refresh_jira_connection_tokens,
+        jira_oauth_client_fn=_jira_oauth_client,
+    )
 
 
 def _admin_project_service() -> AdminProjectService:
