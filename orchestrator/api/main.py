@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,7 +29,20 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
     cors_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
 
-    app = FastAPI(title="master-builder orchestrator")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if settings.auto_migrate_on_startup:
+            run_migrations()
+        register_discord_command_executor()
+        # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
+        sync_discord_guild_commands(settings=settings)
+        gateway_listener.start()
+        try:
+            yield
+        finally:
+            gateway_listener.stop()
+
+    app = FastAPI(title="master-builder orchestrator", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -46,19 +61,6 @@ def create_app() -> FastAPI:
     app.include_router(webhook_github_router)
     register_discord_command_executor()
     gateway_listener = DiscordGatewayListener(settings=settings)
-
-    @app.on_event("startup")
-    def _startup_discord_command_sync() -> None:
-        if settings.auto_migrate_on_startup:
-            run_migrations()
-        register_discord_command_executor()
-        # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
-        sync_discord_guild_commands(settings=settings)
-        gateway_listener.start()
-
-    @app.on_event("shutdown")
-    def _shutdown_discord_gateway_listener() -> None:
-        gateway_listener.stop()
 
     @app.get("/health")
     def health() -> dict[str, str]:
