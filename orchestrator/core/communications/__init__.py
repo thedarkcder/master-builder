@@ -7,6 +7,16 @@ from orchestrator.core.communications.contracts import (
     InboundMessage,
     ProjectScope,
 )
+from orchestrator.core.communications.command_pipeline import (
+    CommandExecutionContext,
+    CommandHandler,
+    dispatch_registered_command,
+)
+from orchestrator.core.communications.integration_contracts import (
+    CapabilityProvider,
+    InboundAdapter,
+    OutboundAdapter,
+)
 from orchestrator.core.communications.scope_repository import (
     ChannelScopeRepository,
     ResolvedChannelScope,
@@ -14,12 +24,18 @@ from orchestrator.core.communications.scope_repository import (
 
 __all__ = [
     "ActorIdentity",
+    "CapabilityProvider",
     "ChannelScopeRepository",
+    "CommandExecutionContext",
+    "CommandHandler",
     "CommandRequest",
     "CommunicationAction",
     "CommunicationEvent",
     "CommunicationLink",
+    "InboundAdapter",
     "InboundMessage",
+    "OutboundAdapter",
     "ProjectScope",
     "ResolvedChannelScope",
+    "dispatch_registered_command",
 ]
