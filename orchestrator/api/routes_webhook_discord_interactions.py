@@ -8,7 +8,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.routes_webhook import (
+from orchestrator.api.webhook_payload_utils import read_json_payload as _read_json_payload
+from orchestrator.api.discord_interactions_service import (
     ASK_REPLY_OPEN_CUSTOM_ID,
     _discord_autocomplete_response,
     _discord_interaction_deferred_response,
@@ -21,7 +22,6 @@ from orchestrator.api.routes_webhook import (
     _parse_ask_confirmation_custom_id,
     _parse_ask_reply_modal_custom_id,
     _parse_discord_interaction_command,
-    _read_json_payload,
     _resolve_discord_interactions_public_key,
     _run_discord_ask_confirmation_followup,
     _run_discord_command_followup,
