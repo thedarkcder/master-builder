@@ -37,7 +37,10 @@ from orchestrator.api.discord_ask_context import (
 from orchestrator.api.discord_state_repository import resolve_project_for_discord_channel
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.jira_oauth_connection_service import tenant_jira_oauth_context
-from orchestrator.api.command_entrypoint import execute_tenant_jira_comment_command
+from orchestrator.api.command_entrypoint import (
+    execute_tenant_discord_ingress_command,
+    execute_tenant_jira_comment_command,
+)
 from orchestrator.api.discord_reply_transport import DiscordReplyTransport
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhook_followup_service import DiscordWebhookFollowupService
@@ -62,9 +65,11 @@ from orchestrator.tools.jira_oauth import JiraOAuthError
 
 router = APIRouter(tags=["jira-webhook"])
 
-# Backward-compatible alias for existing tests/patch paths while command
-# execution import paths are migrated to the shared entrypoint module.
-execute_discord_command = execute_tenant_jira_comment_command
+# Canonical command-ingress entrypoints by source.
+execute_jira_comment_command = execute_tenant_jira_comment_command
+execute_discord_ingress_command = execute_tenant_discord_ingress_command
+# Backward-compatible alias for legacy test patch paths.
+execute_discord_command = execute_jira_comment_command
 
 logger = logging.getLogger(__name__)
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
@@ -1238,7 +1243,7 @@ async def _run_discord_command_followup(
     service = DiscordWebhookFollowupService(
         session_factory=create_session_factory(),
         settings_factory=get_settings,
-        execute_command_ingress=execute_discord_command,
+        execute_command_ingress=execute_discord_ingress_command,
         command_request_factory=DiscordCommandRequest,
         build_command_followup_message=_build_command_followup_message,
         ask_confirmation_components=_ask_confirmation_components,
@@ -1277,7 +1282,7 @@ async def _run_discord_ask_confirmation_followup(
     service = DiscordWebhookFollowupService(
         session_factory=create_session_factory(),
         settings_factory=get_settings,
-        execute_command_ingress=execute_discord_command,
+        execute_command_ingress=execute_discord_ingress_command,
         command_request_factory=DiscordCommandRequest,
         build_command_followup_message=_build_command_followup_message,
         ask_confirmation_components=_ask_confirmation_components,
@@ -1570,7 +1575,7 @@ def _stage_handle_comment_ask_command(
 
     author_account_id = _extract_jira_comment_author_account_id(context.payload) or "jira-user"
     try:
-        ask_response = execute_discord_command(
+        ask_response = execute_jira_comment_command(
             session=session,
             tenant_id=context.tenant_id,
             payload=DiscordCommandRequest(

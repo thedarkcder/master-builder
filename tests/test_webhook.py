@@ -489,7 +489,7 @@ class JiraWebhookTests(unittest.TestCase):
         }
         with (
             patch(
-                "orchestrator.api.routes_webhook.execute_discord_command",
+                "orchestrator.api.routes_webhook.execute_jira_comment_command",
                 return_value=DiscordCommandResponse(ok=True, command="ask", message="I can fix this.", data=None),
             ) as command_mock,
             patch("orchestrator.api.routes_webhook._post_jira_comment", return_value=(True, None)) as post_mock,
@@ -1072,7 +1072,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_reply_followup_posts_to_thread_without_webhook_followup(self) -> None:
         with (
             patch(
-                "orchestrator.api.routes_webhook.execute_discord_command",
+                "orchestrator.api.routes_webhook.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(
                     ok=True,
                     command="ask",
@@ -1101,7 +1101,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_interaction_followup_send_failure_is_swallowed(self) -> None:
         with (
             patch(
-                "orchestrator.api.routes_webhook.execute_discord_command",
+                "orchestrator.api.routes_webhook.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(
                     ok=True,
                     command="help",
@@ -1128,7 +1128,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_followup_executes_with_discord_ingress_contract(self) -> None:
         with (
             patch(
-                "orchestrator.api.routes_webhook.execute_discord_command",
+                "orchestrator.api.routes_webhook.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(ok=True, command="help", message="ok", data=None),
             ) as command_mock,
             patch("orchestrator.api.routes_webhook._send_discord_interaction_followup"),
@@ -1150,7 +1150,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_ask_followup_creates_new_thread_for_initial_response(self) -> None:
         with (
             patch(
-                "orchestrator.api.routes_webhook.execute_discord_command",
+                "orchestrator.api.routes_webhook.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(
                     ok=True,
                     command="ask",
@@ -1238,7 +1238,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_issues_followup_creates_seed_thread_for_clarifications(self) -> None:
         with (
             patch(
-                "orchestrator.api.routes_webhook.execute_discord_command",
+                "orchestrator.api.routes_webhook.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(
                     ok=True,
                     command="issues",
