@@ -34,6 +34,7 @@ from orchestrator.api.discord_response_format import (
     format_issue_markdown_link,
     format_issue_markdown_list,
 )
+from orchestrator.api.discord_followup_format import resolve_tenant_jira_browse_base_url
 from orchestrator.api.command_executor_registry import register_tenant_command_executor
 from orchestrator.api.discord_state import (
     assert_channel_scope as _assert_channel_scope,
@@ -193,17 +194,6 @@ def _tenant_repo_url(tenant: Tenant) -> str | None:
     return repo_url or None
 
 
-def _tenant_jira_browse_base_url(*, session: Session, tenant: Tenant) -> str | None:
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        return None
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        return None
-    normalized_site_url = str(connection.site_url or "").strip().rstrip("/")
-    return normalized_site_url or None
-
-
 def _extract_acceptance_criteria_from_description(description: str) -> list[str]:
     lines = [line.strip() for line in description.splitlines() if line.strip()]
     if not lines:
@@ -268,7 +258,7 @@ def _run_gap_analysis(
         .limit(1)
     ).scalar_one_or_none()
 
-    jira_base_url = _tenant_jira_browse_base_url(session=session, tenant=tenant)
+    jira_base_url = resolve_tenant_jira_browse_base_url(session=session, tenant=tenant)
     jira_url = f"{jira_base_url}/browse/{normalized_issue_key}" if jira_base_url else None
     repo_url = _tenant_repo_url(tenant)
     repo_issue_search_url = f"{repo_url}/search?q={quote_plus(normalized_issue_key)}" if repo_url else None
@@ -1369,7 +1359,7 @@ def execute_discord_command(
                 payload=ctx.payload,
                 command_name=ctx.command_name,
                 arguments=list(ctx.arguments),
-                jira_browse_base_url=_tenant_jira_browse_base_url(session=ctx.session, tenant=ctx.tenant),
+                jira_browse_base_url=resolve_tenant_jira_browse_base_url(session=ctx.session, tenant=ctx.tenant),
                 scope=ctx.scope,
             )
 
