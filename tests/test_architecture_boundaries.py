@@ -16,7 +16,6 @@ LEGACY_ROUTE_IMPORT_ALLOWLIST = {
     },
     "orchestrator/api/routes_webhook.py": {
         "orchestrator.api.routes_admin",
-        "orchestrator.api.routes_discord",
     },
     "orchestrator/api/routes_webhook_discord.py": {
         "orchestrator.api.routes_webhook",
