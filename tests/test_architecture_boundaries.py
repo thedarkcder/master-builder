@@ -20,6 +20,22 @@ LEGACY_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.routes_webhook",
     },
 }
+NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
+    "orchestrator/api/command_entrypoint.py": {
+        "orchestrator.api.routes_discord",
+    },
+    "orchestrator/api/main.py": {
+        "orchestrator.api.routes_admin",
+        "orchestrator.api.routes_admin_auth",
+        "orchestrator.api.routes_admin_secrets",
+        "orchestrator.api.routes_discord",
+        "orchestrator.api.routes_runs",
+        "orchestrator.api.routes_webhook",
+        "orchestrator.api.routes_webhook_discord",
+        "orchestrator.api.routes_webhook_discord_interactions",
+        "orchestrator.api.routes_webhook_github",
+    },
+}
 
 
 def _imported_modules(module_path: Path) -> set[str]:
@@ -125,6 +141,39 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             observed_allowed,
             expected_allowed,
             msg="Route import allowlist drifted; update list only with explicit architectural decision.",
+        )
+
+    def test_non_route_api_modules_only_use_explicit_route_import_allowlist(self) -> None:
+        api_modules = sorted(ORCHESTRATOR_ROOT.rglob("api/*.py"))
+        self.assertTrue(api_modules)
+        violations: list[str] = []
+        observed_allowed: set[tuple[str, str]] = set()
+        for module_path in api_modules:
+            relative = module_path.relative_to(ROOT).as_posix()
+            if relative.startswith("orchestrator/api/routes_"):
+                continue
+            allowed = NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
+            for module_name in _imported_modules(module_path):
+                if not module_name.startswith("orchestrator.api.routes_"):
+                    continue
+                if module_name in allowed:
+                    observed_allowed.add((relative, module_name))
+                    continue
+                violations.append(f"{relative}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Non-route API module imports routes outside allowlist: {violations}",
+        )
+        expected_allowed = {
+            (path, module_name)
+            for path, module_names in NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST.items()
+            for module_name in module_names
+        }
+        self.assertEqual(
+            observed_allowed,
+            expected_allowed,
+            msg="Non-route API allowlist drifted; update list only with explicit architectural decision.",
         )
 
 
