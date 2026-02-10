@@ -19,14 +19,10 @@ from orchestrator.core.discord_notifications import send_tenant_discord_message
 from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.logging import configure_logging
-from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.signal_templates import (
-    format_stage_discord_update,
-    format_stage_jira_update,
-)
+from orchestrator.core.worker_decision_gate import apply_decision_gate
 from orchestrator.core.worker_queue_selector import coerce_positive_int, select_next_queued_run
 from orchestrator.core.worker_run_lifecycle import (
     bind_run_project,
@@ -37,6 +33,12 @@ from orchestrator.core.worker_run_lifecycle import (
     finalize_workflow_result,
     resolve_project_for_run,
     start_run,
+)
+from orchestrator.core.worker_stage_events import (
+    lock_acquired_update,
+    plan_posted_update,
+    pr_opened_update,
+    run_failed_update,
 )
 from orchestrator.core.worker_stage_notifier import RunStageNotifier
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
@@ -311,89 +313,31 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     tenant = selection.tenant
     effective_policy = selection.effective_policy or tenant.policy_config
 
-    try:
-        decision_gate = evaluate_decision_gate(
-            issue_summary=run.issue_summary,
-            issue_description=run.issue_description,
-        )
-    except (FileNotFoundError, ValueError) as exc:
-        run.status = RUN_STATUS_FAILED
-        run.last_error = f"Decision Gate configuration error: {exc}"
-        run.finished_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(run)
-        return run
-    if decision_gate.triggered:
-        stage_update = {
-            "stage": "decision_gate_required",
-            "tenant_id": run.tenant_id,
-            "issue_key": run.issue_key,
-            "run_id": run.run_id,
-            "jira_message": format_stage_jira_update(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                stage="decision_gate_required",
-                jira_url=f"https://example.atlassian.net/browse/{run.issue_key}",
-                error=decision_gate.reason,
-                next_steps=decision_gate.questions,
-            ),
-            "discord_message": format_stage_discord_update(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                stage="decision_gate_required",
-                jira_url=f"https://example.atlassian.net/browse/{run.issue_key}",
-                error=decision_gate.reason,
-                next_steps=decision_gate.questions,
-            ),
-        }
-        send_result = send_tenant_discord_message(
-            session=session,
-            tenant=tenant,
-            project=resolve_project_for_run(session, run=run),
-            message=stage_update["discord_message"],
-            settings=settings,
-            event="decision_gate_required",
-            open_thread=True,
-            thread_name=f"{run.issue_key}-decision-gate",
-            thread_intro=(
-                "Reply here with clarification questions, then update the Jira issue with GTD details "
-                "and run !retry <ISSUE_KEY>."
-            ),
-            thread_intro_components=_ask_reply_components(),
-        )
-        _send_stage_update_to_jira(
-            session=session,
-            tenant=tenant,
-            issue_key=run.issue_key,
-            stage=stage_update["stage"],
-            message=stage_update["jira_message"],
-            settings=settings,
-        )
-        if not send_result.sent:
-            logger.info(
-                "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
-                run.tenant_id,
-                run.run_id,
-                stage_update["stage"],
-                send_result.reason,
-            )
-        run.plan = {
-            "succeeded": False,
-            "attempts": 0,
-            "summary": [],
-            "test_guidance": [],
-            "pr_url": None,
-            "stage_updates": [stage_update],
-            "decision_gate": decision_gate.to_payload(),
-        }
-        return mark_run_terminal(
-            session,
-            run_id=run.run_id,
-            terminal_status=RUN_STATUS_BLOCKED,
-            last_error=f"Decision Gate required: {decision_gate.reason}",
-        )
+    decision_gate_run, decision_gate_meta = apply_decision_gate(
+        session=session,
+        run=run,
+        tenant=tenant,
+        settings=settings,
+        evaluate_decision_gate_fn=evaluate_decision_gate,
+        send_discord_message_fn=send_tenant_discord_message,
+        send_jira_message_fn=_send_stage_update_to_jira,
+        ask_reply_components_fn=_ask_reply_components,
+        blocked_status=RUN_STATUS_BLOCKED,
+        failed_status=RUN_STATUS_FAILED,
+    )
+    if decision_gate_run is not None:
+        if decision_gate_meta and isinstance(decision_gate_meta.get("send_result"), object):
+            send_result = decision_gate_meta["send_result"]
+            stage_update = decision_gate_meta["stage_update"]
+            if not send_result.sent:
+                logger.info(
+                    "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
+                    run.tenant_id,
+                    run.run_id,
+                    stage_update["stage"],
+                    send_result.reason,
+                )
+        return decision_gate_run
 
     project: Project | None = resolve_project_for_run(session, run=run)
     if project is None:
@@ -434,26 +378,12 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         else None
     )
     notifier.append(
-        {
-            "stage": "lock_acquired",
-            "tenant_id": run.tenant_id,
-            "issue_key": run.issue_key,
-            "run_id": run.run_id,
-            "jira_message": format_stage_jira_update(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                stage="lock_acquired",
-                jira_url=jira_issue_url,
-            ),
-            "discord_message": format_stage_discord_update(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                stage="lock_acquired",
-                jira_url=jira_issue_url,
-            ),
-        }
+        lock_acquired_update(
+            tenant_id=run.tenant_id,
+            issue_key=run.issue_key,
+            run_id=run.run_id,
+            jira_url=jira_issue_url,
+        )
     )
 
     workflow_result = runner.run(workflow_request)
@@ -462,51 +392,22 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         return finalize_cancelled_run(session, run=run, stage_updates=notifier.stage_updates)
     if workflow_result.plan is not None:
         notifier.append(
-            {
-                "stage": "plan_posted",
-                "tenant_id": run.tenant_id,
-                "issue_key": run.issue_key,
-                "run_id": run.run_id,
-                "jira_message": format_stage_jira_update(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    stage="plan_posted",
-                    jira_url=jira_issue_url,
-                ),
-                "discord_message": format_stage_discord_update(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    stage="plan_posted",
-                    jira_url=jira_issue_url,
-                ),
-            }
+            plan_posted_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                jira_url=jira_issue_url,
+            )
         )
     if workflow_result.pr_url:
         notifier.append(
-            {
-                "stage": "pr_opened",
-                "tenant_id": run.tenant_id,
-                "issue_key": run.issue_key,
-                "run_id": run.run_id,
-                "jira_message": format_stage_jira_update(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    stage="pr_opened",
-                    jira_url=jira_issue_url,
-                    pr_url=workflow_result.pr_url,
-                ),
-                "discord_message": format_stage_discord_update(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    stage="pr_opened",
-                    jira_url=jira_issue_url,
-                    pr_url=workflow_result.pr_url,
-                ),
-            }
+            pr_opened_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                jira_url=jira_issue_url,
+                pr_url=workflow_result.pr_url,
+            )
         )
     if not workflow_result.succeeded:
         error_text = (
@@ -515,36 +416,13 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             else "Workflow failed without diagnostics"
         )
         notifier.append(
-            {
-                "stage": "run_failed",
-                "tenant_id": run.tenant_id,
-                "issue_key": run.issue_key,
-                "run_id": run.run_id,
-                "jira_message": format_stage_jira_update(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    stage="run_failed",
-                    jira_url=jira_issue_url,
-                    error=error_text,
-                    next_steps=(
-                        "Review diagnostics and follow-up issue payload.",
-                        "Apply fix and move issue back to To Do when ready.",
-                    ),
-                ),
-                "discord_message": format_stage_discord_update(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    stage="run_failed",
-                    jira_url=jira_issue_url,
-                    error=error_text,
-                    next_steps=(
-                        "Review diagnostics and follow-up issue payload.",
-                        "Apply fix and move issue back to To Do when ready.",
-                    ),
-                ),
-            }
+            run_failed_update(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                jira_url=jira_issue_url,
+                error=error_text,
+            )
         )
 
     return finalize_workflow_result(
