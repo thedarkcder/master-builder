@@ -235,6 +235,17 @@ def _send_stage_update_to_jira(
         )
 
 
+def _tenant_jira_browse_base_url(*, session: Session, tenant: Tenant) -> str | None:
+    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    if not connection_id:
+        return None
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        return None
+    site_url = str(connection.site_url or "").strip().rstrip("/")
+    return site_url or None
+
+
 def _workflow_request_for_run(
     tenant: Tenant,
     run: Run,
@@ -372,11 +383,8 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     except (PermissionError, ValueError) as exc:
         return fail_guardrail_violation(session, run=run, error=str(exc))
 
-    jira_issue_url = (
-        f"https://example.atlassian.net/browse/{run.issue_key}"
-        if run.issue_key
-        else None
-    )
+    jira_browse_base_url = _tenant_jira_browse_base_url(session=session, tenant=tenant)
+    jira_issue_url = f"{jira_browse_base_url}/browse/{run.issue_key}" if jira_browse_base_url and run.issue_key else None
     notifier.append(
         lock_acquired_update(
             tenant_id=run.tenant_id,

@@ -20,6 +20,7 @@ from orchestrator.api.discord_command_issues import dispatch_issues_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_command_ask import dispatch_ask_command
+from orchestrator.api.discord_ask_context import project_filter_jql as _project_filter_jql
 from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
 from orchestrator.api.discord_ask_history_service import DiscordAskHistoryService
@@ -408,31 +409,6 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Issue is in '{issue_status}', expected one of: {display_statuses}",
         )
-
-
-def _project_filter_jql(*, session: Session, tenant: Tenant, channel_id: str | None = None) -> str:
-    normalized_channel_id = _normalize_scope_channel_id(channel_id)
-    if normalized_channel_id:
-        scope = _channel_scope_repository.resolve_project_scope(
-            session=session,
-            tenant=tenant,
-            channel_id=normalized_channel_id,
-        )
-        if scope is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Discord channel is not mapped to an active project",
-            )
-        return f'project = "{scope.jira_project_key}"'
-    keys = [project.jira_project_key for project in _tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
-    if not keys:
-        keys = [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
-    if not keys:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
-    if len(keys) == 1:
-        return f'project = "{keys[0]}"'
-    joined = ", ".join(f'"{key}"' for key in keys)
-    return f"project in ({joined})"
 
 
 def _tenant_project_keys(*, session: Session, tenant: Tenant) -> list[str]:
