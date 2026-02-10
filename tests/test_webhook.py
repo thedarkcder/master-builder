@@ -502,7 +502,7 @@ class JiraWebhookTests(unittest.TestCase):
         command_mock.assert_called_once()
         dispatched_payload = command_mock.call_args.kwargs["payload"]
         self.assertIsNone(dispatched_payload.channel_id)
-        self.assertEqual(command_mock.call_args.kwargs["ingress_source"], "jira_comment")
+        self.assertNotIn("ingress_source", command_mock.call_args.kwargs)
         post_mock.assert_called_once()
 
         with self.session_factory() as session:
@@ -772,7 +772,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["accepted"])
         command_mock.assert_called_once()
-        self.assertEqual(command_mock.call_args.kwargs["ingress_source"], "discord")
+        self.assertNotIn("ingress_source", command_mock.call_args.kwargs)
 
     def test_discord_interaction_commands_are_deferred_and_processed_async(self) -> None:
         payload = {
