@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord_ask_history_service import DiscordAskHistoryService
 from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
-from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
+from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth_client
+from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
 from orchestrator.core.config import get_settings
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
 from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError

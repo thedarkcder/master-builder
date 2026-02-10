@@ -11,12 +11,8 @@ ORCHESTRATOR_ROOT = ROOT / "orchestrator"
 # Temporary explicit allowlist while route-level logic is extracted into
 # integration-agnostic services. The test fails on any new coupling.
 LEGACY_ROUTE_IMPORT_ALLOWLIST = {
-    "orchestrator/api/routes_discord.py": {
-        "orchestrator.api.routes_admin",
-    },
-    "orchestrator/api/routes_webhook.py": {
-        "orchestrator.api.routes_admin",
-    },
+    "orchestrator/api/routes_discord.py": set(),
+    "orchestrator/api/routes_webhook.py": set(),
     "orchestrator/api/routes_webhook_discord_interactions.py": {
         "orchestrator.api.routes_webhook",
     },
