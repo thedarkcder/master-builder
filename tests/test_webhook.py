@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
-from orchestrator.api.discord_interactions_service import (
+from orchestrator.api.discord.discord_interactions_service import (
     _build_command_followup_message,
     _discord_issue_autocomplete_choices,
     _find_tenant_for_discord_channel,
