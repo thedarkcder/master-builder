@@ -28,6 +28,7 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
+from orchestrator.tools.jira_oauth import JiraIssuePreview
 
 
 class JiraWebhookTests(unittest.TestCase):
@@ -507,6 +508,46 @@ class JiraWebhookTests(unittest.TestCase):
             ).scalar_one_or_none()
             self.assertIsNone(run)
 
+    def test_webhook_comment_command_ask_uses_jira_ingress_contract_with_tenant_discord_scope(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+            tenant.discord_config = {"channel_id": "discord-channel-1", "notify_events": []}
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-905", status_name="To Do")
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-2"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "/mb ask What changed?"}],
+                    }
+                ],
+            },
+        }
+        with (
+            patch(
+                "orchestrator.api.routes_discord._search_jira_issues_for_tenant",
+                return_value=[JiraIssuePreview(key="TP-905", summary="Investigate", status="To Do")],
+            ),
+            patch("orchestrator.api.routes_discord.build_codex_runtime"),
+            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Jira ask response"),
+            patch("orchestrator.api.routes_webhook._post_jira_comment", return_value=(True, None)) as post_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["reason"], "comment_command_ask")
+        self.assertTrue(body["comment_posted"])
+        post_mock.assert_called_once()
+        posted_comment = post_mock.call_args.kwargs["comment"]
+        self.assertEqual(posted_comment, "Jira ask response")
+
     def test_webhook_respects_tenant_concurrency_limit(self) -> None:
         self._create_tenant("tenant-single", max_concurrent_runs=1)
         first_payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
@@ -714,6 +755,21 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertFalse(response.json()["accepted"])
         self.assertEqual(response.json()["reason"], "missing_pr_context")
+
+    def test_discord_webhook_routes_with_discord_ingress_contract(self) -> None:
+        with patch(
+            "orchestrator.api.routes_webhook_discord.execute_discord_command",
+            return_value=DiscordCommandResponse(ok=True, command="help", message="ok", data=None),
+        ) as command_mock:
+            response = self.client.post(
+                "/discord/webhook/tenant-webhook",
+                json={"user_id": "discord-user-1", "command": "!help", "channel_id": "discord-channel-1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["accepted"])
+        command_mock.assert_called_once()
+        self.assertEqual(command_mock.call_args.kwargs["ingress_source"], "discord")
 
     def test_discord_interaction_commands_are_deferred_and_processed_async(self) -> None:
         payload = {
@@ -1062,6 +1118,28 @@ class JiraWebhookTests(unittest.TestCase):
                     interaction_token="interaction-token-1",
                 )
             )
+
+    def test_discord_followup_executes_with_discord_ingress_contract(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.routes_webhook.execute_discord_command",
+                return_value=DiscordCommandResponse(ok=True, command="help", message="ok", data=None),
+            ) as command_mock,
+            patch("orchestrator.api.routes_webhook._send_discord_interaction_followup"),
+        ):
+            asyncio.run(
+                _run_discord_command_followup(
+                    tenant_id="tenant-webhook",
+                    user_id="discord-user-1",
+                    channel_id="discord-channel-1",
+                    command_text="!help",
+                    application_id="discord-app-1",
+                    interaction_token="interaction-token-1",
+                )
+            )
+
+        self.assertEqual(command_mock.call_count, 1)
+        self.assertEqual(command_mock.call_args.kwargs["ingress_source"], "discord")
 
     def test_discord_ask_followup_creates_new_thread_for_initial_response(self) -> None:
         with (

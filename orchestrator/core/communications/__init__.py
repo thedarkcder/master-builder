@@ -8,6 +8,7 @@ from orchestrator.core.communications.contracts import (
     ProjectScope,
 )
 from orchestrator.core.communications.command_pipeline import (
+    CommandScope,
     CommandExecutionContext,
     CommandHandler,
     dispatch_registered_command,
@@ -26,6 +27,7 @@ __all__ = [
     "ActorIdentity",
     "CapabilityProvider",
     "ChannelScopeRepository",
+    "CommandScope",
     "CommandExecutionContext",
     "CommandHandler",
     "CommandRequest",

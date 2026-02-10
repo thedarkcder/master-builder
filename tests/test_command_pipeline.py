@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from orchestrator.core.communications.command_pipeline import (
+    CommandScope,
     CommandExecutionContext,
     dispatch_registered_command,
 )
@@ -43,6 +44,22 @@ class CommandPipelineTests(unittest.TestCase):
                 context=self._context("unknown"),
                 registry={"help": (lambda _ctx: {"ok": True},)},
             )
+
+    def test_context_uses_explicit_scope_contract(self) -> None:
+        context = CommandExecutionContext(
+            command_name="status",
+            arguments=(),
+            tenant_id="tenant-a",
+            tenant=object(),
+            session=object(),
+            payload=object(),
+            normalized_user_id="u-1",
+            normalized_channel_id="c-1",
+            flags={},
+            scope=CommandScope(project_id="project-a", project_keys=("TP",), channel_id="c-1"),
+        )
+        self.assertEqual(context.scope.project_id, "project-a")
+        self.assertEqual(context.scope.project_keys, ("TP",))
 
 
 if __name__ == "__main__":
