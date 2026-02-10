@@ -36,6 +36,15 @@ from orchestrator.api.discord_gap_analysis import (
     run_gap_analysis as _run_gap_analysis_impl,
     tenant_repo_url as _tenant_repo_url_impl,
 )
+from orchestrator.api.discord_seed_normalization import (
+    collect_seed_issue_questions as _collect_seed_issue_questions_impl,
+    normalize_seed_issue_key as _normalize_seed_issue_key_impl,
+    normalize_seed_issue_labels as _normalize_seed_issue_labels_impl,
+    normalize_seed_issue_scope as _normalize_seed_issue_scope_impl,
+    normalize_seed_issue_tags as _normalize_seed_issue_tags_impl,
+    parse_seed_issue_type as _parse_seed_issue_type_impl,
+    seed_text_is_missing as _seed_text_is_missing_impl,
+)
 from orchestrator.api.discord_ask_memory import (
     MAX_ASK_HISTORY_CONTEXT as ASK_HISTORY_CONTEXT_LIMIT,
     collect_ask_context_with_history_context as _collect_ask_context_with_history_context_impl,
@@ -212,74 +221,37 @@ def _resolve_project_for_issue(
 
 
 def _normalize_seed_issue_labels(raw_labels: object) -> list[str]:
-    if not isinstance(raw_labels, list):
-        return ["discord-seeded"]
-    normalized: list[str] = ["discord-seeded"]
-    for label in raw_labels:
-        text = str(label).strip().lower()
-        if text and text not in normalized:
-            normalized.append(text)
-    return normalized
+    return _normalize_seed_issue_labels_impl(raw_labels)
 
 
 def _normalize_seed_issue_tags(raw_tags: object) -> list[str]:
-    if not isinstance(raw_tags, list):
-        return []
-    normalized: list[str] = []
-    for tag in raw_tags:
-        text = str(tag).strip().lower()
-        if text and text not in normalized:
-            normalized.append(text)
-    return normalized
+    return _normalize_seed_issue_tags_impl(raw_tags)
 
 
 def _parse_seed_issue_type(raw_issue_type: object) -> str:
-    normalized = str(raw_issue_type or "").strip().lower()
-    if normalized == "bug":
-        return "Bug"
-    if normalized == "story":
-        return "Story"
-    return "Task"
+    return _parse_seed_issue_type_impl(raw_issue_type)
 
 
 def _normalize_seed_issue_scope(raw_scope: object) -> list[str]:
-    if not isinstance(raw_scope, list):
-        return []
-    return [str(item).strip() for item in raw_scope if str(item).strip()]
+    return _normalize_seed_issue_scope_impl(raw_scope)
 
 
 def _normalize_seed_issue_key(raw_issue_key: object) -> str | None:
-    normalized = str(raw_issue_key or "").strip().upper()
-    if ISSUE_KEY_PATTERN.match(normalized):
-        return normalized
-    return None
+    return _normalize_seed_issue_key_impl(raw_issue_key, issue_key_pattern=ISSUE_KEY_PATTERN)
 
 
 def _seed_text_is_missing(value: str) -> bool:
-    normalized = value.strip().lower()
-    if not normalized:
-        return True
-    if normalized in {"tbd", "unknown", "n/a", "na", "none", "todo", "decide later"}:
-        return True
-    if "to be determined" in normalized:
-        return True
-    if "???" in normalized:
-        return True
-    return False
+    return _seed_text_is_missing_impl(value)
 
 
 def _collect_seed_issue_questions(*, issue_summary: str, objective: str, scope_in: list[str], scope_out: list[str], acceptance: list[str]) -> list[str]:
-    questions: list[str] = []
-    title = issue_summary.strip() or "this issue"
-    if _seed_text_is_missing(objective):
-        questions.append(f"For '{title}', what is the objective in one sentence?")
-    if not scope_in:
-        questions.append(f"For '{title}', what is explicitly in scope?")
-    if not scope_out:
-        questions.append(f"For '{title}', what is explicitly out of scope?")
-    if not acceptance:
-        questions.append(f"For '{title}', list acceptance criteria (at least 1 testable outcome).")
-    return questions
+    return _collect_seed_issue_questions_impl(
+        issue_summary=issue_summary,
+        objective=objective,
+        scope_in=scope_in,
+        scope_out=scope_out,
+        acceptance=acceptance,
+    )
 
 
 def _normalized_summary_key(summary: str) -> str:
