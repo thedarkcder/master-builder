@@ -411,6 +411,31 @@ class DiscordCommandApiTests(unittest.TestCase):
                 {'project in ("TP", "OTH")', 'project in ("OTH", "TP")'},
             )
 
+    def test_project_filter_jql_excludes_archived_projects_from_unscoped_queries(self) -> None:
+        create_project = self.client.post(
+            f"/api/admin/tenants/{self.tenant_id}/projects",
+            json={
+                "name": "Archived Project",
+                "github_repository": "https://github.com/example/archived",
+                "jira_project_key": "ARC",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        archived_project_id = create_project.json()["project_id"]
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            archived_project = session.get(Project, archived_project_id)
+            self.assertIsNotNone(archived_project)
+            archived_project.is_archived = True
+            session.commit()
+
+            jql = _project_filter_jql(session=session, tenant=tenant, channel_id="dm")
+            self.assertEqual(jql, 'project = "TP"')
+            self.assertNotIn("ARC", jql)
+
     def test_collect_ask_context_scopes_jql_to_channel_project(self) -> None:
         create_project = self.client.post(
             f"/api/admin/tenants/{self.tenant_id}/projects",
