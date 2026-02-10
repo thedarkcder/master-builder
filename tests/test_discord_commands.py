@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from orchestrator.api.main import create_app
 from orchestrator.api.routes_discord import (
+    _build_discord_bug_description,
     _build_seed_issue_description,
     _collect_ask_context,
     _create_discord_bug_issue,
@@ -870,8 +871,10 @@ class DiscordCommandApiTests(unittest.TestCase):
         class _FakeClient:
             def __init__(self) -> None:
                 self.upload_calls: list[dict] = []
+                self.created_issues: list[object] = []
 
-            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+            def create_issues_bulk(self, **kwargs: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                self.created_issues = list(kwargs.get("issues") or [])
                 return JiraIssueBulkCreateResult(
                     created=[JiraIssueCreateResult(key="TP-901", issue_id="901")],
                     errors=[],
@@ -886,6 +889,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             self.session_factory() as session,
             patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
             patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes_discord._resolve_discord_channel_name", return_value="triage-bugs"),
             patch(
                 "orchestrator.api.routes_discord._download_discord_attachment",
                 return_value=(b"image-bytes", "image/png"),
@@ -908,6 +912,22 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(data["uploaded_attachment_count"], 1)
         self.assertEqual(len(fake_client.upload_calls), 1)
         self.assertEqual(fake_client.upload_calls[0]["issue_id_or_key"], "TP-901")
+        self.assertEqual(len(fake_client.created_issues), 1)
+        created_description = str(fake_client.created_issues[0].description)
+        self.assertIn("Channel: triage-bugs (discord-channel-1)", created_description)
+        self.assertIn("[screen.png](https://cdn.discordapp.com/x.png)", created_description)
+
+    def test_build_discord_bug_description_uses_hyperlinks_for_attachments(self) -> None:
+        description = _build_discord_bug_description(
+            summary="Login fails",
+            details="Details",
+            reporter_user_id="u-viewer",
+            channel_id="triage-bugs (discord-channel-1)",
+            related_issue_key="TP-77",
+            attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+        )
+        self.assertIn("[screen.png](https://cdn.discordapp.com/x.png)", description)
+        self.assertIn("Channel: triage-bugs (discord-channel-1)", description)
 
     def test_request_creates_pending_request(self) -> None:
         response = self.client.post(

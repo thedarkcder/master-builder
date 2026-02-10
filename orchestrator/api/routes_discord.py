@@ -42,6 +42,7 @@ from orchestrator.core.codex_agents import (
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.project_routing import find_active_project_for_issue_key
+from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
@@ -49,6 +50,7 @@ from orchestrator.core.runs import (
     RUN_STATUS_SUCCEEDED,
 )
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssueDetail, JiraIssuePreview, JiraOAuthError
 
 router = APIRouter(tags=["discord"])
@@ -677,6 +679,36 @@ def _build_discord_bug_description(
     return "\n".join(lines)
 
 
+def _resolve_discord_channel_name(
+    *,
+    session: Session,
+    tenant: Tenant,
+    channel_id: str | None,
+) -> str | None:
+    normalized_channel_id = str(channel_id or "").strip()
+    if not normalized_channel_id:
+        return None
+    settings = get_settings()
+    token_ref = settings.discord_bot_token_secret_ref.strip()
+    if not token_ref:
+        return None
+    bot_token = resolve_scoped_secret_ref(
+        session,
+        secret_ref=token_ref,
+        encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
+    )
+    if not bot_token:
+        return None
+    try:
+        client = DiscordApiClient(bot_token=bot_token)
+        payload = client.get_channel(channel_id=normalized_channel_id)
+    except (DiscordApiError, ValueError):
+        return None
+    name = str(payload.get("name") or "").strip()
+    return name or None
+
+
 def _download_discord_attachment(*, url: str) -> tuple[bytes, str | None]:
     request = Request(
         url=url,
@@ -762,11 +794,20 @@ def _create_discord_bug_issue(
             detail="Configured Jira connection was not found",
         )
 
+    channel_display_name = _resolve_discord_channel_name(
+        session=session,
+        tenant=tenant,
+        channel_id=channel_id,
+    )
+    normalized_channel = (
+        f"{channel_display_name} ({channel_id})" if channel_display_name and channel_id else channel_display_name or channel_id
+    )
+
     description = _build_discord_bug_description(
         summary=summary,
         details=details,
         reporter_user_id=reporter_user_id,
-        channel_id=channel_id,
+        channel_id=normalized_channel,
         related_issue_key=related_issue_key,
         attachments=attachments,
     )
