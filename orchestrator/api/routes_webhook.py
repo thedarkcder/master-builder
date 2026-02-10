@@ -10,12 +10,11 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.webhooks.contracts import (
-    parse_jira_comment_command as _parse_jira_comment_command,
-    post_jira_comment as _post_jira_comment,
+    parse_jira_comment_command as _parse_jira_comment_command,  # noqa: F401
+    post_jira_comment as _post_jira_comment,  # noqa: F401
     extract_status_transition as _extract_status_transition,
 )
 from orchestrator.api.webhooks.jira_ingress import (
-    JiraWebhookContext,
     jira_webhook_response as _jira_webhook_response,
     resolve_ready_statuses_for_tenant as _resolve_ready_statuses_for_tenant,
     stage_handle_comment_ask_command as _stage_handle_comment_ask_command,
