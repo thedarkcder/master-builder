@@ -696,4 +696,8 @@ def execute_discord_command_route(
     )
 
 
-register_tenant_command_executor(execute_tenant_command_ingress)
+def register_discord_command_executor() -> None:
+    register_tenant_command_executor(execute_tenant_command_ingress)
+
+
+register_discord_command_executor()

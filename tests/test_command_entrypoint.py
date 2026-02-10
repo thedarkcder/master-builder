@@ -18,13 +18,12 @@ class CommandEntrypointTests(unittest.TestCase):
 
     def test_execute_tenant_discord_command_requires_registered_executor(self) -> None:
         clear_tenant_command_executor()
-        with patch("orchestrator.api.command_entrypoint.importlib.import_module", return_value=object()):
-            with self.assertRaises(HTTPException) as ctx:
-                execute_tenant_discord_command(
-                    tenant_id="tenant-a",
-                    payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
-                    session=MagicMock(),
-                )
+        with self.assertRaises(HTTPException) as ctx:
+            execute_tenant_discord_command(
+                tenant_id="tenant-a",
+                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
+                session=MagicMock(),
+            )
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertEqual(ctx.exception.detail, "Discord command executor is not registered")
 

@@ -4,7 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from orchestrator.api.routes_admin import router as admin_router
 from orchestrator.api.routes_admin_auth import router as admin_auth_router
 from orchestrator.api.routes_admin_secrets import router as admin_secrets_router
-from orchestrator.api.routes_discord import router as discord_router
+from orchestrator.api.routes_discord import (
+    register_discord_command_executor,
+    router as discord_router,
+)
 from orchestrator.api.routes_runs import router as runs_router
 from orchestrator.api.routes_webhook import router as webhook_router
 from orchestrator.api.routes_webhook_discord import router as webhook_discord_router
@@ -41,12 +44,14 @@ def create_app() -> FastAPI:
     app.include_router(webhook_discord_router)
     app.include_router(webhook_discord_interactions_router)
     app.include_router(webhook_github_router)
+    register_discord_command_executor()
     gateway_listener = DiscordGatewayListener(settings=settings)
 
     @app.on_event("startup")
     def _startup_discord_command_sync() -> None:
         if settings.auto_migrate_on_startup:
             run_migrations()
+        register_discord_command_executor()
         # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
         sync_discord_guild_commands(settings=settings)
         gateway_listener.start()
