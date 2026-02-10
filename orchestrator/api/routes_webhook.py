@@ -35,8 +35,9 @@ from orchestrator.api.discord_ask_context import (
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
 )
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth_client
+from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
 from orchestrator.api.command_entrypoint import execute_tenant_discord_command
-from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
 from orchestrator.api.discord_reply_transport import DiscordReplyTransport
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhook_followup_service import DiscordWebhookFollowupService

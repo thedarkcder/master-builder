@@ -36,7 +36,8 @@ from orchestrator.api.discord_state import (
     normalize_status_name as _normalize_status_name,
     store_seed_followup_context as _store_seed_followup_context,
 )
-from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
+from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth_client
+from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,
