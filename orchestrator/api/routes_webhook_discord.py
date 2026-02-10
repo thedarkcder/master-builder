@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -8,17 +9,17 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.command_entrypoint import execute_tenant_discord_command
-from orchestrator.api.routes_webhook import (
-    _extract_webhook_token,
-    _read_json_payload,
-    logger,
-)
 from orchestrator.api.schemas import DiscordCommandRequest
+from orchestrator.api.webhook_payload_utils import (
+    extract_webhook_token as _extract_webhook_token,
+    read_json_payload as _read_json_payload,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(tags=["discord-webhook"])
+logger = logging.getLogger(__name__)
 
 # Backward-compatible alias for existing tests/patch paths while command
 # execution import paths are migrated to the shared entrypoint module.
