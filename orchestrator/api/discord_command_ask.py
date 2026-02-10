@@ -29,6 +29,7 @@ def dispatch_ask_command(
     store_pending_ask_action: Callable[..., Any],
     store_ask_history_entry: Callable[..., Any],
     ask_board_message: Callable[..., Any],
+    scoped_project_keys: list[str],
 ) -> DiscordCommandResponse | None:
     if command_name != "ask":
         return None
@@ -78,11 +79,7 @@ def dispatch_ask_command(
             intent_payload = plan_discord_ask_intent_with_codex(
                 runtime=runtime,
                 question=question,
-                project_keys=[
-                    str(key).strip().upper()
-                    for key in tenant.jira_config.get("project_keys", [])
-                    if str(key).strip()
-                ],
+                project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
                 issues=issues,
                 status_counts=status_counts,
                 history=history_context,
@@ -122,11 +119,7 @@ def dispatch_ask_command(
         message = answer_board_question_with_codex(
             runtime=runtime,
             question=question,
-            project_keys=[
-                str(key).strip().upper()
-                for key in tenant.jira_config.get("project_keys", [])
-                if str(key).strip()
-            ],
+            project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
             issues=issues,
             status_counts=status_counts,
             history=history_context,
