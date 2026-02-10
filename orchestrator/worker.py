@@ -22,7 +22,6 @@ from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.secrets import decrypt_value, encrypt_value
-from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.worker_decision_gate import apply_decision_gate
 from orchestrator.core.worker_queue_selector import coerce_positive_int, select_next_queued_run
 from orchestrator.core.worker_run_lifecycle import (
@@ -35,13 +34,13 @@ from orchestrator.core.worker_run_lifecycle import (
     resolve_project_for_run,
     start_run,
 )
+from orchestrator.core.worker_process_service import process_next_queued_run as _process_next_queued_run_impl
 from orchestrator.core.worker_stage_events import (
     lock_acquired_update,
     plan_posted_update,
     pr_opened_update,
     run_failed_update,
 )
-from orchestrator.core.worker_stage_notifier import RunStageNotifier
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
@@ -299,134 +298,38 @@ def _cached_enforcement_context(required_assets_version: str) -> str:
 
 
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
-    settings = get_settings()
-    selection = select_next_queued_run(
-        session,
-        queued_status=RUN_STATUS_QUEUED,
-        running_status=RUN_STATUS_RUNNING,
-        failed_status=RUN_STATUS_FAILED,
-    )
-    if selection.terminal_run is not None:
-        return selection.terminal_run
-    if selection.run is None or selection.tenant is None:
-        return None
-    run = selection.run
-    tenant = selection.tenant
-    effective_policy = selection.effective_policy or tenant.policy_config
-
-    decision_gate_run, decision_gate_meta = apply_decision_gate(
+    return _process_next_queued_run_impl(
         session=session,
-        run=run,
-        tenant=tenant,
-        settings=settings,
-        evaluate_decision_gate_fn=evaluate_decision_gate,
+        runner=runner,
+        logger=logger,
+        settings_fn=get_settings,
+        select_next_queued_run_fn=select_next_queued_run,
+        apply_decision_gate_fn=lambda **kwargs: apply_decision_gate(
+            evaluate_decision_gate_fn=evaluate_decision_gate,
+            **kwargs,
+        ),
         send_discord_message_fn=send_tenant_discord_message,
         send_jira_message_fn=_send_stage_update_to_jira,
         ask_reply_components_fn=_ask_reply_components,
-        blocked_status=RUN_STATUS_BLOCKED,
-        failed_status=RUN_STATUS_FAILED,
-    )
-    if decision_gate_run is not None:
-        if decision_gate_meta and isinstance(decision_gate_meta.get("send_result"), object):
-            send_result = decision_gate_meta["send_result"]
-            stage_update = decision_gate_meta["stage_update"]
-            if not send_result.sent:
-                logger.info(
-                    "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
-                    run.tenant_id,
-                    run.run_id,
-                    stage_update["stage"],
-                    send_result.reason,
-                )
-        return decision_gate_run
-
-    project: Project | None = resolve_project_for_run(session, run=run)
-    if project is None:
-        return fail_missing_project_mapping(session, run=run)
-    if project.is_archived:
-        return block_archived_project(session, run=run, project=project)
-
-    notifier = RunStageNotifier(
-        session=session,
-        tenant=tenant,
-        run=run,
-        settings=settings,
-        project=project,
-        send_discord_message=send_tenant_discord_message,
-        send_jira_message=_send_stage_update_to_jira,
-    )
-    start_run(session, run=run)
-
-    bind_run_project(session, run=run, project=project)
-    effective_policy = resolve_effective_policy(
-        tenant_policy=tenant.policy_config,
-        project_overrides=project.policy_overrides,
-    )
-
-    try:
-        workflow_request = _workflow_request_for_run(
-            tenant,
-            run,
-            project=project,
-            effective_policy=effective_policy,
-        )
-    except (PermissionError, ValueError) as exc:
-        return fail_guardrail_violation(session, run=run, error=str(exc))
-
-    jira_issue_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=run.issue_key)
-    notifier.append(
-        lock_acquired_update(
-            tenant_id=run.tenant_id,
-            issue_key=run.issue_key,
-            run_id=run.run_id,
-            jira_url=jira_issue_url,
-        )
-    )
-
-    workflow_result = runner.run(workflow_request)
-    session.refresh(run)
-    if run.status == RUN_STATUS_CANCELLED:
-        return finalize_cancelled_run(session, run=run, stage_updates=notifier.stage_updates)
-    if workflow_result.plan is not None:
-        notifier.append(
-            plan_posted_update(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                jira_url=jira_issue_url,
-            )
-        )
-    if workflow_result.pr_url:
-        notifier.append(
-            pr_opened_update(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                jira_url=jira_issue_url,
-                pr_url=workflow_result.pr_url,
-            )
-        )
-    if not workflow_result.succeeded:
-        error_text = (
-            workflow_result.diagnostics.message
-            if workflow_result.diagnostics is not None
-            else "Workflow failed without diagnostics"
-        )
-        notifier.append(
-            run_failed_update(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                jira_url=jira_issue_url,
-                error=error_text,
-            )
-        )
-
-    return finalize_workflow_result(
-        session,
-        run=run,
-        workflow_result=workflow_result,
-        stage_updates=notifier.stage_updates,
+        resolve_project_for_run_fn=resolve_project_for_run,
+        fail_missing_project_mapping_fn=fail_missing_project_mapping,
+        block_archived_project_fn=block_archived_project,
+        start_run_fn=start_run,
+        bind_run_project_fn=bind_run_project,
+        workflow_request_for_run_fn=_workflow_request_for_run,
+        fail_guardrail_violation_fn=fail_guardrail_violation,
+        tenant_jira_issue_url_fn=tenant_jira_issue_url,
+        lock_acquired_update_fn=lock_acquired_update,
+        plan_posted_update_fn=plan_posted_update,
+        pr_opened_update_fn=pr_opened_update,
+        run_failed_update_fn=run_failed_update,
+        finalize_cancelled_run_fn=finalize_cancelled_run,
+        finalize_workflow_result_fn=finalize_workflow_result,
+        run_status_queued=RUN_STATUS_QUEUED,
+        run_status_running=RUN_STATUS_RUNNING,
+        run_status_failed=RUN_STATUS_FAILED,
+        run_status_blocked=RUN_STATUS_BLOCKED,
+        run_status_cancelled=RUN_STATUS_CANCELLED,
     )
 
 
