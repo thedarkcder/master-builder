@@ -47,6 +47,7 @@ def send_tenant_discord_message(
     open_thread: bool = False,
     thread_name: str | None = None,
     thread_intro: str | None = None,
+    thread_intro_components: list[dict] | None = None,
 ) -> DiscordSendResult:
     if not message.strip():
         return DiscordSendResult(sent=False, reason="empty_message")
@@ -87,7 +88,11 @@ def send_tenant_discord_message(
             )
             intro = (thread_intro or "").strip()
             if intro:
-                client.post_message(channel_id=thread_channel_id, content=intro)
+                client.post_message(
+                    channel_id=thread_channel_id,
+                    content=intro,
+                    components=thread_intro_components,
+                )
     except (DiscordApiError, ValueError) as exc:
         logger.warning(
             "discord_message_send_failed tenant_id=%s channel_id=%s error=%s",

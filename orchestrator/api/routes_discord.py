@@ -18,6 +18,7 @@ from orchestrator.api.discord_command_issues import dispatch_issues_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_command_ask import dispatch_ask_command
+from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.discord_response_format import (
     build_issue_url_list,
     build_jira_issue_url,
@@ -51,6 +52,7 @@ from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenan
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssueDetail, JiraIssuePreview, JiraOAuthError
 
 router = APIRouter(tags=["discord"])
+_channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
 
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
@@ -380,7 +382,19 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
         )
 
 
-def _project_filter_jql(*, session: Session, tenant: Tenant) -> str:
+def _project_filter_jql(*, session: Session, tenant: Tenant, channel_id: str | None = None) -> str:
+    if channel_id:
+        scope = _channel_scope_repository.resolve_project_scope(
+            session=session,
+            tenant=tenant,
+            channel_id=channel_id,
+        )
+        if scope is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Discord channel is not mapped to an active project",
+            )
+        return f'project = "{scope.jira_project_key}"'
     keys = [project.jira_project_key for project in _tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
     if not keys:
         keys = [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
@@ -825,10 +839,11 @@ def _collect_ask_context(
     *,
     session: Session,
     tenant: Tenant,
+    channel_id: str | None,
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str | None, str | None, list[dict], dict[str, int]]:
-    project_jql = _project_filter_jql(session=session, tenant=tenant)
+    project_jql = _project_filter_jql(session=session, tenant=tenant, channel_id=channel_id)
     if scoped_issue_key:
         normalized_issue_key = scoped_issue_key.strip().upper()
         jira_issues = _search_jira_issues_for_tenant(
@@ -950,6 +965,7 @@ def _existing_issue_keys_for_tenant(
     *,
     session: Session,
     tenant: Tenant,
+    channel_id: str | None,
     issue_keys: set[str],
 ) -> set[str]:
     if not issue_keys:
@@ -960,7 +976,7 @@ def _existing_issue_keys_for_tenant(
         return set()
 
     quoted_issue_keys = ", ".join(f'"{value}"' for value in normalized_issue_keys)
-    jql = f"{_project_filter_jql(session=session, tenant=tenant)} AND key in ({quoted_issue_keys})"
+    jql = f"{_project_filter_jql(session=session, tenant=tenant, channel_id=channel_id)} AND key in ({quoted_issue_keys})"
     issues = _search_jira_issues_for_tenant(
         session=session,
         tenant=tenant,
@@ -994,6 +1010,7 @@ def _prune_missing_issue_keys_from_ask_history(
     existing_issue_keys = _existing_issue_keys_for_tenant(
         session=session,
         tenant=tenant,
+        channel_id=channel_id,
         issue_keys=scoped_issue_keys,
     )
     missing_issue_keys = scoped_issue_keys - existing_issue_keys
@@ -1051,6 +1068,7 @@ def _collect_ask_context_with_history_context(
     normalized_issue_key, requested_status, issues, status_counts = _collect_ask_context(
         session=session,
         tenant=tenant,
+        channel_id=channel_id,
         question=question,
         scoped_issue_key=resolved_scoped_issue_key,
     )

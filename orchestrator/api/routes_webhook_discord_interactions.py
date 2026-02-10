@@ -79,6 +79,7 @@ async def ingest_discord_interaction(
             choices = _discord_issue_autocomplete_choices(
                 session=session,
                 tenant=tenant,
+                channel_id=channel_id.strip(),
                 current_value=focused_value,
             )
         except HTTPException:
