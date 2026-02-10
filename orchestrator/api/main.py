@@ -3,20 +3,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from orchestrator.api.routes_admin import router as admin_router
-from orchestrator.api.routes_admin_auth import router as admin_auth_router
-from orchestrator.api.routes_admin_secrets import router as admin_secrets_router
-from orchestrator.api.routes_discord import (
+from orchestrator.api.routes.admin import router as admin_router
+from orchestrator.api.routes.admin_auth import router as admin_auth_router
+from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
+from orchestrator.api.routes.discord import (
     register_discord_command_executor,
     router as discord_router,
 )
-from orchestrator.api.routes_runs import router as runs_router
-from orchestrator.api.routes_webhook import router as webhook_router
-from orchestrator.api.routes_webhook_discord import router as webhook_discord_router
-from orchestrator.api.routes_webhook_discord_interactions import (
+from orchestrator.api.routes.runs import router as runs_router
+from orchestrator.api.routes.webhook import router as webhook_router
+from orchestrator.api.routes.webhook_discord import router as webhook_discord_router
+from orchestrator.api.routes.webhook_discord_interactions import (
     router as webhook_discord_interactions_router,
 )
-from orchestrator.api.routes_webhook_github import router as webhook_github_router
+from orchestrator.api.routes.webhook_github import router as webhook_github_router
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord_commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord_gateway_listener import DiscordGatewayListener

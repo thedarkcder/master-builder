@@ -20,7 +20,12 @@ def validate_codex_assets_for_tenant_init(
     module_file: str,
     validate_enforcement_assets_fn=validate_enforcement_assets,
 ) -> None:  # noqa: ANN001
-    repo_root = Path(module_file).resolve().parents[2]
+    module_path = Path(module_file).resolve()
+    repo_root = module_path.parent
+    for candidate in [repo_root, *repo_root.parents]:
+        if (candidate / ".codex").exists():
+            repo_root = candidate
+            break
     try:
         validate_enforcement_assets_fn(
             repo_root=repo_root,
