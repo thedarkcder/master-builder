@@ -1337,3 +1337,31 @@ class JiraWebhookTests(unittest.TestCase):
 
             matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-shared-channel")
             self.assertIsNone(matched)
+
+    def test_find_tenant_for_discord_channel_refreshes_after_project_channel_change(self) -> None:
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project).where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.is_archived.is_(False),
+                )
+            ).scalar_one_or_none()
+            assert project is not None
+            project.discord_config = {"channel_id": "discord-dynamic-1"}
+            session.commit()
+
+            first_match = _find_tenant_for_discord_channel(session=session, channel_id="discord-dynamic-1")
+            self.assertIsNotNone(first_match)
+            assert first_match is not None
+            self.assertEqual(first_match.tenant_id, "tenant-webhook")
+
+            project.discord_config = {"channel_id": "discord-dynamic-2"}
+            session.commit()
+
+            stale_match = _find_tenant_for_discord_channel(session=session, channel_id="discord-dynamic-1")
+            self.assertIsNone(stale_match)
+
+            refreshed_match = _find_tenant_for_discord_channel(session=session, channel_id="discord-dynamic-2")
+            self.assertIsNotNone(refreshed_match)
+            assert refreshed_match is not None
+            self.assertEqual(refreshed_match.tenant_id, "tenant-webhook")
