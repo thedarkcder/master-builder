@@ -39,6 +39,31 @@ logger = logging.getLogger(__name__)
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
 JIRA_COMMENT_EVENTS = {"comment_created", "comment_updated"}
 
+# Explicit public contract surface consumed by ingress routes/services.
+__all__ = [
+    "JIRA_COMMENT_EVENTS",
+    "adf_to_text",
+    "extract_delivery_id",
+    "extract_installation_id",
+    "extract_issue_payload",
+    "extract_jira_comment_author_account_id",
+    "extract_jira_comment_text",
+    "extract_pull_request_targets",
+    "extract_repository_full_name",
+    "extract_status_transition",
+    "find_tenant_by_installation_id",
+    "normalize_jira_webhook_event",
+    "parse_jira_comment_command",
+    "post_jira_comment",
+    "record_jira_webhook_receipt",
+    "resolve_active_project_for_issue",
+    "resolve_active_project_for_repo",
+    "resolve_global_github_webhook_secret",
+    "resolve_tenant_github_webhook_secret",
+    "validate_github_webhook_signature",
+    "validate_webhook_auth",
+]
+
 
 def post_jira_comment(
     *,
