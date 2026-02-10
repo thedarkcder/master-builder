@@ -23,7 +23,9 @@ def _execute_registered_command(
     if executor is None:
         # Ensure the Discord adapter module has had a chance to register itself.
         discord_routes_module = importlib.import_module("orchestrator.api.routes_discord")
-        registered_executor = getattr(discord_routes_module, "execute_discord_command", None)
+        registered_executor = getattr(discord_routes_module, "execute_tenant_command_ingress", None)
+        if not callable(registered_executor):
+            registered_executor = getattr(discord_routes_module, "execute_discord_command", None)
         if callable(registered_executor):
             register_tenant_command_executor(registered_executor)
         executor = get_tenant_command_executor()

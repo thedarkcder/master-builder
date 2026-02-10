@@ -1250,8 +1250,7 @@ def _ask_board_message(
     )
 
 
-@router.post("/discord/command/{tenant_id}", response_model=DiscordCommandResponse)
-def execute_discord_command(
+def execute_tenant_command_ingress(
     tenant_id: str,
     payload: DiscordCommandRequest,
     session: Session = Depends(get_session),
@@ -1391,4 +1390,46 @@ def execute_discord_command(
     )
 
 
-register_tenant_command_executor(execute_discord_command)
+def execute_discord_command(
+    tenant_id: str,
+    payload: DiscordCommandRequest,
+    session: Session = Depends(get_session),
+    *,
+    defer_seed_issues: bool = False,
+    require_ask_confirmation: bool = False,
+    allow_plain_ask: bool = False,
+    ingress_source: Literal["discord", "jira_comment"] = "discord",
+) -> DiscordCommandResponse:
+    return execute_tenant_command_ingress(
+        tenant_id=tenant_id,
+        payload=payload,
+        session=session,
+        defer_seed_issues=defer_seed_issues,
+        require_ask_confirmation=require_ask_confirmation,
+        allow_plain_ask=allow_plain_ask,
+        ingress_source=ingress_source,
+    )
+
+
+@router.post("/discord/command/{tenant_id}", response_model=DiscordCommandResponse)
+def execute_discord_command_route(
+    tenant_id: str,
+    payload: DiscordCommandRequest,
+    session: Session = Depends(get_session),
+    *,
+    defer_seed_issues: bool = False,
+    require_ask_confirmation: bool = False,
+    allow_plain_ask: bool = False,
+) -> DiscordCommandResponse:
+    return execute_discord_command(
+        tenant_id=tenant_id,
+        payload=payload,
+        session=session,
+        defer_seed_issues=defer_seed_issues,
+        require_ask_confirmation=require_ask_confirmation,
+        allow_plain_ask=allow_plain_ask,
+        ingress_source="discord",
+    )
+
+
+register_tenant_command_executor(execute_tenant_command_ingress)
