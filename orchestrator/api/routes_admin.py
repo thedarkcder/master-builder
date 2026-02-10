@@ -5,7 +5,6 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -56,6 +55,18 @@ from orchestrator.api.admin_release_bootstrap_service import (
     get_release_bootstrap_report as _get_release_bootstrap_report_impl,
     list_tenant_repo_bootstrap_states as _list_tenant_repo_bootstrap_states_impl,
     run_release_bootstrap as _run_release_bootstrap_impl,
+)
+from orchestrator.api.admin_tenant_project_routes_service import (
+    create_project as _create_project_route_impl,
+    create_tenant as _create_tenant_route_impl,
+    delete_tenant as _delete_tenant_route_impl,
+    get_project as _get_project_route_impl,
+    get_tenant as _get_tenant_route_impl,
+    list_projects as _list_projects_route_impl,
+    list_tenants as _list_tenants_route_impl,
+    set_tenant_archive_state as _set_tenant_archive_state_route_impl,
+    update_project as _update_project_route_impl,
+    update_tenant as _update_tenant_route_impl,
 )
 from orchestrator.api.admin_jira_connect_flow import (
     build_jira_connect_start as _build_jira_connect_start_impl,
@@ -619,8 +630,11 @@ def list_tenants(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[TenantRead]:
-    tenants = session.execute(select(Tenant).order_by(Tenant.tenant_id)).scalars().all()
-    return [_tenant_to_schema(tenant) for tenant in tenants]
+    return _list_tenants_route_impl(
+        session=session,
+        tenant_model=Tenant,
+        tenant_to_schema_fn=_tenant_to_schema,
+    )
 
 
 @router.post("/tenants", response_model=TenantRead, status_code=status.HTTP_201_CREATED)
@@ -629,10 +643,11 @@ def create_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    _validate_codex_assets_for_tenant_init()
-    return _create_tenant_impl(
+    return _create_tenant_route_impl(
         session=session,
         payload=payload,
+        validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
+        create_tenant_fn=_create_tenant_impl,
         allocate_tenant_id_fn=_allocate_tenant_id,
         with_preserved_jira_system_fields_fn=_with_preserved_jira_system_fields,
         with_managed_github_refs_fn=_with_managed_github_refs,
@@ -649,7 +664,12 @@ def get_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    return _tenant_to_schema(_get_tenant_or_404_impl(session=session, tenant_id=tenant_id))
+    return _get_tenant_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        get_tenant_or_404_fn=_get_tenant_or_404_impl,
+        tenant_to_schema_fn=_tenant_to_schema,
+    )
 
 
 @router.put("/tenants/{tenant_id}", response_model=TenantRead)
@@ -659,11 +679,12 @@ def update_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    _validate_codex_assets_for_tenant_init()
-    return _update_tenant_impl(
+    return _update_tenant_route_impl(
         session=session,
         tenant_id=tenant_id,
         payload=payload,
+        validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
+        update_tenant_fn=_update_tenant_impl,
         with_preserved_jira_system_fields_fn=_with_preserved_jira_system_fields,
         with_managed_github_refs_fn=_with_managed_github_refs,
         with_preserved_discord_system_fields_fn=_with_preserved_discord_system_fields,
@@ -679,7 +700,11 @@ def delete_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> Response:
-    return _delete_tenant_impl(session=session, tenant_id=tenant_id)
+    return _delete_tenant_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        delete_tenant_fn=_delete_tenant_impl,
+    )
 
 
 @router.post("/tenants/{tenant_id}/archive", response_model=TenantRead)
@@ -688,10 +713,11 @@ def archive_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    return _set_tenant_archive_state_impl(
+    return _set_tenant_archive_state_route_impl(
         session=session,
         tenant_id=tenant_id,
         is_enabled=False,
+        set_tenant_archive_state_fn=_set_tenant_archive_state_impl,
         tenant_to_schema_fn=_tenant_to_schema,
     )
 
@@ -702,10 +728,11 @@ def unarchive_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    return _set_tenant_archive_state_impl(
+    return _set_tenant_archive_state_route_impl(
         session=session,
         tenant_id=tenant_id,
         is_enabled=True,
+        set_tenant_archive_state_fn=_set_tenant_archive_state_impl,
         tenant_to_schema_fn=_tenant_to_schema,
     )
 
@@ -716,8 +743,11 @@ def list_projects(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[ProjectRead]:
-    service = _admin_project_service()
-    return service.list_projects(session=session, tenant_id=tenant_id)  # type: ignore[return-value]
+    return _list_projects_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        admin_project_service_factory=_admin_project_service,
+    )  # type: ignore[return-value]
 
 
 @router.post("/tenants/{tenant_id}/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
@@ -727,8 +757,12 @@ def create_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    service = _admin_project_service()
-    return service.create_project(session=session, tenant_id=tenant_id, payload=payload)  # type: ignore[return-value]
+    return _create_project_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        payload=payload,
+        admin_project_service_factory=_admin_project_service,
+    )  # type: ignore[return-value]
 
 
 @router.get("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
@@ -738,8 +772,12 @@ def get_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    service = _admin_project_service()
-    return service.get_project(session=session, tenant_id=tenant_id, project_id=project_id)  # type: ignore[return-value]
+    return _get_project_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        admin_project_service_factory=_admin_project_service,
+    )  # type: ignore[return-value]
 
 
 @router.put("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
@@ -750,8 +788,13 @@ def update_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    service = _admin_project_service()
-    return service.update_project(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)  # type: ignore[return-value]
+    return _update_project_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=_admin_project_service,
+    )  # type: ignore[return-value]
 
 
 @router.post("/tenants/{tenant_id}/test-jira", response_model=IntegrationTestResult)
