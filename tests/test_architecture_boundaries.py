@@ -13,12 +13,8 @@ ORCHESTRATOR_ROOT = ROOT / "orchestrator"
 LEGACY_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/routes_discord.py": set(),
     "orchestrator/api/routes_webhook.py": set(),
-    "orchestrator/api/routes_webhook_discord_interactions.py": {
-        "orchestrator.api.routes_webhook",
-    },
-    "orchestrator/api/routes_webhook_github.py": {
-        "orchestrator.api.routes_webhook",
-    },
+    "orchestrator/api/routes_webhook_discord_interactions.py": set(),
+    "orchestrator/api/routes_webhook_github.py": set(),
 }
 NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/main.py": {
