@@ -85,6 +85,9 @@ from orchestrator.api.admin_integration_checks import (
     test_github_connection as _test_github_connection_impl,
     test_jira_connection as _test_jira_connection_impl,
 )
+from orchestrator.api.admin_jira_webhook_provision import (
+    provision_jira_webhook as _provision_jira_webhook_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -386,195 +389,25 @@ def _provision_jira_webhook(
     settings,  # noqa: ANN001
     replace_existing: bool,
 ) -> JiraWebhookActionResult:
-    action_name = "reset" if replace_existing else "provision"
-    jira_config = dict(tenant.jira_config)
-    connection_id = jira_config.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
-        return JiraWebhookActionResult(
-            ok=False,
-            action=action_name,
-            details="Jira OAuth connection is not linked for this tenant",
-            webhook_ids=[],
-        )
-
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        return JiraWebhookActionResult(
-            ok=False,
-            action=action_name,
-            details="Configured Jira connection was not found",
-            webhook_ids=[],
-        )
-
-    if replace_existing:
-        delete_ok, delete_details, _ = _delete_jira_webhooks(
-            session=session,
-            tenant=tenant,
-            settings=settings,
-        )
-        if not delete_ok:
-            return JiraWebhookActionResult(
-                ok=False,
-                action="reset",
-                details=delete_details,
-                webhook_ids=_parse_managed_webhook_ids(jira_config),
-            )
-        session.refresh(tenant)
-        jira_config = dict(tenant.jira_config)
-
-    access_token = _refresh_jira_connection_tokens(
-        session,
-        connection=connection,
+    return _provision_jira_webhook_impl(
+        session=session,
+        tenant=tenant,
         settings=settings,
-        tenant_id=tenant.tenant_id,
-    )
-    client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
-    callback_url = _jira_webhook_callback_url(settings=settings, tenant_id=tenant.tenant_id)
-    jql_filter = _jira_webhook_filter_jql(jira_config)
-    webhook_ids: list[int] | None = None
-    cleanup_note: str | None = None
-    try:
-        webhook_ids = client.register_webhook(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
-            callback_url=callback_url,
-            jql_filter=jql_filter,
-            events=JIRA_WEBHOOK_EVENTS,
-        )
-    except (ValueError, JiraOAuthError) as exc:
-        if _is_jira_webhook_limit_error(exc):
-            try:
-                deleted_count, cleanup_details = _cleanup_unmanaged_jira_webhooks_for_connection(
-                    session=session,
-                    client=client,
-                    access_token=access_token,
-                    cloud_id=connection.cloud_id,
-                )
-                cleanup_note = cleanup_details
-                if deleted_count == 0:
-                    current_tenant_ids = _parse_managed_webhook_ids(jira_config)
-                    if current_tenant_ids:
-                        client.delete_webhooks(
-                            access_token=access_token,
-                            cloud_id=connection.cloud_id,
-                            webhook_ids=current_tenant_ids,
-                        )
-                        deleted_count = len(current_tenant_ids)
-                        cleanup_note = (
-                            f"{cleanup_details} Deleted {deleted_count} existing tenant Jira webhook(s)."
-                        )
-                if deleted_count == 0:
-                    all_webhooks = client.list_webhooks(access_token=access_token, cloud_id=connection.cloud_id)
-                    rollover_id: int | None = None
-                    for item in all_webhooks:
-                        parsed = _parse_jira_webhook_id(item.get("id"))
-                        if parsed is not None:
-                            rollover_id = parsed
-                            break
-                    if rollover_id is not None:
-                        client.delete_webhooks(
-                            access_token=access_token,
-                            cloud_id=connection.cloud_id,
-                            webhook_ids=[rollover_id],
-                        )
-                        touched_tenants = _remove_managed_webhook_id_from_tenants(
-                            session=session,
-                            webhook_id=rollover_id,
-                        )
-                        deleted_count = 1
-                        tenant_note = (
-                            f" Removed stale managed reference from {touched_tenants} tenant(s)."
-                            if touched_tenants > 0
-                            else ""
-                        )
-                        cleanup_note = (
-                            f"{cleanup_details} Deleted 1 rollover Jira webhook ({rollover_id}) to free capacity."
-                            f"{tenant_note}"
-                        )
-                if deleted_count > 0:
-                    webhook_ids = client.register_webhook(
-                        access_token=access_token,
-                        cloud_id=connection.cloud_id,
-                        callback_url=callback_url,
-                        jql_filter=jql_filter,
-                        events=JIRA_WEBHOOK_EVENTS,
-                    )
-            except (ValueError, JiraOAuthError) as cleanup_exc:
-                jira_config["webhook_last_error"] = (
-                    "Failed to provision Jira webhook: "
-                    f"{exc}. Cleanup attempt failed: {cleanup_exc}"
-                )
-                tenant.jira_config = jira_config
-                tenant.updated_at = datetime.now(timezone.utc)
-                session.commit()
-                return JiraWebhookActionResult(
-                    ok=False,
-                    action=action_name,
-                    details=jira_config["webhook_last_error"],
-                    webhook_ids=_parse_managed_webhook_ids(jira_config),
-                )
-        if webhook_ids is None:
-            if _is_jira_webhook_single_url_error(exc):
-                try:
-                    conflicting_url = _extract_jira_webhook_conflict_url(exc)
-                    deleted_count, cleanup_details = _cleanup_conflicting_jira_webhook_url(
-                        session=session,
-                        client=client,
-                        access_token=access_token,
-                        cloud_id=connection.cloud_id,
-                        callback_url=callback_url,
-                        conflicting_url=conflicting_url,
-                    )
-                    if deleted_count > 0:
-                        cleanup_note = cleanup_details
-                        webhook_ids = client.register_webhook(
-                            access_token=access_token,
-                            cloud_id=connection.cloud_id,
-                            callback_url=callback_url,
-                            jql_filter=jql_filter,
-                            events=JIRA_WEBHOOK_EVENTS,
-                        )
-                except (ValueError, JiraOAuthError) as cleanup_exc:
-                    jira_config["webhook_last_error"] = (
-                        "Failed to provision Jira webhook: "
-                        f"{exc}. URL-conflict cleanup failed: {cleanup_exc}"
-                    )
-                    tenant.jira_config = jira_config
-                    tenant.updated_at = datetime.now(timezone.utc)
-                    session.commit()
-                    return JiraWebhookActionResult(
-                        ok=False,
-                        action=action_name,
-                        details=jira_config["webhook_last_error"],
-                        webhook_ids=_parse_managed_webhook_ids(jira_config),
-                    )
-        if webhook_ids is None:
-            jira_config["webhook_last_error"] = f"Failed to provision Jira webhook: {exc}"
-            tenant.jira_config = jira_config
-            tenant.updated_at = datetime.now(timezone.utc)
-            session.commit()
-            return JiraWebhookActionResult(
-                ok=False,
-                action=action_name,
-                details=jira_config["webhook_last_error"],
-                webhook_ids=_parse_managed_webhook_ids(jira_config),
-            )
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    jira_config["managed_webhook_ids"] = webhook_ids
-    jira_config["webhook_last_provisioned_at"] = now_iso
-    jira_config["webhook_last_error"] = None
-    tenant.jira_config = jira_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    details = f"Provisioned {len(webhook_ids)} Jira webhook(s)."
-    if cleanup_note:
-        details = f"{details} {cleanup_note}"
-    return JiraWebhookActionResult(
-        ok=True,
-        action=action_name,
-        details=details,
-        webhook_ids=webhook_ids,
+        replace_existing=replace_existing,
+        jira_webhook_events=JIRA_WEBHOOK_EVENTS,
+        delete_jira_webhooks_fn=_delete_jira_webhooks,
+        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
+        refresh_jira_connection_tokens_fn=_refresh_jira_connection_tokens,
+        jira_oauth_client_fn=_jira_oauth_client,
+        jira_webhook_callback_url_fn=_jira_webhook_callback_url,
+        jira_webhook_filter_jql_fn=_jira_webhook_filter_jql,
+        is_jira_webhook_limit_error_fn=_is_jira_webhook_limit_error,
+        cleanup_unmanaged_jira_webhooks_for_connection_fn=_cleanup_unmanaged_jira_webhooks_for_connection,
+        parse_jira_webhook_id_fn=_parse_jira_webhook_id,
+        remove_managed_webhook_id_from_tenants_fn=_remove_managed_webhook_id_from_tenants,
+        is_jira_webhook_single_url_error_fn=_is_jira_webhook_single_url_error,
+        extract_jira_webhook_conflict_url_fn=_extract_jira_webhook_conflict_url,
+        cleanup_conflicting_jira_webhook_url_fn=_cleanup_conflicting_jira_webhook_url,
     )
 
 
