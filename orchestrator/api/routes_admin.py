@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -51,6 +51,11 @@ from orchestrator.api.admin_config_helpers import (
 from orchestrator.api.admin_release_bootstrap_helpers import (
     compute_release_bootstrap_result as _compute_release_bootstrap_result_impl,
     release_bootstrap_report_from_config as _release_bootstrap_report_from_config_impl,
+)
+from orchestrator.api.admin_release_bootstrap_service import (
+    get_release_bootstrap_report as _get_release_bootstrap_report_impl,
+    list_tenant_repo_bootstrap_states as _list_tenant_repo_bootstrap_states_impl,
+    run_release_bootstrap as _run_release_bootstrap_impl,
 )
 from orchestrator.api.admin_jira_connect_flow import (
     build_jira_connect_start as _build_jira_connect_start_impl,
@@ -781,22 +786,12 @@ def list_tenant_repo_bootstrap_states(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[RepoBootstrapStateRead]:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    states = list_repo_bootstrap_states(session=session, tenant_id=tenant_id)
-    return [
-        RepoBootstrapStateRead(
-            tenant_id=state.tenant_id,
-            repo_url=state.repo_url,
-            bootstrap_count=state.bootstrap_count,
-            last_created_files=list(state.last_created_files),
-            bootstrapped_at=state.bootstrapped_at,
-            updated_at=state.updated_at,
-        )
-        for state in states
-    ]
+    return _list_tenant_repo_bootstrap_states_impl(
+        session=session,
+        tenant_id=tenant_id,
+        tenant_model=Tenant,
+        list_repo_bootstrap_states_fn=list_repo_bootstrap_states,
+    )
 
 
 def _release_bootstrap_report_from_config(*, tenant_id: str, jira_config: dict) -> ReleaseBootstrapReportRead | None:
@@ -812,10 +807,12 @@ def get_release_bootstrap_report(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ReleaseBootstrapReportRead | None:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    return _release_bootstrap_report_from_config(tenant_id=tenant_id, jira_config=dict(tenant.jira_config or {}))
+    return _get_release_bootstrap_report_impl(
+        session=session,
+        tenant_id=tenant_id,
+        tenant_model=Tenant,
+        release_bootstrap_report_from_config_fn=_release_bootstrap_report_from_config,
+    )
 
 
 @router.post("/tenants/{tenant_id}/release/bootstrap", response_model=ReleaseBootstrapReportRead)
@@ -824,32 +821,15 @@ def run_release_bootstrap(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ReleaseBootstrapReportRead:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    settings = get_settings()
-    ok, checks, details, report_payload = _compute_release_bootstrap_result_impl(
+    return _run_release_bootstrap_impl(
         session=session,
-        tenant=tenant,
         tenant_id=tenant_id,
-        settings=settings,
+        tenant_model=Tenant,
+        settings=get_settings(),
         required_statuses=RELEASE_BOOTSTRAP_REQUIRED_STATUSES,
+        compute_release_bootstrap_result_fn=_compute_release_bootstrap_result_impl,
         refresh_jira_connection_tokens_fn=_refresh_jira_connection_tokens,
         jira_oauth_client_fn=_jira_oauth_client,
-    )
-    jira_config = dict(tenant.jira_config or {})
-    jira_config["release_bootstrap"] = report_payload
-    tenant.jira_config = jira_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    session.refresh(tenant)
-
-    return ReleaseBootstrapReportRead(
-        tenant_id=tenant_id,
-        ok=ok,
-        checks=checks,
-        details=details,
-        checked_at=str(report_payload.get("checked_at") or ""),
     )
 
 
