@@ -4,9 +4,22 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.api.discord_state_repository import (
+    project_allowed_channel_ids,
+    resolve_project_for_discord_channel,
+    save_project_allowlist_requests,
+    save_seed_followups,
+    tenant_allowed_channel_ids,
+)
+from orchestrator.core.discord_policy import (
+    can_execute_sensitive_command,
+    channel_ids_from_discord_config,
+    is_channel_allowed,
+    normalize_allowlist_requests,
+    normalize_allowlisted_user_ids,
+)
 from orchestrator.storage.models import Project, Tenant
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
@@ -44,97 +57,27 @@ def parse_command_text(command_text: str) -> tuple[str, list[str]]:
 
 
 def tenant_allowlisted_user_ids(tenant: Tenant) -> set[str]:
-    discord_config = tenant.discord_config or {}
-    raw_allowlist = discord_config.get("allowed_user_ids")
-    if not isinstance(raw_allowlist, list):
-        return set()
-    normalized = {str(user_id).strip() for user_id in raw_allowlist if str(user_id).strip()}
-    return normalized
+    return normalize_allowlisted_user_ids(tenant.discord_config or {})
 
 
 def project_allowlisted_user_ids(project: Project) -> set[str]:
-    discord_config = project.discord_config or {}
-    raw_allowlist = discord_config.get("allowed_user_ids")
-    if not isinstance(raw_allowlist, list):
-        return set()
-    return {str(user_id).strip() for user_id in raw_allowlist if str(user_id).strip()}
+    return normalize_allowlisted_user_ids(project.discord_config or {})
 
 
 def tenant_allowlist_requests(tenant: Tenant) -> list[dict]:
-    discord_config = tenant.discord_config or {}
-    raw_requests = discord_config.get("allowlist_requests")
-    if not isinstance(raw_requests, list):
-        return []
-    normalized: list[dict] = []
-    for item in raw_requests:
-        if not isinstance(item, dict):
-            continue
-        user_id = str(item.get("user_id") or "").strip()
-        if not user_id:
-            continue
-        normalized.append(
-            {
-                "user_id": user_id,
-                "requested_at": str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
-                "channel_id": str(item.get("channel_id") or "").strip() or None,
-                "reason": str(item.get("reason") or "").strip() or None,
-            }
-        )
+    normalized = normalize_allowlist_requests(tenant.discord_config or {})
+    for item in normalized:
+        if not item.get("requested_at"):
+            item["requested_at"] = datetime.now(timezone.utc).isoformat()
     return normalized
 
 
 def project_allowlist_requests(project: Project) -> list[dict]:
-    discord_config = project.discord_config or {}
-    raw_requests = discord_config.get("allowlist_requests")
-    if not isinstance(raw_requests, list):
-        return []
-    normalized: list[dict] = []
-    for item in raw_requests:
-        if not isinstance(item, dict):
-            continue
-        user_id = str(item.get("user_id") or "").strip()
-        if not user_id:
-            continue
-        normalized.append(
-            {
-                "user_id": user_id,
-                "requested_at": str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
-                "channel_id": str(item.get("channel_id") or "").strip() or None,
-                "reason": str(item.get("reason") or "").strip() or None,
-                "permissions": [
-                    str(value).strip()
-                    for value in (item.get("permissions") or [])
-                    if str(value).strip()
-                ],
-            }
-        )
+    normalized = normalize_allowlist_requests(project.discord_config or {})
+    for item in normalized:
+        if not item.get("requested_at"):
+            item["requested_at"] = datetime.now(timezone.utc).isoformat()
     return normalized
-
-
-def resolve_project_for_discord_channel(
-    *,
-    session: Session,
-    tenant_id: str,
-    channel_id: str | None,
-) -> Project | None:
-    normalized_channel_id = str(channel_id or "").strip()
-    if not normalized_channel_id:
-        return None
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
-        )
-    ).scalars().all()
-    for project in projects:
-        if normalized_channel_id in _channel_ids_from_discord_config(dict(project.discord_config or {})):
-            return project
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is not None:
-        tenant_channel_ids = _channel_ids_from_discord_config(dict(tenant.discord_config or {}))
-        if normalized_channel_id in tenant_channel_ids and len(projects) == 1:
-            return projects[0]
-    return None
 
 
 def create_allowlist_request(
@@ -183,12 +126,12 @@ def create_allowlist_request(
         )
         message = "Allowlist request submitted. An admin can approve it in the project Discord page."
 
-    discord_config = dict(project.discord_config or {})
-    discord_config["allowlist_requests"] = requests
-    project.discord_config = discord_config
-    project.updated_at = datetime.now(timezone.utc)
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
+    save_project_allowlist_requests(
+        session=session,
+        tenant=tenant,
+        project=project,
+        requests=requests,
+    )
     return True, message
 
 
@@ -208,69 +151,24 @@ def assert_sensitive_command_permission(
         channel_id=channel_id,
     )
     legacy_tenant_allowlist = tenant_allowlisted_user_ids(tenant)
-    if user_id in legacy_tenant_allowlist:
-        return
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"'{command_name}' requires a project-mapped Discord channel",
-        )
-    allowlist = project_allowlisted_user_ids(project)
-    if user_id in allowlist:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"'{command_name}' requires an allowlisted Discord user for this project",
+    project_allowlist = project_allowlisted_user_ids(project) if project is not None else set()
+    permitted, reason = can_execute_sensitive_command(
+        command_name=command_name,
+        user_id=user_id,
+        has_project_mapping=project is not None,
+        tenant_allowlist=legacy_tenant_allowlist,
+        project_allowlist=project_allowlist,
     )
-
-
-def _channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
-    discord_config = discord_config or {}
-    allowed: set[str] = set()
-    configured_channel_id = str(discord_config.get("channel_id") or "").strip()
-    if configured_channel_id:
-        allowed.add(configured_channel_id)
-
-    raw_thread_ids = discord_config.get("ask_thread_channel_ids")
-    if isinstance(raw_thread_ids, list):
-        for value in raw_thread_ids:
-            normalized = str(value or "").strip()
-            if normalized:
-                allowed.add(normalized)
-    raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
-    if isinstance(raw_seed_thread_ids, list):
-        for value in raw_seed_thread_ids:
-            normalized = str(value or "").strip()
-            if normalized:
-                allowed.add(normalized)
-    return allowed
-
-
-def project_allowed_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
-        )
-    ).scalars().all()
-    allowed: set[str] = set()
-    for project in projects:
-        allowed.update(_channel_ids_from_discord_config(dict(project.discord_config or {})))
-    return allowed
-
-
-def tenant_allowed_channel_ids(*, session: Session, tenant: Tenant) -> set[str]:
-    # Project-level channel bindings take precedence, with tenant-level fallback for backward compatibility.
-    allowed = project_allowed_channel_ids(session=session, tenant_id=tenant.tenant_id)
-    allowed.update(_channel_ids_from_discord_config(dict(tenant.discord_config or {})))
-    return allowed
+    if permitted:
+        return
+    if reason is None:
+        reason = f"'{command_name}' requires an allowlisted Discord user for this project"
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
 
 
 def assert_channel_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> None:
-    if not channel_id:
-        return
     allowed_channel_ids = tenant_allowed_channel_ids(session=session, tenant=tenant)
-    if allowed_channel_ids and channel_id not in allowed_channel_ids:
+    if not is_channel_allowed(channel_id=channel_id, allowed_channel_ids=allowed_channel_ids):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Command channel does not match project or tenant Discord channel",
@@ -416,21 +314,14 @@ def clear_seed_followup_context(
     kept_entries = [entry for entry in entries if entry.get("request_id") != normalized_request_id]
     removed_entry = next((entry for entry in entries if entry.get("request_id") == normalized_request_id), None)
 
-    discord_config = dict(tenant.discord_config or {})
-    discord_config["seed_followups"] = kept_entries
+    removed_channel_ids: set[str] = set()
     if isinstance(removed_entry, dict):
-        raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
-        seed_thread_ids = (
-            [str(value).strip() for value in raw_seed_thread_ids if str(value).strip()]
-            if isinstance(raw_seed_thread_ids, list)
-            else []
-        )
         removed_channels = removed_entry.get("channel_ids")
         if isinstance(removed_channels, list):
-            removed_set = {str(value).strip() for value in removed_channels if str(value).strip()}
-            if removed_set:
-                seed_thread_ids = [value for value in seed_thread_ids if value not in removed_set]
-        discord_config["seed_followup_thread_channel_ids"] = seed_thread_ids
-    tenant.discord_config = discord_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
+            removed_channel_ids = {str(value).strip() for value in removed_channels if str(value).strip()}
+    save_seed_followups(
+        session=session,
+        tenant=tenant,
+        entries=kept_entries,
+        removed_channel_ids=removed_channel_ids,
+    )
