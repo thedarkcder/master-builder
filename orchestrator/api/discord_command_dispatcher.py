@@ -17,6 +17,24 @@ from orchestrator.core.runs import RUN_STATUS_QUEUED, RUN_STATUS_RUNNING
 from orchestrator.storage.models import Run, Tenant
 
 
+def _issue_project_key(issue_key: str) -> str:
+    normalized = issue_key.strip().upper()
+    if "-" not in normalized:
+        return ""
+    return normalized.split("-", 1)[0]
+
+
+def _assert_issue_key_in_scope(*, issue_key: str, scope: CommandScope) -> None:
+    if not scope.project_keys:
+        return
+    if _issue_project_key(issue_key) in {value.strip().upper() for value in scope.project_keys if value.strip()}:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Issue {issue_key} is outside the mapped project scope",
+    )
+
+
 def _format_elapsed_seconds(*, started_at: datetime | None, created_at: datetime | None) -> int:
     anchor = started_at or created_at
     if anchor is None:
@@ -139,6 +157,7 @@ def dispatch_simple_discord_command(
         if len(arguments) != 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !link <ISSUE_KEY>")
         issue_key = arguments[0].strip().upper()
+        _assert_issue_key_in_scope(issue_key=issue_key, scope=scope)
         latest_pr = session.execute(
             select(Run)
             .where(
