@@ -38,6 +38,10 @@ from orchestrator.api.admin_jira_oauth_helpers import (
     refresh_jira_connection_tokens as _refresh_jira_connection_tokens_impl,
     resolve_secret_ref as _resolve_secret_ref_impl,
 )
+from orchestrator.api.admin_discord_allowlist_helpers import (
+    notify_discord_allowlist_approved as _notify_discord_allowlist_approved_impl,
+    parse_discord_allowlist_requests as _parse_discord_allowlist_requests_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -304,36 +308,10 @@ def _parse_discord_allowlist_requests(
     *,
     project_id: str | None = None,
 ) -> list[DiscordAllowlistRequestRead]:
-    if not isinstance(discord_config, dict):
-        return []
-    raw = discord_config.get("allowlist_requests")
-    if not isinstance(raw, list):
-        return []
-    normalized: list[DiscordAllowlistRequestRead] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        user_id = str(item.get("user_id") or "").strip()
-        if not user_id:
-            continue
-        permissions_raw = item.get("permissions")
-        permissions = (
-            [str(value).strip() for value in permissions_raw if str(value).strip()]
-            if isinstance(permissions_raw, list)
-            else []
-        )
-        normalized.append(
-            DiscordAllowlistRequestRead(
-                project_id=project_id,
-                user_id=user_id,
-                requested_at=str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
-                channel_id=str(item.get("channel_id") or "").strip() or None,
-                reason=str(item.get("reason") or "").strip() or None,
-                permissions=permissions,
-            )
-        )
-    normalized.sort(key=lambda item: item.requested_at, reverse=True)
-    return normalized
+    return _parse_discord_allowlist_requests_impl(
+        discord_config,
+        project_id=project_id,
+    )
 
 
 def _notify_discord_allowlist_approved(
@@ -343,23 +321,14 @@ def _notify_discord_allowlist_approved(
     tenant_id: str,
     user_id: str,
 ) -> bool:  # noqa: ANN001
-    bot_token_ref = settings.discord_bot_token_secret_ref.strip()
-    if not bot_token_ref:
-        return False
-    bot_token = resolve_scoped_secret_ref(
-        session,
-        secret_ref=bot_token_ref,
-        encryption_key=settings.secrets_encryption_key,
+    return _notify_discord_allowlist_approved_impl(
+        session=session,
+        settings=settings,
         tenant_id=tenant_id,
-    )
-    if not bot_token:
-        return False
-    client = DiscordApiClient(bot_token=bot_token)
-    client.send_direct_message(
         user_id=user_id,
-        content="Your allowlist request has been approved. You can now run sensitive commands for this tenant.",
+        resolve_secret_ref_fn=resolve_scoped_secret_ref,
+        discord_client_factory=DiscordApiClient,
     )
-    return True
 
 
 def _delete_jira_webhooks(
