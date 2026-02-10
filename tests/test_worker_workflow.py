@@ -2,6 +2,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import enqueue_run
@@ -10,6 +11,7 @@ from orchestrator.core.workflow_runner import (
     WorkflowDiagnostics,
     WorkflowResult,
 )
+from orchestrator.core.discord_notifications import DiscordSendResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, RunLock, Tenant
@@ -257,6 +259,28 @@ class WorkerWorkflowTests(unittest.TestCase):
                 repo_url="https://github.com/example/repo",
             )
             self.assertTrue(retry_enqueue.enqueued)
+
+    def test_decision_gate_notification_includes_reply_components(self) -> None:
+        run_id = self._queue_run(
+            "TP-399",
+            issue_summary="Unclear requirements",
+            issue_description="TBD: need to decide later?",
+        )
+
+        with self.session_factory() as session, patch(
+            "orchestrator.worker.send_tenant_discord_message",
+            return_value=DiscordSendResult(sent=True, reason="sent"),
+        ) as send_mock:
+            processed = process_next_queued_run(session, _SuccessRunner())
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "blocked")
+
+        send_mock.assert_called_once()
+        kwargs = send_mock.call_args.kwargs
+        self.assertTrue(kwargs["open_thread"])
+        self.assertIsInstance(kwargs["thread_intro_components"], list)
+        self.assertEqual(kwargs["thread_intro_components"][0]["components"][0]["custom_id"], "ask.reply.open")
 
     def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
         with self.session_factory() as session:

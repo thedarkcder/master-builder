@@ -1014,6 +1014,33 @@ class JiraWebhookTests(unittest.TestCase):
         thread_send_mock.assert_called_once()
         interaction_send_mock.assert_not_called()
 
+    def test_discord_interaction_followup_send_failure_is_swallowed(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.routes_webhook.execute_discord_command",
+                return_value=DiscordCommandResponse(
+                    ok=True,
+                    command="help",
+                    message="ok",
+                    data=None,
+                ),
+            ),
+            patch(
+                "orchestrator.api.routes_webhook._send_discord_interaction_followup",
+                side_effect=RuntimeError("token expired"),
+            ),
+        ):
+            asyncio.run(
+                _run_discord_command_followup(
+                    tenant_id="tenant-webhook",
+                    user_id="discord-user-1",
+                    channel_id="discord-channel-1",
+                    command_text="!help",
+                    application_id="discord-app-1",
+                    interaction_token="interaction-token-1",
+                )
+            )
+
     def test_discord_ask_followup_creates_new_thread_for_initial_response(self) -> None:
         with (
             patch(
