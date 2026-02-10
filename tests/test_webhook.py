@@ -491,10 +491,10 @@ class JiraWebhookTests(unittest.TestCase):
         }
         with (
             patch(
-                "orchestrator.api.routes_webhook.execute_jira_comment_command",
+                "orchestrator.api.webhooks.jira_ingress.execute_jira_comment_command",
                 return_value=DiscordCommandResponse(ok=True, command="ask", message="I can fix this.", data=None),
             ) as command_mock,
-            patch("orchestrator.api.routes_webhook._post_jira_comment", return_value=(True, None)) as post_mock,
+            patch("orchestrator.api.webhooks.jira_ingress.post_jira_comment", return_value=(True, None)) as post_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -544,7 +544,7 @@ class JiraWebhookTests(unittest.TestCase):
             ),
             patch("orchestrator.api.routes_discord.build_codex_runtime"),
             patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Jira ask response"),
-            patch("orchestrator.api.routes_webhook._post_jira_comment", return_value=(True, None)) as post_mock,
+            patch("orchestrator.api.webhooks.jira_ingress.post_jira_comment", return_value=(True, None)) as post_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
