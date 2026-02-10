@@ -1,6 +1,6 @@
 ---
 name: staff-engineer-review
-description: Autonomous Staff Engineering review protocol for design and implementation requests in any language or stack. Enforces problem framing, architectural judgment, risk analysis, simplicity checks, and a final proceed/constraint/decision-gate verdict before coding.
+description: Autonomous Staff Engineering review protocol for design and implementation requests in any language or stack. Enforces problem framing, architectural judgment, contract semantics, risk analysis, simplicity checks, and a final proceed/constraint/decision-gate verdict before coding.
 ---
 
 # Skill: Staff Engineering Review (Autonomous & Mandatory)
@@ -9,7 +9,7 @@ This skill is a **self-governing Staff Engineer protocol** executed by the agent
 It is not a suggestion engine and not primarily addressed to a human.
 
 The agent must make decisions autonomously by default.
-Human-in-the-loop (Decision Gate) is required only when risk, ambiguity, or irreversibility exceeds safe thresholds.
+Human-in-the-loop (Decision Gate) is required only when ambiguity, risk, or irreversibility exceeds safe thresholds.
 
 If the final verdict is not `✅ Proceed — design is appropriate and scoped`, **do not write code**.
 
@@ -23,8 +23,8 @@ If the final verdict is not `✅ Proceed — design is appropriate and scoped`, 
   - changes are reversible or mitigated,
   - risk is low or medium with controls in place.
 - The agent must trigger a **Decision Gate** only when:
-  - ambiguity would materially change external behavior, contracts, or pricing,
-  - a trade-off impacts reliability, security, privacy, compliance, cost, or performance,
+  - ambiguity would materially change external behavior, contracts, pricing, or compliance,
+  - a trade-off impacts reliability, security, privacy, cost, or performance,
   - the change is hard to roll back (data migration, contract break, data loss),
   - required intent cannot be inferred safely without guessing.
 - If proceeding with assumptions, list them explicitly and keep them minimal.
@@ -39,13 +39,15 @@ Produce output using these sections in this exact order:
 2. Type (one choice)
 3. Invariants (2–5 bullets)
 4. Assumptions (explicit defaults + why safe)
-5. Proposed design (bullets with component placement)
-6. Patterns used (with alternatives rejected)
-7. Patterns not used
-8. Change surface (files/modules/contracts)
-9. Failure modes (detection + recovery)
-10. Tests (invariants -> specific tests)
-11. Verdict (exactly one)
+5. Contract matrix (inputs × expected behavior, incl. before/after)
+6. Call-path impact scan (who calls this, with what shapes)
+7. Proposed design (bullets with component placement)
+8. Patterns used (with alternatives rejected)
+9. Patterns not used
+10. Change surface (files/modules/contracts)
+11. Failure modes (detection + recovery)
+12. Tests (invariants -> specific tests)
+13. Verdict (exactly one)
 
 Do not skip sections. Keep each section concise and complete.
 
@@ -72,12 +74,13 @@ If multiple types apply, select the dominant one and justify internally.
 
 ### 3) Determine non-negotiable invariants
 Infer 2–5 invariants (business, technical, or compliance).
+
 Examples:
 - A customer is never charged twice.
 - A lender decision is traceable.
 - State transitions are monotonic.
 
-If no clear invariants exist, call out overengineering risk explicitly.
+If no clear invariants exist, explicitly call out overengineering risk.
 
 ---
 
@@ -116,6 +119,52 @@ This enforces architectural restraint.
 
 ---
 
+## Phase 2.1: Contract & Call-Path Semantics (Mandatory)
+
+This phase prevents semantic regressions caused by refactors, normalization, sentinels, defaults, or shared helpers.
+It is executed autonomously. Decision Gate is required only when safe behavior cannot be inferred.
+
+### 2.1a) Build a Contract Matrix (Equivalence Buckets)
+
+Identify relevant input dimensions (e.g. None vs empty vs sentinel vs valid vs invalid; mapped vs unmapped).
+Create equivalence buckets and expected behavior for each, including:
+- scope/interpretation (tenant-level, unscoped, project-scoped, etc.)
+- status code / error class
+- side effects (none / write / event emitted)
+- observability expectations
+
+**Hard requirements:**
+- Minimum 4 buckets when normalization, scoping, auth, or routing is involved.
+- Must include: `None/null`, sentinel/default, valid value, invalid/unmapped value.
+
+**Behavioral equivalence rule (critical):**
+For each bucket, explicitly state whether behavior is:
+- unchanged from before this change,
+- intentionally changed (and why),
+- unintentionally changed → **Decision Gate required**.
+
+### 2.1b) Sentinel & Default Semantics Check
+
+If any code converts one representation into another (e.g. `None → "dm"`, `"" → "unknown"`, missing → default):
+- Determine whether downstream logic treats the new representation differently (branching, scoping, auth, error mapping).
+- Confirm semantic equivalence is preserved.
+
+**Hard rule:**
+If representation change alters truthiness or branch selection, contract matrix **must** include before/after behavior.
+
+### 2.1c) Call-Path Impact Scan (Transitive Semantics)
+
+If modifying a shared helper, normalization function, or scope resolver:
+- Identify all call sites or entrypoints.
+- For each call site, document input shapes it can supply.
+- Determine whether any call site crosses a semantic boundary due to the change.
+
+If a call site’s input shape is unknown:
+- infer from code/tests/search,
+- if still unclear and external behavior could change → **Decision Gate**.
+
+---
+
 ## Phase 3: Change Surface & Risk
 
 ### 7) Determine change surface
@@ -127,20 +176,22 @@ List:
 If surface is large, justify why or propose a smaller first step.
 
 If an external contract changes (HTTP/event/schema), also include:
-- Before vs after contract
-- Compatibility strategy (versioning, defaults, migration)
-- Rollout plan if needed
+- before vs after contract
+- compatibility strategy (versioning, defaults, migration)
+- rollout plan if needed
+
+---
 
 ### 8) Analyze production failure scenarios
 For each risk, determine:
-- Failure mode
-- Detection mechanism
-- Recovery or mitigation
+- failure mode
+- detection mechanism
+- recovery or mitigation
 
 Include:
-- Partial failures
-- Retry/idempotency risks
-- Observability gaps
+- partial failures
+- retry/idempotency risks
+- observability gaps
 
 “Unlikely” is not a reason to skip analysis.
 
@@ -150,20 +201,20 @@ Include:
 
 ### 9) Project six-month evolution
 Determine:
-- Most likely part to change
-- Intentionally rigid part
-- Key assumptions
+- most likely part to change
+- intentionally rigid part
+- key assumptions
 
 If everything is flexible → call out vagueness risk.  
 If everything is rigid → call out brittleness risk.
 
 ### 10) Explain in 60 seconds
 Produce a 3–5 sentence explanation:
-- Plain language
-- No acronyms unless unavoidable
-- No framework names unless essential
+- plain language
+- no acronyms unless unavoidable
+- no framework names unless essential
 
-If explanation is not clear, refine design before coding.
+If explanation is unclear, refine design before coding.
 
 ---
 
@@ -182,13 +233,19 @@ Before marking PR-ready, enforce all of the following:
 - Web/API layer must not import ORM or repository implementations.
 - Infrastructure may depend on Application ports and external libraries only.
 
+### Contract & semantics rules
+- Contract matrix exists for any PR touching normalization, scoping, auth, routing, or shared helpers.
+- Contract matrix includes explicit before/after behavior per bucket.
+- Sentinel/default conversions preserve semantics or trigger Decision Gate.
+- Call-path impact scan lists all affected entrypoints and confirms no semantic drift.
+
 ### Logic & quality rules
 - No duplicated business logic.
 - No forbidden concurrency patterns.
 - No speculative abstractions.
 
 ### Test proof requirement
-For each invariant, list at least one proving test in this format:
+For each invariant, list at least one proving test:
 `Invariant -> Test name -> What it asserts`
 
 If any enforcement check fails, refactor **before** feature work.
@@ -214,36 +271,35 @@ If a heuristic is violated, explain why.
 
 ### When to use a domain model
 Use when:
-- Invariants must never be broken.
-- The same rule appears in 2+ use cases.
-- Incorrect behavior has real business or compliance cost.
+- invariants must never be broken,
+- the same rule appears in 2+ use cases,
+- incorrect behavior has real business or compliance cost.
 
 Otherwise prefer transaction scripts.
 
 ### When to introduce a new abstraction
 Use when:
-- It removes duplication **and** reduces cognitive load.
-- It has one stable responsibility.
-- It can be named clearly in one sentence.
+- it removes duplication **and** reduces cognitive load,
+- it has one stable responsibility,
+- it can be named clearly in one sentence.
 
 If naming is hard, treat abstraction as premature.
 
 ### When not to add a pattern
 Avoid when:
-- It exists only for consistency.
-- The team cannot explain it in two sentences.
-- It optimizes a hypothetical future.
+- it exists only for consistency,
+- the team cannot explain it in two sentences,
+- it optimizes a hypothetical future.
 
 ### When to refactor
 Refactor when:
-- Change friction is visible now.
-- The same bug appears twice.
-- Test setup dominates test intent.
+- change friction is visible now,
+- the same bug appears twice,
+- test setup dominates test intent.
 
 Refactor protocol:
-- Add characterization tests first for preserved behavior.
-- Refactor in small, verifiable steps.
-- Avoid feature + large structural refactor in one change unless trivial.
+- add characterization tests first for preserved behavior,
+- refactor in small, verifiable steps,its not ange unless trivial.
 
 ### Logic placement reminder
 - Decisions → Domain
