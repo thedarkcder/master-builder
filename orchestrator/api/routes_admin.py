@@ -66,6 +66,11 @@ from orchestrator.api.admin_jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
     jira_webhook_action_status_code as _jira_webhook_action_status_code_impl,
 )
+from orchestrator.api.admin_tenant_actions import (
+    approve_discord_allowlist_request as _approve_discord_allowlist_request_impl,
+    disconnect_tenant_jira as _disconnect_tenant_jira_impl,
+    list_discord_allowlist_requests as _list_discord_allowlist_requests_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -116,7 +121,7 @@ from orchestrator.core.secret_manager import (
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import github_client_from_tenant_config
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
+from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
@@ -687,35 +692,12 @@ def disconnect_tenant_jira(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> JiraWebhookActionResult:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    settings = get_settings()
-
-    webhook_delete_ok, delete_details, _ = _delete_jira_webhooks(
+    return _disconnect_tenant_jira_impl(
         session=session,
-        tenant=tenant,
-        settings=settings,
-    )
-    session.refresh(tenant)
-    jira_config = dict(tenant.jira_config)
-    jira_config["connection_id"] = None
-    jira_config["managed_webhook_ids"] = []
-    tenant.jira_config = jira_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-
-    details = "Jira connection disconnected and webhook metadata cleared."
-    if not webhook_delete_ok:
-        details = (
-            "Jira connection disconnected, but webhook deletion failed. "
-            f"{delete_details}"
-        )
-    return JiraWebhookActionResult(
-        ok=True,
-        action="disconnect",
-        details=details,
-        webhook_ids=[],
+        tenant=session.get(Tenant, tenant_id),
+        tenant_id=tenant_id,
+        settings=get_settings(),
+        delete_jira_webhooks_fn=_delete_jira_webhooks,
     )
 
 
@@ -729,10 +711,12 @@ def list_discord_allowlist_requests(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[DiscordAllowlistRequestRead]:
-    project = session.get(Project, project_id)
-    if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return _parse_discord_allowlist_requests(project.discord_config, project_id=project.project_id)
+    return _list_discord_allowlist_requests_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        parse_discord_allowlist_requests_fn=_parse_discord_allowlist_requests,
+    )
 
 
 @router.post(
@@ -746,69 +730,14 @@ def approve_discord_allowlist_request(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> DiscordAllowlistApprovalResult:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    project = session.get(Project, project_id)
-    if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-
-    normalized_user_id = user_id.strip()
-    if not normalized_user_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Discord user ID is required")
-
-    discord_config = dict(project.discord_config or {})
-    existing_requests = _parse_discord_allowlist_requests(discord_config, project_id=project.project_id)
-    matching_request = next((item for item in existing_requests if item.user_id == normalized_user_id), None)
-    if matching_request is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allowlist request not found")
-
-    allowed_user_ids_raw = discord_config.get("allowed_user_ids")
-    allowed_user_ids = (
-        [str(value).strip() for value in allowed_user_ids_raw if str(value).strip()]
-        if isinstance(allowed_user_ids_raw, list)
-        else []
-    )
-    if normalized_user_id not in allowed_user_ids:
-        allowed_user_ids.append(normalized_user_id)
-    discord_config["allowed_user_ids"] = allowed_user_ids
-    discord_config["allowlist_requests"] = [
-        item.model_dump()
-        for item in existing_requests
-        if item.user_id != normalized_user_id
-    ]
-    project.discord_config = discord_config
-    project.updated_at = datetime.now(timezone.utc)
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-
-    settings = get_settings()
-    notified = False
-    notify_error: str | None = None
-    try:
-        notified = _notify_discord_allowlist_approved(
-            session=session,
-            settings=settings,
-            tenant_id=tenant_id,
-            user_id=normalized_user_id,
-        )
-    except (DiscordApiError, ValueError) as exc:
-        notify_error = str(exc)
-
-    details = f"Approved allowlist request for {normalized_user_id} on project {project.name}."
-    if notified:
-        details = f"{details} Sent Discord DM confirmation."
-    elif notify_error:
-        details = f"{details} DM notification failed: {notify_error}"
-    else:
-        details = f"{details} DM notification skipped (bot token unavailable)."
-
-    return DiscordAllowlistApprovalResult(
-        ok=True,
-        details=details,
-        project_id=project.project_id,
-        user_id=normalized_user_id,
-        notified=notified,
+    return _approve_discord_allowlist_request_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        user_id=user_id,
+        settings=get_settings(),
+        parse_discord_allowlist_requests_fn=_parse_discord_allowlist_requests,
+        notify_discord_allowlist_approved_fn=_notify_discord_allowlist_approved,
     )
 
 
