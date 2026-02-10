@@ -39,6 +39,10 @@ from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,
     plan_seed_issues_with_codex,
 )
+from orchestrator.core.communications.command_pipeline import (
+    CommandExecutionContext,
+    dispatch_registered_command,
+)
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.project_routing import find_active_project_for_issue_key
@@ -1570,80 +1574,109 @@ def execute_discord_command(
     )
     normalized_user_id = payload.user_id.strip()
     normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
-
-    simple_response = dispatch_simple_discord_command(
-        session=session,
-        tenant=tenant,
+    context = CommandExecutionContext(
+        command_name=command_name,
+        arguments=tuple(arguments),
         tenant_id=tenant_id,
-        payload=payload,
-        command_name=command_name,
-        arguments=arguments,
-        jira_browse_base_url=_tenant_jira_browse_base_url(session=session, tenant=tenant),
-    )
-    if simple_response is not None:
-        return simple_response
-
-    ask_response = dispatch_ask_command(
-        session=session,
         tenant=tenant,
+        session=session,
         payload=payload,
-        command_name=command_name,
-        arguments=arguments,
         normalized_user_id=normalized_user_id,
         normalized_channel_id=normalized_channel_id,
-        require_ask_confirmation=require_ask_confirmation,
-        issue_key_pattern=ISSUE_KEY_PATTERN,
-        collect_ask_context_with_history_context=_collect_ask_context_with_history_context,
-        store_pending_ask_action=_store_pending_ask_action,
-        store_ask_history_entry=_store_ask_history_entry,
-        ask_board_message=_ask_board_message,
+        flags={
+            "defer_seed_issues": defer_seed_issues,
+            "require_ask_confirmation": require_ask_confirmation,
+            "allow_plain_ask": allow_plain_ask,
+        },
     )
-    if ask_response is not None:
-        return ask_response
 
-    bug_gap_response = dispatch_bug_gap_command(
-        session=session,
-        tenant=tenant,
-        payload=payload,
-        command_name=command_name,
-        arguments=arguments,
-        issue_key_pattern=ISSUE_KEY_PATTERN,
-        run_gap_analysis=_run_gap_analysis,
-        normalize_discord_attachments=_normalize_discord_attachments,
-        create_discord_bug_issue=_create_discord_bug_issue,
-    )
-    if bug_gap_response is not None:
-        return bug_gap_response
+    def _simple_handler(command_context: CommandExecutionContext) -> DiscordCommandResponse | None:
+        return dispatch_simple_discord_command(
+            session=command_context.session,
+            tenant=command_context.tenant,
+            tenant_id=command_context.tenant_id,
+            payload=command_context.payload,
+            command_name=command_context.command_name,
+            arguments=list(command_context.arguments),
+            jira_browse_base_url=_tenant_jira_browse_base_url(session=command_context.session, tenant=command_context.tenant),
+        )
 
-    issues_response = dispatch_issues_command(
-        session=session,
-        tenant=tenant,
-        payload=payload,
-        command_name=command_name,
-        arguments=arguments,
-        normalized_user_id=normalized_user_id,
-        defer_seed_issues=defer_seed_issues,
-        seed_issues_with_codex=_seed_issues_with_codex,
-        find_seed_followup_context=_find_seed_followup_context,
-        store_seed_followup_context=_store_seed_followup_context,
-        clear_seed_followup_context=_clear_seed_followup_context,
-    )
-    if issues_response is not None:
-        return issues_response
+    def _ask_handler(command_context: CommandExecutionContext) -> DiscordCommandResponse | None:
+        return dispatch_ask_command(
+            session=command_context.session,
+            tenant=command_context.tenant,
+            payload=command_context.payload,
+            command_name=command_context.command_name,
+            arguments=list(command_context.arguments),
+            normalized_user_id=command_context.normalized_user_id,
+            normalized_channel_id=command_context.normalized_channel_id,
+            require_ask_confirmation=bool(command_context.flags.get("require_ask_confirmation")),
+            issue_key_pattern=ISSUE_KEY_PATTERN,
+            collect_ask_context_with_history_context=_collect_ask_context_with_history_context,
+            store_pending_ask_action=_store_pending_ask_action,
+            store_ask_history_entry=_store_ask_history_entry,
+            ask_board_message=_ask_board_message,
+        )
 
-    run_control_response = dispatch_run_control_command(
-        session=session,
-        tenant=tenant,
-        tenant_id=tenant_id,
-        payload=payload,
-        command_name=command_name,
-        arguments=arguments,
-        retryable_statuses=RETRYABLE_STATUSES,
-        resolve_project_for_issue=_resolve_project_for_issue,
-        fetch_issue_preview=_fetch_jira_issue_preview,
-        ensure_issue_is_executable=_ensure_issue_is_executable,
-    )
-    if run_control_response is not None:
-        return run_control_response
+    def _bug_gap_handler(command_context: CommandExecutionContext) -> DiscordCommandResponse | None:
+        return dispatch_bug_gap_command(
+            session=command_context.session,
+            tenant=command_context.tenant,
+            payload=command_context.payload,
+            command_name=command_context.command_name,
+            arguments=list(command_context.arguments),
+            issue_key_pattern=ISSUE_KEY_PATTERN,
+            run_gap_analysis=_run_gap_analysis,
+            normalize_discord_attachments=_normalize_discord_attachments,
+            create_discord_bug_issue=_create_discord_bug_issue,
+        )
 
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported command")
+    def _issues_handler(command_context: CommandExecutionContext) -> DiscordCommandResponse | None:
+        return dispatch_issues_command(
+            session=command_context.session,
+            tenant=command_context.tenant,
+            payload=command_context.payload,
+            command_name=command_context.command_name,
+            arguments=list(command_context.arguments),
+            normalized_user_id=command_context.normalized_user_id,
+            defer_seed_issues=bool(command_context.flags.get("defer_seed_issues")),
+            seed_issues_with_codex=_seed_issues_with_codex,
+            find_seed_followup_context=_find_seed_followup_context,
+            store_seed_followup_context=_store_seed_followup_context,
+            clear_seed_followup_context=_clear_seed_followup_context,
+        )
+
+    def _run_control_handler(command_context: CommandExecutionContext) -> DiscordCommandResponse | None:
+        return dispatch_run_control_command(
+            session=command_context.session,
+            tenant=command_context.tenant,
+            tenant_id=command_context.tenant_id,
+            payload=command_context.payload,
+            command_name=command_context.command_name,
+            arguments=list(command_context.arguments),
+            retryable_statuses=RETRYABLE_STATUSES,
+            resolve_project_for_issue=_resolve_project_for_issue,
+            fetch_issue_preview=_fetch_jira_issue_preview,
+            ensure_issue_is_executable=_ensure_issue_is_executable,
+        )
+
+    handler_registry: dict[str, tuple] = {
+        "help": (_simple_handler,),
+        "policy": (_simple_handler,),
+        "status": (_simple_handler,),
+        "runs": (_simple_handler,),
+        "link": (_simple_handler,),
+        "request": (_simple_handler,),
+        "ask": (_ask_handler,),
+        "bug": (_bug_gap_handler,),
+        "gap": (_bug_gap_handler,),
+        "issues": (_issues_handler,),
+        "run": (_run_control_handler,),
+        "cancel": (_run_control_handler,),
+        "retry": (_run_control_handler,),
+    }
+
+    try:
+        return dispatch_registered_command(context=context, registry=handler_registry)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
