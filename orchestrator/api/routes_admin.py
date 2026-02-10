@@ -12,6 +12,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.admin_schema_mappers import (
+    project_to_schema as _project_to_schema,
+    run_to_schema as _run_to_schema,
+    tenant_to_schema as _tenant_to_schema,
+)
 from orchestrator.api.admin_project_service import AdminProjectService
 from orchestrator.api.admin_jira_webhook_helpers import (
     default_ready_jql as _default_ready_jql,
@@ -57,7 +62,7 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
-from orchestrator.core.project_policy import normalize_project_policy_overrides, resolve_effective_policy
+from orchestrator.core.project_policy import normalize_project_policy_overrides
 from orchestrator.core.secret_manager import (
     resolve_scoped_secret_ref,
 )
@@ -84,61 +89,6 @@ JIRA_WEBHOOK_EVENTS = [
     "comment_updated",
 ]
 RELEASE_BOOTSTRAP_REQUIRED_STATUSES = ("Ready to Release", "Done")
-
-
-def _tenant_to_schema(tenant: Tenant) -> TenantRead:
-    return TenantRead(
-        tenant_id=tenant.tenant_id,
-        name=tenant.name,
-        is_enabled=tenant.is_enabled,
-        jira=tenant.jira_config,
-        github=tenant.github_config,
-        repos=tenant.repos_config,
-        policy=tenant.policy_config,
-        discord=tenant.discord_config,
-        created_at=tenant.created_at,
-        updated_at=tenant.updated_at,
-    )
-
-
-def _run_to_schema(run: Run) -> RunRead:
-    return RunRead(
-        run_id=run.run_id,
-        tenant_id=run.tenant_id,
-        project_id=run.project_id,
-        issue_key=run.issue_key,
-        repo_url=run.repo_url,
-        branch=run.branch,
-        pr_url=run.pr_url,
-        status=run.status,
-        last_error=run.last_error,
-        plan=run.plan,
-        created_at=run.created_at,
-        started_at=run.started_at,
-        finished_at=run.finished_at,
-    )
-
-
-def _project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
-    normalized_project_discord = _normalize_project_discord_config(project.discord_config)
-    return ProjectRead(
-        project_id=project.project_id,
-        tenant_id=project.tenant_id,
-        name=project.name,
-        github_repository=project.github_repository,
-        jira_project_key=project.jira_project_key,
-        policy_overrides=normalize_project_policy_overrides(project.policy_overrides),
-        environment=dict(project.environment or {}),
-        secret_refs=dict(project.secret_refs or {}),
-        discord=normalized_project_discord if normalized_project_discord else None,
-        effective_policy=resolve_effective_policy(
-            tenant_policy=tenant_policy,
-            project_overrides=project.policy_overrides,
-        ),
-        is_archived=project.is_archived,
-        created_at=project.created_at,
-        updated_at=project.updated_at,
-    )
 
 
 def _slugify_tenant_name(name: str) -> str:
