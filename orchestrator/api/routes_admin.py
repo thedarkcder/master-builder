@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -37,6 +36,15 @@ from orchestrator.api.admin_project_normalization import (
     resolve_project_discord_channel_name as _resolve_project_discord_channel_name,
     sanitize_discord_channel_name as _sanitize_discord_channel_name,
     with_preserved_discord_system_fields as _with_preserved_discord_system_fields,
+)
+from orchestrator.api.admin_tenant_project_helpers import (
+    allocate_tenant_id as _allocate_tenant_id_impl,
+    ensure_default_project_for_tenant as _ensure_default_project_for_tenant_impl,
+    primary_jira_project_key as _primary_jira_project_key_impl,
+    primary_repo_url as _primary_repo_url_impl,
+    resolve_project_discord_channel_binding as _resolve_project_discord_channel_binding_impl,
+    slugify_tenant_name as _slugify_tenant_name_impl,
+    sync_tenant_jira_project_keys as _sync_tenant_jira_project_keys_impl,
 )
 from orchestrator.api.schemas import (
     DiscordAllowlistApprovalResult,
@@ -75,7 +83,7 @@ from orchestrator.core.github_install_state import create_install_state_token, p
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError, DiscordTextChannel
+from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
@@ -92,55 +100,19 @@ RELEASE_BOOTSTRAP_REQUIRED_STATUSES = ("Ready to Release", "Done")
 
 
 def _slugify_tenant_name(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
-    return slug or "tenant"
+    return _slugify_tenant_name_impl(name)
 
 
 def _allocate_tenant_id(session: Session, *, name: str) -> str:
-    base = _slugify_tenant_name(name)
-    candidate = base
-    suffix = 2
-    while session.get(Tenant, candidate) is not None:
-        candidate = f"{base}-{suffix}"
-        suffix += 1
-    return candidate
+    return _allocate_tenant_id_impl(session, name=name)
 
 
 def _primary_jira_project_key(jira_config: dict) -> str | None:
-    project_keys = jira_config.get("project_keys")
-    if isinstance(project_keys, list):
-        for key in project_keys:
-            key_normalized = str(key).strip().upper()
-            if key_normalized:
-                return key_normalized
-    return None
+    return _primary_jira_project_key_impl(jira_config)
 
 
 def _primary_repo_url(repos_config: dict) -> str | None:
-    candidates: list[object] = [
-        repos_config.get("github_repository"),
-        repos_config.get("fallback_repo"),
-    ]
-
-    allowlist = repos_config.get("allowlist")
-    if isinstance(allowlist, list):
-        candidates.extend(allowlist)
-
-    by_project = repos_config.get("mapping_rules_by_project_key")
-    if isinstance(by_project, dict):
-        candidates.extend(by_project.values())
-
-    by_component = repos_config.get("mapping_rules_by_component")
-    if isinstance(by_component, dict):
-        candidates.extend(by_component.values())
-
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        normalized = str(candidate).strip()
-        if normalized and normalized.lower() != "none":
-            return normalized
-    return None
+    return _primary_repo_url_impl(repos_config)
 
 
 def _resolve_project_discord_channel_binding(
@@ -151,109 +123,30 @@ def _resolve_project_discord_channel_binding(
     project: Project,
     discord_config: dict,
 ) -> dict:
-    normalized = dict(discord_config or {})
-    existing_channel_id = str(normalized.get("channel_id") or "").strip()
-    if existing_channel_id:
-        normalized["channel_id"] = existing_channel_id
-        return normalized
-
-    token_ref = settings.discord_bot_token_secret_ref.strip()
-    if not token_ref:
-        raise ValueError("Discord bot token reference is not configured")
-    bot_token = resolve_scoped_secret_ref(
-        session,
-        secret_ref=token_ref,
-        encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id,
+    return _resolve_project_discord_channel_binding_impl(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        discord_config=discord_config,
+        resolve_project_discord_channel_name_fn=_resolve_project_discord_channel_name,
     )
-    if not bot_token:
-        raise ValueError(f"Discord bot token secret is missing: {token_ref}")
-
-    guild_id = settings.discord_guild_id.strip()
-    if not guild_id:
-        guild_ref = settings.discord_guild_id_secret_ref.strip()
-        if guild_ref:
-            guild_id = (
-                resolve_scoped_secret_ref(
-                    session,
-                    secret_ref=guild_ref,
-                    encryption_key=settings.secrets_encryption_key,
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                )
-                or ""
-            ).strip()
-    if not guild_id:
-        raise ValueError("Discord guild ID is not configured")
-
-    parent_id = settings.discord_channel_category_id.strip() or None
-    channel_name = _resolve_project_discord_channel_name(settings=settings, tenant=tenant, project=project)
-    client = DiscordApiClient(bot_token=bot_token)
-    channel: DiscordTextChannel = client.ensure_text_channel(
-        guild_id=guild_id,
-        name=channel_name,
-        parent_id=parent_id,
-    )
-    normalized["channel_id"] = channel.channel_id
-    return normalized
 
 
 def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> None:
-    existing = session.execute(
-        select(Project).where(Project.tenant_id == tenant.tenant_id).limit(1)
-    ).scalar_one_or_none()
-    if existing is not None:
-        return
-
-    repo_url = _primary_repo_url(dict(tenant.repos_config))
-    jira_project_key = _primary_jira_project_key(dict(tenant.jira_config))
-    if not repo_url or not jira_project_key:
-        return
-
-    now = datetime.now(timezone.utc)
-    session.add(
-        Project(
-            project_id=f"{tenant.tenant_id}-default",
-            tenant_id=tenant.tenant_id,
-            name=_default_project_name_from_repo(repo_url=repo_url, tenant_id=tenant.tenant_id),
-            github_repository=repo_url,
-            jira_project_key=jira_project_key,
-            policy_overrides={},
-            environment={},
-            secret_refs={},
-            is_archived=False,
-            created_at=now,
-            updated_at=now,
-        )
+    _ensure_default_project_for_tenant_impl(
+        session,
+        tenant=tenant,
+        default_project_name_from_repo_fn=_default_project_name_from_repo,
     )
 
 
 def _sync_tenant_jira_project_keys(session: Session, *, tenant: Tenant) -> None:
-    persisted_projects = session.execute(
-        select(Project)
-        .where(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
-        .order_by(Project.created_at.asc())
-    ).scalars().all()
-    pending_projects = [
-        project
-        for project in session.new
-        if isinstance(project, Project)
-        and project.tenant_id == tenant.tenant_id
-        and not project.is_archived
-    ]
-    persisted_ids = {item.project_id for item in persisted_projects}
-    projects = persisted_projects + [project for project in pending_projects if project.project_id not in persisted_ids]
-    keys: list[str] = []
-    for project in projects:
-        if project.is_archived:
-            continue
-        normalized = _normalize_project_key(project.jira_project_key)
-        if normalized and normalized not in keys:
-            keys.append(normalized)
-    jira_config = dict(tenant.jira_config)
-    jira_config["project_keys"] = keys
-    tenant.jira_config = jira_config
+    _sync_tenant_jira_project_keys_impl(
+        session,
+        tenant=tenant,
+        normalize_project_key_fn=_normalize_project_key,
+    )
 
 
 def _with_managed_github_refs(raw_github_config: dict) -> dict:
