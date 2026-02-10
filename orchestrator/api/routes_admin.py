@@ -81,6 +81,10 @@ from orchestrator.api.admin_tenant_crud import (
     set_tenant_archive_state as _set_tenant_archive_state_impl,
     update_tenant as _update_tenant_impl,
 )
+from orchestrator.api.admin_integration_checks import (
+    test_github_connection as _test_github_connection_impl,
+    test_jira_connection as _test_jira_connection_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -914,43 +918,12 @@ def test_jira_connection(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> IntegrationTestResult:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    jira = tenant.jira_config
-    required = ["project_keys"]
-    missing = [field for field in required if not jira.get(field)]
-    if missing:
-        return IntegrationTestResult(ok=False, details=f"Missing Jira fields: {', '.join(missing)}")
-
-    connection_id = jira.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
-        return IntegrationTestResult(ok=False, details="Jira OAuth connection is not linked for this tenant")
-
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        return IntegrationTestResult(ok=False, details="Configured Jira connection was not found")
-
-    settings = get_settings()
-    try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-            tenant_id=tenant_id,
-        )
-        client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
-        projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
-    except (ValueError, JiraOAuthError) as exc:
-        return IntegrationTestResult(ok=False, details=f"Jira OAuth validation failed: {exc}")
-
-    return IntegrationTestResult(
-        ok=True,
-        details=(
-            f"Jira OAuth connection is valid for {connection.site_url}; "
-            f"{len(projects)} project(s) visible"
-        ),
+    return _test_jira_connection_impl(
+        session=session,
+        tenant_id=tenant_id,
+        settings=get_settings(),
+        refresh_jira_connection_tokens_fn=_refresh_jira_connection_tokens,
+        jira_oauth_client_fn=_jira_oauth_client,
     )
 
 
@@ -960,42 +933,13 @@ def test_github_connection(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> IntegrationTestResult:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    github = tenant.github_config
-    required = ["mode"]
-    missing = [field for field in required if not github.get(field)]
-    if missing:
-        return IntegrationTestResult(ok=False, details=f"Missing GitHub fields: {', '.join(missing)}")
-
-    if github.get("mode") != "github_app":
-        return IntegrationTestResult(ok=False, details="Only github_app mode is supported")
-
-    if not github.get("installation_id"):
-        return IntegrationTestResult(
-            ok=False,
-            details="GitHub App installation is not connected for this tenant",
-        )
-
-    try:
-        settings = get_settings()
-        github_client_from_tenant_config(
-            _with_managed_github_refs(github),
-            secret_lookup=lambda ref: resolve_scoped_secret_ref(
-                session,
-                secret_ref=ref,
-                encryption_key=settings.secrets_encryption_key,
-                tenant_id=tenant_id,
-            ),
-        )
-    except ValueError as exc:
-        return IntegrationTestResult(ok=False, details=str(exc))
-
-    return IntegrationTestResult(
-        ok=True,
-        details="GitHub tenant configuration looks valid and secret refs resolve",
+    return _test_github_connection_impl(
+        session=session,
+        tenant_id=tenant_id,
+        settings=get_settings(),
+        with_managed_github_refs_fn=_with_managed_github_refs,
+        resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref,
+        github_client_from_tenant_config_fn=github_client_from_tenant_config,
     )
 
 @router.get("/tenants/{tenant_id}/repo-bootstrap", response_model=list[RepoBootstrapStateRead])
