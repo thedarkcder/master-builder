@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -14,38 +13,27 @@ from orchestrator.api.admin_schema_mappers import (
     tenant_to_schema as _tenant_to_schema,
 )
 from orchestrator.api.admin_project_service import AdminProjectService
+from orchestrator.api.admin_config_helpers import (
+    validate_codex_assets_for_tenant_init as _validate_codex_assets_for_tenant_init_core,
+)
+from orchestrator.api.admin_discord_allowlist_helpers import (
+    notify_discord_allowlist_approved as _notify_discord_allowlist_approved_core,
+)
 from orchestrator.api.admin_jira_webhook_helpers import (
     default_ready_jql as _default_ready_jql,
-    extract_jira_webhook_conflict_url as _extract_jira_webhook_conflict_url,
-    is_jira_webhook_limit_error as _is_jira_webhook_limit_error,
-    is_jira_webhook_single_url_error as _is_jira_webhook_single_url_error,
     jira_webhook_callback_url as _jira_webhook_callback_url,
     jira_webhook_filter_jql as _jira_webhook_filter_jql,
+    is_jira_webhook_limit_error as _is_jira_webhook_limit_error,
+    is_jira_webhook_single_url_error as _is_jira_webhook_single_url_error,
+    extract_jira_webhook_conflict_url as _extract_jira_webhook_conflict_url,
     parse_jira_webhook_id as _parse_jira_webhook_id,
     parse_managed_webhook_ids as _parse_managed_webhook_ids,
 )
-from orchestrator.api.admin_jira_webhook_cleanup import (
-    all_managed_webhook_ids as _all_managed_webhook_ids_impl,
-    cleanup_conflicting_jira_webhook_url as _cleanup_conflicting_jira_webhook_url_impl,
-    cleanup_unmanaged_jira_webhooks_for_connection as _cleanup_unmanaged_jira_webhooks_for_connection_impl,
-    remove_managed_webhook_id_from_tenants as _remove_managed_webhook_id_from_tenants_impl,
-)
-from orchestrator.api.admin_jira_oauth_helpers import (
-    jira_oauth_client as _jira_oauth_client_impl,
-    refresh_jira_connection_tokens as _refresh_jira_connection_tokens_impl,
-    resolve_secret_ref as _resolve_secret_ref_impl,
-)
-from orchestrator.api.admin_discord_allowlist_helpers import (
-    notify_discord_allowlist_approved as _notify_discord_allowlist_approved_impl,
-    parse_discord_allowlist_requests as _parse_discord_allowlist_requests_impl,
-)
 from orchestrator.api.admin_jira_webhook_delete import (
-    delete_jira_webhooks as _delete_jira_webhooks_impl,
+    delete_jira_webhooks as _delete_jira_webhooks_core,
 )
-from orchestrator.api.admin_config_helpers import (
-    validate_codex_assets_for_tenant_init as _validate_codex_assets_for_tenant_init_impl,
-    with_managed_github_refs as _with_managed_github_refs_impl,
-    with_preserved_jira_system_fields as _with_preserved_jira_system_fields_impl,
+from orchestrator.api.admin_jira_webhook_provision import (
+    provision_jira_webhook as _provision_jira_webhook_core,
 )
 from orchestrator.api.admin_release_bootstrap_helpers import (
     compute_release_bootstrap_result as _compute_release_bootstrap_result_impl,
@@ -68,6 +56,20 @@ from orchestrator.api.admin_tenant_project_routes_service import (
     update_project as _update_project_route_impl,
     update_tenant as _update_tenant_route_impl,
 )
+from orchestrator.api.admin_route_helpers import (
+    allocate_tenant_id as _allocate_tenant_id,
+    cleanup_conflicting_jira_webhook_url as _cleanup_conflicting_jira_webhook_url,
+    cleanup_unmanaged_jira_webhooks_for_connection as _cleanup_unmanaged_jira_webhooks_for_connection,
+    ensure_default_project_for_tenant as _ensure_default_project_for_tenant,
+    jira_oauth_client as _jira_oauth_client_impl,
+    jira_webhook_action_status_code as _jira_webhook_action_status_code,
+    parse_discord_allowlist_requests as _parse_discord_allowlist_requests,
+    refresh_jira_connection_tokens as _refresh_jira_connection_tokens_impl,
+    remove_managed_webhook_id_from_tenants as _remove_managed_webhook_id_from_tenants,
+    sync_tenant_jira_project_keys as _sync_tenant_jira_project_keys,
+    with_managed_github_refs as _with_managed_github_refs,
+    with_preserved_jira_system_fields as _with_preserved_jira_system_fields,
+)
 from orchestrator.api.admin_jira_connect_flow import (
     build_jira_connect_start as _build_jira_connect_start_impl,
     handle_jira_connect_callback as _handle_jira_connect_callback_impl,
@@ -84,7 +86,6 @@ from orchestrator.api.admin_runs_service import (
 )
 from orchestrator.api.admin_jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
-    jira_webhook_action_status_code as _jira_webhook_action_status_code_impl,
 )
 from orchestrator.api.admin_jira_route_service import (
     get_jira_webhook_diagnostics as _get_jira_webhook_diagnostics_route_impl,
@@ -110,27 +111,16 @@ from orchestrator.api.admin_integration_checks import (
     test_github_connection as _test_github_connection_impl,
     test_jira_connection as _test_jira_connection_impl,
 )
-from orchestrator.api.admin_jira_webhook_provision import (
-    provision_jira_webhook as _provision_jira_webhook_impl,
-)
 from orchestrator.api.admin_project_normalization import (
-    default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
     normalize_project_key as _normalize_project_key,
     normalize_project_repo as _normalize_project_repo,
     normalize_string_map as _normalize_string_map,
-    resolve_project_discord_channel_name as _resolve_project_discord_channel_name,
-    sanitize_discord_channel_name as _sanitize_discord_channel_name,
+    resolve_project_discord_channel_name as _resolve_project_discord_channel_name,  # noqa: F401
     with_preserved_discord_system_fields as _with_preserved_discord_system_fields,
 )
 from orchestrator.api.admin_tenant_project_helpers import (
-    allocate_tenant_id as _allocate_tenant_id_impl,
-    ensure_default_project_for_tenant as _ensure_default_project_for_tenant_impl,
-    primary_jira_project_key as _primary_jira_project_key_impl,
-    primary_repo_url as _primary_repo_url_impl,
     resolve_project_discord_channel_binding as _resolve_project_discord_channel_binding_impl,
-    slugify_tenant_name as _slugify_tenant_name_impl,
-    sync_tenant_jira_project_keys as _sync_tenant_jira_project_keys_impl,
 )
 from orchestrator.api.schemas import (
     DiscordAllowlistApprovalResult,
@@ -154,16 +144,15 @@ from orchestrator.api.schemas import (
     TenantUpdate,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
+from orchestrator.core.enforcement_context import validate_enforcement_assets
 from orchestrator.core.project_policy import normalize_project_policy_overrides
 from orchestrator.core.secret_manager import (
     resolve_scoped_secret_ref,
 )
 from orchestrator.core.security import require_admin
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
-from orchestrator.tools.github_app import github_client_from_tenant_config
+from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
-from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthError
+from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -178,184 +167,11 @@ JIRA_WEBHOOK_EVENTS = [
 RELEASE_BOOTSTRAP_REQUIRED_STATUSES = ("Ready to Release", "Done")
 
 
-def _slugify_tenant_name(name: str) -> str:
-    return _slugify_tenant_name_impl(name)
-
-
-def _allocate_tenant_id(session: Session, *, name: str) -> str:
-    return _allocate_tenant_id_impl(session, name=name)
-
-
-def _primary_jira_project_key(jira_config: dict) -> str | None:
-    return _primary_jira_project_key_impl(jira_config)
-
-
-def _primary_repo_url(repos_config: dict) -> str | None:
-    return _primary_repo_url_impl(repos_config)
-
-
-def _resolve_project_discord_channel_binding(
-    *,
-    session: Session,
-    settings,  # noqa: ANN001
-    tenant: Tenant,
-    project: Project,
-    discord_config: dict,
-) -> dict:
-    return _resolve_project_discord_channel_binding_impl(
-        session=session,
-        settings=settings,
-        tenant=tenant,
-        project=project,
-        discord_config=discord_config,
-        resolve_project_discord_channel_name_fn=_resolve_project_discord_channel_name,
-    )
-
-
-def _ensure_default_project_for_tenant(session: Session, *, tenant: Tenant) -> None:
-    _ensure_default_project_for_tenant_impl(
-        session,
-        tenant=tenant,
-        default_project_name_from_repo_fn=_default_project_name_from_repo,
-    )
-
-
-def _sync_tenant_jira_project_keys(session: Session, *, tenant: Tenant) -> None:
-    _sync_tenant_jira_project_keys_impl(
-        session,
-        tenant=tenant,
-        normalize_project_key_fn=_normalize_project_key,
-    )
-
-
-def _with_managed_github_refs(raw_github_config: dict) -> dict:
-    return _with_managed_github_refs_impl(
-        raw_github_config=raw_github_config,
-        settings=get_settings(),
-    )
-
-
 def _validate_codex_assets_for_tenant_init() -> None:
-    _validate_codex_assets_for_tenant_init_impl(
+    _validate_codex_assets_for_tenant_init_core(
         settings=get_settings(),
         module_file=__file__,
         validate_enforcement_assets_fn=validate_enforcement_assets,
-    )
-
-
-def _resolve_secret_ref(
-    session: Session,
-    *,
-    ref_name: str,
-    settings,
-    tenant_id: str | None = None,
-    project_id: str | None = None,
-) -> str:  # noqa: ANN001
-    return _resolve_secret_ref_impl(
-        session,
-        ref_name=ref_name,
-        settings=settings,
-        tenant_id=tenant_id,
-        project_id=project_id,
-    )
-
-
-def _jira_oauth_client(
-    *,
-    session: Session,
-    settings,
-    tenant_id: str | None = None,
-    project_id: str | None = None,
-) -> JiraOAuthClient:  # noqa: ANN001
-    return _jira_oauth_client_impl(
-        session=session,
-        settings=settings,
-        tenant_id=tenant_id,
-        project_id=project_id,
-    )
-
-
-def _refresh_jira_connection_tokens(
-    session: Session,
-    *,
-    connection: JiraOAuthConnection,
-    settings,
-    tenant_id: str | None = None,
-) -> str:  # noqa: ANN001
-    return _refresh_jira_connection_tokens_impl(
-        session,
-        connection=connection,
-        settings=settings,
-        tenant_id=tenant_id,
-        jira_oauth_client_fn=_jira_oauth_client,
-    )
-
-
-def _all_managed_webhook_ids(session: Session) -> set[int]:
-    return _all_managed_webhook_ids_impl(
-        session=session,
-        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
-    )
-
-
-def _cleanup_unmanaged_jira_webhooks_for_connection(
-    *,
-    session: Session,
-    client: JiraOAuthClient,
-    access_token: str,
-    cloud_id: str,
-) -> tuple[int, str]:
-    return _cleanup_unmanaged_jira_webhooks_for_connection_impl(
-        session=session,
-        client=client,
-        access_token=access_token,
-        cloud_id=cloud_id,
-        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
-        parse_jira_webhook_id_fn=_parse_jira_webhook_id,
-    )
-
-
-def _cleanup_conflicting_jira_webhook_url(
-    *,
-    session: Session,
-    client: JiraOAuthClient,
-    access_token: str,
-    cloud_id: str,
-    callback_url: str,
-    conflicting_url: str | None,
-) -> tuple[int, str]:
-    return _cleanup_conflicting_jira_webhook_url_impl(
-        session=session,
-        client=client,
-        access_token=access_token,
-        cloud_id=cloud_id,
-        callback_url=callback_url,
-        conflicting_url=conflicting_url,
-        parse_jira_webhook_id_fn=_parse_jira_webhook_id,
-        remove_managed_webhook_id_from_tenants_fn=_remove_managed_webhook_id_from_tenants,
-    )
-
-
-def _remove_managed_webhook_id_from_tenants(*, session: Session, webhook_id: int) -> int:
-    return _remove_managed_webhook_id_from_tenants_impl(
-        session=session,
-        webhook_id=webhook_id,
-        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
-    )
-
-
-def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:
-    return _with_preserved_jira_system_fields_impl(existing=existing, proposed=proposed)
-
-
-def _parse_discord_allowlist_requests(
-    discord_config: dict | None,
-    *,
-    project_id: str | None = None,
-) -> list[DiscordAllowlistRequestRead]:
-    return _parse_discord_allowlist_requests_impl(
-        discord_config,
-        project_id=project_id,
     )
 
 
@@ -366,7 +182,7 @@ def _notify_discord_allowlist_approved(
     tenant_id: str,
     user_id: str,
 ) -> bool:  # noqa: ANN001
-    return _notify_discord_allowlist_approved_impl(
+    return _notify_discord_allowlist_approved_core(
         session=session,
         settings=settings,
         tenant_id=tenant_id,
@@ -376,19 +192,21 @@ def _notify_discord_allowlist_approved(
     )
 
 
-def _delete_jira_webhooks(
+def _resolve_project_discord_channel_binding(
     *,
     session: Session,
-    tenant: Tenant,
     settings,  # noqa: ANN001
-) -> tuple[bool, str, list[int]]:
-    return _delete_jira_webhooks_impl(
+    tenant: Tenant,
+    project,
+    discord_config: dict,
+) -> dict:
+    return _resolve_project_discord_channel_binding_impl(
         session=session,
-        tenant=tenant,
         settings=settings,
-        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
-        refresh_jira_connection_tokens_fn=_refresh_jira_connection_tokens,
-        jira_oauth_client_fn=_jira_oauth_client,
+        tenant=tenant,
+        project=project,
+        discord_config=discord_config,
+        resolve_project_discord_channel_name_fn=_resolve_project_discord_channel_name,
     )
 
 
@@ -407,6 +225,37 @@ def _admin_project_service() -> AdminProjectService:
     )
 
 
+def _jira_oauth_client(
+    *,
+    session: Session,
+    settings,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+) -> object:  # noqa: ANN401
+    return _jira_oauth_client_impl(
+        session=session,
+        settings=settings,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
+
+
+def _refresh_jira_connection_tokens(
+    session: Session,
+    *,
+    connection: JiraOAuthConnection,
+    settings,
+    tenant_id: str | None = None,
+) -> str:
+    return _refresh_jira_connection_tokens_impl(
+        session,
+        connection=connection,
+        settings=settings,
+        tenant_id=tenant_id,
+        jira_oauth_client_fn=_jira_oauth_client,
+    )
+
+
 def _provision_jira_webhook(
     *,
     session: Session,
@@ -414,7 +263,7 @@ def _provision_jira_webhook(
     settings,  # noqa: ANN001
     replace_existing: bool,
 ) -> JiraWebhookActionResult:
-    return _provision_jira_webhook_impl(
+    return _provision_jira_webhook_core(
         session=session,
         tenant=tenant,
         settings=settings,
@@ -436,8 +285,20 @@ def _provision_jira_webhook(
     )
 
 
-def _jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
-    return _jira_webhook_action_status_code_impl(result)
+def _delete_jira_webhooks(
+    *,
+    session: Session,
+    tenant: Tenant,
+    settings,  # noqa: ANN001
+) -> tuple[bool, str, list[int]]:
+    return _delete_jira_webhooks_core(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
+        refresh_jira_connection_tokens_fn=_refresh_jira_connection_tokens,
+        jira_oauth_client_fn=_jira_oauth_client,
+    )
 
 
 @router.post("/jira/connect/start", response_model=JiraConnectStart)
