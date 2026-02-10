@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import mark_run_terminal
-from orchestrator.core.workflow_runner import WorkflowResult
+from orchestrator.core.workflow.runner import WorkflowResult
 from orchestrator.storage.models import Project, Run
 
 RUN_STATUS_RUNNING = "running"

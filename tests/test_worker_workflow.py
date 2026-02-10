@@ -6,12 +6,12 @@ from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import enqueue_run
-from orchestrator.core.workflow_runner import (
+from orchestrator.core.workflow.runner import (
     PmPlan,
     WorkflowDiagnostics,
     WorkflowResult,
 )
-from orchestrator.core.discord_notifications import DiscordSendResult
+from orchestrator.core.discord.notifications import DiscordSendResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, RunLock, Tenant

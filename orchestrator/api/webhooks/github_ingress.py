@@ -19,7 +19,7 @@ from orchestrator.api.webhooks.contracts import (
     resolve_tenant_github_webhook_secret as _resolve_tenant_github_webhook_secret,
     validate_github_webhook_signature as _validate_github_webhook_signature,
 )
-from orchestrator.core.discord_notifications import send_tenant_discord_message
+from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.reviewer import ReviewAgentGate
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config

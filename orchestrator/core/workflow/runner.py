@@ -7,7 +7,7 @@ from typing import Protocol
 
 from orchestrator.core.followups import build_backlog_follow_up_draft
 from orchestrator.core.gtd import validate_good_to_do
-from orchestrator.core.workflow_runner_policies import (
+from orchestrator.core.workflow.runner_policies import (
     evaluate_placeholder_policy,
     evaluate_runtime_limit,
 )

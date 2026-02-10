@@ -1,6 +1,6 @@
 import unittest
 
-from orchestrator.core.workflow_runner import (
+from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
     ReviewResult,

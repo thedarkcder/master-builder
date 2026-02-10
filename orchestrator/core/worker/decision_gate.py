@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runs import mark_run_terminal
-from orchestrator.core.worker_run_lifecycle import resolve_project_for_run
-from orchestrator.core.worker_stage_events import decision_gate_required_update
+from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
+from orchestrator.core.worker.stage_events import decision_gate_required_update
 
 
 def apply_decision_gate(

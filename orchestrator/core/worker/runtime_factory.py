@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.codex_agents import CodexWorkflowAgents
 from orchestrator.core.codex_runtime import build_codex_runtime
 from orchestrator.core.config import get_settings
-from orchestrator.core.workflow_runner import WorkflowRunner
+from orchestrator.core.workflow.runner import WorkflowRunner
 
 
 def build_workflow_runner_for_session(*, session: Session) -> WorkflowRunner:

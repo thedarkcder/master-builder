@@ -1,6 +1,6 @@
 import unittest
 
-from orchestrator.core.discord_commands_sync import build_discord_guild_commands
+from orchestrator.core.discord.commands_sync import build_discord_guild_commands
 
 
 class DiscordCommandSyncTests(unittest.TestCase):

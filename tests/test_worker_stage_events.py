@@ -1,4 +1,4 @@
-from orchestrator.core.worker_stage_events import decision_gate_required_update, run_failed_update
+from orchestrator.core.worker.stage_events import decision_gate_required_update, run_failed_update
 
 
 def test_decision_gate_required_update_contains_stage_and_messages() -> None:

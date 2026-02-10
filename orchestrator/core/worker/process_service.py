@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.worker_stage_notifier import RunStageNotifier
+from orchestrator.core.worker.stage_notifier import RunStageNotifier
 
 
 def process_next_queued_run(

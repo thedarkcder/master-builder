@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from orchestrator.core.discord_policy import channel_ids_from_discord_config
+from orchestrator.core.discord.policy import channel_ids_from_discord_config
 from orchestrator.storage.models import Project, Tenant
 
 

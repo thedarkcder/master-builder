@@ -25,7 +25,7 @@ from orchestrator.api.routes.webhook import (
     _parse_jira_comment_command,
 )
 from orchestrator.api.schemas import DiscordCommandResponse
-from orchestrator.core.discord_channel_tenant_index import invalidate_discord_channel_tenant_index
+from orchestrator.core.discord.channel_tenant_index import invalidate_discord_channel_tenant_index
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
