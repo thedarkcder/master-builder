@@ -62,6 +62,11 @@ from orchestrator.api.discord_seed_matching import (
 from orchestrator.api.discord_seed_description import (
     build_seed_issue_description as _build_seed_issue_description_impl,
 )
+from orchestrator.api.discord_scope_service import (
+    normalize_scope_channel_id as _normalize_scope_channel_id_impl,
+    resolve_command_scope as _resolve_command_scope_impl,
+    resolve_project_for_issue as _resolve_project_for_issue_impl,
+)
 from orchestrator.api.discord_ask_memory import (
     MAX_ASK_HISTORY_CONTEXT as ASK_HISTORY_CONTEXT_LIMIT,
     collect_ask_context_with_history_context as _collect_ask_context_with_history_context_impl,
@@ -118,14 +123,8 @@ _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 MAX_ASK_HISTORY_CONTEXT = ASK_HISTORY_CONTEXT_LIMIT
-DM_SCOPE_SENTINEL_CHANNEL_IDS = {"__dm__", "__dm", "dm"}
 def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
-    normalized_channel_id = str(channel_id or "").strip()
-    if not normalized_channel_id:
-        return None
-    if normalized_channel_id.lower() in DM_SCOPE_SENTINEL_CHANNEL_IDS:
-        return None
-    return normalized_channel_id
+    return _normalize_scope_channel_id_impl(channel_id)
 
 
 def _tenant_repo_url(tenant: Tenant) -> str | None:
@@ -196,22 +195,12 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
 
 
 def _resolve_command_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> CommandScope:
-    normalized_channel_id = _normalize_scope_channel_id(channel_id)
-    if normalized_channel_id:
-        scope = _channel_scope_repository.resolve_project_scope(
-            session=session,
-            tenant=tenant,
-            channel_id=normalized_channel_id,
-        )
-        if scope is not None and scope.jira_project_key:
-            return CommandScope(
-                project_id=scope.project_id,
-                project_keys=(scope.jira_project_key,),
-                channel_id=normalized_channel_id,
-            )
-    return CommandScope(
-        project_keys=tuple(_tenant_project_keys(session=session, tenant=tenant)),
-        channel_id=normalized_channel_id,
+    return _resolve_command_scope_impl(
+        session=session,
+        tenant=tenant,
+        channel_id=channel_id,
+        channel_scope_repository=_channel_scope_repository,
+        tenant_project_keys_fn=_tenant_project_keys,
     )
 
 
@@ -221,16 +210,11 @@ def _resolve_project_for_issue(
     tenant: Tenant,
     issue_key: str,
 ) -> Project:
-    project = find_active_project_for_issue_key(
-        session,
-        tenant_id=tenant.tenant_id,
+    return _resolve_project_for_issue_impl(
+        session=session,
+        tenant=tenant,
         issue_key=issue_key,
-    )
-    if project is not None:
-        return project
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail=f"No active project mapping found for issue {issue_key}",
+        find_active_project_for_issue_key_fn=find_active_project_for_issue_key,
     )
 
 
