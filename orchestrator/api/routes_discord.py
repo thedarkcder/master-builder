@@ -50,6 +50,9 @@ from orchestrator.api.discord_seed_matching import (
     select_seed_match as _select_seed_match_impl,
     summary_similarity as _summary_similarity_impl,
 )
+from orchestrator.api.discord_seed_description import (
+    build_seed_issue_description as _build_seed_issue_description_impl,
+)
 from orchestrator.api.discord_ask_memory import (
     MAX_ASK_HISTORY_CONTEXT as ASK_HISTORY_CONTEXT_LIMIT,
     collect_ask_context_with_history_context as _collect_ask_context_with_history_context_impl,
@@ -289,59 +292,12 @@ def _build_seed_issue_description(
     scope_out: list[str],
     acceptance_criteria: list[str],
 ) -> dict:
-    def _heading(text: str) -> dict:
-        return {
-            "type": "heading",
-            "attrs": {"level": 3},
-            "content": [{"type": "text", "text": text}],
-        }
-
-    def _bullet_list(items: list[str]) -> dict:
-        return {
-            "type": "bulletList",
-            "content": [
-                {
-                    "type": "listItem",
-                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": item}]}],
-                }
-                for item in items
-            ],
-        }
-
-    scope_in_items = scope_in if scope_in else ["Not specified"]
-    scope_out_items = scope_out if scope_out else ["Not specified"]
-    acceptance_items = acceptance_criteria if acceptance_criteria else ["Criteria were not provided"]
-
-    content = [
-        _heading("Objective"),
-        _bullet_list([objective.strip() or "No objective provided"]),
-        _heading("Scope In"),
-        _bullet_list(scope_in_items),
-        _heading("Scope Out"),
-        _bullet_list(scope_out_items),
-        _heading("Acceptance Criteria"),
-        _bullet_list(acceptance_items),
-        _heading("Good To Do Checklist"),
-        _bullet_list(
-            [
-                "[ ] Objective is clear",
-                "[ ] Scope is explicit (in/out)",
-                "[ ] Acceptance criteria are testable",
-                "[ ] How-to-test is defined",
-                "[ ] MVP vs scale-ready is decided",
-            ]
-        ),
-        _heading("Decision Gate Triggers"),
-        _bullet_list(
-            [
-                "[ ] Requirements are ambiguous",
-                "[ ] Design choice impacts NFRs/reliability/cost/security",
-            ]
-        ),
-        _heading("Notes / Links"),
-        _bullet_list(["Reported via Discord issue seeding flow"]),
-    ]
-    return {"type": "doc", "version": 1, "content": content}
+    return _build_seed_issue_description_impl(
+        objective=objective,
+        scope_in=scope_in,
+        scope_out=scope_out,
+        acceptance_criteria=acceptance_criteria,
+    )
 
 
 def _normalize_discord_attachments(raw_attachments: object) -> list[dict[str, str]]:
