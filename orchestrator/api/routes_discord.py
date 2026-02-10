@@ -20,7 +20,10 @@ from orchestrator.api.discord_command_issues import dispatch_issues_command
 from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_command_ask import dispatch_ask_command
-from orchestrator.api.discord_ask_context import project_filter_jql as _project_filter_jql
+from orchestrator.api.discord_ask_context import (
+    project_filter_jql as _project_filter_jql,
+    tenant_project_keys as _tenant_project_keys,
+)
 from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
 from orchestrator.api.discord_ask_history_service import DiscordAskHistoryService
@@ -411,13 +414,6 @@ def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
         )
 
 
-def _tenant_project_keys(*, session: Session, tenant: Tenant) -> list[str]:
-    keys = [project.jira_project_key for project in _tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
-    if keys:
-        return keys
-    return [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
-
-
 def _resolve_command_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> CommandScope:
     normalized_channel_id = _normalize_scope_channel_id(channel_id)
     if normalized_channel_id:
@@ -436,14 +432,6 @@ def _resolve_command_scope(*, session: Session, tenant: Tenant, channel_id: str 
         project_keys=tuple(_tenant_project_keys(session=session, tenant=tenant)),
         channel_id=normalized_channel_id,
     )
-
-
-def _tenant_active_projects(*, session: Session, tenant_id: str) -> list[Project]:
-    return session.execute(
-        select(Project)
-        .where(Project.tenant_id == tenant_id, Project.is_archived.is_(False))
-        .order_by(Project.created_at.asc())
-    ).scalars().all()
 
 
 def _resolve_project_for_issue(

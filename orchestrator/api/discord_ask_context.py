@@ -32,10 +32,17 @@ def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
     return normalized_channel_id
 
 
-def _tenant_active_projects(*, session: Session, tenant_id: str) -> list[Project]:
+def tenant_active_projects(*, session: Session, tenant_id: str) -> list[Project]:
     return session.execute(
         select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at)
     ).scalars().all()
+
+
+def tenant_project_keys(*, session: Session, tenant: Tenant) -> list[str]:
+    keys = [project.jira_project_key for project in tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
+    if keys:
+        return keys
+    return [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
 
 
 def project_filter_jql(*, session: Session, tenant: Tenant, channel_id: str | None = None) -> str:
@@ -52,9 +59,7 @@ def project_filter_jql(*, session: Session, tenant: Tenant, channel_id: str | No
                 detail="Discord channel is not mapped to an active project",
             )
         return f'project = "{scope.jira_project_key}"'
-    keys = [project.jira_project_key for project in _tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
-    if not keys:
-        keys = [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
+    keys = tenant_project_keys(session=session, tenant=tenant)
     if not keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
     if len(keys) == 1:
