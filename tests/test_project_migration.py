@@ -159,3 +159,95 @@ class ProjectMigrationTests(unittest.TestCase):
             self.assertNotIn("seed_followup_thread_channel_ids", tenant_discord)
             self.assertIn("discord-ask-thread-1", project_discord.get("ask_thread_channel_ids", []))
             self.assertIn("discord-seed-thread-1", project_discord.get("seed_followup_thread_channel_ids", []))
+
+    def test_thread_channels_keep_unresolved_tenant_entries_for_multi_project_tenants(self) -> None:
+        self._alembic_upgrade("20260209_0011")
+        session_factory = create_session_factory(database_url=self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-multi-threads",
+                    name="Tenant Multi Threads",
+                    is_enabled=True,
+                    jira_config={"project_keys": ["APP", "API"], "ready_statuses": ["To Do"]},
+                    github_config={"mode": "github_app", "installation_id": "123"},
+                    repos_config={"github_repository": "https://github.com/example/multi"},
+                    policy_config={
+                        "allow_jira_transitions": False,
+                        "allow_pr_creation": True,
+                        "allow_label_mutations": True,
+                        "max_runtime_minutes": 30,
+                        "max_dev_test_review_loops": 2,
+                        "max_concurrent_runs": 2,
+                        "allowed_commands": [],
+                        "require_agents_md": False,
+                    },
+                    discord_config={
+                        "channel_id": "discord-main",
+                        "ask_thread_channel_ids": ["discord-app-thread", "discord-unmapped-thread"],
+                        "seed_followup_thread_channel_ids": ["discord-seed-thread", "discord-unmapped-seed-thread"],
+                        "seed_followups": [
+                            {
+                                "channel_ids": ["discord-app-thread", "discord-seed-thread"],
+                                "issue_keys": ["APP-12"],
+                            }
+                        ],
+                    },
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="tenant-multi-threads-app",
+                    tenant_id="tenant-multi-threads",
+                    name="app",
+                    github_repository="https://github.com/example/multi-app",
+                    jira_project_key="APP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={"channel_id": "discord-app"},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="tenant-multi-threads-api",
+                    tenant_id="tenant-multi-threads",
+                    name="api",
+                    github_repository="https://github.com/example/multi-api",
+                    jira_project_key="API",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={"channel_id": "discord-api"},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        self._alembic_upgrade("head")
+
+        with session_factory() as session:
+            tenant = session.get(Tenant, "tenant-multi-threads")
+            self.assertIsNotNone(tenant)
+            app_project = session.get(Project, "tenant-multi-threads-app")
+            self.assertIsNotNone(app_project)
+            tenant_discord = dict(tenant.discord_config or {})
+            app_project_discord = dict(app_project.discord_config or {})
+            self.assertIn("discord-app-thread", app_project_discord.get("ask_thread_channel_ids", []))
+            self.assertIn("discord-seed-thread", app_project_discord.get("seed_followup_thread_channel_ids", []))
+            self.assertEqual(
+                tenant_discord.get("ask_thread_channel_ids"),
+                ["discord-unmapped-thread"],
+            )
+            self.assertEqual(
+                tenant_discord.get("seed_followup_thread_channel_ids"),
+                ["discord-unmapped-seed-thread"],
+            )

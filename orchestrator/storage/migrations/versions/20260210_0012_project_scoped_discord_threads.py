@@ -93,8 +93,10 @@ def upgrade() -> None:
     for tenant_row in tenant_rows:
         tenant_id = str(tenant_row.tenant_id)
         tenant_discord_config = dict(tenant_row.discord_config or {})
-        tenant_ask_threads = set(_normalize_id_list(tenant_discord_config.get("ask_thread_channel_ids")))
-        tenant_seed_threads = set(_normalize_id_list(tenant_discord_config.get("seed_followup_thread_channel_ids")))
+        tenant_ask_thread_list = _normalize_id_list(tenant_discord_config.get("ask_thread_channel_ids"))
+        tenant_seed_thread_list = _normalize_id_list(tenant_discord_config.get("seed_followup_thread_channel_ids"))
+        tenant_ask_threads = set(tenant_ask_thread_list)
+        tenant_seed_threads = set(tenant_seed_thread_list)
         if not tenant_ask_threads and not tenant_seed_threads:
             continue
 
@@ -145,8 +147,18 @@ def upgrade() -> None:
                     .values(discord_config=project_discord_config)
                 )
 
-        tenant_discord_config.pop("ask_thread_channel_ids", None)
-        tenant_discord_config.pop("seed_followup_thread_channel_ids", None)
+        assigned_ask_channels = set().union(*assigned_ask.values()) if assigned_ask else set()
+        assigned_seed_channels = set().union(*assigned_seed.values()) if assigned_seed else set()
+        remaining_ask_channels = [channel_id for channel_id in tenant_ask_thread_list if channel_id not in assigned_ask_channels]
+        remaining_seed_channels = [channel_id for channel_id in tenant_seed_thread_list if channel_id not in assigned_seed_channels]
+        if remaining_ask_channels:
+            tenant_discord_config["ask_thread_channel_ids"] = remaining_ask_channels
+        else:
+            tenant_discord_config.pop("ask_thread_channel_ids", None)
+        if remaining_seed_channels:
+            tenant_discord_config["seed_followup_thread_channel_ids"] = remaining_seed_channels
+        else:
+            tenant_discord_config.pop("seed_followup_thread_channel_ids", None)
         bind.execute(
             tenants.update()
             .where(tenants.c.tenant_id == tenant_id)
