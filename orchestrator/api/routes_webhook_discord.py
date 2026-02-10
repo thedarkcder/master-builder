@@ -21,9 +21,7 @@ from orchestrator.storage.models import Tenant
 router = APIRouter(tags=["discord-webhook"])
 logger = logging.getLogger(__name__)
 
-# Backward-compatible alias for existing tests/patch paths while command
-# execution import paths are migrated to the shared entrypoint module.
-execute_discord_command = execute_tenant_discord_ingress_command
+execute_discord_ingress_command = execute_tenant_discord_ingress_command
 
 
 @router.post("/discord/webhook/{tenant_id}")
@@ -89,7 +87,7 @@ async def ingest_discord_webhook(
     if channel_id is not None and not isinstance(channel_id, str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid channel_id")
 
-    command_response = execute_discord_command(
+    command_response = execute_discord_ingress_command(
         tenant_id=tenant_id,
         payload=DiscordCommandRequest(
             user_id=user_id.strip(),
