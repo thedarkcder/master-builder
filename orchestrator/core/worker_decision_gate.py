@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.worker_run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker_stage_events import decision_gate_required_update
@@ -36,7 +37,7 @@ def apply_decision_gate(
     if not decision_gate.triggered:
         return None, None
 
-    jira_url = f"https://example.atlassian.net/browse/{run.issue_key}" if run.issue_key else None
+    jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=run.issue_key)
     stage_update = decision_gate_required_update(
         tenant_id=run.tenant_id,
         issue_key=run.issue_key,
