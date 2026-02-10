@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orchestrator.api.discord_state import (
+from orchestrator.api.discord.discord_state import (
     find_seed_followup_context as _find_seed_followup_context,
     parse_command_text as _parse_command_text,
 )

@@ -1,4 +1,4 @@
-from orchestrator.api.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
+from orchestrator.api.discord.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
 
 
 def test_normalize_discord_attachments_limits_and_filters() -> None:

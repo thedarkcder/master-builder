@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
+from orchestrator.api.discord.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 
 
 class DiscordAdapterContractTests(unittest.TestCase):
@@ -13,7 +13,7 @@ class DiscordAdapterContractTests(unittest.TestCase):
         tenant = SimpleNamespace(tenant_id="tenant-1")
 
         with patch(
-            "orchestrator.api.discord_channel_scope_repository.resolve_project_for_discord_channel",
+            "orchestrator.api.discord.discord_channel_scope_repository.resolve_project_for_discord_channel",
             return_value=None,
         ):
             scope = repository.resolve_project_scope(
@@ -30,7 +30,7 @@ class DiscordAdapterContractTests(unittest.TestCase):
         project = SimpleNamespace(project_id="project-1", jira_project_key="YANA")
 
         with patch(
-            "orchestrator.api.discord_channel_scope_repository.resolve_project_for_discord_channel",
+            "orchestrator.api.discord.discord_channel_scope_repository.resolve_project_for_discord_channel",
             return_value=project,
         ):
             scope = repository.resolve_project_scope(

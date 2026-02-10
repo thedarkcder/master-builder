@@ -1,1 +1,3 @@
-from orchestrator.api.discord_commands.bug_gap import *  # noqa: F401,F403
+from orchestrator.api.discord import discord_command_bug_gap as _impl
+
+globals().update({name: getattr(_impl, name) for name in dir(_impl) if not name.startswith("__")})

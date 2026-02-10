@@ -1,24 +1,3 @@
-from __future__ import annotations
+from orchestrator.api.discord import discord_channel_scope_repository as _impl
 
-from sqlalchemy.orm import Session
-
-from orchestrator.api.discord_state import resolve_project_for_discord_channel
-from orchestrator.core.communications.scope_repository import ResolvedChannelScope
-from orchestrator.storage.models import Tenant
-
-
-class SqlAlchemyDiscordChannelScopeRepository:
-    def resolve_project_scope(self, *, session: Session, tenant: Tenant, channel_id: str) -> ResolvedChannelScope | None:
-        project = resolve_project_for_discord_channel(
-            session=session,
-            tenant_id=tenant.tenant_id,
-            channel_id=channel_id,
-        )
-        if project is None:
-            return None
-        return ResolvedChannelScope(
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-            jira_project_key=project.jira_project_key,
-            channel_id=channel_id,
-        )
+globals().update({name: getattr(_impl, name) for name in dir(_impl) if not name.startswith("__")})
