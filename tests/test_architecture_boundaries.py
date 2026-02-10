@@ -19,7 +19,6 @@ LEGACY_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.routes_discord",
     },
     "orchestrator/api/routes_webhook_discord.py": {
-        "orchestrator.api.routes_discord",
         "orchestrator.api.routes_webhook",
     },
     "orchestrator/api/routes_webhook_discord_interactions.py": {
@@ -29,7 +28,6 @@ LEGACY_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.routes_webhook",
     },
     "orchestrator/core/discord_gateway_listener.py": {
-        "orchestrator.api.routes_discord",
         "orchestrator.api.routes_webhook",
     },
 }

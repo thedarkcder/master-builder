@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from orchestrator.api.routes_discord import execute_discord_command
+from orchestrator.api.command_entrypoint import execute_tenant_discord_command
 from orchestrator.api.routes_webhook import _ask_confirmation_components, _build_command_followup_message
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import Settings
@@ -261,7 +261,7 @@ class DiscordGatewayListener:
             message_content = f"<@{user_id}> Command failed due to an internal error."
             components: list[dict] | None = None
             try:
-                command_response = execute_discord_command(
+                command_response = execute_tenant_discord_command(
                     tenant_id=tenant.tenant_id,
                     payload=DiscordCommandRequest(
                         user_id=user_id,

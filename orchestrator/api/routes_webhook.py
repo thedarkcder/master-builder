@@ -21,12 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.command_entrypoint import execute_tenant_discord_command
 from orchestrator.api.routes_admin import _jira_oauth_client, _refresh_jira_connection_tokens
 from orchestrator.api.routes_discord import (
     _project_filter_jql,
     _search_jira_issues_for_tenant,
     consume_pending_ask_action,
-    execute_discord_command,
     remove_issue_key_from_tenant_ask_history,
 )
 from orchestrator.api.discord_reply_transport import DiscordReplyTransport
@@ -51,6 +51,10 @@ from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
 router = APIRouter(tags=["jira-webhook"])
+
+# Backward-compatible alias for existing tests/patch paths while command
+# execution import paths are migrated to the shared entrypoint module.
+execute_discord_command = execute_tenant_discord_command
 
 logger = logging.getLogger(__name__)
 DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1_048_576
@@ -1783,6 +1787,7 @@ def _stage_handle_comment_ask_command(
                 channel_id=f"jira:{context.tenant_id}:{context.issue_key}",
                 command=f"!ask @{context.issue_key} {question}",
             ),
+            ingress_source="jira_comment",
         )
         response_text = ask_response.message.strip()
         if not response_text:
