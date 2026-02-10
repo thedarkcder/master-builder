@@ -14,7 +14,7 @@ from orchestrator.core.workflow_runner import (
 from orchestrator.core.discord_notifications import DiscordSendResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, RunLock, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, RunLock, Tenant
 from orchestrator.worker import process_next_queued_run
 
 
@@ -313,3 +313,42 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "ZZ-101"})
             self.assertIsNone(lock)
+
+    def test_process_next_queued_run_uses_tenant_jira_site_url_for_stage_links(self) -> None:
+        run_id = self._queue_run("TP-555")
+        now = datetime.now(timezone.utc)
+
+        with self.session_factory() as session:
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="jira-tenant-worker",
+                    account_id="acct-1",
+                    account_email="agent@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://jira.example.test",
+                    scopes=["read:jira-work"],
+                    access_token_encrypted="enc-access",
+                    refresh_token_encrypted="enc-refresh",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            tenant = session.get(Tenant, "tenant-worker")
+            assert tenant is not None
+            jira_config = dict(tenant.jira_config or {})
+            jira_config["connection_id"] = "jira-tenant-worker"
+            tenant.jira_config = jira_config
+            tenant.updated_at = now
+            session.commit()
+
+        runner = _SuccessRunner()
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, runner)
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            stage_updates = processed.plan["stage_updates"]
+            self.assertIn(
+                "https://jira.example.test/browse/TP-555",
+                stage_updates[0]["discord_message"],
+            )
