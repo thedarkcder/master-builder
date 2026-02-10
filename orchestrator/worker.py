@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from functools import lru_cache
-from pathlib import Path
 
 from sqlalchemy.orm import Session
 
@@ -13,8 +11,6 @@ from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runti
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import evaluate_decision_gate
 from orchestrator.core.discord_notifications import send_tenant_discord_message
-from orchestrator.core.enforcement_context import build_agent_enforcement_context
-from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.worker_decision_gate import apply_decision_gate
@@ -23,7 +19,7 @@ from orchestrator.core.worker_queue_listener import (
     RunQueueNotificationBridge,
     wait_for_wake_or_stop,
 )
-from orchestrator.core.worker_queue_selector import coerce_positive_int, select_next_queued_run
+from orchestrator.core.worker_queue_selector import select_next_queued_run
 from orchestrator.core.worker_run_lifecycle import (
     bind_run_project,
     block_archived_project,
@@ -40,6 +36,9 @@ from orchestrator.core.worker_stage_events import (
     plan_posted_update,
     pr_opened_update,
     run_failed_update,
+)
+from orchestrator.core.worker_workflow_request_service import (
+    build_workflow_request_for_run as _build_workflow_request_for_run,
 )
 from orchestrator.core.workflow_runner import WorkflowRequest, WorkflowRunner
 from orchestrator.storage.db import create_session_factory
@@ -89,58 +88,12 @@ def _workflow_request_for_run(
     project: Project | None,
     effective_policy: dict,
 ) -> WorkflowRequest:
-    max_loops = coerce_positive_int(
-        effective_policy.get("max_dev_test_review_loops"),
-        default=1,
-    )
-    max_runtime_minutes = coerce_positive_int(
-        effective_policy.get("max_runtime_minutes"),
-        default=30,
-    )
-    suggested_test_commands_raw = effective_policy.get("allowed_commands") or []
-    suggested_test_commands: list[str] = []
-    for command in suggested_test_commands_raw:
-        command_text = str(command).strip()
-        enforce_safe_command(command_text)
-        suggested_test_commands.append(command_text)
-
-    settings = get_settings()
-    enforcement_context = _cached_enforcement_context(settings.required_codex_assets_version or "")
-
-    issue_description = run.issue_description or ""
-    if project is not None:
-        project_context = (
-            "\n\nProject routing context:\n"
-            f"- project_id: {project.project_id}\n"
-            f"- project_name: {project.name}\n"
-            f"- github_repository: {project.github_repository}\n"
-            f"- jira_project_key: {project.jira_project_key}\n"
-        )
-        issue_description = f"{issue_description}{project_context}".strip()
-    else:
-        issue_description = issue_description.strip()
-    issue_description_with_enforcement = (
-        f"{issue_description}\n\n{enforcement_context}" if issue_description else enforcement_context
-    )
-
-    return WorkflowRequest(
-        tenant_id=tenant.tenant_id,
-        run_id=run.run_id,
-        issue_key=run.issue_key,
-        issue_summary=run.issue_summary or f"Execute {run.issue_key}",
-        issue_description=issue_description_with_enforcement,
-        max_dev_test_review_loops=max_loops,
-        max_runtime_minutes=max_runtime_minutes,
-        suggested_test_commands=suggested_test_commands,
-    )
-
-
-@lru_cache(maxsize=1)
-def _cached_enforcement_context(required_assets_version: str) -> str:
-    repo_root = Path(__file__).resolve().parents[1]
-    return build_agent_enforcement_context(
-        repo_root=repo_root,
-        required_assets_version=required_assets_version or None,
+    return _build_workflow_request_for_run(
+        tenant=tenant,
+        run=run,
+        project=project,
+        effective_policy=effective_policy,
+        settings=get_settings(),
     )
 
 
