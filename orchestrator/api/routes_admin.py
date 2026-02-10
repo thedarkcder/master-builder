@@ -804,6 +804,21 @@ def _delete_jira_webhooks(
     return True, f"Deleted {len(webhook_ids)} Jira webhook(s).", webhook_ids
 
 
+def _admin_project_service() -> AdminProjectService:
+    return AdminProjectService(
+        normalize_project_repo=_normalize_project_repo,
+        normalize_project_key=_normalize_project_key,
+        normalize_project_policy_overrides=normalize_project_policy_overrides,
+        normalize_string_map=_normalize_string_map,
+        normalize_project_discord_config=_normalize_project_discord_config,
+        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        project_to_schema=_project_to_schema,
+        settings_factory=get_settings,
+    )
+
+
 def _provision_jira_webhook(
     *,
     session: Session,
@@ -1576,18 +1591,7 @@ def list_projects(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[ProjectRead]:
-    service = AdminProjectService(
-        normalize_project_repo=_normalize_project_repo,
-        normalize_project_key=_normalize_project_key,
-        normalize_project_policy_overrides=normalize_project_policy_overrides,
-        normalize_string_map=_normalize_string_map,
-        normalize_project_discord_config=_normalize_project_discord_config,
-        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
-        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
-        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
-        project_to_schema=_project_to_schema,
-        settings_factory=get_settings,
-    )
+    service = _admin_project_service()
     return service.list_projects(session=session, tenant_id=tenant_id)  # type: ignore[return-value]
 
 
@@ -1598,18 +1602,7 @@ def create_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    service = AdminProjectService(
-        normalize_project_repo=_normalize_project_repo,
-        normalize_project_key=_normalize_project_key,
-        normalize_project_policy_overrides=normalize_project_policy_overrides,
-        normalize_string_map=_normalize_string_map,
-        normalize_project_discord_config=_normalize_project_discord_config,
-        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
-        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
-        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
-        project_to_schema=_project_to_schema,
-        settings_factory=get_settings,
-    )
+    service = _admin_project_service()
     return service.create_project(session=session, tenant_id=tenant_id, payload=payload)  # type: ignore[return-value]
 
 
@@ -1620,18 +1613,7 @@ def get_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    service = AdminProjectService(
-        normalize_project_repo=_normalize_project_repo,
-        normalize_project_key=_normalize_project_key,
-        normalize_project_policy_overrides=normalize_project_policy_overrides,
-        normalize_string_map=_normalize_string_map,
-        normalize_project_discord_config=_normalize_project_discord_config,
-        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
-        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
-        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
-        project_to_schema=_project_to_schema,
-        settings_factory=get_settings,
-    )
+    service = _admin_project_service()
     return service.get_project(session=session, tenant_id=tenant_id, project_id=project_id)  # type: ignore[return-value]
 
 
@@ -1643,18 +1625,7 @@ def update_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    service = AdminProjectService(
-        normalize_project_repo=_normalize_project_repo,
-        normalize_project_key=_normalize_project_key,
-        normalize_project_policy_overrides=normalize_project_policy_overrides,
-        normalize_string_map=_normalize_string_map,
-        normalize_project_discord_config=_normalize_project_discord_config,
-        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
-        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
-        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
-        project_to_schema=_project_to_schema,
-        settings_factory=get_settings,
-    )
+    service = _admin_project_service()
     return service.update_project(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)  # type: ignore[return-value]
 
 
