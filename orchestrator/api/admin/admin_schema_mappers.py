@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orchestrator.api.admin_project_normalization import normalize_project_discord_config
+from orchestrator.api.admin.admin_project_normalization import normalize_project_discord_config
 from orchestrator.api.schemas import ProjectRead, RunRead, TenantRead
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.storage.models import Project, Run, Tenant

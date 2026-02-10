@@ -1,44 +1,42 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.discord_ingress_service import (
+from orchestrator.api.discord.discord_ingress_service import (
     execute_tenant_command_ingress as _execute_tenant_command_ingress,
 )
-from orchestrator.api.discord_ingress_wiring import build_discord_ingress_dependencies
-from orchestrator.api.discord_ask_context import (
+from orchestrator.api.discord.discord_ingress_wiring import build_discord_ingress_dependencies
+from orchestrator.api.discord.discord_ask_context import (
     fetch_jira_issue_preview_for_tenant,
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
     tenant_project_keys as _tenant_project_keys,
 )
-from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
-from orchestrator.api.discord_bug_attachments import (
+from orchestrator.api.discord.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
+from orchestrator.api.discord.discord_bug_attachments import (
     download_discord_attachment as _download_discord_attachment_impl,
     resolve_discord_channel_name as _resolve_discord_channel_name_impl,
     upload_discord_attachments_to_jira as _upload_discord_attachments_to_jira_impl,
 )
-from orchestrator.api.discord_bug_issue_create_service import (
+from orchestrator.api.discord.discord_bug_issue_create_service import (
     create_discord_bug_issue as _create_discord_bug_issue_impl,
 )
-from orchestrator.api.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
-from orchestrator.api.discord_gap_analysis import (
+from orchestrator.api.discord.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
+from orchestrator.api.discord.discord_gap_analysis import (
     extract_acceptance_criteria_from_description as _extract_acceptance_criteria_from_description_impl,
     gap_confidence as _gap_confidence_impl,
     run_gap_analysis as _run_gap_analysis_impl,
     tenant_repo_url as _tenant_repo_url_impl,
 )
-from orchestrator.api.discord_ask_query_service import (
+from orchestrator.api.discord.discord_ask_query_service import (
     collect_ask_context as _collect_ask_context_impl,
 )
-from orchestrator.api.discord_seed_normalization import (
+from orchestrator.api.discord.discord_seed_normalization import (
     collect_seed_issue_questions as _collect_seed_issue_questions_impl,
     normalize_seed_issue_key as _normalize_seed_issue_key_impl,
     normalize_seed_issue_labels as _normalize_seed_issue_labels_impl,
@@ -47,40 +45,38 @@ from orchestrator.api.discord_seed_normalization import (
     parse_seed_issue_type as _parse_seed_issue_type_impl,
     seed_text_is_missing as _seed_text_is_missing_impl,
 )
-from orchestrator.api.discord_seed_matching import (
+from orchestrator.api.discord.discord_seed_matching import (
     normalized_summary_key as _normalized_summary_key_impl,
     select_seed_match as _select_seed_match_impl,
     summary_similarity as _summary_similarity_impl,
 )
-from orchestrator.api.discord_seed_description import (
+from orchestrator.api.discord.discord_seed_description import (
     build_seed_issue_description as _build_seed_issue_description_impl,
 )
-from orchestrator.api.discord_scope_service import (
+from orchestrator.api.discord.discord_scope_service import (
     normalize_scope_channel_id as _normalize_scope_channel_id_impl,
     resolve_command_scope as _resolve_command_scope_impl,
     resolve_project_for_issue as _resolve_project_for_issue_impl,
 )
-from orchestrator.api.discord_execution_policy import (
+from orchestrator.api.discord.discord_execution_policy import (
     ensure_issue_is_executable as _ensure_issue_is_executable_impl,
 )
-from orchestrator.api.discord_ask_memory import (
+from orchestrator.api.discord.discord_ask_memory import (
     MAX_ASK_HISTORY_CONTEXT as ASK_HISTORY_CONTEXT_LIMIT,
     collect_ask_context_with_history_context as _collect_ask_context_with_history_context_impl,
     consume_pending_ask_action as _consume_pending_ask_action_impl,
     drop_issue_key_from_ask_history as _drop_issue_key_from_ask_history_impl,
-    existing_issue_keys_for_tenant as _existing_issue_keys_for_tenant_impl,
     prune_missing_issue_keys_from_ask_history as _prune_missing_issue_keys_from_ask_history_impl,
     recent_ask_history as _recent_ask_history_impl,
-    remove_issue_key_from_tenant_ask_history,
     store_ask_history_entry as _store_ask_history_entry_impl,
     store_pending_ask_action as _store_pending_ask_action_impl,
     tenant_ask_history as _tenant_ask_history_impl,
 )
-from orchestrator.api.discord_ask_board_service import ask_board_message as _ask_board_message_impl
-from orchestrator.api.discord_seed_issue_service import seed_issues_with_codex as _seed_issues_with_codex_impl
+from orchestrator.api.discord.discord_ask_board_service import ask_board_message as _ask_board_message_impl
+from orchestrator.api.discord.discord_seed_issue_service import seed_issues_with_codex as _seed_issues_with_codex_impl
 from orchestrator.api.jira_oauth_connection_service import resolve_tenant_jira_connection
 from orchestrator.api.command_executor_registry import register_tenant_command_executor
-from orchestrator.api.discord_state import (
+from orchestrator.api.discord.discord_state import (
     assert_channel_scope as _assert_channel_scope,
     assert_sensitive_command_permission as _assert_sensitive_command_permission,
     clear_seed_followup_context as _clear_seed_followup_context,
@@ -105,9 +101,8 @@ from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
     RUN_STATUS_FAILED,
-    RUN_STATUS_SUCCEEDED,
 )
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.jira_oauth import JiraIssuePreview
 
 router = APIRouter(tags=["discord"])

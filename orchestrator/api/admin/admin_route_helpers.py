@@ -2,40 +2,40 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin_config_helpers import (
+from orchestrator.api.admin.admin_config_helpers import (
     validate_codex_assets_for_tenant_init as _validate_codex_assets_for_tenant_init_impl,
     with_managed_github_refs as _with_managed_github_refs_impl,
     with_preserved_jira_system_fields as _with_preserved_jira_system_fields_impl,
 )
-from orchestrator.api.admin_discord_allowlist_helpers import (
+from orchestrator.api.admin.admin_discord_allowlist_helpers import (
     notify_discord_allowlist_approved as _notify_discord_allowlist_approved_impl,
     parse_discord_allowlist_requests as _parse_discord_allowlist_requests_impl,
 )
-from orchestrator.api.admin_jira_oauth_helpers import (
+from orchestrator.api.admin.admin_jira_oauth_helpers import (
     jira_oauth_client as _jira_oauth_client_impl,
     refresh_jira_connection_tokens as _refresh_jira_connection_tokens_impl,
     resolve_secret_ref as _resolve_secret_ref_impl,
 )
-from orchestrator.api.admin_jira_webhook_cleanup import (
+from orchestrator.api.admin.admin_jira_webhook_cleanup import (
     all_managed_webhook_ids as _all_managed_webhook_ids_impl,
     cleanup_conflicting_jira_webhook_url as _cleanup_conflicting_jira_webhook_url_impl,
     cleanup_unmanaged_jira_webhooks_for_connection as _cleanup_unmanaged_jira_webhooks_for_connection_impl,
     remove_managed_webhook_id_from_tenants as _remove_managed_webhook_id_from_tenants_impl,
 )
-from orchestrator.api.admin_jira_webhook_delete import (
+from orchestrator.api.admin.admin_jira_webhook_delete import (
     delete_jira_webhooks as _delete_jira_webhooks_impl,
 )
-from orchestrator.api.admin_jira_webhook_helpers import (
+from orchestrator.api.admin.admin_jira_webhook_helpers import (
     parse_jira_webhook_id as _parse_jira_webhook_id,
     parse_managed_webhook_ids as _parse_managed_webhook_ids,
 )
-from orchestrator.api.admin_jira_webhook_provision import (
+from orchestrator.api.admin.admin_jira_webhook_provision import (
     provision_jira_webhook as _provision_jira_webhook_impl,
 )
-from orchestrator.api.admin_jira_webhook_response_helpers import (
+from orchestrator.api.admin.admin_jira_webhook_response_helpers import (
     jira_webhook_action_status_code as _jira_webhook_action_status_code_impl,
 )
-from orchestrator.api.admin_project_normalization import (
+from orchestrator.api.admin.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
     normalize_project_key as _normalize_project_key,
@@ -44,9 +44,9 @@ from orchestrator.api.admin_project_normalization import (
     resolve_project_discord_channel_name as _resolve_project_discord_channel_name,
     with_preserved_discord_system_fields as _with_preserved_discord_system_fields,
 )
-from orchestrator.api.admin_project_service import AdminProjectService
-from orchestrator.api.admin_schema_mappers import project_to_schema as _project_to_schema
-from orchestrator.api.admin_tenant_project_helpers import (
+from orchestrator.api.admin.admin_project_service import AdminProjectService
+from orchestrator.api.admin.admin_schema_mappers import project_to_schema as _project_to_schema
+from orchestrator.api.admin.admin_tenant_project_helpers import (
     allocate_tenant_id as _allocate_tenant_id_impl,
     ensure_default_project_for_tenant as _ensure_default_project_for_tenant_impl,
     primary_jira_project_key as _primary_jira_project_key_impl,
@@ -336,7 +336,7 @@ def jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
 
 
 # Imported lazily at end to avoid circular references in type checking/import order.
-from orchestrator.api.admin_jira_webhook_helpers import (  # noqa: E402
+from orchestrator.api.admin.admin_jira_webhook_helpers import (  # noqa: E402
     extract_jira_webhook_conflict_url as _extract_jira_webhook_conflict_url,
     is_jira_webhook_limit_error as _is_jira_webhook_limit_error,
     is_jira_webhook_single_url_error as _is_jira_webhook_single_url_error,
