@@ -13,6 +13,15 @@ from orchestrator.core.runs import cancel_run, enqueue_run
 from orchestrator.storage.models import Run, Tenant
 
 
+def _queue_conflict_detail(*, prefix: str, enqueue_reason: str, enqueue_run_obj: Run | None) -> str:
+    if enqueue_reason != "run_already_active" or enqueue_run_obj is None:
+        return f"{prefix}: {enqueue_reason}"
+    return (
+        f"{prefix}: {enqueue_reason} "
+        f"(active run: {enqueue_run_obj.run_id}, status: {enqueue_run_obj.status})"
+    )
+
+
 def dispatch_run_control_command(
     *,
     session: Session,
@@ -54,7 +63,11 @@ def dispatch_run_control_command(
         if not enqueue_result.enqueued:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Run could not be queued: {enqueue_result.reason}",
+                detail=_queue_conflict_detail(
+                    prefix="Run could not be queued",
+                    enqueue_reason=str(enqueue_result.reason),
+                    enqueue_run_obj=enqueue_result.run,
+                ),
             )
         return DiscordCommandResponse(
             ok=True,
@@ -125,7 +138,11 @@ def dispatch_run_control_command(
         if not enqueue_result.enqueued:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Retry could not be queued: {enqueue_result.reason}",
+                detail=_queue_conflict_detail(
+                    prefix="Retry could not be queued",
+                    enqueue_reason=str(enqueue_result.reason),
+                    enqueue_run_obj=enqueue_result.run,
+                ),
             )
         return DiscordCommandResponse(
             ok=True,

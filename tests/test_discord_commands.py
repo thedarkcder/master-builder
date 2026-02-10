@@ -192,6 +192,21 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-20")
 
+    def test_run_conflict_includes_active_run_details(self) -> None:
+        self._queue_run(run_id="run-active-1", issue_key="TP-20", status="running")
+        with patch(
+            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!run TP-20"},
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("run_already_active", response.json()["detail"])
+        self.assertIn("run-active-1", response.json()["detail"])
+        self.assertIn("running", response.json()["detail"])
+
     def test_retry_enqueues_from_latest_failed_run(self) -> None:
         self._queue_run(run_id="run-failed-1", issue_key="TP-30", status="failed")
         with patch(
