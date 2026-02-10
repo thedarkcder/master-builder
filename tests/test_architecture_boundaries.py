@@ -17,11 +17,16 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for module_path in command_modules:
             tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
             for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("orchestrator.tools"):
-                    violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    if node.module.startswith("orchestrator.tools"):
+                        violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
+                    if node.module.startswith("orchestrator.api.routes_"):
+                        violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.startswith("orchestrator.tools"):
+                            violations.append(f"{module_path.name}:{node.lineno}:{alias.name}")
+                        if alias.name.startswith("orchestrator.api.routes_"):
                             violations.append(f"{module_path.name}:{node.lineno}:{alias.name}")
 
         self.assertEqual(
