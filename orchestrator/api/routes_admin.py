@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -73,6 +73,13 @@ from orchestrator.api.admin_tenant_actions import (
 )
 from orchestrator.api.admin_ready_preview import (
     preview_tenant_ready_gate as _preview_tenant_ready_gate_impl,
+)
+from orchestrator.api.admin_tenant_crud import (
+    create_tenant as _create_tenant_impl,
+    delete_tenant as _delete_tenant_impl,
+    get_tenant_or_404 as _get_tenant_or_404_impl,
+    set_tenant_archive_state as _set_tenant_archive_state_impl,
+    update_tenant as _update_tenant_impl,
 )
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
@@ -777,32 +784,17 @@ def create_tenant(
     session: Session = Depends(get_session),
 ) -> TenantRead:
     _validate_codex_assets_for_tenant_init()
-    tenant_id = _allocate_tenant_id(session, name=payload.name)
-    now = datetime.now(timezone.utc)
-    tenant = Tenant(
-        tenant_id=tenant_id,
-        name=payload.name,
-        is_enabled=payload.is_enabled,
-        jira_config=_with_preserved_jira_system_fields(
-            existing={},
-            proposed=payload.jira.model_dump(),
-        ),
-        github_config=_with_managed_github_refs(payload.github.model_dump()),
-        repos_config=payload.repos.model_dump(),
-        policy_config=payload.policy.model_dump(),
-        discord_config=_with_preserved_discord_system_fields(
-            existing={},
-            proposed=payload.discord.model_dump() if payload.discord else None,
-        ),
-        created_at=now,
-        updated_at=now,
+    return _create_tenant_impl(
+        session=session,
+        payload=payload,
+        allocate_tenant_id_fn=_allocate_tenant_id,
+        with_preserved_jira_system_fields_fn=_with_preserved_jira_system_fields,
+        with_managed_github_refs_fn=_with_managed_github_refs,
+        with_preserved_discord_system_fields_fn=_with_preserved_discord_system_fields,
+        ensure_default_project_for_tenant_fn=_ensure_default_project_for_tenant,
+        sync_tenant_jira_project_keys_fn=_sync_tenant_jira_project_keys,
+        tenant_to_schema_fn=_tenant_to_schema,
     )
-    session.add(tenant)
-    _ensure_default_project_for_tenant(session, tenant=tenant)
-    _sync_tenant_jira_project_keys(session, tenant=tenant)
-    session.commit()
-    session.refresh(tenant)
-    return _tenant_to_schema(tenant)
 
 
 @router.get("/tenants/{tenant_id}", response_model=TenantRead)
@@ -811,11 +803,7 @@ def get_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    return _tenant_to_schema(tenant)
+    return _tenant_to_schema(_get_tenant_or_404_impl(session=session, tenant_id=tenant_id))
 
 
 @router.put("/tenants/{tenant_id}", response_model=TenantRead)
@@ -826,30 +814,17 @@ def update_tenant(
     session: Session = Depends(get_session),
 ) -> TenantRead:
     _validate_codex_assets_for_tenant_init()
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    tenant.name = payload.name
-    tenant.is_enabled = payload.is_enabled
-    tenant.jira_config = _with_preserved_jira_system_fields(
-        existing=dict(tenant.jira_config),
-        proposed=payload.jira.model_dump(),
+    return _update_tenant_impl(
+        session=session,
+        tenant_id=tenant_id,
+        payload=payload,
+        with_preserved_jira_system_fields_fn=_with_preserved_jira_system_fields,
+        with_managed_github_refs_fn=_with_managed_github_refs,
+        with_preserved_discord_system_fields_fn=_with_preserved_discord_system_fields,
+        ensure_default_project_for_tenant_fn=_ensure_default_project_for_tenant,
+        sync_tenant_jira_project_keys_fn=_sync_tenant_jira_project_keys,
+        tenant_to_schema_fn=_tenant_to_schema,
     )
-    tenant.github_config = _with_managed_github_refs(payload.github.model_dump())
-    tenant.repos_config = payload.repos.model_dump()
-    tenant.policy_config = payload.policy.model_dump()
-    tenant.discord_config = _with_preserved_discord_system_fields(
-        existing=dict(tenant.discord_config or {}),
-        proposed=payload.discord.model_dump() if payload.discord else None,
-    )
-    tenant.updated_at = datetime.now(timezone.utc)
-    _ensure_default_project_for_tenant(session, tenant=tenant)
-    _sync_tenant_jira_project_keys(session, tenant=tenant)
-
-    session.commit()
-    session.refresh(tenant)
-    return _tenant_to_schema(tenant)
 
 
 @router.delete("/tenants/{tenant_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -858,14 +833,7 @@ def delete_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> Response:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    session.execute(delete(Run).where(Run.tenant_id == tenant_id))
-    session.delete(tenant)
-    session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return _delete_tenant_impl(session=session, tenant_id=tenant_id)
 
 
 @router.post("/tenants/{tenant_id}/archive", response_model=TenantRead)
@@ -874,15 +842,12 @@ def archive_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    tenant.is_enabled = False
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    session.refresh(tenant)
-    return _tenant_to_schema(tenant)
+    return _set_tenant_archive_state_impl(
+        session=session,
+        tenant_id=tenant_id,
+        is_enabled=False,
+        tenant_to_schema_fn=_tenant_to_schema,
+    )
 
 
 @router.post("/tenants/{tenant_id}/unarchive", response_model=TenantRead)
@@ -891,15 +856,12 @@ def unarchive_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    tenant.is_enabled = True
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-    session.refresh(tenant)
-    return _tenant_to_schema(tenant)
+    return _set_tenant_archive_state_impl(
+        session=session,
+        tenant_id=tenant_id,
+        is_enabled=True,
+        tenant_to_schema_fn=_tenant_to_schema,
+    )
 
 
 @router.get("/tenants/{tenant_id}/projects", response_model=list[ProjectRead])
