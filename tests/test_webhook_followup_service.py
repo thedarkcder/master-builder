@@ -12,14 +12,14 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self,
         *,
         session,
-        execute_discord_command,
+        execute_command_ingress,
         ask_reply_components=None,
     ) -> tuple[DiscordWebhookFollowupService, MagicMock]:
         reply_transport = MagicMock()
         service = DiscordWebhookFollowupService(
             session_factory=lambda: nullcontext(session),
             settings_factory=lambda: SimpleNamespace(),
-            execute_discord_command=execute_discord_command,
+            execute_command_ingress=execute_command_ingress,
             command_request_factory=lambda **kwargs: SimpleNamespace(**kwargs),
             build_command_followup_message=lambda **_kwargs: "formatted followup",
             ask_confirmation_components=lambda request_id: [{"type": 1, "request_id": request_id}],
@@ -39,7 +39,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 data={"issue_key": "YANA-46"},
             )
         )
-        service, transport = self._build_service(session=session, execute_discord_command=execute)
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -65,7 +65,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 data={"issue_key": "YANA-46"},
             )
         )
-        service, transport = self._build_service(session=session, execute_discord_command=execute)
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
 
         asyncio.run(
             service.run_discord_command_followup(
