@@ -68,8 +68,6 @@ router = APIRouter(tags=["jira-webhook"])
 # Canonical command-ingress entrypoints by source.
 execute_jira_comment_command = execute_tenant_jira_comment_command
 execute_discord_ingress_command = execute_tenant_discord_ingress_command
-# Backward-compatible alias for legacy test patch paths.
-execute_discord_command = execute_jira_comment_command
 
 logger = logging.getLogger(__name__)
 GLOBAL_GITHUB_WEBHOOK_SECRET_REF = "GITHUB_WEBHOOK_SECRET"
