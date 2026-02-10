@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import threading
 from typing import Any
 
@@ -11,7 +12,11 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from orchestrator.api.command_entrypoint import execute_tenant_discord_command
-from orchestrator.api.routes_webhook import _ask_confirmation_components, _build_command_followup_message
+from orchestrator.api.discord_followup_format import (
+    build_ask_confirmation_components,
+    build_command_followup_message,
+    resolve_tenant_jira_browse_base_url,
+)
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import Settings
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
@@ -31,6 +36,7 @@ DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 INTENT_GUILDS = 1 << 0
 INTENT_GUILD_MESSAGES = 1 << 9
 INTENT_MESSAGE_CONTENT = 1 << 15
+_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 
 def _channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
@@ -273,11 +279,14 @@ class DiscordGatewayListener:
                     require_ask_confirmation=True,
                     allow_plain_ask=True,
                 )
-                message_content = _build_command_followup_message(
-                    session=session,
-                    tenant=tenant,
+                message_content = build_command_followup_message(
                     user_id=user_id,
                     command_response=command_response,
+                    jira_browse_base_url=resolve_tenant_jira_browse_base_url(
+                        session=session,
+                        tenant=tenant,
+                    ),
+                    issue_key_pattern=_ISSUE_KEY_PATTERN,
                 )
                 data = command_response.data if isinstance(command_response.data, dict) else {}
                 if (
@@ -287,7 +296,7 @@ class DiscordGatewayListener:
                 ):
                     request_id = str(data.get("request_id") or "").strip()
                     if request_id:
-                        components = _ask_confirmation_components(request_id)
+                        components = build_ask_confirmation_components(request_id)
             except HTTPException as exc:
                 message_content = f"<@{user_id}> Command failed: {exc.detail}"
             except Exception:
