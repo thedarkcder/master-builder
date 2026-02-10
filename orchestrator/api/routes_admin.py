@@ -9,10 +9,10 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.admin_project_service import AdminProjectService
 from orchestrator.api.schemas import (
     DiscordAllowlistApprovalResult,
     DiscordAllowlistRequestRead,
@@ -1576,14 +1576,19 @@ def list_projects(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[ProjectRead]:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    projects = session.execute(
-        select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at)
-    ).scalars().all()
-    return [_project_to_schema(project, tenant_policy=tenant.policy_config) for project in projects]
+    service = AdminProjectService(
+        normalize_project_repo=_normalize_project_repo,
+        normalize_project_key=_normalize_project_key,
+        normalize_project_policy_overrides=normalize_project_policy_overrides,
+        normalize_string_map=_normalize_string_map,
+        normalize_project_discord_config=_normalize_project_discord_config,
+        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        project_to_schema=_project_to_schema,
+        settings_factory=get_settings,
+    )
+    return service.list_projects(session=session, tenant_id=tenant_id)  # type: ignore[return-value]
 
 
 @router.post("/tenants/{tenant_id}/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
@@ -1593,58 +1598,19 @@ def create_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    normalized_name = payload.name.strip()
-    normalized_repo = _normalize_project_repo(payload.github_repository)
-    normalized_jira_key = _normalize_project_key(payload.jira_project_key)
-    if not normalized_name or not normalized_repo or not normalized_jira_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project name, repository, and Jira key are required")
-
-    now = datetime.now(timezone.utc)
-    project = Project(
-        project_id=str(uuid4()),
-        tenant_id=tenant_id,
-        name=normalized_name,
-        github_repository=normalized_repo,
-        jira_project_key=normalized_jira_key,
-        policy_overrides=normalize_project_policy_overrides(payload.policy_overrides),
-        environment=_normalize_string_map(payload.environment),
-        secret_refs=_normalize_string_map(payload.secret_refs),
-        discord_config={},
-        is_archived=False,
-        created_at=now,
-        updated_at=now,
+    service = AdminProjectService(
+        normalize_project_repo=_normalize_project_repo,
+        normalize_project_key=_normalize_project_key,
+        normalize_project_policy_overrides=normalize_project_policy_overrides,
+        normalize_string_map=_normalize_string_map,
+        normalize_project_discord_config=_normalize_project_discord_config,
+        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        project_to_schema=_project_to_schema,
+        settings_factory=get_settings,
     )
-    normalized_discord = _normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
-    if payload.discord is not None:
-        settings = get_settings()
-        try:
-            normalized_discord = _resolve_project_discord_channel_binding(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                project=project,
-                discord_config=normalized_discord,
-            )
-        except (DiscordApiError, ValueError) as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Unable to provision Discord channel: {exc}") from exc
-    project.discord_config = normalized_discord
-    session.add(project)
-    tenant.updated_at = now
-    _sync_tenant_jira_project_keys(session, tenant=tenant)
-    try:
-        session.commit()
-    except IntegrityError as exc:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A project with the same repository or Jira project key already exists for this tenant",
-        ) from exc
-    session.refresh(project)
-    return _project_to_schema(project, tenant_policy=tenant.policy_config)
+    return service.create_project(session=session, tenant_id=tenant_id, payload=payload)  # type: ignore[return-value]
 
 
 @router.get("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
@@ -1654,13 +1620,19 @@ def get_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    project = session.get(Project, project_id)
-    if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    return _project_to_schema(project, tenant_policy=tenant.policy_config)
+    service = AdminProjectService(
+        normalize_project_repo=_normalize_project_repo,
+        normalize_project_key=_normalize_project_key,
+        normalize_project_policy_overrides=normalize_project_policy_overrides,
+        normalize_string_map=_normalize_string_map,
+        normalize_project_discord_config=_normalize_project_discord_config,
+        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        project_to_schema=_project_to_schema,
+        settings_factory=get_settings,
+    )
+    return service.get_project(session=session, tenant_id=tenant_id, project_id=project_id)  # type: ignore[return-value]
 
 
 @router.put("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
@@ -1671,58 +1643,19 @@ def update_project(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    project = session.get(Project, project_id)
-    if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    normalized_name = payload.name.strip()
-    normalized_repo = _normalize_project_repo(payload.github_repository)
-    normalized_jira_key = _normalize_project_key(payload.jira_project_key)
-    if not normalized_name or not normalized_repo or not normalized_jira_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project name, repository, and Jira key are required")
-
-    project.name = normalized_name
-    project.github_repository = normalized_repo
-    project.jira_project_key = normalized_jira_key
-    project.policy_overrides = normalize_project_policy_overrides(payload.policy_overrides)
-    project.environment = _normalize_string_map(payload.environment)
-    project.secret_refs = _normalize_string_map(payload.secret_refs)
-    normalized_discord = _with_preserved_discord_system_fields(
-        existing=dict(project.discord_config or {}),
-        proposed=_normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None),
+    service = AdminProjectService(
+        normalize_project_repo=_normalize_project_repo,
+        normalize_project_key=_normalize_project_key,
+        normalize_project_policy_overrides=normalize_project_policy_overrides,
+        normalize_string_map=_normalize_string_map,
+        normalize_project_discord_config=_normalize_project_discord_config,
+        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        project_to_schema=_project_to_schema,
+        settings_factory=get_settings,
     )
-    if payload.discord is not None:
-        settings = get_settings()
-        try:
-            normalized_discord = _resolve_project_discord_channel_binding(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                project=project,
-                discord_config=normalized_discord,
-            )
-        except (DiscordApiError, ValueError) as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Unable to provision Discord channel: {exc}") from exc
-    project.discord_config = normalized_discord
-    project.is_archived = payload.is_archived
-    project.updated_at = datetime.now(timezone.utc)
-
-    _sync_tenant_jira_project_keys(session, tenant=tenant)
-    tenant.updated_at = project.updated_at
-
-    try:
-        session.commit()
-    except IntegrityError as exc:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A project with the same repository or Jira project key already exists for this tenant",
-        ) from exc
-    session.refresh(project)
-    return _project_to_schema(project, tenant_policy=tenant.policy_config)
+    return service.update_project(session=session, tenant_id=tenant_id, project_id=project_id, payload=payload)  # type: ignore[return-value]
 
 
 @router.post("/tenants/{tenant_id}/test-jira", response_model=IntegrationTestResult)
