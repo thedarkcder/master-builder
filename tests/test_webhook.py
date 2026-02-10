@@ -500,6 +500,9 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertTrue(body["comment_posted"])
         self.assertIsNone(body["comment_error"])
         command_mock.assert_called_once()
+        dispatched_payload = command_mock.call_args.kwargs["payload"]
+        self.assertIsNone(dispatched_payload.channel_id)
+        self.assertEqual(command_mock.call_args.kwargs["ingress_source"], "jira_comment")
         post_mock.assert_called_once()
 
         with self.session_factory() as session:

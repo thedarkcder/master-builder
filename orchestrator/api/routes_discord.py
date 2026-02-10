@@ -46,6 +46,7 @@ from orchestrator.core.codex_agents import (
 from orchestrator.core.communications.command_pipeline import (
     CommandScope,
     CommandExecutionContext,
+    parse_ingress_source,
     dispatch_registered_command,
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
@@ -93,8 +94,6 @@ def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
     if not normalized_channel_id:
         return None
     if normalized_channel_id.lower() in DM_SCOPE_SENTINEL_CHANNEL_IDS:
-        return None
-    if normalized_channel_id.lower().startswith("jira:"):
         return None
     return normalized_channel_id
 
@@ -1441,7 +1440,11 @@ def execute_discord_command(
     if not tenant.is_enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant is disabled")
 
-    if ingress_source == "discord":
+    try:
+        normalized_ingress_source = parse_ingress_source(ingress_source)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if normalized_ingress_source.value == "discord":
         _assert_channel_scope(session=session, tenant=tenant, channel_id=payload.channel_id)
     raw_command = payload.command.strip()
     _, command_name, arguments = resolve_discord_command(
@@ -1478,7 +1481,7 @@ def execute_discord_command(
             "require_ask_confirmation": require_ask_confirmation,
             "allow_plain_ask": allow_plain_ask,
         },
-        ingress_source=ingress_source,
+        ingress_source=normalized_ingress_source,
         scope=command_scope,
     )
 
