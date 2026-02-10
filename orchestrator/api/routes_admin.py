@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -44,6 +43,11 @@ from orchestrator.api.admin_discord_allowlist_helpers import (
 )
 from orchestrator.api.admin_jira_webhook_delete import (
     delete_jira_webhooks as _delete_jira_webhooks_impl,
+)
+from orchestrator.api.admin_config_helpers import (
+    validate_codex_assets_for_tenant_init as _validate_codex_assets_for_tenant_init_impl,
+    with_managed_github_refs as _with_managed_github_refs_impl,
+    with_preserved_jira_system_fields as _with_preserved_jira_system_fields_impl,
 )
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
@@ -168,26 +172,18 @@ def _sync_tenant_jira_project_keys(session: Session, *, tenant: Tenant) -> None:
 
 
 def _with_managed_github_refs(raw_github_config: dict) -> dict:
-    settings = get_settings()
-    github_config = dict(raw_github_config)
-    github_config["app_id_ref"] = settings.github_app_id_ref
-    github_config["private_key_ref"] = settings.github_private_key_ref
-    return github_config
+    return _with_managed_github_refs_impl(
+        raw_github_config=raw_github_config,
+        settings=get_settings(),
+    )
 
 
 def _validate_codex_assets_for_tenant_init() -> None:
-    settings = get_settings()
-    repo_root = Path(__file__).resolve().parents[2]
-    try:
-        validate_enforcement_assets(
-            repo_root=repo_root,
-            required_assets_version=settings.required_codex_assets_version,
-        )
-    except EnforcementAssetsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Codex assets validation failed: {exc}",
-        ) from exc
+    _validate_codex_assets_for_tenant_init_impl(
+        settings=get_settings(),
+        module_file=__file__,
+        validate_enforcement_assets_fn=validate_enforcement_assets,
+    )
 
 
 def _resolve_secret_ref(
@@ -292,18 +288,7 @@ def _remove_managed_webhook_id_from_tenants(*, session: Session, webhook_id: int
 
 
 def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:
-    merged = dict(proposed)
-    for key in (
-        "managed_webhook_ids",
-        "webhook_last_provisioned_at",
-        "webhook_last_error",
-        "webhook_last_received_at",
-        "webhook_last_delivery_id",
-        "webhook_last_issue_key",
-    ):
-        if key in existing:
-            merged[key] = existing.get(key)
-    return merged
+    return _with_preserved_jira_system_fields_impl(existing=existing, proposed=proposed)
 
 
 def _parse_discord_allowlist_requests(
