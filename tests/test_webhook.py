@@ -15,6 +15,7 @@ from sqlalchemy import select
 from orchestrator.api.main import create_app
 from orchestrator.api.routes_webhook import (
     _build_command_followup_message,
+    _discord_issue_autocomplete_choices,
     _find_tenant_for_discord_channel,
     _parse_jira_comment_command,
     _parse_discord_interaction_command,
@@ -796,6 +797,27 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         choices_mock.assert_called_once()
         self.assertEqual(choices_mock.call_args.kwargs["channel_id"], "discord-channel-1")
+
+    def test_discord_issue_autocomplete_filters_results_locally(self) -> None:
+        fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
+        fake_issues = [
+            SimpleNamespace(key="TP-10", summary="Fix auth"),
+            SimpleNamespace(key="TP-11", summary="Add notifications"),
+            SimpleNamespace(key="ZZ-1", summary="Other project"),
+        ]
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes_webhook._project_filter_jql", return_value='project = "TP"'),
+            patch("orchestrator.api.routes_webhook._search_jira_issues_for_tenant", return_value=fake_issues),
+        ):
+            choices = _discord_issue_autocomplete_choices(
+                session=session,
+                tenant=fake_tenant,  # type: ignore[arg-type]
+                channel_id="discord-channel-1",
+                current_value="TP-11",
+            )
+        self.assertEqual(len(choices), 1)
+        self.assertEqual(choices[0]["value"], "TP-11")
 
     def test_parse_discord_bug_interaction_includes_params_and_attachments(self) -> None:
         payload = {

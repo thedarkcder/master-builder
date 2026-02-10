@@ -640,26 +640,32 @@ def _discord_issue_autocomplete_choices(
 ) -> list[dict]:
     project_jql = _project_filter_jql(session=session, tenant=tenant, channel_id=channel_id)
     normalized = current_value.strip().upper()
-    if normalized:
-        jql = f'{project_jql} AND key ~ "{normalized}*" ORDER BY updated DESC'
-    else:
-        jql = f"{project_jql} ORDER BY updated DESC"
+    # Keep Jira query simple and deterministic, then filter in-process.
+    # Prefix key matching with `key ~` is not consistently supported.
+    jql = f"{project_jql} ORDER BY updated DESC"
     issues = _search_jira_issues_for_tenant(
         session=session,
         tenant=tenant,
         jql=jql,
-        max_results=25,
+        max_results=100,
     )
 
     choices: list[dict] = []
     seen_keys: set[str] = set()
     for issue in issues:
+        issue_key = str(issue.key or "").strip().upper()
+        summary = (issue.summary or "").strip()
+        if normalized:
+            haystack = f"{issue_key} {summary}".upper()
+            if normalized not in haystack:
+                continue
         if issue.key in seen_keys:
             continue
         seen_keys.add(issue.key)
-        summary = (issue.summary or "").strip()
         display = f"{issue.key} — {summary}" if summary else issue.key
         choices.append({"name": display[:100], "value": issue.key[:100]})
+        if len(choices) >= 25:
+            break
     return choices
 
 
