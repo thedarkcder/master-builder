@@ -62,6 +62,10 @@ from orchestrator.api.admin_github_helpers import (
     start_github_install as _start_github_install_impl,
 )
 from orchestrator.api.admin_runs_query import build_runs_query as _build_runs_query_impl
+from orchestrator.api.admin_jira_webhook_response_helpers import (
+    build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
+    jira_webhook_action_status_code as _jira_webhook_action_status_code_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -557,13 +561,7 @@ def _provision_jira_webhook(
 
 
 def _jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
-    if result.ok:
-        return status.HTTP_200_OK
-    if result.details.startswith("Jira OAuth connection is not linked"):
-        return status.HTTP_400_BAD_REQUEST
-    if result.details.startswith("Configured Jira connection was not found"):
-        return status.HTTP_400_BAD_REQUEST
-    return status.HTTP_502_BAD_GATEWAY
+    return _jira_webhook_action_status_code_impl(result)
 
 
 @router.post("/jira/connect/start", response_model=JiraConnectStart)
@@ -629,38 +627,13 @@ def get_jira_webhook_diagnostics(
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    settings = get_settings()
-    jira_config = dict(tenant.jira_config)
-    connection_id = jira_config.get("connection_id")
-    connected = isinstance(connection_id, str) and bool(connection_id.strip())
-    last_received_at_raw = jira_config.get("webhook_last_received_at")
-    last_received_at = (
-        last_received_at_raw.strip()
-        if isinstance(last_received_at_raw, str) and last_received_at_raw.strip()
-        else None
-    )
-    recent_delivery_ok = False
-    if last_received_at:
-        try:
-            parsed_last_received = datetime.fromisoformat(last_received_at.replace("Z", "+00:00"))
-            threshold = datetime.now(timezone.utc) - timedelta(minutes=within_minutes)
-            recent_delivery_ok = parsed_last_received >= threshold
-        except ValueError:
-            recent_delivery_ok = False
-
-    return JiraWebhookDiagnosticsRead(
+    return _build_jira_webhook_diagnostics_impl(
         tenant_id=tenant_id,
-        connected=connected,
-        webhook_url=_jira_webhook_callback_url(settings=settings, tenant_id=tenant_id),
-        managed_webhook_ids=_parse_managed_webhook_ids(jira_config),
-        last_provisioned_at=jira_config.get("webhook_last_provisioned_at"),
-        last_received_at=last_received_at,
-        last_delivery_id=jira_config.get("webhook_last_delivery_id"),
-        last_issue_key=jira_config.get("webhook_last_issue_key"),
-        last_error=jira_config.get("webhook_last_error"),
-        recent_delivery_window_minutes=within_minutes,
-        recent_delivery_ok=recent_delivery_ok,
+        within_minutes=within_minutes,
+        jira_config=dict(tenant.jira_config),
+        settings=get_settings(),
+        jira_webhook_callback_url_fn=_jira_webhook_callback_url,
+        parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
     )
 
 
