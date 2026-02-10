@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 from fastapi import HTTPException
 
-from orchestrator.api.discord.discord_command_bug_gap import dispatch_bug_gap_command
+from orchestrator.api.discord.commands.bug_gap import dispatch_bug_gap_command
 from orchestrator.api.schemas import DiscordCommandRequest
 
 

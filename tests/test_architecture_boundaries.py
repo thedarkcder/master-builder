@@ -45,7 +45,7 @@ def _imported_modules(module_path: Path) -> set[str]:
 
 class ArchitectureBoundaryTests(unittest.TestCase):
     def test_discord_command_handlers_do_not_import_provider_clients_directly(self) -> None:
-        command_modules = sorted((ROOT / "orchestrator" / "api" / "discord").glob("discord_command_*.py"))
+        command_modules = sorted((ROOT / "orchestrator" / "api" / "discord" / "commands").glob("*.py"))
         self.assertTrue(command_modules)
 
         violations: list[str] = []

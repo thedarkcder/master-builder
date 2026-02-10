@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from orchestrator.api.discord.discord_response_format import build_issue_url_list, format_issue_markdown_list
+from orchestrator.api.discord.response_format import build_issue_url_list, format_issue_markdown_list
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraOAuthError
 

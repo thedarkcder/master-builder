@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-# Compatibility facade for Discord interaction contracts.
-# Implementation is split by concern into focused modules.
-from orchestrator.api.discord_interactions.auth import (  # noqa: F401
+from orchestrator.api.discord.interactions.auth import (  # noqa: F401
     ASK_REPLY_OPEN_CUSTOM_ID,
     _discord_autocomplete_response,
     _discord_interaction_deferred_response,
@@ -14,7 +12,7 @@ from orchestrator.api.discord_interactions.auth import (  # noqa: F401
     _resolve_discord_interactions_public_key,
     _validate_discord_interaction_signature,
 )
-from orchestrator.api.discord_interactions.followup import (  # noqa: F401
+from orchestrator.api.discord.interactions.followup import (  # noqa: F401
     _build_command_followup_message,
     _run_discord_ask_confirmation_followup,
     _run_discord_command_followup,
@@ -24,7 +22,7 @@ from orchestrator.api.discord_interactions.followup import (  # noqa: F401
     _send_discord_thread_followup,
     execute_discord_ingress_command,
 )
-from orchestrator.api.discord_interactions.parser import (  # noqa: F401
+from orchestrator.api.discord.interactions.parser import (  # noqa: F401
     _discord_issue_autocomplete_choices,
     _find_focused_discord_option,
     _find_tenant_for_discord_channel,
