@@ -36,8 +36,7 @@ from orchestrator.api.discord_ask_context import (
 )
 from orchestrator.api.discord_state_repository import resolve_project_for_discord_channel
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth_client
-from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
+from orchestrator.api.jira_oauth_connection_service import tenant_jira_oauth_context
 from orchestrator.api.command_entrypoint import execute_tenant_jira_comment_command
 from orchestrator.api.discord_reply_transport import DiscordReplyTransport
 from orchestrator.api.schemas import DiscordCommandRequest
@@ -57,7 +56,7 @@ from orchestrator.core.runs import (
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -253,26 +252,17 @@ def _post_jira_comment(
     comment: str,
     settings,  # noqa: ANN001
 ) -> tuple[bool, str | None]:
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        return False, "Tenant Jira connection is missing"
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        return False, "Tenant Jira connection was not found"
     try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-        )
-        client = _jira_oauth_client(session=session, settings=settings)
-        client.add_issue_comment(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
+        oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+        oauth.client.add_issue_comment(
+            access_token=oauth.access_token,
+            cloud_id=oauth.connection.cloud_id,
             issue_id_or_key=issue_key,
             comment=comment,
         )
         return True, None
+    except HTTPException as exc:
+        return False, str(exc.detail)
     except (JiraOAuthError, ValueError) as exc:
         return False, str(exc)
 
