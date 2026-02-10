@@ -11,14 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.command_entrypoint import execute_tenant_discord_ingress_command
-from orchestrator.api.discord.discord_ask_context import consume_pending_ask_action
-from orchestrator.api.discord.discord_followup_format import (
+from orchestrator.api.discord.ask_context import consume_pending_ask_action
+from orchestrator.api.discord.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
 )
-from orchestrator.api.discord.discord_reply_transport import DiscordReplyTransport
-from orchestrator.api.discord.discord_state_repository import resolve_project_for_discord_channel
+from orchestrator.api.discord.reply_transport import DiscordReplyTransport
+from orchestrator.api.discord.state_repository import resolve_project_for_discord_channel
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhook_followup_service import DiscordWebhookFollowupService
 from orchestrator.core.config import get_settings

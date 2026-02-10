@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
-from orchestrator.api.discord.discord_interactions_service import (
+from orchestrator.api.discord.interactions.service import (
     _build_command_followup_message,
     _discord_issue_autocomplete_choices,
     _find_tenant_for_discord_channel,
@@ -871,8 +871,8 @@ class JiraWebhookTests(unittest.TestCase):
         ]
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord_interactions.parser._project_filter_jql", return_value='project = "TP"'),
-            patch("orchestrator.api.discord_interactions.parser._search_jira_issues_for_tenant", return_value=fake_issues),
+            patch("orchestrator.api.discord.interactions.parser._project_filter_jql", return_value='project = "TP"'),
+            patch("orchestrator.api.discord.interactions.parser._search_jira_issues_for_tenant", return_value=fake_issues),
         ):
             choices = _discord_issue_autocomplete_choices(
                 session=session,
@@ -1074,7 +1074,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_reply_followup_posts_to_thread_without_webhook_followup(self) -> None:
         with (
             patch(
-                "orchestrator.api.discord_interactions.followup.execute_discord_ingress_command",
+                "orchestrator.api.discord.interactions.followup.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(
                     ok=True,
                     command="ask",
@@ -1082,8 +1082,8 @@ class JiraWebhookTests(unittest.TestCase):
                     data={"issue_key": "TP-324"},
                 ),
             ),
-            patch("orchestrator.api.discord_interactions.followup._send_discord_thread_followup") as thread_send_mock,
-            patch("orchestrator.api.discord_interactions.followup._send_discord_interaction_followup") as interaction_send_mock,
+            patch("orchestrator.api.discord.interactions.followup._send_discord_thread_followup") as thread_send_mock,
+            patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as interaction_send_mock,
         ):
             asyncio.run(
                 _run_discord_command_followup(
@@ -1103,7 +1103,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_interaction_followup_send_failure_is_swallowed(self) -> None:
         with (
             patch(
-                "orchestrator.api.discord_interactions.followup.execute_discord_ingress_command",
+                "orchestrator.api.discord.interactions.followup.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(
                     ok=True,
                     command="help",
@@ -1112,7 +1112,7 @@ class JiraWebhookTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord_interactions.followup._send_discord_interaction_followup",
+                "orchestrator.api.discord.interactions.followup._send_discord_interaction_followup",
                 side_effect=RuntimeError("token expired"),
             ),
         ):
@@ -1130,10 +1130,10 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_followup_executes_with_discord_ingress_contract(self) -> None:
         with (
             patch(
-                "orchestrator.api.discord_interactions.followup.execute_discord_ingress_command",
+                "orchestrator.api.discord.interactions.followup.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(ok=True, command="help", message="ok", data=None),
             ) as command_mock,
-            patch("orchestrator.api.discord_interactions.followup._send_discord_interaction_followup"),
+            patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup"),
         ):
             asyncio.run(
                 _run_discord_command_followup(
@@ -1152,7 +1152,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_ask_followup_creates_new_thread_for_initial_response(self) -> None:
         with (
             patch(
-                "orchestrator.api.discord_interactions.followup.execute_discord_ingress_command",
+                "orchestrator.api.discord.interactions.followup.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(
                     ok=True,
                     command="ask",
@@ -1160,9 +1160,9 @@ class JiraWebhookTests(unittest.TestCase):
                     data={"issue_key": "TP-324"},
                 ),
             ),
-            patch("orchestrator.api.discord_interactions.followup._send_discord_ask_response_with_thread") as ask_thread_send_mock,
-            patch("orchestrator.api.discord_interactions.followup._send_discord_thread_followup") as thread_send_mock,
-            patch("orchestrator.api.discord_interactions.followup._send_discord_interaction_followup") as interaction_send_mock,
+            patch("orchestrator.api.discord.interactions.followup._send_discord_ask_response_with_thread") as ask_thread_send_mock,
+            patch("orchestrator.api.discord.interactions.followup._send_discord_thread_followup") as thread_send_mock,
+            patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as interaction_send_mock,
         ):
             asyncio.run(
                 _run_discord_command_followup(
@@ -1187,8 +1187,8 @@ class JiraWebhookTests(unittest.TestCase):
             fake_client = MagicMock()
             fake_client.ensure_thread_for_message.side_effect = DiscordApiError("Cannot create nested thread")
             with (
-                patch("orchestrator.api.discord_interactions.followup.resolve_scoped_secret_ref", return_value="bot-token"),
-                patch("orchestrator.api.discord_interactions.followup.DiscordApiClient", return_value=fake_client),
+                patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="bot-token"),
+                patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=fake_client),
             ):
                 _send_discord_thread_followup(
                     session=session,
@@ -1218,8 +1218,8 @@ class JiraWebhookTests(unittest.TestCase):
             tenant = session.get(Tenant, "tenant-webhook")
             self.assertIsNotNone(tenant)
             with (
-                patch("orchestrator.api.discord_interactions.followup.resolve_scoped_secret_ref", return_value="bot-token"),
-                patch("orchestrator.api.discord_interactions.followup.DiscordApiClient", return_value=fake_client),
+                patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="bot-token"),
+                patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=fake_client),
             ):
                 _send_discord_thread_followup(
                     session=session,
@@ -1240,7 +1240,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_discord_issues_followup_creates_seed_thread_for_clarifications(self) -> None:
         with (
             patch(
-                "orchestrator.api.discord_interactions.followup.execute_discord_ingress_command",
+                "orchestrator.api.discord.interactions.followup.execute_discord_ingress_command",
                 return_value=DiscordCommandResponse(
                     ok=True,
                     command="issues",
@@ -1252,9 +1252,9 @@ class JiraWebhookTests(unittest.TestCase):
                     },
                 ),
             ),
-            patch("orchestrator.api.discord_interactions.followup._send_discord_seed_followup_with_thread") as seed_thread_send_mock,
-            patch("orchestrator.api.discord_interactions.followup._send_discord_thread_followup") as thread_send_mock,
-            patch("orchestrator.api.discord_interactions.followup._send_discord_interaction_followup") as interaction_send_mock,
+            patch("orchestrator.api.discord.interactions.followup._send_discord_seed_followup_with_thread") as seed_thread_send_mock,
+            patch("orchestrator.api.discord.interactions.followup._send_discord_thread_followup") as thread_send_mock,
+            patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as interaction_send_mock,
         ):
             asyncio.run(
                 _run_discord_command_followup(

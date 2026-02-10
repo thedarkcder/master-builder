@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.discord_bug_service import build_discord_bug_description
-from orchestrator.api.discord.discord_response_format import build_jira_issue_url
+from orchestrator.api.discord.bug_service import build_discord_bug_description
+from orchestrator.api.discord.response_format import build_jira_issue_url
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraOAuthError
 

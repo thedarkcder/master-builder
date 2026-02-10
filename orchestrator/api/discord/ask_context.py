@@ -4,8 +4,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.discord_ask_history_service import DiscordAskHistoryService
-from orchestrator.api.discord.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
+from orchestrator.api.discord.ask_history_service import DiscordAskHistoryService
+from orchestrator.api.discord.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.jira_oauth_connection_service import (
     resolve_tenant_jira_connection,
     tenant_jira_oauth_context,

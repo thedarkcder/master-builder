@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from orchestrator.api.command_entrypoint import execute_tenant_discord_command
-from orchestrator.api.discord.discord_followup_format import (
+from orchestrator.api.discord.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
