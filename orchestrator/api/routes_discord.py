@@ -37,6 +37,7 @@ from orchestrator.api.discord_response_format import (
     format_issue_markdown_list,
 )
 from orchestrator.api.discord_followup_format import resolve_tenant_jira_browse_base_url
+from orchestrator.api.jira_oauth_connection_service import resolve_tenant_jira_connection
 from orchestrator.api.command_executor_registry import register_tenant_command_executor
 from orchestrator.api.discord_state import (
     assert_channel_scope as _assert_channel_scope,
@@ -68,7 +69,7 @@ from orchestrator.core.runs import (
     RUN_STATUS_FAILED,
     RUN_STATUS_SUCCEEDED,
 )
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
 
@@ -110,6 +111,17 @@ def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
 def _tenant_repo_url(tenant: Tenant) -> str | None:
     repo_url = str((tenant.repos_config or {}).get("github_repository") or "").strip()
     return repo_url or None
+
+
+def _tenant_jira_oauth_context(*, session: Session, tenant: Tenant, settings):  # noqa: ANN001
+    connection = resolve_tenant_jira_connection(session=session, tenant=tenant)
+    access_token = _refresh_jira_connection_tokens(
+        session,
+        connection=connection,
+        settings=settings,
+    )
+    client = _jira_oauth_client(session=session, settings=settings)
+    return {"connection": connection, "access_token": access_token, "client": client}
 
 
 def _fetch_jira_issue_preview(*, session: Session, tenant: Tenant, issue_key: str) -> JiraIssuePreview:
@@ -646,19 +658,6 @@ def _create_discord_bug_issue(
     if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
     project_key = project_keys[0]
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jira OAuth connection is not linked for this tenant",
-        )
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Configured Jira connection was not found",
-        )
-
     channel_display_name = _resolve_discord_channel_name(
         session=session,
         tenant=tenant,
@@ -684,15 +683,10 @@ def _create_discord_bug_issue(
     )
     settings = get_settings()
     try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-        )
-        client = _jira_oauth_client(session=session, settings=settings)
-        create_result = client.create_issues_bulk(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
+        oauth = _tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+        create_result = oauth["client"].create_issues_bulk(
+            access_token=oauth["access_token"],
+            cloud_id=oauth["connection"].cloud_id,
             project_key=project_key,
             issues=[issue_input],
         )
@@ -710,13 +704,13 @@ def _create_discord_bug_issue(
 
     created_issue = create_result.created[0]
     uploaded_count, upload_warnings = _upload_discord_attachments_to_jira(
-        client=client,
-        access_token=access_token,
-        cloud_id=connection.cloud_id,
+        client=oauth["client"],
+        access_token=oauth["access_token"],
+        cloud_id=oauth["connection"].cloud_id,
         issue_key=created_issue.key,
         attachments=attachments,
     )
-    browse_base_url = str(connection.site_url or "").strip().rstrip("/")
+    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
     issue_url = build_jira_issue_url(issue_key=created_issue.key, browse_base_url=browse_base_url)
     if issue_url:
         message = f"Bug logged: [{created_issue.key}]({issue_url})"
@@ -1089,28 +1083,11 @@ def _seed_issues_with_codex(
     if not issue_inputs:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid issue drafts")
 
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jira OAuth connection is not linked for this tenant",
-        )
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Configured Jira connection was not found",
-        )
     try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-        )
-        client = _jira_oauth_client(session=session, settings=settings)
-        existing_issues = client.search_issues_by_jql(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
+        oauth = _tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+        existing_issues = oauth["client"].search_issues_by_jql(
+            access_token=oauth["access_token"],
+            cloud_id=oauth["connection"].cloud_id,
             jql=f'project = "{project_key}" ORDER BY updated DESC',
             max_results=100,
         )
@@ -1130,9 +1107,9 @@ def _seed_issues_with_codex(
                 to_create.append(issue_input)
                 continue
             matched_issue_keys.add(matched.key)
-            client.update_issue_fields(
-                access_token=access_token,
-                cloud_id=connection.cloud_id,
+            oauth["client"].update_issue_fields(
+                access_token=oauth["access_token"],
+                cloud_id=oauth["connection"].cloud_id,
                 issue_id_or_key=matched.key,
                 summary=issue_input.summary,
                 description=issue_input.description,
@@ -1141,9 +1118,9 @@ def _seed_issues_with_codex(
             updated_issue_keys.append(matched.key)
 
         create_result = (
-            client.create_issues_bulk(
-                access_token=access_token,
-                cloud_id=connection.cloud_id,
+            oauth["client"].create_issues_bulk(
+                access_token=oauth["access_token"],
+                cloud_id=oauth["connection"].cloud_id,
                 project_key=project_key,
                 issues=to_create,
             )
@@ -1163,7 +1140,7 @@ def _seed_issues_with_codex(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Jira seed upsert produced no changes: {'; '.join(create_errors) or 'unknown error'}",
         )
-    browse_base_url = str(connection.site_url or "").strip().rstrip("/")
+    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
 
     message = (
         "Issue upsert complete. "
