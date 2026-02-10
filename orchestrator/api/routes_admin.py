@@ -49,6 +49,10 @@ from orchestrator.api.admin_config_helpers import (
     with_managed_github_refs as _with_managed_github_refs_impl,
     with_preserved_jira_system_fields as _with_preserved_jira_system_fields_impl,
 )
+from orchestrator.api.admin_release_bootstrap_helpers import (
+    compute_release_bootstrap_result as _compute_release_bootstrap_result_impl,
+    release_bootstrap_report_from_config as _release_bootstrap_report_from_config_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -1275,27 +1279,9 @@ def list_tenant_repo_bootstrap_states(
 
 
 def _release_bootstrap_report_from_config(*, tenant_id: str, jira_config: dict) -> ReleaseBootstrapReportRead | None:
-    raw_report = jira_config.get("release_bootstrap")
-    if not isinstance(raw_report, dict):
-        return None
-    raw_checked_at = raw_report.get("checked_at")
-    checked_at = str(raw_checked_at).strip() if isinstance(raw_checked_at, str) and str(raw_checked_at).strip() else ""
-    if not checked_at:
-        return None
-    raw_checks = raw_report.get("checks")
-    checks = (
-        {str(key): bool(value) for key, value in raw_checks.items()}
-        if isinstance(raw_checks, dict)
-        else {}
-    )
-    raw_details = raw_report.get("details")
-    details = [str(item) for item in raw_details] if isinstance(raw_details, list) else []
-    return ReleaseBootstrapReportRead(
+    return _release_bootstrap_report_from_config_impl(
         tenant_id=tenant_id,
-        ok=bool(raw_report.get("ok")),
-        checks=checks,
-        details=details,
-        checked_at=checked_at,
+        jira_config=jira_config,
     )
 
 
@@ -1320,81 +1306,18 @@ def run_release_bootstrap(
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    checks: dict[str, bool] = {
-        "jira_connection": False,
-        "jira_project_keys": False,
-        "jira_required_statuses": False,
-        "github_installation": False,
-    }
-    details: list[str] = []
-
+    settings = get_settings()
+    ok, checks, details, report_payload = _compute_release_bootstrap_result_impl(
+        session=session,
+        tenant=tenant,
+        tenant_id=tenant_id,
+        settings=settings,
+        required_statuses=RELEASE_BOOTSTRAP_REQUIRED_STATUSES,
+        refresh_jira_connection_tokens_fn=_refresh_jira_connection_tokens,
+        jira_oauth_client_fn=_jira_oauth_client,
+    )
     jira_config = dict(tenant.jira_config or {})
-    project_keys = jira_config.get("project_keys")
-    if isinstance(project_keys, list):
-        normalized_project_keys = [str(item).strip() for item in project_keys if str(item).strip()]
-    else:
-        normalized_project_keys = []
-    checks["jira_project_keys"] = bool(normalized_project_keys)
-    if not normalized_project_keys:
-        details.append("Missing Jira project keys.")
-
-    connection_id = jira_config.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
-        details.append("Jira OAuth connection is not linked.")
-        connection = None
-    else:
-        connection = session.get(JiraOAuthConnection, connection_id)
-        if connection is None:
-            details.append("Configured Jira OAuth connection was not found.")
-    checks["jira_connection"] = connection is not None
-
-    if connection is not None and normalized_project_keys:
-        settings = get_settings()
-        try:
-            access_token = _refresh_jira_connection_tokens(
-                session,
-                connection=connection,
-                settings=settings,
-                tenant_id=tenant_id,
-            )
-            client = _jira_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
-            quoted_projects = ", ".join(f"\"{key}\"" for key in normalized_project_keys)
-            for required_status in RELEASE_BOOTSTRAP_REQUIRED_STATUSES:
-                jql = (
-                    f"project in ({quoted_projects}) AND status = \"{required_status}\" "
-                    "ORDER BY updated DESC"
-                )
-                client.search_issues_by_jql(
-                    access_token=access_token,
-                    cloud_id=connection.cloud_id,
-                    jql=jql,
-                    max_results=1,
-                )
-            checks["jira_required_statuses"] = True
-        except (ValueError, JiraOAuthError) as exc:
-            details.append(
-                "Jira required status validation failed "
-                f"for {', '.join(RELEASE_BOOTSTRAP_REQUIRED_STATUSES)}: {exc}"
-            )
-            checks["jira_required_statuses"] = False
-
-    github_installation_id = str(tenant.github_config.get("installation_id") or "").strip()
-    checks["github_installation"] = bool(github_installation_id)
-    if not github_installation_id:
-        details.append("GitHub App installation is not connected.")
-
-    ok = all(checks.values())
-    if ok:
-        details.append("Release bootstrap checks passed.")
-
-    checked_at = datetime.now(timezone.utc).isoformat()
-    jira_config["release_bootstrap"] = {
-        "ok": ok,
-        "checks": checks,
-        "details": details,
-        "checked_at": checked_at,
-    }
+    jira_config["release_bootstrap"] = report_payload
     tenant.jira_config = jira_config
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
@@ -1405,7 +1328,7 @@ def run_release_bootstrap(
         ok=ok,
         checks=checks,
         details=details,
-        checked_at=checked_at,
+        checked_at=str(report_payload.get("checked_at") or ""),
     )
 
 
