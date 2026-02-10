@@ -6,11 +6,14 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 from orchestrator.api.main import create_app
 from orchestrator.api.routes_discord import (
     _build_seed_issue_description,
+    _collect_ask_context,
     _create_discord_bug_issue,
+    _project_filter_jql,
     _seed_issues_with_codex,
     execute_discord_command,
 )
@@ -254,6 +257,86 @@ class DiscordCommandApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !ask @ISSUE-123", response.json()["detail"])
+
+    def test_project_filter_jql_scopes_to_channel_project(self) -> None:
+        create_project = self.client.post(
+            f"/api/admin/tenants/{self.tenant_id}/projects",
+            json={
+                "name": "Other Project",
+                "github_repository": "https://github.com/example/other",
+                "jira_project_key": "OTH",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        other_project_id = create_project.json()["project_id"]
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+
+            default_project = session.get(Project, f"{self.tenant_id}-default")
+            self.assertIsNotNone(default_project)
+            default_discord = dict(default_project.discord_config or {})
+            default_discord["channel_id"] = "discord-channel-1"
+            default_project.discord_config = default_discord
+
+            other_project = session.get(Project, other_project_id)
+            self.assertIsNotNone(other_project)
+            other_discord = dict(other_project.discord_config or {})
+            other_discord["channel_id"] = "discord-channel-2"
+            other_project.discord_config = other_discord
+            session.commit()
+
+            self.assertEqual(
+                _project_filter_jql(session=session, tenant=tenant, channel_id="discord-channel-1"),
+                'project = "TP"',
+            )
+            self.assertEqual(
+                _project_filter_jql(session=session, tenant=tenant, channel_id="discord-channel-2"),
+                'project = "OTH"',
+            )
+            with self.assertRaises(HTTPException):
+                _project_filter_jql(session=session, tenant=tenant, channel_id="discord-unmapped")
+            self.assertIn(
+                _project_filter_jql(session=session, tenant=tenant),
+                {'project in ("TP", "OTH")', 'project in ("OTH", "TP")'},
+            )
+
+    def test_collect_ask_context_scopes_jql_to_channel_project(self) -> None:
+        create_project = self.client.post(
+            f"/api/admin/tenants/{self.tenant_id}/projects",
+            json={
+                "name": "Other Project",
+                "github_repository": "https://github.com/example/other",
+                "jira_project_key": "OTH",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        other_project_id = create_project.json()["project_id"]
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            other_project = session.get(Project, other_project_id)
+            self.assertIsNotNone(other_project)
+            other_discord = dict(other_project.discord_config or {})
+            other_discord["channel_id"] = "discord-channel-2"
+            other_project.discord_config = other_discord
+            session.commit()
+
+            with patch("orchestrator.api.routes_discord._search_jira_issues_for_tenant", return_value=[]) as search_mock:
+                _collect_ask_context(
+                    session=session,
+                    tenant=tenant,
+                    channel_id="discord-channel-2",
+                    question="what changed",
+                )
+
+        called_jql = search_mock.call_args.kwargs["jql"]
+        self.assertIn('project = "OTH"', called_jql)
+        self.assertNotIn('project = "TP"', called_jql)
 
     def test_ask_command_requires_confirmation_when_intent_is_action(self) -> None:
         with (

@@ -770,6 +770,31 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["data"]["flags"], 64)
         create_task_mock.assert_called_once()
 
+    def test_discord_issue_autocomplete_passes_channel_id_for_project_scoping(self) -> None:
+        payload = {
+            "type": 4,
+            "channel_id": "discord-channel-1",
+            "data": {
+                "name": "run",
+                "options": [
+                    {"type": 3, "name": "issue_key", "value": "TP", "focused": True},
+                ],
+            },
+        }
+        fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
+
+        with (
+            patch("orchestrator.api.routes_webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes_webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes_webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch("orchestrator.api.routes_webhook_discord_interactions._discord_issue_autocomplete_choices", return_value=[]) as choices_mock,
+        ):
+            response = self.client.post("/discord/interactions", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        choices_mock.assert_called_once()
+        self.assertEqual(choices_mock.call_args.kwargs["channel_id"], "discord-channel-1")
+
     def test_parse_discord_bug_interaction_includes_params_and_attachments(self) -> None:
         payload = {
             "type": 2,

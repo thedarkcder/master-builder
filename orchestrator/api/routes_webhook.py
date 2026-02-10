@@ -635,9 +635,10 @@ def _discord_issue_autocomplete_choices(
     *,
     session: Session,
     tenant: Tenant,
+    channel_id: str | None,
     current_value: str,
 ) -> list[dict]:
-    project_jql = _project_filter_jql(session=session, tenant=tenant)
+    project_jql = _project_filter_jql(session=session, tenant=tenant, channel_id=channel_id)
     normalized = current_value.strip().upper()
     if normalized:
         jql = f'{project_jql} AND key ~ "{normalized}*" ORDER BY updated DESC'

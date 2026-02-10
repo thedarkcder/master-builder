@@ -63,6 +63,23 @@ RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
 RUN_STATUS_CANCELLED = "cancelled"
 JIRA_STAGE_COMMENT_EVENTS = {"decision_gate_required", "run_failed"}
+ASK_REPLY_OPEN_CUSTOM_ID = "ask.reply.open"
+
+
+def _ask_reply_components() -> list[dict]:
+    return [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 2,
+                    "label": "Reply",
+                    "custom_id": ASK_REPLY_OPEN_CUSTOM_ID,
+                }
+            ],
+        }
+    ]
 
 
 def _resolve_required_secret(
@@ -340,7 +357,11 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
             event="decision_gate_required",
             open_thread=True,
             thread_name=f"{run.issue_key}-decision-gate",
-            thread_intro="Reply here with GTD details, then run !retry <ISSUE_KEY>.",
+            thread_intro=(
+                "Reply here with clarification questions, then update the Jira issue with GTD details "
+                "and run !retry <ISSUE_KEY>."
+            ),
+            thread_intro_components=_ask_reply_components(),
         )
         _send_stage_update_to_jira(
             session=session,
