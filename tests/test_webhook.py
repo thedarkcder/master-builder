@@ -18,6 +18,7 @@ from orchestrator.api.routes_webhook import (
     _find_tenant_for_discord_channel,
     _parse_jira_comment_command,
     _parse_discord_interaction_command,
+    _send_discord_thread_followup,
     _run_discord_command_followup,
 )
 from orchestrator.api.schemas import DiscordCommandResponse
@@ -25,6 +26,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.tools.discord_api import DiscordApiError
 
 
 class JiraWebhookTests(unittest.TestCase):
@@ -1041,6 +1043,32 @@ class JiraWebhookTests(unittest.TestCase):
         ask_thread_send_mock.assert_called_once()
         thread_send_mock.assert_not_called()
         interaction_send_mock.assert_not_called()
+
+    def test_send_discord_thread_followup_falls_back_to_current_channel_when_thread_lookup_fails(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
+
+            fake_client = MagicMock()
+            fake_client.ensure_thread_for_message.side_effect = DiscordApiError("Cannot create nested thread")
+            with (
+                patch("orchestrator.api.routes_webhook.resolve_scoped_secret_ref", return_value="bot-token"),
+                patch("orchestrator.api.routes_webhook.DiscordApiClient", return_value=fake_client),
+            ):
+                _send_discord_thread_followup(
+                    session=session,
+                    settings=get_settings(),
+                    tenant=tenant,
+                    channel_id="discord-thread-1",
+                    reply_to_message_id="123456789012345678",
+                    content="reply content",
+                )
+
+            fake_client.post_message.assert_called_once_with(
+                channel_id="discord-thread-1",
+                content="reply content",
+                components=None,
+            )
 
     def test_discord_issues_followup_creates_seed_thread_for_clarifications(self) -> None:
         with (

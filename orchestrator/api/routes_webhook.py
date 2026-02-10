@@ -1253,12 +1253,17 @@ def _send_discord_thread_followup(
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
     client = DiscordApiClient(bot_token=bot_token)
     thread_name = f"{tenant.tenant_id}-{reply_to_message_id[-6:]}".replace(" ", "-")
-    thread_channel_id = client.ensure_thread_for_message(
-        channel_id=channel_id,
-        message_id=reply_to_message_id,
-        thread_name=thread_name[:100],
-    )
-    client.post_message(channel_id=thread_channel_id, content=content, components=components)
+    try:
+        thread_channel_id = client.ensure_thread_for_message(
+            channel_id=channel_id,
+            message_id=reply_to_message_id,
+            thread_name=thread_name[:100],
+        )
+        client.post_message(channel_id=thread_channel_id, content=content, components=components)
+    except DiscordApiError:
+        # If the interaction is already inside a thread, Discord can reject nested thread creation.
+        # Fallback to posting directly in the current channel/thread to keep reply flow working.
+        client.post_message(channel_id=channel_id, content=content, components=components)
 
 
 def _send_discord_ask_response_with_thread(
