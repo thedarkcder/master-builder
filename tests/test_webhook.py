@@ -1202,14 +1202,16 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_send_discord_thread_followup_posts_directly_for_known_thread_channel(self) -> None:
         with self.session_factory() as session:
-            tenant = session.get(Tenant, "tenant-webhook")
-            self.assertIsNotNone(tenant)
-            discord_config = dict(tenant.discord_config or {})
+            project = session.get(Project, "tenant-webhook-default")
+            self.assertIsNotNone(project)
+            discord_config = dict(project.discord_config or {})
             discord_config["ask_thread_channel_ids"] = ["discord-thread-1"]
-            tenant.discord_config = discord_config
+            project.discord_config = discord_config
             session.commit()
 
             fake_client = MagicMock()
+            tenant = session.get(Tenant, "tenant-webhook")
+            self.assertIsNotNone(tenant)
             with (
                 patch("orchestrator.api.routes_webhook.resolve_scoped_secret_ref", return_value="bot-token"),
                 patch("orchestrator.api.routes_webhook.DiscordApiClient", return_value=fake_client),
@@ -1266,12 +1268,11 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_find_tenant_for_discord_channel_matches_registered_thread_channel(self) -> None:
         with self.session_factory() as session:
-            tenant = session.get(Tenant, "tenant-webhook")
-            self.assertIsNotNone(tenant)
-            discord_config = dict(tenant.discord_config or {})
-            discord_config["channel_id"] = "discord-channel-1"
+            project = session.get(Project, "tenant-webhook-default")
+            self.assertIsNotNone(project)
+            discord_config = dict(project.discord_config or {})
             discord_config["ask_thread_channel_ids"] = ["discord-thread-123"]
-            tenant.discord_config = discord_config
+            project.discord_config = discord_config
             session.commit()
 
             matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-thread-123")
@@ -1280,12 +1281,11 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_find_tenant_for_discord_channel_matches_seed_followup_thread_channel(self) -> None:
         with self.session_factory() as session:
-            tenant = session.get(Tenant, "tenant-webhook")
-            self.assertIsNotNone(tenant)
-            discord_config = dict(tenant.discord_config or {})
-            discord_config["channel_id"] = "discord-channel-1"
+            project = session.get(Project, "tenant-webhook-default")
+            self.assertIsNotNone(project)
+            discord_config = dict(project.discord_config or {})
             discord_config["seed_followup_thread_channel_ids"] = ["discord-thread-seed-1"]
-            tenant.discord_config = discord_config
+            project.discord_config = discord_config
             session.commit()
 
             matched = _find_tenant_for_discord_channel(session=session, channel_id="discord-thread-seed-1")

@@ -62,16 +62,29 @@ def _channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
 
 def _tenant_allowed_channel_ids(tenant: Tenant, *, project_channel_ids: set[str]) -> set[str]:
     allowed = set(project_channel_ids)
-    allowed.update(_channel_ids_from_discord_config(dict(tenant.discord_config or {})))
+    configured_channel_id = str((tenant.discord_config or {}).get("channel_id") or "").strip()
+    if configured_channel_id:
+        allowed.add(configured_channel_id)
     return allowed
 
 
-def _tenant_seed_followup_thread_ids(tenant: Tenant) -> set[str]:
-    discord_config = tenant.discord_config or {}
-    raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
-    if not isinstance(raw_seed_thread_ids, list):
-        return set()
-    return {str(value).strip() for value in raw_seed_thread_ids if str(value).strip()}
+def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    thread_ids: set[str] = set()
+    for project in projects:
+        raw_seed_thread_ids = (project.discord_config or {}).get("seed_followup_thread_channel_ids")
+        if not isinstance(raw_seed_thread_ids, list):
+            continue
+        for value in raw_seed_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                thread_ids.add(normalized)
+    return thread_ids
 
 
 class DiscordGatewayListener:
@@ -258,7 +271,10 @@ class DiscordGatewayListener:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
             if tenant is None:
                 return
-            seed_followup_thread_ids = _tenant_seed_followup_thread_ids(tenant)
+            seed_followup_thread_ids = _project_seed_followup_thread_ids(
+                session=session,
+                tenant_id=tenant.tenant_id,
+            )
 
             command_text = content
             if channel_id in seed_followup_thread_ids and not command_text.startswith("!"):

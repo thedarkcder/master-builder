@@ -457,18 +457,6 @@ def _tenant_discord_channel_ids(*, tenant: Tenant, project_channel_ids: set[str]
     configured_channel_id = str(discord_config.get("channel_id") or "").strip()
     if configured_channel_id:
         channel_ids.add(configured_channel_id)
-    raw_thread_ids = discord_config.get("ask_thread_channel_ids")
-    if isinstance(raw_thread_ids, list):
-        for value in raw_thread_ids:
-            normalized = str(value or "").strip()
-            if normalized:
-                channel_ids.add(normalized)
-    raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
-    if isinstance(raw_seed_thread_ids, list):
-        for value in raw_seed_thread_ids:
-            normalized = str(value or "").strip()
-            if normalized:
-                channel_ids.add(normalized)
     return channel_ids
 
 
@@ -1174,18 +1162,6 @@ def _send_discord_ask_response_with_thread(
         project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
         project.discord_config = project_discord_config
         project.updated_at = datetime.now(timezone.utc)
-    else:
-        discord_config = dict(tenant.discord_config or {})
-        raw_thread_ids = discord_config.get("ask_thread_channel_ids")
-        thread_ids = (
-            [str(value).strip() for value in raw_thread_ids if str(value).strip()]
-            if isinstance(raw_thread_ids, list)
-            else []
-        )
-        if thread_channel_id not in thread_ids:
-            thread_ids.append(thread_channel_id)
-        discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
-        tenant.discord_config = discord_config
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
     client.post_message(
@@ -1245,16 +1221,6 @@ def _send_discord_seed_followup_with_thread(
         project_discord_config["seed_followup_thread_channel_ids"] = seed_thread_ids[-200:]
         project.discord_config = project_discord_config
         project.updated_at = datetime.now(timezone.utc)
-    else:
-        raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
-        seed_thread_ids = (
-            [str(value).strip() for value in raw_seed_thread_ids if str(value).strip()]
-            if isinstance(raw_seed_thread_ids, list)
-            else []
-        )
-        if thread_channel_id not in seed_thread_ids:
-            seed_thread_ids.append(thread_channel_id)
-        discord_config["seed_followup_thread_channel_ids"] = seed_thread_ids[-200:]
 
     raw_seed_followups = discord_config.get("seed_followups")
     if isinstance(raw_seed_followups, list):

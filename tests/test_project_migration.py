@@ -95,3 +95,67 @@ class ProjectMigrationTests(unittest.TestCase):
                 select(Project).where(Project.tenant_id == "tenant-one")
             ).scalars().all()
             self.assertEqual(len(project_count), 1)
+
+    def test_thread_channels_migrate_from_tenant_to_project_scope(self) -> None:
+        self._alembic_upgrade("20260209_0011")
+        session_factory = create_session_factory(database_url=self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-threads",
+                    name="Tenant Threads",
+                    is_enabled=True,
+                    jira_config={"project_keys": ["THR"], "ready_statuses": ["To Do"]},
+                    github_config={"mode": "github_app", "installation_id": "123"},
+                    repos_config={"github_repository": "https://github.com/example/threads"},
+                    policy_config={
+                        "allow_jira_transitions": False,
+                        "allow_pr_creation": True,
+                        "allow_label_mutations": True,
+                        "max_runtime_minutes": 30,
+                        "max_dev_test_review_loops": 2,
+                        "max_concurrent_runs": 2,
+                        "allowed_commands": [],
+                        "require_agents_md": False,
+                    },
+                    discord_config={
+                        "channel_id": "discord-main",
+                        "ask_thread_channel_ids": ["discord-ask-thread-1"],
+                        "seed_followup_thread_channel_ids": ["discord-seed-thread-1"],
+                    },
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="tenant-threads-default",
+                    tenant_id="tenant-threads",
+                    name="threads",
+                    github_repository="https://github.com/example/threads",
+                    jira_project_key="THR",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={"channel_id": "discord-main"},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        self._alembic_upgrade("head")
+
+        with session_factory() as session:
+            tenant = session.get(Tenant, "tenant-threads")
+            self.assertIsNotNone(tenant)
+            project = session.get(Project, "tenant-threads-default")
+            self.assertIsNotNone(project)
+            tenant_discord = dict(tenant.discord_config or {})
+            project_discord = dict(project.discord_config or {})
+            self.assertNotIn("ask_thread_channel_ids", tenant_discord)
+            self.assertNotIn("seed_followup_thread_channel_ids", tenant_discord)
+            self.assertIn("discord-ask-thread-1", project_discord.get("ask_thread_channel_ids", []))
+            self.assertIn("discord-seed-thread-1", project_discord.get("seed_followup_thread_channel_ids", []))

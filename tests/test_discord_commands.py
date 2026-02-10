@@ -168,13 +168,13 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("allowlisted", response.json()["detail"])
 
-    def test_thread_channel_is_allowed_when_registered_for_tenant(self) -> None:
+    def test_thread_channel_is_allowed_when_registered_for_project(self) -> None:
         with self.session_factory() as session:
-            tenant = session.get(Tenant, self.tenant_id)
-            self.assertIsNotNone(tenant)
-            discord_config = dict(tenant.discord_config or {})
+            project = session.get(Project, f"{self.tenant_id}-default")
+            self.assertIsNotNone(project)
+            discord_config = dict(project.discord_config or {})
             discord_config["ask_thread_channel_ids"] = ["discord-thread-1"]
-            tenant.discord_config = discord_config
+            project.discord_config = discord_config
             session.commit()
 
         response = self.client.post(
