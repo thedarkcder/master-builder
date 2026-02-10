@@ -83,11 +83,8 @@ from orchestrator.api.discord_ask_memory import (
     store_pending_ask_action as _store_pending_ask_action_impl,
     tenant_ask_history as _tenant_ask_history_impl,
 )
-from orchestrator.api.discord_response_format import (
-    build_issue_url_list,
-    format_issue_markdown_list,
-)
 from orchestrator.api.discord_followup_format import resolve_tenant_jira_browse_base_url
+from orchestrator.api.discord_seed_issue_service import seed_issues_with_codex as _seed_issues_with_codex_impl
 from orchestrator.api.jira_oauth_connection_service import resolve_tenant_jira_connection
 from orchestrator.api.command_executor_registry import register_tenant_command_executor
 from orchestrator.api.discord_state import (
@@ -118,7 +115,7 @@ from orchestrator.core.runs import (
     RUN_STATUS_SUCCEEDED,
 )
 from orchestrator.storage.models import Project, Run, Tenant
-from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.jira_oauth import JiraIssuePreview
 
 router = APIRouter(tags=["discord"])
 _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
@@ -555,196 +552,26 @@ def _seed_issues_with_codex(
     force_issue_keys: list[str] | None = None,
     allow_create: bool = True,
 ) -> tuple[str, dict]:
-    project_keys = _tenant_project_keys(session=session, tenant=tenant)
-    if not project_keys:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
-
-    settings = get_settings()
-    runtime = build_codex_runtime(session=session, settings=settings)
-    try:
-        plan_payload = plan_seed_issues_with_codex(
-            runtime=runtime,
-            prompt_markdown=prompt_markdown,
-            allowed_project_keys=project_keys,
-        )
-    except CodexRuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Codex issue seeding is unavailable: {exc}",
-        ) from exc
-
-    project_key = str(plan_payload.get("project_key") or project_keys[0]).strip().upper()
-    if project_key not in project_keys:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Codex selected unsupported Jira project key '{project_key}'",
-        )
-
-    raw_issues = plan_payload.get("issues")
-    if not isinstance(raw_issues, list):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return issue drafts")
-
-    clarification_questions: list[str] = []
-    question_set: set[str] = set()
-    raw_questions = plan_payload.get("questions")
-    if isinstance(raw_questions, list):
-        for raw_question in raw_questions:
-            question = str(raw_question).strip()
-            if question and question not in question_set:
-                question_set.add(question)
-                clarification_questions.append(question)
-    normalized_force_issue_keys = [
-        str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()
-    ]
-    issue_inputs: list[JiraIssueCreateInput] = []
-    issue_requested_keys: list[str | None] = []
-    for item in raw_issues[:12]:
-        if not isinstance(item, dict):
-            continue
-        summary = str(item.get("summary") or "").strip()
-        objective = str(item.get("objective") or "").strip()
-        scope_in = _normalize_seed_issue_scope(item.get("scope_in"))
-        scope_out = _normalize_seed_issue_scope(item.get("scope_out"))
-        acceptance_raw = item.get("acceptance_criteria")
-        acceptance = (
-            [str(entry).strip() for entry in acceptance_raw if str(entry).strip()]
-            if isinstance(acceptance_raw, list)
-            else []
-        )
-        requested_issue_key = _normalize_seed_issue_key(item.get("issue_key"))
-        if not requested_issue_key and len(normalized_force_issue_keys) > len(issue_requested_keys):
-            requested_issue_key = normalized_force_issue_keys[len(issue_requested_keys)]
-        tags = _normalize_seed_issue_tags(item.get("tags"))
-        labels = _normalize_seed_issue_labels(item.get("labels"))
-        for tag in tags:
-            if tag not in labels:
-                labels.append(tag)
-        if not summary:
-            continue
-        draft_questions = _collect_seed_issue_questions(
-            issue_summary=summary,
-            objective=objective,
-            scope_in=scope_in,
-            scope_out=scope_out,
-            acceptance=acceptance,
-        )
-        for question in draft_questions:
-            if question not in question_set:
-                question_set.add(question)
-                clarification_questions.append(question)
-        issue_inputs.append(
-            JiraIssueCreateInput(
-                summary=summary[:90],
-                description=_build_seed_issue_description(
-                    objective=objective,
-                    scope_in=scope_in,
-                    scope_out=scope_out,
-                    acceptance_criteria=acceptance,
-                ),
-                labels=labels,
-                issue_type=_parse_seed_issue_type(item.get("issue_type")),
-            )
-        )
-        issue_requested_keys.append(requested_issue_key)
-
-    if not issue_inputs:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid issue drafts")
-
-    try:
-        oauth = _tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
-        existing_issues = oauth["client"].search_issues_by_jql(
-            access_token=oauth["access_token"],
-            cloud_id=oauth["connection"].cloud_id,
-            jql=f'project = "{project_key}" ORDER BY updated DESC',
-            max_results=100,
-        )
-        matched_issue_keys: set[str] = set()
-        to_create: list[JiraIssueCreateInput] = []
-        updated_issue_keys: list[str] = []
-
-        for idx, issue_input in enumerate(issue_inputs):
-            requested_issue_key = issue_requested_keys[idx] if idx < len(issue_requested_keys) else None
-            matched = _select_seed_match(
-                existing_issues=existing_issues,
-                summary=issue_input.summary,
-                requested_issue_key=requested_issue_key,
-                matched_issue_keys=matched_issue_keys,
-            )
-            if matched is None:
-                to_create.append(issue_input)
-                continue
-            matched_issue_keys.add(matched.key)
-            oauth["client"].update_issue_fields(
-                access_token=oauth["access_token"],
-                cloud_id=oauth["connection"].cloud_id,
-                issue_id_or_key=matched.key,
-                summary=issue_input.summary,
-                description=issue_input.description,
-                labels=issue_input.labels,
-            )
-            updated_issue_keys.append(matched.key)
-
-        create_result = (
-            oauth["client"].create_issues_bulk(
-                access_token=oauth["access_token"],
-                cloud_id=oauth["connection"].cloud_id,
-                project_key=project_key,
-                issues=to_create,
-            )
-            if to_create and allow_create
-            else None
-        )
-    except (ValueError, JiraOAuthError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to seed Jira issues: {exc}",
-        ) from exc
-
-    created_keys = [issue.key for issue in create_result.created] if create_result else []
-    create_errors = create_result.errors if create_result else []
-    if not created_keys and not updated_issue_keys:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Jira seed upsert produced no changes: {'; '.join(create_errors) or 'unknown error'}",
-        )
-    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
-
-    message = (
-        "Issue upsert complete. "
-        f"Updated {len(updated_issue_keys)}: "
-        f"{format_issue_markdown_list(issue_keys=updated_issue_keys, browse_base_url=browse_base_url)}. "
-        f"Created {len(created_keys)}: "
-        f"{format_issue_markdown_list(issue_keys=created_keys, browse_base_url=browse_base_url)}."
-    )
-    if create_errors:
-        message = f"{message} (partial errors: {'; '.join(create_errors)})"
-    if clarification_questions:
-        prompt = "\n".join(f"{idx}. {question}" for idx, question in enumerate(clarification_questions, start=1))
-        message = (
-            f"{message}\n\nI still need more detail to finish issue quality. "
-            "Reply in the follow-up thread and I will update these tickets.\n"
-            f"{prompt}"
-        )
-    return (
-        message,
-        {
-            "project_key": project_key,
-            "requires_input": bool(clarification_questions),
-            "questions": clarification_questions,
-            "prompt_markdown": prompt_markdown,
-            "updated_issue_keys": updated_issue_keys,
-            "updated_issue_links": build_issue_url_list(
-                issue_keys=updated_issue_keys,
-                browse_base_url=browse_base_url,
-            ),
-            "created_issue_keys": created_keys,
-            "created_issue_links": build_issue_url_list(
-                issue_keys=created_keys,
-                browse_base_url=browse_base_url,
-            ),
-            "all_issue_keys": [*updated_issue_keys, *created_keys],
-            "errors": create_errors,
-        },
+    return _seed_issues_with_codex_impl(
+        session=session,
+        tenant=tenant,
+        prompt_markdown=prompt_markdown,
+        force_issue_keys=force_issue_keys,
+        allow_create=allow_create,
+        tenant_project_keys_fn=_tenant_project_keys,
+        get_settings_fn=get_settings,
+        build_codex_runtime_fn=build_codex_runtime,
+        plan_seed_issues_with_codex_fn=plan_seed_issues_with_codex,
+        codex_runtime_error_type=CodexRuntimeError,
+        normalize_seed_issue_scope_fn=_normalize_seed_issue_scope,
+        normalize_seed_issue_key_fn=_normalize_seed_issue_key,
+        normalize_seed_issue_tags_fn=_normalize_seed_issue_tags,
+        normalize_seed_issue_labels_fn=_normalize_seed_issue_labels,
+        collect_seed_issue_questions_fn=_collect_seed_issue_questions,
+        build_seed_issue_description_fn=_build_seed_issue_description,
+        parse_seed_issue_type_fn=_parse_seed_issue_type,
+        tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
+        select_seed_match_fn=_select_seed_match,
     )
 
 
