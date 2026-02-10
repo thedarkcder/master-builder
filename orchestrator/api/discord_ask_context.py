@@ -6,10 +6,14 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord_ask_history_service import DiscordAskHistoryService
 from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
+from orchestrator.api.jira_oauth_connection_service import (
+    resolve_tenant_jira_connection,
+    tenant_jira_oauth_context,
+)
 from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth_client
 from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
 from orchestrator.core.config import get_settings
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
+from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
 
 _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
@@ -81,28 +85,11 @@ def search_jira_issues_for_tenant(
     max_results: int = 20,
 ) -> list[JiraIssuePreview]:
     settings = get_settings()
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jira OAuth connection is not linked for this tenant",
-        )
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Configured Jira connection was not found",
-        )
     try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-        )
-        client = _jira_oauth_client(session=session, settings=settings)
-        return client.search_issues_by_jql(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
+        oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+        return oauth.client.search_issues_by_jql(
+            access_token=oauth.access_token,
+            cloud_id=oauth.connection.cloud_id,
             jql=jql,
             max_results=max_results,
         )
@@ -140,18 +127,7 @@ def fetch_jira_issue_detail_for_tenant(
     issue_key: str,
 ) -> JiraIssueDetail:
     settings = get_settings()
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jira OAuth connection is not linked for this tenant",
-        )
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Configured Jira connection was not found",
-        )
+    connection = resolve_tenant_jira_connection(session=session, tenant=tenant)
     try:
         access_token = _refresh_jira_connection_tokens(
             session,
