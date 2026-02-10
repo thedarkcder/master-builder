@@ -1238,7 +1238,7 @@ async def _run_discord_command_followup(
     service = DiscordWebhookFollowupService(
         session_factory=create_session_factory(),
         settings_factory=get_settings,
-        execute_discord_command=execute_discord_command,
+        execute_command_ingress=execute_discord_command,
         command_request_factory=DiscordCommandRequest,
         build_command_followup_message=_build_command_followup_message,
         ask_confirmation_components=_ask_confirmation_components,
@@ -1277,7 +1277,7 @@ async def _run_discord_ask_confirmation_followup(
     service = DiscordWebhookFollowupService(
         session_factory=create_session_factory(),
         settings_factory=get_settings,
-        execute_discord_command=execute_discord_command,
+        execute_command_ingress=execute_discord_command,
         command_request_factory=DiscordCommandRequest,
         build_command_followup_message=_build_command_followup_message,
         ask_confirmation_components=_ask_confirmation_components,
