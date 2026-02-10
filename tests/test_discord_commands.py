@@ -598,10 +598,10 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
             ),
             patch(
-                "orchestrator.api.discord_command_ask.build_codex_runtime",
+                "orchestrator.api.discord_commands.ask.build_codex_runtime",
             ),
             patch(
-                "orchestrator.api.discord_command_ask.plan_discord_ask_intent_with_codex",
+                "orchestrator.api.discord_commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "command", "summary": "Queue the issue run now", "command": "!run TP-20"},
             ),
         ):
@@ -648,13 +648,13 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.routes_discord._collect_ask_context",
                 return_value=(None, None, [{"key": "OTH-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
             ),
-            patch("orchestrator.api.discord_command_ask.build_codex_runtime"),
+            patch("orchestrator.api.discord_commands.ask.build_codex_runtime"),
             patch(
-                "orchestrator.api.discord_command_ask.plan_discord_ask_intent_with_codex",
+                "orchestrator.api.discord_commands.ask.plan_discord_ask_intent_with_codex",
                 return_value={"mode": "answer", "summary": "Board answer"},
             ) as plan_mock,
             patch(
-                "orchestrator.api.discord_command_ask.answer_board_question_with_codex",
+                "orchestrator.api.discord_commands.ask.answer_board_question_with_codex",
                 return_value="Scoped board answer",
             ),
         ):
