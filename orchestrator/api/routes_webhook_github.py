@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -7,18 +8,17 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.routes_webhook import (
-    _extract_delivery_id,
-    _extract_installation_id,
-    _extract_pull_request_targets,
-    _extract_repository_full_name,
-    _find_tenant_by_installation_id,
-    _read_json_payload,
-    _resolve_active_project_for_repo,
-    _resolve_global_github_webhook_secret,
-    _resolve_tenant_github_webhook_secret,
-    _validate_github_webhook_signature,
-    logger,
+from orchestrator.api.webhook_payload_utils import read_json_payload as _read_json_payload
+from orchestrator.api.webhooks.contracts import (
+    extract_delivery_id as _extract_delivery_id,
+    extract_installation_id as _extract_installation_id,
+    extract_pull_request_targets as _extract_pull_request_targets,
+    extract_repository_full_name as _extract_repository_full_name,
+    find_tenant_by_installation_id as _find_tenant_by_installation_id,
+    resolve_active_project_for_repo as _resolve_active_project_for_repo,
+    resolve_global_github_webhook_secret as _resolve_global_github_webhook_secret,
+    resolve_tenant_github_webhook_secret as _resolve_tenant_github_webhook_secret,
+    validate_github_webhook_signature as _validate_github_webhook_signature,
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord_notifications import send_tenant_discord_message
@@ -27,6 +27,7 @@ from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 
 router = APIRouter(tags=["github-webhook"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/github/webhook")
