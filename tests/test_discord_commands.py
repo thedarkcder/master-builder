@@ -781,6 +781,69 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["message"], "DM scoped answer")
 
+    def test_ask_ingress_scope_contract_matrix(self) -> None:
+        create_project = self.client.post(
+            f"/api/admin/tenants/{self.tenant_id}/projects",
+            json={
+                "name": "Other Project",
+                "github_repository": "https://github.com/example/other",
+                "jira_project_key": "OTH",
+                "discord": {"channel_id": "discord-channel-2", "notify_events": []},
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+
+        with (
+            patch(
+                "orchestrator.api.routes_discord._search_jira_issues_for_tenant",
+                return_value=[JiraIssuePreview(key="OTH-50", summary="Scoped issue", status="To Do")],
+            ) as search_mock,
+            patch("orchestrator.api.routes_discord.build_codex_runtime"),
+            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Scoped answer"),
+        ):
+            mapped = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={"user_id": "u-viewer", "channel_id": "discord-channel-2", "command": "!ask scoped"},
+            )
+            self.assertEqual(mapped.status_code, 200)
+            mapped_jql = str(search_mock.call_args.kwargs["jql"])
+            self.assertIn('project = "OTH"', mapped_jql)
+
+            dm = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={"user_id": "u-viewer", "channel_id": None, "command": "!ask unscoped"},
+            )
+            self.assertEqual(dm.status_code, 200)
+            dm_jql = str(search_mock.call_args.kwargs["jql"])
+            self.assertIn("project in", dm_jql)
+            self.assertIn('"TP"', dm_jql)
+            self.assertIn('"OTH"', dm_jql)
+
+            with self.session_factory() as session:
+                jira_ingress = execute_discord_command(
+                    tenant_id=self.tenant_id,
+                    payload=DiscordCommandRequest(
+                        user_id="jira-user-1",
+                        channel_id=None,
+                        command="!ask via-jira",
+                    ),
+                    session=session,
+                    ingress_source="jira_comment",
+                )
+            self.assertTrue(jira_ingress.ok)
+            jira_jql = str(search_mock.call_args.kwargs["jql"])
+            self.assertIn("project in", jira_jql)
+            self.assertIn('"TP"', jira_jql)
+            self.assertIn('"OTH"', jira_jql)
+
+        unmapped = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-unmapped", "command": "!ask blocked"},
+        )
+        self.assertEqual(unmapped.status_code, 403)
+        self.assertIn("does not match", unmapped.json()["detail"])
+
     def test_ask_follow_up_drops_deleted_history_issue_key(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
