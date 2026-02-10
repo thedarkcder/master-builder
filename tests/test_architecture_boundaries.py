@@ -8,8 +8,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATOR_ROOT = ROOT / "orchestrator"
 
-# Temporary explicit allowlist while route-level logic is extracted into
-# integration-agnostic services. The test fails on any new coupling.
+# Explicit allowlist for intentionally permitted route coupling.
+# The test fails on any new coupling or stale expectation drift.
 LEGACY_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/routes_discord.py": set(),
     "orchestrator/api/routes_webhook.py": set(),
