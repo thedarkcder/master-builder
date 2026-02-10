@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from orchestrator.api.main import create_app
 from orchestrator.api.routes_discord import (
+    _ask_board_message,
     _build_discord_bug_description,
     _build_seed_issue_description,
     _collect_ask_context,
@@ -368,6 +369,61 @@ class DiscordCommandApiTests(unittest.TestCase):
         called_jql = search_mock.call_args.kwargs["jql"]
         self.assertIn('project = "OTH"', called_jql)
         self.assertNotIn('project = "TP"', called_jql)
+
+    def test_ask_board_message_passes_channel_scoped_project_key_to_codex(self) -> None:
+        create_project = self.client.post(
+            f"/api/admin/tenants/{self.tenant_id}/projects",
+            json={
+                "name": "Other Project",
+                "github_repository": "https://github.com/example/other",
+                "jira_project_key": "OTH",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        other_project_id = create_project.json()["project_id"]
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+
+            default_project = session.get(Project, f"{self.tenant_id}-default")
+            self.assertIsNotNone(default_project)
+            default_discord = dict(default_project.discord_config or {})
+            default_discord["channel_id"] = "discord-channel-1"
+            default_project.discord_config = default_discord
+
+            other_project = session.get(Project, other_project_id)
+            self.assertIsNotNone(other_project)
+            other_discord = dict(other_project.discord_config or {})
+            other_discord["channel_id"] = "discord-channel-2"
+            other_project.discord_config = other_discord
+            session.commit()
+
+            with (
+                patch(
+                    "orchestrator.api.routes_discord._collect_ask_context_with_history_context",
+                    return_value=(
+                        None,
+                        None,
+                        [{"key": "OTH-1", "summary": "Other item", "status": "To Do"}],
+                        {"To Do": 1},
+                        [],
+                    ),
+                ),
+                patch("orchestrator.api.routes_discord.build_codex_runtime"),
+                patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+            ):
+                message, _ = _ask_board_message(
+                    session=session,
+                    tenant=tenant,
+                    user_id="u-viewer",
+                    channel_id="discord-channel-2",
+                    question="what is in progress",
+                )
+
+        self.assertEqual(message, "Board answer")
+        self.assertEqual(answer_mock.call_args.kwargs["project_keys"], ["OTH"])
 
     def test_project_filter_jql_scopes_to_project_thread_channel(self) -> None:
         create_project = self.client.post(

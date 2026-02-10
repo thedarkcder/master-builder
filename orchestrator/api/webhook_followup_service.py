@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from orchestrator.core.communications.integration_contracts import InteractiveReplyTransport
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -24,10 +25,7 @@ class DiscordWebhookFollowupService:
         build_command_followup_message: Callable[..., str],
         ask_confirmation_components: Callable[[str], list[dict]],
         ask_reply_components: Callable[[], list[dict]],
-        send_discord_ask_response_with_thread: Callable[..., None],
-        send_discord_seed_followup_with_thread: Callable[..., None],
-        send_discord_thread_followup: Callable[..., None],
-        send_discord_interaction_followup: Callable[..., None],
+        reply_transport: InteractiveReplyTransport,
         consume_pending_ask_action: Callable[..., dict | None],
     ) -> None:
         self._session_factory = session_factory
@@ -37,10 +35,7 @@ class DiscordWebhookFollowupService:
         self._build_command_followup_message = build_command_followup_message
         self._ask_confirmation_components = ask_confirmation_components
         self._ask_reply_components = ask_reply_components
-        self._send_discord_ask_response_with_thread = send_discord_ask_response_with_thread
-        self._send_discord_seed_followup_with_thread = send_discord_seed_followup_with_thread
-        self._send_discord_thread_followup = send_discord_thread_followup
-        self._send_discord_interaction_followup = send_discord_interaction_followup
+        self._reply_transport = reply_transport
         self._consume_pending_ask_action = consume_pending_ask_action
 
     async def run_discord_command_followup(
@@ -108,7 +103,7 @@ class DiscordWebhookFollowupService:
                             )
                             if command_response.command == "ask" and not reply_to_message_id:
                                 try:
-                                    self._send_discord_ask_response_with_thread(
+                                    self._reply_transport.send_ask_with_thread(
                                         session=session,
                                         settings=settings,
                                         tenant=tenant,
@@ -138,7 +133,7 @@ class DiscordWebhookFollowupService:
                                 )
                                 if followup_request_id:
                                     try:
-                                        self._send_discord_seed_followup_with_thread(
+                                        self._reply_transport.send_seed_with_thread(
                                             session=session,
                                             settings=settings,
                                             tenant=tenant,
@@ -167,7 +162,7 @@ class DiscordWebhookFollowupService:
                         content = f"<@{user_id}> Command failed due to an internal error."
                     if reply_to_message_id and not sent_to_thread:
                         try:
-                            self._send_discord_thread_followup(
+                            self._reply_transport.send_thread_reply(
                                 session=session,
                                 settings=settings,
                                 tenant=tenant,
@@ -193,7 +188,7 @@ class DiscordWebhookFollowupService:
         if sent_to_thread:
             return
         try:
-            self._send_discord_interaction_followup(
+            self._reply_transport.send_interaction_followup(
                 application_id=application_id,
                 interaction_token=interaction_token,
                 content=content,
@@ -285,7 +280,7 @@ class DiscordWebhookFollowupService:
                 user_id,
             )
         try:
-            self._send_discord_interaction_followup(
+            self._reply_transport.send_interaction_followup(
                 application_id=application_id,
                 interaction_token=interaction_token,
                 content=content,
