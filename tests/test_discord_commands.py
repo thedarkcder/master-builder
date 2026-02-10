@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
 from orchestrator.api.main import create_app
-from orchestrator.api.routes_discord import (
+from orchestrator.api.routes.discord import (
     _ask_board_message,
     _build_discord_bug_description,
     _build_seed_issue_description,
@@ -204,7 +204,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_run_enqueues_when_jira_issue_is_executable(self) -> None:
         with patch(
-            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
         ):
             response = self.client.post(
@@ -218,7 +218,7 @@ class DiscordCommandApiTests(unittest.TestCase):
     def test_run_conflict_includes_active_run_details(self) -> None:
         self._queue_run(run_id="run-active-1", issue_key="TP-20", status="running")
         with patch(
-            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
         ):
             response = self.client.post(
@@ -233,7 +233,7 @@ class DiscordCommandApiTests(unittest.TestCase):
     def test_retry_enqueues_from_latest_failed_run(self) -> None:
         self._queue_run(run_id="run-failed-1", issue_key="TP-30", status="failed")
         with patch(
-            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
         ):
             response = self.client.post(
@@ -248,7 +248,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self._queue_run(run_id="run-failed-1", issue_key="TP-30", status="failed")
         self._queue_run(run_id="run-active-2", issue_key="TP-30", status="queued")
         with patch(
-            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
         ):
             response = self.client.post(
@@ -271,7 +271,7 @@ class DiscordCommandApiTests(unittest.TestCase):
     def test_run_rejects_issue_outside_mapped_project_scope(self) -> None:
         self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
         with patch(
-            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
         ):
             response = self.client.post(
@@ -285,7 +285,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
         self._queue_run(run_id="run-tp-1", issue_key="TP-30", status="failed", project_id=f"{self.tenant_id}-default")
         with patch(
-            "orchestrator.api.routes_discord._fetch_jira_issue_preview",
+            "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
         ):
             response = self.client.post(
@@ -315,7 +315,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_ask_command_returns_board_answer(self) -> None:
         with patch(
-            "orchestrator.api.routes_discord._ask_board_message",
+            "orchestrator.api.routes.discord._ask_board_message",
             return_value=("Board snapshot", {"status_counts": {"To Do": 2}}),
         ):
             response = self.client.post(
@@ -333,7 +333,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_ask_command_supports_issue_scope(self) -> None:
         with patch(
-            "orchestrator.api.routes_discord._ask_board_message",
+            "orchestrator.api.routes.discord._ask_board_message",
             return_value=("Issue snapshot", {"issue_key": "TP-101"}),
         ) as ask_mock:
             response = self.client.post(
@@ -459,7 +459,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             other_project.discord_config = other_discord
             session.commit()
 
-            with patch("orchestrator.api.routes_discord._search_jira_issues_for_tenant", return_value=[]) as search_mock:
+            with patch("orchestrator.api.routes.discord._search_jira_issues_for_tenant", return_value=[]) as search_mock:
                 _collect_ask_context(
                     session=session,
                     tenant=tenant,
@@ -503,7 +503,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
             with (
                 patch(
-                    "orchestrator.api.routes_discord._collect_ask_context_with_history_context",
+                    "orchestrator.api.routes.discord._collect_ask_context_with_history_context",
                     return_value=(
                         None,
                         None,
@@ -512,8 +512,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                         [],
                     ),
                 ),
-                patch("orchestrator.api.routes_discord.build_codex_runtime"),
-                patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+                patch("orchestrator.api.routes.discord.build_codex_runtime"),
+                patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
             ):
                 message, _ = _ask_board_message(
                     session=session,
@@ -594,7 +594,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.routes_discord._collect_ask_context",
+                "orchestrator.api.routes.discord._collect_ask_context",
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
             ),
             patch(
@@ -645,7 +645,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.routes_discord._collect_ask_context",
+                "orchestrator.api.routes.discord._collect_ask_context",
                 return_value=(None, None, [{"key": "OTH-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
@@ -687,9 +687,9 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.routes_discord.build_codex_runtime"),
-            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.routes.discord._collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.routes.discord.build_codex_runtime"),
+            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Board answer"),
         ):
             first = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -741,9 +741,9 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.routes_discord.build_codex_runtime"),
-            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.routes.discord._collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.routes.discord.build_codex_runtime"),
+            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Board answer"),
         ):
             first = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -846,7 +846,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_ask_command_surfaces_jira_provider_outage(self) -> None:
         with patch(
-            "orchestrator.api.routes_discord._search_jira_issues_for_tenant",
+            "orchestrator.api.routes.discord._search_jira_issues_for_tenant",
             side_effect=HTTPException(status_code=502, detail="Failed to query Jira board: Bad Gateway"),
         ):
             response = self.client.post(
@@ -859,11 +859,11 @@ class DiscordCommandApiTests(unittest.TestCase):
     def test_ask_command_with_dm_channel_uses_tenant_scope(self) -> None:
         with (
             patch(
-                "orchestrator.api.routes_discord._search_jira_issues_for_tenant",
+                "orchestrator.api.routes.discord._search_jira_issues_for_tenant",
                 return_value=[JiraIssuePreview(key="TP-50", summary="DM issue", status="To Do")],
             ),
-            patch("orchestrator.api.routes_discord.build_codex_runtime"),
-            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="DM scoped answer"),
+            patch("orchestrator.api.routes.discord.build_codex_runtime"),
+            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="DM scoped answer"),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -888,11 +888,11 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.api.routes_discord._search_jira_issues_for_tenant",
+                "orchestrator.api.routes.discord._search_jira_issues_for_tenant",
                 return_value=[JiraIssuePreview(key="OTH-50", summary="Scoped issue", status="To Do")],
             ) as search_mock,
-            patch("orchestrator.api.routes_discord.build_codex_runtime"),
-            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Scoped answer"),
+            patch("orchestrator.api.routes.discord.build_codex_runtime"),
+            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Scoped answer"),
         ):
             mapped = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -971,10 +971,10 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.routes_discord._existing_issue_keys_for_tenant", return_value=set()),
-            patch("orchestrator.api.routes_discord._collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.routes_discord.build_codex_runtime"),
-            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.routes.discord._existing_issue_keys_for_tenant", return_value=set()),
+            patch("orchestrator.api.routes.discord._collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.routes.discord.build_codex_runtime"),
+            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Board answer"),
         ):
             response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1006,7 +1006,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.routes_discord._ask_board_message",
+                "orchestrator.api.routes.discord._ask_board_message",
                 return_value=("Implicit ask answer", {"status_counts": {"Blocked": 1}}),
             ),
         ):
@@ -1035,7 +1035,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_gap_command_returns_analysis(self) -> None:
         with patch(
-            "orchestrator.api.routes_discord._run_gap_analysis",
+            "orchestrator.api.routes.discord._run_gap_analysis",
             return_value=(
                 "Gap analysis for [TP-77](https://master-builder.atlassian.net/browse/TP-77)",
                 {
@@ -1085,7 +1085,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.routes_discord._seed_issues_with_codex",
+                "orchestrator.api.routes.discord._seed_issues_with_codex",
                 return_value=(
                     "Issue upsert complete. Updated 1: TP-11. Created 0: none.",
                     {
@@ -1151,7 +1151,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_bug_command_creates_jira_bug_from_params_and_attachments(self) -> None:
         with patch(
-            "orchestrator.api.routes_discord._create_discord_bug_issue",
+            "orchestrator.api.routes.discord._create_discord_bug_issue",
             return_value=(
                 "Bug logged: [TP-501](https://master-builder.atlassian.net/browse/TP-501)",
                 {"created_issue_keys": ["TP-501"]},
@@ -1191,7 +1191,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_issues_seed_calls_codex_seed_flow(self) -> None:
         with patch(
-            "orchestrator.api.routes_discord._seed_issues_with_codex",
+            "orchestrator.api.routes.discord._seed_issues_with_codex",
             return_value=("Seeded 2 issue(s): TP-1, TP-2", {"created_issue_keys": ["TP-1", "TP-2"]}),
         ):
             response = self.client.post(
@@ -1245,9 +1245,9 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.routes_discord.build_codex_runtime", return_value=object()),
+            patch("orchestrator.api.routes.discord.build_codex_runtime", return_value=object()),
             patch(
-                "orchestrator.api.routes_discord.plan_seed_issues_with_codex",
+                "orchestrator.api.routes.discord.plan_seed_issues_with_codex",
                 return_value={
                     "project_key": "TP",
                     "questions": ["What is the rollout plan?"],
@@ -1264,8 +1264,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ],
                 },
             ),
-            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.routes.discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes.discord._jira_oauth_client", return_value=_FakeClient()),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
@@ -1324,9 +1324,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.routes_discord.build_codex_runtime", return_value=object()),
+            patch("orchestrator.api.routes.discord.build_codex_runtime", return_value=object()),
             patch(
-                "orchestrator.api.routes_discord.plan_seed_issues_with_codex",
+                "orchestrator.api.routes.discord.plan_seed_issues_with_codex",
                 return_value={
                     "project_key": "TP",
                     "issues": [
@@ -1342,8 +1342,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ],
                 },
             ),
-            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes.discord._jira_oauth_client", return_value=fake_client),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
@@ -1419,11 +1419,11 @@ class DiscordCommandApiTests(unittest.TestCase):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=fake_client),
-            patch("orchestrator.api.routes_discord._resolve_discord_channel_name", return_value="triage-bugs"),
+            patch("orchestrator.api.routes.discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes.discord._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.discord._resolve_discord_channel_name", return_value="triage-bugs"),
             patch(
-                "orchestrator.api.routes_discord._download_discord_attachment",
+                "orchestrator.api.routes.discord._download_discord_attachment",
                 return_value=(b"image-bytes", "image/png"),
             ),
         ):
@@ -1491,11 +1491,11 @@ class DiscordCommandApiTests(unittest.TestCase):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.routes_discord._refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.routes_discord._jira_oauth_client", return_value=fake_client),
-            patch("orchestrator.api.routes_discord._resolve_discord_channel_name", return_value=None),
+            patch("orchestrator.api.routes.discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes.discord._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.discord._resolve_discord_channel_name", return_value=None),
             patch(
-                "orchestrator.api.routes_discord._download_discord_attachment",
+                "orchestrator.api.routes.discord._download_discord_attachment",
                 return_value=(b"image-bytes", "image/png"),
             ),
         ):

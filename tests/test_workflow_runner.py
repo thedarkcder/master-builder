@@ -261,7 +261,7 @@ class WorkflowRunnerTests(unittest.TestCase):
         agents = _FakeAgents()
         agents.review_results_by_attempt[1] = ReviewResult(
             approved=True,
-            summary=["TODO: finish webhook validation for orchestrator/api/routes_webhook.py"],
+            summary=["TODO: finish webhook validation for orchestrator/api/routes/webhook.py"],
             feedback=None,
             pr_url=None,
         )
@@ -275,7 +275,7 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertIsNotNone(result.follow_up_issue)
         self.assertEqual(result.follow_up_issue["target_status"], "Backlog")
         self.assertIn("placeholder", result.follow_up_issue["labels"])
-        self.assertIn("routes_webhook.py", result.follow_up_issue["description"])
+        self.assertIn("routes/webhook.py", result.follow_up_issue["description"])
 
     def test_placeholder_with_tracked_followup_still_blocks_without_new_draft(self) -> None:
         agents = _FakeAgents()

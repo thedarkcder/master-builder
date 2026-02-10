@@ -11,22 +11,22 @@ ORCHESTRATOR_ROOT = ROOT / "orchestrator"
 # Explicit allowlist for intentionally permitted route coupling.
 # The test fails on any new coupling or stale expectation drift.
 LEGACY_ROUTE_IMPORT_ALLOWLIST = {
-    "orchestrator/api/routes_discord.py": set(),
-    "orchestrator/api/routes_webhook.py": set(),
-    "orchestrator/api/routes_webhook_discord_interactions.py": set(),
-    "orchestrator/api/routes_webhook_github.py": set(),
+    "orchestrator/api/routes/discord.py": set(),
+    "orchestrator/api/routes/webhook.py": set(),
+    "orchestrator/api/routes/webhook_discord_interactions.py": set(),
+    "orchestrator/api/routes/webhook_github.py": set(),
 }
 NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/main.py": {
-        "orchestrator.api.routes_admin",
-        "orchestrator.api.routes_admin_auth",
-        "orchestrator.api.routes_admin_secrets",
-        "orchestrator.api.routes_discord",
-        "orchestrator.api.routes_runs",
-        "orchestrator.api.routes_webhook",
-        "orchestrator.api.routes_webhook_discord",
-        "orchestrator.api.routes_webhook_discord_interactions",
-        "orchestrator.api.routes_webhook_github",
+        "orchestrator.api.routes.admin",
+        "orchestrator.api.routes.admin_auth",
+        "orchestrator.api.routes.admin_secrets",
+        "orchestrator.api.routes.discord",
+        "orchestrator.api.routes.runs",
+        "orchestrator.api.routes.webhook",
+        "orchestrator.api.routes.webhook_discord",
+        "orchestrator.api.routes.webhook_discord_interactions",
+        "orchestrator.api.routes.webhook_github",
     },
 }
 
@@ -55,13 +55,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.module:
                     if node.module.startswith("orchestrator.tools"):
                         violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
-                    if node.module.startswith("orchestrator.api.routes_"):
+                    if node.module.startswith("orchestrator.api.routes."):
                         violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.startswith("orchestrator.tools"):
                             violations.append(f"{module_path.name}:{node.lineno}:{alias.name}")
-                        if alias.name.startswith("orchestrator.api.routes_"):
+                        if alias.name.startswith("orchestrator.api.routes."):
                             violations.append(f"{module_path.name}:{node.lineno}:{alias.name}")
 
         self.assertEqual(
@@ -79,7 +79,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             relative = module_path.relative_to(ROOT).as_posix()
             allowed = LEGACY_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not module_name.startswith("orchestrator.api.routes_"):
+                if not module_name.startswith("orchestrator.api.routes."):
                     continue
                 if module_name in allowed:
                     observed_allowed.add((relative, module_name))
@@ -103,7 +103,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
 
     def test_route_modules_only_use_explicit_route_import_allowlist(self) -> None:
-        route_modules = sorted(ORCHESTRATOR_ROOT.rglob("api/routes_*.py"))
+        route_modules = sorted((ORCHESTRATOR_ROOT / "api" / "routes").rglob("*.py"))
         self.assertTrue(route_modules)
         violations: list[str] = []
         observed_allowed: set[tuple[str, str]] = set()
@@ -111,7 +111,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             relative = module_path.relative_to(ROOT).as_posix()
             allowed = LEGACY_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not module_name.startswith("orchestrator.api.routes_"):
+                if not module_name.startswith("orchestrator.api.routes."):
                     continue
                 if module_name == relative.replace("/", ".")[:-3]:
                     continue
@@ -143,11 +143,11 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         observed_allowed: set[tuple[str, str]] = set()
         for module_path in api_modules:
             relative = module_path.relative_to(ROOT).as_posix()
-            if relative.startswith("orchestrator/api/routes_"):
+            if relative.startswith("orchestrator/api/routes/"):
                 continue
             allowed = NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not module_name.startswith("orchestrator.api.routes_"):
+                if not module_name.startswith("orchestrator.api.routes."):
                     continue
                 if module_name in allowed:
                     observed_allowed.add((relative, module_name))

@@ -21,7 +21,7 @@ from orchestrator.api.discord.interactions.service import (
     _run_discord_command_followup,
     _send_discord_thread_followup,
 )
-from orchestrator.api.routes_webhook import (
+from orchestrator.api.routes.webhook import (
     _parse_jira_comment_command,
 )
 from orchestrator.api.schemas import DiscordCommandResponse
@@ -539,11 +539,11 @@ class JiraWebhookTests(unittest.TestCase):
         }
         with (
             patch(
-                "orchestrator.api.routes_discord._search_jira_issues_for_tenant",
+                "orchestrator.api.routes.discord._search_jira_issues_for_tenant",
                 return_value=[JiraIssuePreview(key="TP-905", summary="Investigate", status="To Do")],
             ),
-            patch("orchestrator.api.routes_discord.build_codex_runtime"),
-            patch("orchestrator.api.routes_discord.answer_board_question_with_codex", return_value="Jira ask response"),
+            patch("orchestrator.api.routes.discord.build_codex_runtime"),
+            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Jira ask response"),
             patch("orchestrator.api.webhooks.jira_ingress.post_jira_comment", return_value=(True, None)) as post_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -766,7 +766,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_discord_webhook_routes_with_discord_ingress_contract(self) -> None:
         with patch(
-            "orchestrator.api.routes_webhook_discord.execute_discord_ingress_command",
+            "orchestrator.api.routes.webhook_discord.execute_discord_ingress_command",
             return_value=DiscordCommandResponse(ok=True, command="help", message="ok", data=None),
         ) as command_mock:
             response = self.client.post(
@@ -795,10 +795,10 @@ class JiraWebhookTests(unittest.TestCase):
             return MagicMock(name="discord-task")
 
         with (
-            patch("orchestrator.api.routes_webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes_webhook_discord_interactions._validate_discord_interaction_signature"),
-            patch("orchestrator.api.routes_webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
-            patch("orchestrator.api.routes_webhook_discord_interactions.asyncio.create_task", side_effect=_capture_and_close) as create_task_mock,
+            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes.webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch("orchestrator.api.routes.webhook_discord_interactions.asyncio.create_task", side_effect=_capture_and_close) as create_task_mock,
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
@@ -824,10 +824,10 @@ class JiraWebhookTests(unittest.TestCase):
             return MagicMock(name="discord-component-task")
 
         with (
-            patch("orchestrator.api.routes_webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes_webhook_discord_interactions._validate_discord_interaction_signature"),
-            patch("orchestrator.api.routes_webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
-            patch("orchestrator.api.routes_webhook_discord_interactions.asyncio.create_task", side_effect=_capture_and_close) as create_task_mock,
+            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes.webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch("orchestrator.api.routes.webhook_discord_interactions.asyncio.create_task", side_effect=_capture_and_close) as create_task_mock,
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
@@ -851,10 +851,10 @@ class JiraWebhookTests(unittest.TestCase):
         fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
 
         with (
-            patch("orchestrator.api.routes_webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes_webhook_discord_interactions._validate_discord_interaction_signature"),
-            patch("orchestrator.api.routes_webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
-            patch("orchestrator.api.routes_webhook_discord_interactions._discord_issue_autocomplete_choices", return_value=[]) as choices_mock,
+            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes.webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch("orchestrator.api.routes.webhook_discord_interactions._discord_issue_autocomplete_choices", return_value=[]) as choices_mock,
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
@@ -951,9 +951,9 @@ class JiraWebhookTests(unittest.TestCase):
         fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
 
         with (
-            patch("orchestrator.api.routes_webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes_webhook_discord_interactions._validate_discord_interaction_signature"),
-            patch("orchestrator.api.routes_webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes.webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
@@ -986,8 +986,8 @@ class JiraWebhookTests(unittest.TestCase):
         }
 
         with (
-            patch("orchestrator.api.routes_webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes_webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
@@ -1024,11 +1024,11 @@ class JiraWebhookTests(unittest.TestCase):
         run_followup_mock = MagicMock()
 
         with (
-            patch("orchestrator.api.routes_webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes_webhook_discord_interactions._validate_discord_interaction_signature"),
-            patch("orchestrator.api.routes_webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
-            patch("orchestrator.api.routes_webhook_discord_interactions._run_discord_command_followup", run_followup_mock),
-            patch("orchestrator.api.routes_webhook_discord_interactions.asyncio.create_task", return_value=MagicMock()) as create_task_mock,
+            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
+            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch("orchestrator.api.routes.webhook_discord_interactions._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch("orchestrator.api.routes.webhook_discord_interactions._run_discord_command_followup", run_followup_mock),
+            patch("orchestrator.api.routes.webhook_discord_interactions.asyncio.create_task", return_value=MagicMock()) as create_task_mock,
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
