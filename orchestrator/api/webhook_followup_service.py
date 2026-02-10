@@ -20,8 +20,7 @@ class DiscordWebhookFollowupService:
         *,
         session_factory: Callable[[], AbstractContextManager[Session]],
         settings_factory: Callable[[], object],
-        execute_command_ingress: Callable[..., object] | None = None,
-        execute_discord_command: Callable[..., object] | None = None,
+        execute_command_ingress: Callable[..., object],
         command_request_factory: Callable[..., object],
         build_command_followup_message: Callable[..., str],
         ask_confirmation_components: Callable[[str], list[dict]],
@@ -29,13 +28,9 @@ class DiscordWebhookFollowupService:
         reply_transport: InteractiveReplyTransport,
         consume_pending_ask_action: Callable[..., dict | None],
     ) -> None:
-        resolved_execute_command_ingress = execute_command_ingress or execute_discord_command
-        if resolved_execute_command_ingress is None:
-            raise ValueError("execute_command_ingress is required")
-
         self._session_factory = session_factory
         self._settings_factory = settings_factory
-        self._execute_command_ingress = resolved_execute_command_ingress
+        self._execute_command_ingress = execute_command_ingress
         self._command_request_factory = command_request_factory
         self._build_command_followup_message = build_command_followup_message
         self._ask_confirmation_components = ask_confirmation_components
