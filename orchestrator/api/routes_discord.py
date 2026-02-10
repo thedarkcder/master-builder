@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -29,6 +27,11 @@ from orchestrator.api.discord_ask_context import (
     tenant_project_keys as _tenant_project_keys,
 )
 from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
+from orchestrator.api.discord_bug_attachments import (
+    download_discord_attachment as _download_discord_attachment_impl,
+    resolve_discord_channel_name as _resolve_discord_channel_name_impl,
+    upload_discord_attachments_to_jira as _upload_discord_attachments_to_jira_impl,
+)
 from orchestrator.api.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
 from orchestrator.api.discord_gap_analysis import (
     extract_acceptance_criteria_from_description as _extract_acceptance_criteria_from_description_impl,
@@ -95,7 +98,6 @@ from orchestrator.core.communications.command_pipeline import (
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.project_routing import find_active_project_for_issue_key
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
@@ -103,7 +105,6 @@ from orchestrator.core.runs import (
     RUN_STATUS_SUCCEEDED,
 )
 from orchestrator.storage.models import Project, Run, Tenant
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
 
 router = APIRouter(tags=["discord"])
@@ -329,49 +330,18 @@ def _resolve_discord_channel_name(
     tenant: Tenant,
     channel_id: str | None,
 ) -> str | None:
-    normalized_channel_id = str(channel_id or "").strip()
-    if not normalized_channel_id:
-        return None
     settings = get_settings()
-    token_ref = settings.discord_bot_token_secret_ref.strip()
-    if not token_ref:
-        return None
-    bot_token = resolve_scoped_secret_ref(
-        session,
-        secret_ref=token_ref,
-        encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
+    return _resolve_discord_channel_name_impl(
+        session=session,
+        tenant=tenant,
+        channel_id=channel_id,
+        discord_bot_token_secret_ref=settings.discord_bot_token_secret_ref,
+        secrets_encryption_key=settings.secrets_encryption_key,
     )
-    if not bot_token:
-        return None
-    try:
-        client = DiscordApiClient(bot_token=bot_token)
-        payload = client.get_channel(channel_id=normalized_channel_id)
-    except (DiscordApiError, ValueError):
-        return None
-    name = str(payload.get("name") or "").strip()
-    return name or None
 
 
 def _download_discord_attachment(*, url: str) -> tuple[bytes, str | None]:
-    request = Request(
-        url=url,
-        headers={"User-Agent": "MasterBuilderDiscordBugUploader/1.0"},
-        method="GET",
-    )
-    try:
-        with urlopen(request, timeout=30) as response:
-            payload = response.read()
-            content_type = response.headers.get("Content-Type")
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise JiraOAuthError(f"HTTP {exc.code} downloading attachment: {body}") from exc
-    except URLError as exc:
-        raise JiraOAuthError(f"Failed to download attachment: {exc.reason}") from exc
-
-    if not payload:
-        raise JiraOAuthError("Downloaded attachment was empty")
-    return payload, content_type.strip() if isinstance(content_type, str) and content_type.strip() else None
+    return _download_discord_attachment_impl(url=url)
 
 
 def _upload_discord_attachments_to_jira(
@@ -382,32 +352,14 @@ def _upload_discord_attachments_to_jira(
     issue_key: str,
     attachments: list[dict[str, str]],
 ) -> tuple[int, list[str]]:
-    if not attachments:
-        return 0, []
-
-    uploaded_count = 0
-    warnings: list[str] = []
-    for attachment in attachments:
-        filename = str(attachment.get("filename") or "").strip() or "attachment"
-        url = str(attachment.get("url") or "").strip()
-        if not url:
-            warnings.append(f"{filename}: missing URL")
-            continue
-        try:
-            content, downloaded_content_type = _download_discord_attachment(url=url)
-            content_type = str(attachment.get("content_type") or "").strip() or downloaded_content_type
-            client.upload_issue_attachment(
-                access_token=access_token,
-                cloud_id=cloud_id,
-                issue_id_or_key=issue_key,
-                filename=filename,
-                content=content,
-                content_type=content_type,
-            )
-            uploaded_count += 1
-        except (JiraOAuthError, ValueError) as exc:
-            warnings.append(f"{filename}: {exc}")
-    return uploaded_count, warnings
+    return _upload_discord_attachments_to_jira_impl(
+        client=client,
+        access_token=access_token,
+        cloud_id=cloud_id,
+        issue_key=issue_key,
+        attachments=attachments,
+        download_attachment=_download_discord_attachment,
+    )
 
 
 def _create_discord_bug_issue(
