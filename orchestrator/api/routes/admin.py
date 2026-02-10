@@ -7,19 +7,19 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.admin.admin_schema_mappers import (
+from orchestrator.api.admin.schema_mappers import (
     project_to_schema as _project_to_schema,
     run_to_schema as _run_to_schema,
     tenant_to_schema as _tenant_to_schema,
 )
-from orchestrator.api.admin.admin_project_service import AdminProjectService
-from orchestrator.api.admin.admin_config_helpers import (
+from orchestrator.api.admin.project_service import AdminProjectService
+from orchestrator.api.admin.config_helpers import (
     validate_codex_assets_for_tenant_init as _validate_codex_assets_for_tenant_init_core,
 )
-from orchestrator.api.admin.admin_discord_allowlist_helpers import (
+from orchestrator.api.admin.discord_allowlist_helpers import (
     notify_discord_allowlist_approved as _notify_discord_allowlist_approved_core,
 )
-from orchestrator.api.admin.admin_jira_webhook_helpers import (
+from orchestrator.api.admin.jira_webhook_helpers import (
     default_ready_jql as _default_ready_jql,
     jira_webhook_callback_url as _jira_webhook_callback_url,
     jira_webhook_filter_jql as _jira_webhook_filter_jql,
@@ -29,22 +29,22 @@ from orchestrator.api.admin.admin_jira_webhook_helpers import (
     parse_jira_webhook_id as _parse_jira_webhook_id,
     parse_managed_webhook_ids as _parse_managed_webhook_ids,
 )
-from orchestrator.api.admin.admin_jira_webhook_delete import (
+from orchestrator.api.admin.jira_webhook_delete import (
     delete_jira_webhooks as _delete_jira_webhooks_core,
 )
-from orchestrator.api.admin.admin_jira_webhook_provision import (
+from orchestrator.api.admin.jira_webhook_provision import (
     provision_jira_webhook as _provision_jira_webhook_core,
 )
-from orchestrator.api.admin.admin_release_bootstrap_helpers import (
+from orchestrator.api.admin.release_bootstrap_helpers import (
     compute_release_bootstrap_result as _compute_release_bootstrap_result_impl,
     release_bootstrap_report_from_config as _release_bootstrap_report_from_config_impl,
 )
-from orchestrator.api.admin.admin_release_bootstrap_service import (
+from orchestrator.api.admin.release_bootstrap_service import (
     get_release_bootstrap_report as _get_release_bootstrap_report_impl,
     list_tenant_repo_bootstrap_states as _list_tenant_repo_bootstrap_states_impl,
     run_release_bootstrap as _run_release_bootstrap_impl,
 )
-from orchestrator.api.admin.admin_tenant_project_routes_service import (
+from orchestrator.api.admin.tenant_project_routes_service import (
     create_project as _create_project_route_impl,
     create_tenant as _create_tenant_route_impl,
     delete_tenant as _delete_tenant_route_impl,
@@ -56,7 +56,7 @@ from orchestrator.api.admin.admin_tenant_project_routes_service import (
     update_project as _update_project_route_impl,
     update_tenant as _update_tenant_route_impl,
 )
-from orchestrator.api.admin.admin_route_helpers import (
+from orchestrator.api.admin.route_helpers import (
     allocate_tenant_id as _allocate_tenant_id,
     cleanup_conflicting_jira_webhook_url as _cleanup_conflicting_jira_webhook_url,
     cleanup_unmanaged_jira_webhooks_for_connection as _cleanup_unmanaged_jira_webhooks_for_connection,
@@ -70,48 +70,48 @@ from orchestrator.api.admin.admin_route_helpers import (
     with_managed_github_refs as _with_managed_github_refs,
     with_preserved_jira_system_fields as _with_preserved_jira_system_fields,
 )
-from orchestrator.api.admin.admin_jira_connect_flow import (
+from orchestrator.api.admin.jira_connect_flow import (
     build_jira_connect_start as _build_jira_connect_start_impl,
     handle_jira_connect_callback as _handle_jira_connect_callback_impl,
 )
-from orchestrator.api.admin.admin_github_helpers import (
+from orchestrator.api.admin.github_helpers import (
     github_install_callback as _github_install_callback_impl,
     list_tenant_github_repositories as _list_tenant_github_repositories_impl,
     start_github_install as _start_github_install_impl,
 )
-from orchestrator.api.admin.admin_runs_query import build_runs_query as _build_runs_query_impl
-from orchestrator.api.admin.admin_runs_service import (
+from orchestrator.api.admin.runs_query import build_runs_query as _build_runs_query_impl
+from orchestrator.api.admin.runs_service import (
     get_run as _get_run_impl,
     list_runs as _list_runs_impl,
 )
-from orchestrator.api.admin.admin_jira_webhook_response_helpers import (
+from orchestrator.api.admin.jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
 )
-from orchestrator.api.admin.admin_jira_route_service import (
+from orchestrator.api.admin.jira_route_service import (
     get_jira_webhook_diagnostics as _get_jira_webhook_diagnostics_route_impl,
     list_jira_projects_for_connection as _list_jira_projects_for_connection_impl,
     run_tenant_jira_webhook_action as _run_tenant_jira_webhook_action_impl,
 )
-from orchestrator.api.admin.admin_tenant_actions import (
+from orchestrator.api.admin.tenant_actions import (
     approve_discord_allowlist_request as _approve_discord_allowlist_request_impl,
     disconnect_tenant_jira as _disconnect_tenant_jira_impl,
     list_discord_allowlist_requests as _list_discord_allowlist_requests_impl,
 )
-from orchestrator.api.admin.admin_ready_preview import (
+from orchestrator.api.admin.ready_preview import (
     preview_tenant_ready_gate as _preview_tenant_ready_gate_impl,
 )
-from orchestrator.api.admin.admin_tenant_crud import (
+from orchestrator.api.admin.tenant_crud import (
     create_tenant as _create_tenant_impl,
     delete_tenant as _delete_tenant_impl,
     get_tenant_or_404 as _get_tenant_or_404_impl,
     set_tenant_archive_state as _set_tenant_archive_state_impl,
     update_tenant as _update_tenant_impl,
 )
-from orchestrator.api.admin.admin_integration_checks import (
+from orchestrator.api.admin.integration_checks import (
     test_github_connection as _test_github_connection_impl,
     test_jira_connection as _test_jira_connection_impl,
 )
-from orchestrator.api.admin.admin_project_normalization import (
+from orchestrator.api.admin.project_normalization import (
     normalize_project_discord_config as _normalize_project_discord_config,
     normalize_project_key as _normalize_project_key,
     normalize_project_repo as _normalize_project_repo,
@@ -119,7 +119,7 @@ from orchestrator.api.admin.admin_project_normalization import (
     resolve_project_discord_channel_name as _resolve_project_discord_channel_name,  # noqa: F401
     with_preserved_discord_system_fields as _with_preserved_discord_system_fields,
 )
-from orchestrator.api.admin.admin_tenant_project_helpers import (
+from orchestrator.api.admin.tenant_project_helpers import (
     resolve_project_discord_channel_binding as _resolve_project_discord_channel_binding_impl,
 )
 from orchestrator.api.schemas import (

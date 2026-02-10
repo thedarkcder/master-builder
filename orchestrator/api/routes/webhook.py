@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.webhooks.contracts import (
-    parse_jira_comment_command as _parse_jira_comment_command,  # compatibility seam for tests
-    post_jira_comment as _post_jira_comment,  # compatibility seam for tests
+    parse_jira_comment_command as _parse_jira_comment_command,
+    post_jira_comment as _post_jira_comment,
 )
 from orchestrator.api.webhooks.jira_ingress import ingest_jira_webhook_event
 from orchestrator.core.config import get_settings

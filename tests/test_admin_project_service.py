@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 
-from orchestrator.api.admin.admin_project_service import AdminProjectService
+from orchestrator.api.admin.project_service import AdminProjectService
 
 
 class _Session:
