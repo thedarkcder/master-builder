@@ -56,6 +56,11 @@ from orchestrator.api.admin_jira_connect_flow import (
     build_jira_connect_start as _build_jira_connect_start_impl,
     handle_jira_connect_callback as _handle_jira_connect_callback_impl,
 )
+from orchestrator.api.admin_github_helpers import (
+    github_install_callback as _github_install_callback_impl,
+    list_tenant_github_repositories as _list_tenant_github_repositories_impl,
+    start_github_install as _start_github_install_impl,
+)
 from orchestrator.api.admin_project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
     normalize_project_discord_config as _normalize_project_discord_config,
@@ -103,10 +108,9 @@ from orchestrator.core.project_policy import normalize_project_policy_overrides
 from orchestrator.core.secret_manager import (
     resolve_scoped_secret_ref,
 )
-from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
-from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthError
 from orchestrator.tools.bootstrap import list_repo_bootstrap_states
@@ -1263,37 +1267,12 @@ def start_github_install(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> GitHubInstallStart:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    github = tenant.github_config
-    if github.get("mode") != "github_app":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only github_app mode is supported",
-        )
-
-    settings = get_settings()
-    app_slug = settings.github_app_slug.strip()
-    if not app_slug:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="GitHub app slug is not configured",
-        )
-
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-    state_token = create_install_state_token(
+    return _start_github_install_impl(
+        tenant=session.get(Tenant, tenant_id),
         tenant_id=tenant_id,
-        exp=expires_at,
-        secret=settings.github_install_state_secret,
         return_to=return_to,
+        settings=get_settings(),
     )
-    install_url = (
-        f"https://github.com/apps/{quote(app_slug, safe='')}/installations/new?"
-        f"state={quote(state_token, safe='')}"
-    )
-    return GitHubInstallStart(install_url=install_url, expires_at=expires_at)
 
 
 @router.get("/github/install/callback", include_in_schema=False)
@@ -1303,38 +1282,13 @@ def github_install_callback(
     setup_action: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> RedirectResponse:
-    settings = get_settings()
-    try:
-        state = parse_install_state_token(
-            token=state_token,
-            secret=settings.github_install_state_secret,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    tenant = session.get(Tenant, state.tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    github_config = dict(tenant.github_config)
-    github_config["installation_id"] = str(installation_id)
-    if setup_action:
-        github_config["installation_setup_action"] = setup_action
-    github_config["installation_updated_at"] = datetime.now(timezone.utc).isoformat()
-    tenant.github_config = github_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
-
-    if state.return_to == "wizard":
-        redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new"
-            f"?tenant_id={quote(tenant.tenant_id, safe='')}&github_install=success"
-        )
-    else:
-        redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/edit"
-            "?github_install=success"
-        )
+    redirect_url = _github_install_callback_impl(
+        state_token=state_token,
+        installation_id=installation_id,
+        setup_action=setup_action,
+        session=session,
+        settings=get_settings(),
+    )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
 
@@ -1344,45 +1298,15 @@ def list_tenant_github_repositories(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[GitHubRepositoryRead]:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
-    github = tenant.github_config
-    if github.get("mode") != "github_app":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only github_app mode is supported")
-    if not github.get("installation_id"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="GitHub App installation is not connected for this tenant",
-        )
-
-    try:
-        settings = get_settings()
-        client = github_client_from_tenant_config(
-            _with_managed_github_refs(github),
-            secret_lookup=lambda ref: resolve_scoped_secret_ref(
-                session,
-                secret_ref=ref,
-                encryption_key=settings.secrets_encryption_key,
-                tenant_id=tenant_id,
-            ),
-        )
-        repositories = client.list_installation_repositories()
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except GitHubApiError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    return [
-        GitHubRepositoryRead(
-            full_name=repo.full_name,
-            html_url=repo.html_url,
-            default_branch=repo.default_branch,
-            private=repo.private,
-        )
-        for repo in repositories
-    ]
+    return _list_tenant_github_repositories_impl(
+        tenant=session.get(Tenant, tenant_id),
+        tenant_id=tenant_id,
+        session=session,
+        settings=get_settings(),
+        with_managed_github_refs_fn=_with_managed_github_refs,
+        resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref,
+        github_client_from_tenant_config_fn=github_client_from_tenant_config,
+    )
 
 
 @router.get("/runs", response_model=list[RunRead])
