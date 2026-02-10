@@ -21,6 +21,8 @@ from orchestrator.api.discord_command_parser import resolve_discord_command
 from orchestrator.api.discord_command_run_controls import dispatch_run_control_command
 from orchestrator.api.discord_command_ask import dispatch_ask_command
 from orchestrator.api.discord_ask_context import (
+    fetch_jira_issue_detail_for_tenant,
+    fetch_jira_issue_preview_for_tenant,
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
     tenant_project_keys as _tenant_project_keys,
@@ -68,7 +70,7 @@ from orchestrator.core.runs import (
 )
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
-from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssueDetail, JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
 
 router = APIRouter(tags=["discord"])
 _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
@@ -105,93 +107,25 @@ def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
     return normalized_channel_id
 
 
-def _fetch_jira_issue_preview(
-    *,
-    session: Session,
-    tenant: Tenant,
-    issue_key: str,
-) -> JiraIssuePreview:
-    settings = get_settings()
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jira OAuth connection is not linked for this tenant",
-        )
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Configured Jira connection was not found",
-        )
-    try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-        )
-        client = _jira_oauth_client(session=session, settings=settings)
-        issues = client.search_issues_by_jql(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
-            jql=f'key = "{issue_key}"',
-            max_results=1,
-        )
-    except (ValueError, JiraOAuthError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to query Jira issue status: {exc}",
-        ) from exc
-
-    if not issues:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Issue {issue_key} was not found in Jira",
-        )
-    return issues[0]
-
-
-def _fetch_jira_issue_detail(
-    *,
-    session: Session,
-    tenant: Tenant,
-    issue_key: str,
-) -> JiraIssueDetail:
-    settings = get_settings()
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jira OAuth connection is not linked for this tenant",
-        )
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Configured Jira connection was not found",
-        )
-    try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-        )
-        client = _jira_oauth_client(session=session, settings=settings)
-        return client.get_issue_detail(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
-            issue_id_or_key=issue_key,
-        )
-    except (ValueError, JiraOAuthError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to query Jira issue details: {exc}",
-        ) from exc
-
-
 def _tenant_repo_url(tenant: Tenant) -> str | None:
     repo_url = str((tenant.repos_config or {}).get("github_repository") or "").strip()
     return repo_url or None
+
+
+def _fetch_jira_issue_preview(*, session: Session, tenant: Tenant, issue_key: str) -> JiraIssuePreview:
+    return fetch_jira_issue_preview_for_tenant(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+    )
+
+
+def _fetch_jira_issue_detail(*, session: Session, tenant: Tenant, issue_key: str):
+    return fetch_jira_issue_detail_for_tenant(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+    )
 
 
 def _extract_acceptance_criteria_from_description(description: str) -> list[str]:

@@ -10,7 +10,7 @@ from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth
 from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
 from orchestrator.core.config import get_settings
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
-from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
 
 _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
 _ask_history_service = DiscordAskHistoryService(
@@ -110,6 +110,64 @@ def search_jira_issues_for_tenant(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to query Jira board: {exc}",
+        ) from exc
+
+
+def fetch_jira_issue_preview_for_tenant(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+) -> JiraIssuePreview:
+    issues = search_jira_issues_for_tenant(
+        session=session,
+        tenant=tenant,
+        jql=f'key = "{issue_key}"',
+        max_results=1,
+    )
+    if not issues:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Issue {issue_key} was not found in Jira",
+        )
+    return issues[0]
+
+
+def fetch_jira_issue_detail_for_tenant(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+) -> JiraIssueDetail:
+    settings = get_settings()
+    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Jira OAuth connection is not linked for this tenant",
+        )
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configured Jira connection was not found",
+        )
+    try:
+        access_token = _refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+        )
+        client = _jira_oauth_client(session=session, settings=settings)
+        return client.get_issue_detail(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            issue_id_or_key=issue_key,
+        )
+    except (ValueError, JiraOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to query Jira issue details: {exc}",
         ) from exc
 
 
