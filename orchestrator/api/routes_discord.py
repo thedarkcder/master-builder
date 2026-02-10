@@ -32,6 +32,9 @@ from orchestrator.api.discord_bug_attachments import (
     resolve_discord_channel_name as _resolve_discord_channel_name_impl,
     upload_discord_attachments_to_jira as _upload_discord_attachments_to_jira_impl,
 )
+from orchestrator.api.discord_bug_issue_create_service import (
+    create_discord_bug_issue as _create_discord_bug_issue_impl,
+)
 from orchestrator.api.discord_bug_service import build_discord_bug_description, normalize_discord_attachments
 from orchestrator.api.discord_gap_analysis import (
     extract_acceptance_criteria_from_description as _extract_acceptance_criteria_from_description_impl,
@@ -74,7 +77,6 @@ from orchestrator.api.discord_ask_memory import (
 )
 from orchestrator.api.discord_response_format import (
     build_issue_url_list,
-    build_jira_issue_url,
     format_issue_markdown_list,
 )
 from orchestrator.api.discord_followup_format import resolve_tenant_jira_browse_base_url
@@ -376,84 +378,21 @@ def _create_discord_bug_issue(
     related_issue_key: str | None,
     attachments: list[dict[str, str]],
 ) -> tuple[str, dict]:
-    project_keys = _tenant_project_keys(session=session, tenant=tenant)
-    if not project_keys:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
-    project_key = project_keys[0]
-    channel_display_name = _resolve_discord_channel_name(
+    settings = get_settings()
+    return _create_discord_bug_issue_impl(
         session=session,
         tenant=tenant,
-        channel_id=channel_id,
-    )
-    normalized_channel = (
-        f"{channel_display_name} ({channel_id})" if channel_display_name and channel_id else channel_display_name or channel_id
-    )
-
-    description = _build_discord_bug_description(
         summary=summary,
         details=details,
         reporter_user_id=reporter_user_id,
-        channel_id=normalized_channel,
+        channel_id=channel_id,
         related_issue_key=related_issue_key,
         attachments=attachments,
-    )
-    issue_input = JiraIssueCreateInput(
-        summary=summary.strip()[:90],
-        description=description,
-        labels=["discord-bug", "from-discord"],
-        issue_type="Bug",
-    )
-    settings = get_settings()
-    try:
-        oauth = _tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
-        create_result = oauth["client"].create_issues_bulk(
-            access_token=oauth["access_token"],
-            cloud_id=oauth["connection"].cloud_id,
-            project_key=project_key,
-            issues=[issue_input],
-        )
-    except (ValueError, JiraOAuthError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to create Jira bug: {exc}",
-        ) from exc
-
-    if not create_result.created:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Jira bug create returned no issues: {'; '.join(create_result.errors) or 'unknown error'}",
-        )
-
-    created_issue = create_result.created[0]
-    uploaded_count, upload_warnings = _upload_discord_attachments_to_jira(
-        client=oauth["client"],
-        access_token=oauth["access_token"],
-        cloud_id=oauth["connection"].cloud_id,
-        issue_key=created_issue.key,
-        attachments=attachments,
-    )
-    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
-    issue_url = build_jira_issue_url(issue_key=created_issue.key, browse_base_url=browse_base_url)
-    if issue_url:
-        message = f"Bug logged: [{created_issue.key}]({issue_url})"
-    else:
-        message = f"Bug logged: {created_issue.key}"
-    if attachments:
-        message = f"{message}. Attached {uploaded_count}/{len(attachments)} file(s) to Jira."
-    if create_result.errors:
-        message = f"{message} (warnings: {'; '.join(create_result.errors)})"
-    if upload_warnings:
-        message = f"{message} (attachment warnings: {'; '.join(upload_warnings)})"
-    return (
-        message,
-        {
-            "created_issue_keys": [created_issue.key],
-            "created_issue_links": [issue_url] if issue_url else [],
-            "issue_type": "Bug",
-            "project_key": project_key,
-            "uploaded_attachment_count": uploaded_count,
-            "attachment_warnings": upload_warnings,
-        },
+        tenant_project_keys_fn=_tenant_project_keys,
+        resolve_discord_channel_name_fn=_resolve_discord_channel_name,
+        tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
+        upload_discord_attachments_to_jira_fn=_upload_discord_attachments_to_jira,
+        settings=settings,
     )
 
 
