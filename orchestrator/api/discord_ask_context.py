@@ -34,7 +34,12 @@ def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
 
 def tenant_active_projects(*, session: Session, tenant_id: str) -> list[Project]:
     return session.execute(
-        select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at)
+        select(Project)
+        .where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+        .order_by(Project.created_at)
     ).scalars().all()
 
 
