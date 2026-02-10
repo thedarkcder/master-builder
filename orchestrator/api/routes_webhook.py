@@ -1582,7 +1582,7 @@ def _stage_handle_comment_ask_command(
             tenant_id=context.tenant_id,
             payload=DiscordCommandRequest(
                 user_id=author_account_id,
-                channel_id=f"jira:{context.tenant_id}:{context.issue_key}",
+                channel_id=None,
                 command=f"!ask @{context.issue_key} {question}",
             ),
             ingress_source="jira_comment",

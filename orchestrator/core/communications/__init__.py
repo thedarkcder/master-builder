@@ -10,6 +10,8 @@ from orchestrator.core.communications.contracts import (
 from orchestrator.core.communications.command_pipeline import (
     CommandScope,
     CommandExecutionContext,
+    IngressSource,
+    parse_ingress_source,
     CommandHandler,
     dispatch_registered_command,
 )
@@ -29,6 +31,8 @@ __all__ = [
     "ChannelScopeRepository",
     "CommandScope",
     "CommandExecutionContext",
+    "IngressSource",
+    "parse_ingress_source",
     "CommandHandler",
     "CommandRequest",
     "CommunicationAction",

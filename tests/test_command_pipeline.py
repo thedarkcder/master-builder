@@ -5,6 +5,8 @@ import unittest
 from orchestrator.core.communications.command_pipeline import (
     CommandScope,
     CommandExecutionContext,
+    IngressSource,
+    parse_ingress_source,
     dispatch_registered_command,
 )
 
@@ -60,6 +62,12 @@ class CommandPipelineTests(unittest.TestCase):
         )
         self.assertEqual(context.scope.project_id, "project-a")
         self.assertEqual(context.scope.project_keys, ("TP",))
+
+    def test_parse_ingress_source_contract(self) -> None:
+        self.assertEqual(parse_ingress_source("discord"), IngressSource.DISCORD)
+        self.assertEqual(parse_ingress_source("jira_comment"), IngressSource.JIRA_COMMENT)
+        with self.assertRaises(ValueError):
+            parse_ingress_source("slack")
 
 
 if __name__ == "__main__":

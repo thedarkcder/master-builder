@@ -1,7 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Protocol
+
+
+class IngressSource(str, Enum):
+    DISCORD = "discord"
+    JIRA_COMMENT = "jira_comment"
+
+
+def parse_ingress_source(value: str) -> IngressSource:
+    try:
+        return IngressSource(value)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported ingress source: {value}") from exc
 
 
 @dataclass(frozen=True)
@@ -22,7 +35,7 @@ class CommandExecutionContext:
     normalized_user_id: str
     normalized_channel_id: str
     flags: dict[str, bool]
-    ingress_source: str = "discord"
+    ingress_source: IngressSource = IngressSource.DISCORD
     scope: CommandScope = field(default_factory=CommandScope)
 
 

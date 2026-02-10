@@ -962,6 +962,22 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(kwargs["force_issue_keys"], ["TP-11"])
         self.assertIn("Here are the missing rollout details", kwargs["prompt_markdown"])
 
+    def test_execute_discord_command_rejects_unknown_ingress_source(self) -> None:
+        with self.session_factory() as session:
+            with self.assertRaises(HTTPException) as exc:
+                execute_discord_command(
+                    tenant_id=self.tenant_id,
+                    payload=DiscordCommandRequest(
+                        user_id="u-admin",
+                        channel_id="discord-channel-1",
+                        command="!help",
+                    ),
+                    session=session,
+                    ingress_source="slack",  # type: ignore[arg-type]
+                )
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertIn("Unsupported ingress source", str(exc.exception.detail))
+
     def test_issues_seed_requires_spec(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
