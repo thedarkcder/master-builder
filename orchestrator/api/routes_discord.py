@@ -22,6 +22,7 @@ from orchestrator.api.discord_command_run_controls import dispatch_run_control_c
 from orchestrator.api.discord_command_ask import dispatch_ask_command
 from orchestrator.api.discord_ask_context import (
     project_filter_jql as _project_filter_jql,
+    search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
     tenant_project_keys as _tenant_project_keys,
 )
 from orchestrator.api.discord_channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
@@ -354,46 +355,6 @@ def _run_gap_analysis(
             "confidence": confidence,
         },
     )
-
-
-def _search_jira_issues_for_tenant(
-    *,
-    session: Session,
-    tenant: Tenant,
-    jql: str,
-    max_results: int = 20,
-) -> list[JiraIssuePreview]:
-    settings = get_settings()
-    connection_id = str(tenant.jira_config.get("connection_id") or "").strip()
-    if not connection_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Jira OAuth connection is not linked for this tenant",
-        )
-    connection = session.get(JiraOAuthConnection, connection_id)
-    if connection is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Configured Jira connection was not found",
-        )
-    try:
-        access_token = _refresh_jira_connection_tokens(
-            session,
-            connection=connection,
-            settings=settings,
-        )
-        client = _jira_oauth_client(session=session, settings=settings)
-        return client.search_issues_by_jql(
-            access_token=access_token,
-            cloud_id=connection.cloud_id,
-            jql=jql,
-            max_results=max_results,
-        )
-    except (ValueError, JiraOAuthError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to query Jira board: {exc}",
-        ) from exc
 
 
 def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
