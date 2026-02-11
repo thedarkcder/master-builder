@@ -5,6 +5,7 @@ import logging
 import runpy
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
@@ -172,6 +173,85 @@ class WorkerTests(unittest.TestCase):
         ):
             worker_module.main()
         run_mock.assert_called_once()
+
+    def test_run_worker_processes_and_stops_cleanly(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(database_url="postgresql://localhost/db", log_level="INFO")
+        session = MagicMock()
+
+        class _SessionCtx:
+            def __enter__(self):  # noqa: ANN204
+                return session
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        def _session_factory():  # noqa: ANN202
+            return _SessionCtx()
+
+        listener = MagicMock()
+        wait_calls = {"count": 0}
+
+        async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
+            wait_calls["count"] += 1
+            if wait_calls["count"] == 1:
+                wake_event.set()
+                return
+            stop_event.set()
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=_session_factory),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()),
+            patch.object(worker_module, "process_next_queued_run", side_effect=[MagicMock(), None]) as process_mock,
+        ):
+            asyncio.run(worker_module.run_worker())
+
+        self.assertEqual(process_mock.call_count, 2)
+        listener.start.assert_called_once()
+        listener.stop.assert_called_once()
+
+    def test_run_worker_raises_runtime_unavailable_when_runner_build_fails(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(database_url="postgresql://localhost/db", log_level="INFO")
+        session = MagicMock()
+
+        class _SessionCtx:
+            def __enter__(self):  # noqa: ANN204
+                return session
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        def _session_factory():  # noqa: ANN202
+            return _SessionCtx()
+
+        listener = MagicMock()
+
+        async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
+            wake_event.set()
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=_session_factory),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "build_workflow_runner_for_session", side_effect=worker_module.CodexRuntimeError("missing runtime")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Worker runtime unavailable"):
+                asyncio.run(worker_module.run_worker())
+
+        listener.stop.assert_called_once()
 
 
 class MainEntryTests(unittest.TestCase):
