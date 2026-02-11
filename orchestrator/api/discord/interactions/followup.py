@@ -83,6 +83,44 @@ def _project_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[
     return channel_ids
 
 
+def _project_ask_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        raw_thread_ids = (project.discord_config or {}).get("ask_thread_channel_ids")
+        if not isinstance(raw_thread_ids, list):
+            continue
+        for value in raw_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
+    return channel_ids
+
+
+def _project_seed_followup_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        raw_thread_ids = (project.discord_config or {}).get("seed_followup_thread_channel_ids")
+        if not isinstance(raw_thread_ids, list):
+            continue
+        for value in raw_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
+    return channel_ids
+
+
 def _ask_confirmation_components(request_id: str) -> list[dict]:
     return build_ask_confirmation_components(request_id)
 
@@ -224,6 +262,18 @@ def _send_discord_ask_response_with_thread(
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
     client = DiscordApiClient(bot_token=bot_token)
+    ask_thread_channel_ids = _project_ask_thread_channel_ids_for_tenant(
+        session=session,
+        tenant_id=tenant.tenant_id,
+    )
+    if channel_id in ask_thread_channel_ids:
+        client.post_message(
+            channel_id=channel_id,
+            content=content,
+            components=_ask_reply_components(),
+        )
+        return
+
     posted = client.post_message(
         channel_id=channel_id,
         content=content,
@@ -284,6 +334,23 @@ def _send_discord_seed_followup_with_thread(
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
 
     client = DiscordApiClient(bot_token=bot_token)
+    seed_thread_channel_ids = _project_seed_followup_thread_channel_ids_for_tenant(
+        session=session,
+        tenant_id=tenant.tenant_id,
+    )
+    if channel_id in seed_thread_channel_ids:
+        numbered_questions = [f"{idx}. {value}" for idx, value in enumerate(questions, start=1) if value.strip()]
+        question_block = "\n".join(numbered_questions) if numbered_questions else "No additional questions."
+        client.post_message(
+            channel_id=channel_id,
+            content=(
+                f"{content}\n\n"
+                f"<@{user_id}> Continue here with details so I can refine and update the seeded tickets.\n"
+                f"{question_block}"
+            ),
+        )
+        return
+
     posted = client.post_message(channel_id=channel_id, content=content)
     posted_message_id = str(posted.get("id") or "").strip()
     if not posted_message_id:
