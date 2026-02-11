@@ -5,11 +5,11 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.ask_context import (
+from orchestrator.api.discord.ask.context import (
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
 )
-from orchestrator.api.discord.ask_history_service import DiscordAskHistoryService
+from orchestrator.api.discord.ask.history_service import DiscordAskHistoryService
 from orchestrator.storage.models import Tenant
 
 MAX_PENDING_ASK_ACTIONS = 50

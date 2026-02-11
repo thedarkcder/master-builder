@@ -6,8 +6,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.response_format import build_jira_issue_url
-from orchestrator.api.discord.state import (
+from orchestrator.api.discord.shared.response_format import build_jira_issue_url
+from orchestrator.api.discord.shared.state import (
     REQUEST_PERMISSION_LABELS,
     create_allowlist_request as _create_allowlist_request,
 )

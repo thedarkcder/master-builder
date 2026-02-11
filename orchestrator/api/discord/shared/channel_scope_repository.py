@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.state import resolve_project_for_discord_channel
+from orchestrator.api.discord.shared.state import resolve_project_for_discord_channel
 from orchestrator.core.communications.scope_repository import ResolvedChannelScope
 from orchestrator.storage.models import Tenant
 

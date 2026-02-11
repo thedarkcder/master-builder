@@ -1,6 +1,6 @@
 import unittest
 
-from orchestrator.api.discord.response_format import (
+from orchestrator.api.discord.shared.response_format import (
     build_issue_url_list,
     build_jira_issue_url,
     format_issue_markdown_link,
