@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from contextlib import nullcontext
 from io import BytesIO
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -251,6 +252,58 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         asyncio.run(_run())
         self.assertTrue(service.run_discord_command_followup.called)
         self.assertTrue(service.run_discord_ask_confirmation_followup.called)
+
+    def test_run_discord_command_followup_reuses_existing_thread_channel(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _run_discord_command_followup
+
+        tenant = SimpleNamespace(tenant_id="t1", is_enabled=True, jira_config={}, discord_config={}, updated_at=None)
+        project = SimpleNamespace(discord_config={}, updated_at=None)
+        session = MagicMock()
+        session.get.return_value = tenant
+        session.execute.return_value.scalars.return_value.all.return_value = [project]
+        settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
+        command_response = SimpleNamespace(command="ask", message="Done", data={})
+
+        with (
+            patch("orchestrator.api.discord.interactions.followup.create_session_factory", return_value=lambda: nullcontext(session)),
+            patch("orchestrator.api.discord.interactions.followup.get_settings", return_value=settings),
+            patch("orchestrator.api.discord.interactions.followup.execute_discord_ingress_command", return_value=command_response),
+            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_project_for_discord_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as send_interaction_followup_mock,
+        ):
+            client = MagicMock()
+            client.post_message.side_effect = [{"id": "msg-1"}, None, None]
+            client.create_thread_from_message.return_value = "thread-1"
+            with patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client):
+                asyncio.run(
+                    _run_discord_command_followup(
+                        tenant_id="t1",
+                        user_id="u1",
+                        channel_id="channel-1",
+                        command_text="!ask status",
+                        application_id="app",
+                        interaction_token="tok",
+                    )
+                )
+                asyncio.run(
+                    _run_discord_command_followup(
+                        tenant_id="t1",
+                        user_id="u1",
+                        channel_id="thread-1",
+                        command_text="!ask status",
+                        application_id="app",
+                        interaction_token="tok",
+                    )
+                )
+
+        self.assertEqual(client.create_thread_from_message.call_count, 1)
+        first_call_kwargs = client.create_thread_from_message.call_args.kwargs
+        self.assertEqual(first_call_kwargs["channel_id"], "channel-1")
+        self.assertEqual(first_call_kwargs["message_id"], "msg-1")
+        self.assertIn("thread-1", project.discord_config["ask_thread_channel_ids"])
+        self.assertGreaterEqual(client.post_message.call_count, 3)
+        send_interaction_followup_mock.assert_not_called()
 
 
 if __name__ == "__main__":
