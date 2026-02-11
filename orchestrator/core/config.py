@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     required_codex_assets_version: str = ""
     discord_guild_id: str = ""
     discord_guild_id_secret_ref: str = "DISCORD_GUILD_ID"
-    discord_channel_name_template: str = "proj-{jira_project_key}-{project_name}"
+    discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
     discord_bot_token_secret_ref: str = "DISCORD_BOT_TOKEN"
     codex_cli_command: str = "codex"

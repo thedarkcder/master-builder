@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
-from orchestrator.core.worker_queue_selector import (
+from orchestrator.core.worker.queue_selector import (
     coerce_positive_int,
     select_next_queued_run,
 )

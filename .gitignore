@@ -6,5 +6,7 @@ __pycache__/
 *.db
 .env
 dist/
+*.egg-info/
+*.egg-info
 .cloudflared/*.json
 !.cloudflared/config.yml

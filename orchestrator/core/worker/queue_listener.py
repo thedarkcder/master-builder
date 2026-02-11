@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import threading
+
+
+class RunQueueNotificationBridge:
+    def __init__(
+        self,
+        *,
+        postgres_dsn: str,
+        wake_event: asyncio.Event,
+        loop: asyncio.AbstractEventLoop,
+        logger,
+        notify_channel: str,
+        psycopg_module,
+    ) -> None:  # noqa: ANN001
+        self._postgres_dsn = postgres_dsn
+        self._wake_event = wake_event
+        self._loop = loop
+        self._logger = logger
+        self._notify_channel = notify_channel
+        self._psycopg = psycopg_module
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._conn = None
+        self._conn_lock = threading.Lock()
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="run-queue-listener",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        with self._conn_lock:
+            if self._conn is not None:
+                with contextlib.suppress(Exception):
+                    self._conn.close()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        if self._psycopg is None:
+            self._logger.error("worker_queue_listener_unavailable reason=missing_psycopg")
+            self._loop.call_soon_threadsafe(self._wake_event.set)
+            return
+        try:
+            with self._psycopg.connect(self._postgres_dsn, autocommit=True) as conn:
+                with self._conn_lock:
+                    self._conn = conn
+                conn.execute(f'LISTEN "{self._notify_channel}"')
+                # Wake once on startup to drain any queued runs that predate the listener.
+                self._loop.call_soon_threadsafe(self._wake_event.set)
+                for _notification in conn.notifies():
+                    if self._stop_event.is_set():
+                        break
+                    self._loop.call_soon_threadsafe(self._wake_event.set)
+        except Exception:
+            self._logger.exception("worker_queue_listener_failed")
+            self._loop.call_soon_threadsafe(self._wake_event.set)
+        finally:
+            with self._conn_lock:
+                self._conn = None
+
+
+async def wait_for_wake_or_stop(
+    *,
+    wake_event: asyncio.Event,
+    stop_event: asyncio.Event,
+) -> None:
+    if wake_event.is_set() or stop_event.is_set():
+        return
+    wake_task = asyncio.create_task(wake_event.wait())
+    stop_task = asyncio.create_task(stop_event.wait())
+    done, pending = await asyncio.wait(
+        {wake_task, stop_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    for task in done:
+        with contextlib.suppress(asyncio.CancelledError):
+            task.result()

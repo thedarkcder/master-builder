@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
-from orchestrator.core.workflow_runner import (
+from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
     ReviewResult,
