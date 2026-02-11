@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+from uuid import uuid4
 from typing import Any
 
 from fastapi import HTTPException
@@ -20,6 +21,7 @@ from orchestrator.api.discord.shared.followup_format import (
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.config import Settings
+from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
@@ -286,13 +288,26 @@ class DiscordGatewayListener:
                         components = build_ask_confirmation_components(request_id)
             except HTTPException as exc:
                 message_content = f"<@{user_id}> Command failed: {exc.detail}"
-            except Exception:
+            except Exception as exc:
+                error_ref = uuid4().hex[:8]
                 logger.exception(
-                    "discord_gateway_command_failed tenant_id=%s user_id=%s channel_id=%s",
+                    "discord_gateway_command_failed tenant_id=%s user_id=%s channel_id=%s error_ref=%s",
                     tenant.tenant_id,
                     user_id,
                     channel_id,
+                    error_ref,
                 )
+                emit_hard_error(
+                    event="discord_gateway_command_failed",
+                    error_ref=error_ref,
+                    exc=exc,
+                    context={
+                        "tenant_id": tenant.tenant_id,
+                        "user_id": user_id,
+                        "channel_id": channel_id,
+                    },
+                )
+                message_content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
 
         try:
             DiscordApiClient(bot_token=bot_token).post_message(

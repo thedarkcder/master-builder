@@ -104,8 +104,8 @@ services:
     container_name: master-builder-admin-ui
     depends_on:
       - api
-    environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4000}
+    env_file:
+      - ./admin-ui/.env.local
     ports:
       - "4100:4100"
 

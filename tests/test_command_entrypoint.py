@@ -62,6 +62,21 @@ class CommandEntrypointTests(unittest.TestCase):
         )
         self.assertEqual(executor.call_args.kwargs["ingress_source"], "discord")
 
+    def test_execute_tenant_discord_ingress_command_rejects_non_discord_source(self) -> None:
+        response = DiscordCommandResponse(ok=True, command="status", message="ok", data={})
+        executor = MagicMock(return_value=response)
+        register_tenant_command_executor(executor)
+
+        with self.assertRaises(HTTPException) as ctx:
+            execute_tenant_discord_ingress_command(
+                tenant_id="tenant-a",
+                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
+                session=MagicMock(),
+                ingress_source="jira_comment",
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("ingress_source='discord'", str(ctx.exception.detail))
+
     def test_execute_tenant_jira_comment_command_forces_jira_comment_source(self) -> None:
         response = DiscordCommandResponse(ok=True, command="ask", message="ok", data={})
         executor = MagicMock(return_value=response)
@@ -73,6 +88,21 @@ class CommandEntrypointTests(unittest.TestCase):
             session=MagicMock(),
         )
         self.assertEqual(executor.call_args.kwargs["ingress_source"], "jira_comment")
+
+    def test_execute_tenant_jira_comment_command_rejects_non_jira_source(self) -> None:
+        response = DiscordCommandResponse(ok=True, command="ask", message="ok", data={})
+        executor = MagicMock(return_value=response)
+        register_tenant_command_executor(executor)
+
+        with self.assertRaises(HTTPException) as ctx:
+            execute_tenant_jira_comment_command(
+                tenant_id="tenant-a",
+                payload=DiscordCommandRequest(user_id="u1", channel_id=None, command="!ask test"),
+                session=MagicMock(),
+                ingress_source="discord",
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("ingress_source='jira_comment'", str(ctx.exception.detail))
 
 
 if __name__ == "__main__":
