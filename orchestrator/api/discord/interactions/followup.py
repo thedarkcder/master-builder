@@ -121,6 +121,19 @@ def _project_seed_followup_thread_channel_ids_for_tenant(*, session: Session, te
     return channel_ids
 
 
+def _ask_thread_message_map_from_config(discord_config: dict) -> dict[str, str]:
+    raw_map = discord_config.get("ask_thread_by_message_id")
+    if not isinstance(raw_map, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in raw_map.items():
+        message_id = str(key or "").strip()
+        thread_id = str(value or "").strip()
+        if message_id and thread_id:
+            normalized[message_id] = thread_id
+    return normalized
+
+
 def _ask_confirmation_components(request_id: str) -> list[dict]:
     return build_ask_confirmation_components(request_id)
 
@@ -222,20 +235,52 @@ def _send_discord_thread_followup(
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
     client = DiscordApiClient(bot_token=bot_token)
-    known_thread_ids = _tenant_discord_channel_ids(
-        tenant=tenant,
-        project_channel_ids=_project_channel_ids_for_tenant(session=session, tenant_id=tenant.tenant_id),
+    ask_thread_ids = _project_ask_thread_channel_ids_for_tenant(
+        session=session,
+        tenant_id=tenant.tenant_id,
     )
+    seed_thread_ids = _project_seed_followup_thread_channel_ids_for_tenant(
+        session=session,
+        tenant_id=tenant.tenant_id,
+    )
+    known_thread_ids = ask_thread_ids | seed_thread_ids
     if channel_id in known_thread_ids:
         client.post_message(channel_id=channel_id, content=content, components=components)
         return
-    thread_name = f"{tenant.tenant_id}-{reply_to_message_id[-6:]}".replace(" ", "-")
+    project = _resolve_project_for_channel(session=session, tenant=tenant, channel_id=channel_id)
+    if project is not None:
+        project_discord_config = dict(project.discord_config or {})
+        ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
+        mapped_thread_id = ask_message_map.get(reply_to_message_id)
+        if mapped_thread_id:
+            client.post_message(channel_id=mapped_thread_id, content=content, components=components)
+            return
+
+    thread_name = f"{tenant.tenant_id}-ask-{reply_to_message_id[-6:]}".replace(" ", "-")
     try:
         thread_channel_id = client.ensure_thread_for_message(
             channel_id=channel_id,
             message_id=reply_to_message_id,
             thread_name=thread_name[:100],
         )
+        if project is not None:
+            project_discord_config = dict(project.discord_config or {})
+            raw_thread_ids = project_discord_config.get("ask_thread_channel_ids")
+            thread_ids = (
+                [str(value).strip() for value in raw_thread_ids if str(value).strip()]
+                if isinstance(raw_thread_ids, list)
+                else []
+            )
+            if thread_channel_id not in thread_ids:
+                thread_ids.append(thread_channel_id)
+            ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
+            ask_message_map[reply_to_message_id] = thread_channel_id
+            project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
+            project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
+            project.discord_config = project_discord_config
+            project.updated_at = datetime.now(timezone.utc)
+            tenant.updated_at = datetime.now(timezone.utc)
+            session.commit()
         client.post_message(channel_id=thread_channel_id, content=content, components=components)
     except DiscordApiError:
         client.post_message(channel_id=channel_id, content=content, components=components)
@@ -299,7 +344,10 @@ def _send_discord_ask_response_with_thread(
         )
         if thread_channel_id not in thread_ids:
             thread_ids.append(thread_channel_id)
+        ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
+        ask_message_map[posted_message_id] = thread_channel_id
         project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
+        project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
         project.discord_config = project_discord_config
         project.updated_at = datetime.now(timezone.utc)
     tenant.updated_at = datetime.now(timezone.utc)

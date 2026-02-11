@@ -67,7 +67,8 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             client = MagicMock()
             with (
                 patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client),
-                patch("orchestrator.api.discord.interactions.followup._project_channel_ids_for_tenant", return_value={"thread-chan"}),
+                patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value={"thread-chan"}),
+                patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             ):
                 _send_discord_thread_followup(
                     session=session,
@@ -84,7 +85,8 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             client.ensure_thread_for_message.side_effect = DiscordApiError("no thread")
             with (
                 patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client),
-                patch("orchestrator.api.discord.interactions.followup._project_channel_ids_for_tenant", return_value=set()),
+                patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
+                patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             ):
                 _send_discord_thread_followup(
                     session=session,
@@ -95,6 +97,41 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
                     content="hello",
                 )
             self.assertGreaterEqual(client.post_message.call_count, 1)
+
+    def test_send_discord_thread_followup_uses_message_mapping(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _send_discord_thread_followup
+
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
+        settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
+        project = SimpleNamespace(
+            discord_config={
+                "ask_thread_channel_ids": ["thread-1"],
+                "ask_thread_by_message_id": {"message-1": "thread-1"},
+            },
+            updated_at=None,
+        )
+
+        with (
+            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+        ):
+            client = MagicMock()
+            client_cls.return_value = client
+            _send_discord_thread_followup(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                channel_id="parent-chan",
+                reply_to_message_id="message-1",
+                content="hello",
+            )
+
+        client.post_message.assert_called_once_with(channel_id="thread-1", content="hello", components=None)
+        client.ensure_thread_for_message.assert_not_called()
 
     def test_send_discord_ask_response_with_thread_updates_project(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_ask_response_with_thread
