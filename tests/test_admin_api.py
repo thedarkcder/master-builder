@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
-from orchestrator.api.routes_admin import _resolve_project_discord_channel_name
+from orchestrator.api.routes.admin import _resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
@@ -184,13 +184,13 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(put_response.status_code, 200)
-        self.assertEqual(put_response.json()["secret_ref"], "secret/github-webhook")
+        self.assertEqual(put_response.json()["secret_ref"], "platform/secret/github-webhook")
         self.assertEqual(put_response.json()["source"], "managed")
 
         list_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)
         refs = [item["secret_ref"] for item in list_response.json()]
-        self.assertIn("secret/github-webhook", refs)
+        self.assertIn("platform/secret/github-webhook", refs)
 
         resolve_response = self.client.post(
             "/api/admin/secrets/resolve",
@@ -200,6 +200,45 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(resolve_response.status_code, 200)
         self.assertTrue(resolve_response.json()["resolved"])
         self.assertEqual(resolve_response.json()["source"], "managed")
+
+    def test_platform_secret_list_excludes_tenant_and_project_scoped_refs(self) -> None:
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        self.client.put(
+            "/api/admin/secrets/platform%2FDISCORD_BOT_TOKEN",
+            json={"value": "platform-token"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/tenants/tenant-a/secrets/DISCORD_BOT_TOKEN",
+            json={"value": "tenant-token"},
+            auth=("admin", "secret"),
+        )
+
+        platform_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
+        self.assertEqual(platform_response.status_code, 200)
+        platform_refs = {item["secret_ref"] for item in platform_response.json()}
+        self.assertIn("platform/DISCORD_BOT_TOKEN", platform_refs)
+        self.assertNotIn("tenant/tenant-a/DISCORD_BOT_TOKEN", platform_refs)
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a/secrets", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        tenant_refs = {item["secret_ref"] for item in tenant_response.json()}
+        self.assertIn("tenant/tenant-a/DISCORD_BOT_TOKEN", tenant_refs)
+
+    def test_platform_secrets_endpoint_rejects_tenant_scoped_secret_ref(self) -> None:
+        response = self.client.put(
+            "/api/admin/secrets/tenant%2Ftenant-a%2FDISCORD_BOT_TOKEN",
+            json={"value": "tenant-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
 
     def test_managed_secret_delete(self) -> None:
         put_response = self.client.put(
@@ -305,9 +344,9 @@ class AdminApiTests(unittest.TestCase):
                 ]
 
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeJiraClient()),
-            patch("orchestrator.api.routes_admin.github_client_from_tenant_config", return_value=_FakeGitHubClient()),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeJiraClient()),
+            patch("orchestrator.api.routes.admin.github_client_from_tenant_config", return_value=_FakeGitHubClient()),
         ):
             jira_test = self.client.post(
                 "/api/admin/tenants/tenant-a/test-jira",
@@ -316,7 +355,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(jira_test.status_code, 200)
         self.assertTrue(jira_test.json()["ok"])
 
-        with patch("orchestrator.api.routes_admin.github_client_from_tenant_config", return_value=_FakeGitHubClient()):
+        with patch("orchestrator.api.routes.admin.github_client_from_tenant_config", return_value=_FakeGitHubClient()):
             github_test = self.client.post(
                 "/api/admin/tenants/tenant-a/test-github",
                 auth=("admin", "secret"),
@@ -365,8 +404,8 @@ class AdminApiTests(unittest.TestCase):
 
         fake_client = _FakeJiraClient()
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=fake_client),
         ):
             preview_response = self.client.get(
                 "/api/admin/tenants/tenant-a/ready-preview",
@@ -381,6 +420,77 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["eligible_issues"][0]["key"], "TP-101")
         self.assertIn("executable only", body["guidance"])
         self.assertEqual(fake_client.last_access_token, "access-token")
+
+    def test_release_bootstrap_persists_success_report(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeJiraClient:
+            def search_issues_by_jql(  # noqa: ANN001
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                jql: str,
+                max_results: int = 20,
+            ):
+                return []
+
+        with (
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeJiraClient()),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/release/bootstrap",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["checks"]["jira_connection"])
+        self.assertTrue(body["checks"]["jira_project_keys"])
+        self.assertTrue(body["checks"]["jira_required_statuses"])
+        self.assertTrue(body["checks"]["github_installation"])
+
+        persisted = self.client.get(
+            "/api/admin/tenants/tenant-a/release/bootstrap",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(persisted.status_code, 200)
+        self.assertTrue(persisted.json()["ok"])
+        self.assertEqual(persisted.json()["checks"]["jira_required_statuses"], True)
+
+    def test_release_bootstrap_reports_missing_configuration(self) -> None:
+        payload = self._tenant_payload()
+        payload["jira"]["connection_id"] = None
+        payload["jira"]["project_keys"] = []
+        payload["github"]["installation_id"] = None
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        response = self.client.post(
+            "/api/admin/tenants/tenant-a/release/bootstrap",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["ok"])
+        self.assertFalse(body["checks"]["jira_connection"])
+        self.assertFalse(body["checks"]["jira_project_keys"])
+        self.assertFalse(body["checks"]["github_installation"])
+        self.assertIn("Missing Jira project keys.", body["details"])
 
     def test_project_crud_and_uniqueness(self) -> None:
         payload = self._tenant_payload()
@@ -459,7 +569,7 @@ class AdminApiTests(unittest.TestCase):
         project_id = default_project["project_id"]
 
         with patch(
-            "orchestrator.api.routes_admin._resolve_project_discord_channel_binding",
+            "orchestrator.api.routes.admin._resolve_project_discord_channel_binding",
             return_value={"channel_id": "discord-channel-proj-1", "notify_events": []},
         ) as provision_mock:
             response = self.client.put(
@@ -513,7 +623,7 @@ class AdminApiTests(unittest.TestCase):
             session.commit()
 
         with patch(
-            "orchestrator.api.routes_admin._resolve_project_discord_channel_binding",
+            "orchestrator.api.routes.admin._resolve_project_discord_channel_binding",
             side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
         ):
             response = self.client.put(
@@ -567,7 +677,7 @@ class AdminApiTests(unittest.TestCase):
         )
         settings = SimpleNamespace(discord_channel_name_template="team-core")
         channel_name = _resolve_project_discord_channel_name(settings=settings, tenant=tenant, project=project)
-        self.assertEqual(channel_name, "team-core-mab-master-builder-api")
+        self.assertEqual(channel_name, "team-core-master-builder-api")
 
     def test_list_runs_supports_project_filter(self) -> None:
         payload = self._tenant_payload()
@@ -669,12 +779,12 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.client.put(
-            "/api/admin/secrets/tenant/tenant-a/GITHUB_APP_ID",
+            "/api/admin/tenants/tenant-a/secrets/GITHUB_APP_ID",
             json={"value": "tenant-app-id"},
             auth=("admin", "secret"),
         )
         self.client.put(
-            "/api/admin/secrets/tenant/tenant-a/GITHUB_APP_PRIVATE_KEY",
+            "/api/admin/tenants/tenant-a/secrets/GITHUB_APP_PRIVATE_KEY",
             json={"value": "tenant-private-key"},
             auth=("admin", "secret"),
         )
@@ -686,7 +796,7 @@ class AdminApiTests(unittest.TestCase):
             captured["private_key"] = secret_lookup(config["private_key_ref"])
             return object()
 
-        with patch("orchestrator.api.routes_admin.github_client_from_tenant_config", side_effect=_fake_factory):
+        with patch("orchestrator.api.routes.admin.github_client_from_tenant_config", side_effect=_fake_factory):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/test-github",
                 auth=("admin", "secret"),
@@ -803,7 +913,7 @@ class AdminApiTests(unittest.TestCase):
     def test_create_tenant_blocks_when_codex_assets_invalid(self) -> None:
         payload = self._tenant_payload()
         with patch(
-            "orchestrator.api.routes_admin.validate_enforcement_assets",
+            "orchestrator.api.routes.admin.validate_enforcement_assets",
             side_effect=EnforcementAssetsError("version mismatch"),
         ):
             response = self.client.post(
@@ -826,7 +936,7 @@ class AdminApiTests(unittest.TestCase):
 
         payload["name"] = "Tenant Updated"
         with patch(
-            "orchestrator.api.routes_admin.validate_enforcement_assets",
+            "orchestrator.api.routes.admin.validate_enforcement_assets",
             side_effect=EnforcementAssetsError("missing packaged asset"),
         ):
             update_response = self.client.put(
@@ -949,7 +1059,7 @@ class AdminApiTests(unittest.TestCase):
                     ),
                 ]
 
-        with patch("orchestrator.api.routes_admin.github_client_from_tenant_config", return_value=_FakeClient()):
+        with patch("orchestrator.api.routes.admin.github_client_from_tenant_config", return_value=_FakeClient()):
             response = self.client.get(
                 "/api/admin/tenants/tenant-a/github/repositories",
                 auth=("admin", "secret"),
@@ -971,7 +1081,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_response.status_code, 201)
 
         with patch(
-            "orchestrator.api.routes_admin.github_client_from_tenant_config",
+            "orchestrator.api.routes.admin.github_client_from_tenant_config",
             side_effect=ValueError("Invalid GitHub App private key secret"),
         ):
             response = self.client.get(
@@ -1034,7 +1144,7 @@ class AdminApiTests(unittest.TestCase):
                     {"webhook_id": "1001"},
                 )()
 
-        with patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()):
+        with patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeClient()):
             callback_response = self.client.get(
                 "/api/admin/jira/connect/callback",
                 params={"code": "abc123", "state": state_token},
@@ -1101,7 +1211,7 @@ class AdminApiTests(unittest.TestCase):
                     {"webhook_id": "1001"},
                 )()
 
-        with patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()):
+        with patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeClient()):
             callback_response = self.client.get(
                 "/api/admin/jira/connect/callback",
                 params={"code": "abc123", "state": state_token},
@@ -1134,8 +1244,8 @@ class AdminApiTests(unittest.TestCase):
                 return [2002]
 
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -1166,8 +1276,8 @@ class AdminApiTests(unittest.TestCase):
                 raise ValueError("Forbidden: missing Jira admin permission")
 
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -1236,8 +1346,8 @@ class AdminApiTests(unittest.TestCase):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -1297,8 +1407,8 @@ class AdminApiTests(unittest.TestCase):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -1369,8 +1479,8 @@ class AdminApiTests(unittest.TestCase):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -1464,7 +1574,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(seed_token_secret.status_code, 200)
 
-        with patch("orchestrator.api.routes_admin.DiscordApiClient.send_direct_message", return_value={"id": "msg-1"}):
+        with patch("orchestrator.api.routes.admin.DiscordApiClient.send_direct_message", return_value={"id": "msg-1"}):
             response = self.client.post("/api/admin/tenants/tenant-a/projects/tenant-a-default/discord/allowlist-requests/discord-user-456/approve", auth=("admin", "secret"))
 
         self.assertEqual(response.status_code, 200)
@@ -1512,8 +1622,8 @@ class AdminApiTests(unittest.TestCase):
 
         fake_client = _FakeJiraClient()
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=fake_client),
         ):
             provision = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/provision",
@@ -1593,8 +1703,8 @@ class AdminApiTests(unittest.TestCase):
                 deleted_batches.append(list(webhook_ids))
 
         with (
-            patch("orchestrator.api.routes_admin._refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.routes_admin._jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.routes.admin._refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/jira/webhooks/reset",
