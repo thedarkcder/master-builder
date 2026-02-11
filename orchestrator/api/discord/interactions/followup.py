@@ -134,6 +134,26 @@ def _ask_thread_message_map_from_config(discord_config: dict) -> dict[str, str]:
     return normalized
 
 
+def _resolve_thread_id_by_message_suffix(
+    *,
+    client: DiscordApiClient,
+    thread_ids: list[str],
+    message_id: str,
+) -> str | None:
+    suffix = message_id.strip()[-6:]
+    if not suffix:
+        return None
+    for thread_id in thread_ids:
+        try:
+            channel = client.get_channel(channel_id=thread_id)
+        except (DiscordApiError, ValueError):
+            continue
+        channel_name = str(channel.get("name") or "").strip()
+        if channel_name.endswith(suffix):
+            return thread_id
+    return None
+
+
 def _ask_confirmation_components(request_id: str) -> list[dict]:
     return build_ask_confirmation_components(request_id)
 
@@ -283,6 +303,29 @@ def _send_discord_thread_followup(
             session.commit()
         client.post_message(channel_id=thread_channel_id, content=content, components=components)
     except DiscordApiError:
+        if project is not None:
+            project_discord_config = dict(project.discord_config or {})
+            raw_thread_ids = project_discord_config.get("ask_thread_channel_ids")
+            thread_ids = (
+                [str(value).strip() for value in raw_thread_ids if str(value).strip()]
+                if isinstance(raw_thread_ids, list)
+                else []
+            )
+            matched_thread_id = _resolve_thread_id_by_message_suffix(
+                client=client,
+                thread_ids=thread_ids,
+                message_id=reply_to_message_id,
+            )
+            if matched_thread_id:
+                ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
+                ask_message_map[reply_to_message_id] = matched_thread_id
+                project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
+                project.discord_config = project_discord_config
+                project.updated_at = datetime.now(timezone.utc)
+                tenant.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                client.post_message(channel_id=matched_thread_id, content=content, components=components)
+                return
         client.post_message(channel_id=channel_id, content=content, components=components)
 
 
