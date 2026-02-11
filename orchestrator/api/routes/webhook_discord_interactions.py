@@ -9,23 +9,27 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.webhook_payload_utils import read_json_payload as _read_json_payload
-from orchestrator.api.discord.interactions.service import (
+from orchestrator.api.discord.interactions.auth import (
     ASK_REPLY_OPEN_CUSTOM_ID,
     _discord_autocomplete_response,
     _discord_interaction_deferred_response,
     _discord_interaction_modal_response,
     _discord_interaction_response,
-    _discord_issue_autocomplete_choices,
     _discord_modal_text_value,
-    _find_focused_discord_option,
-    _find_tenant_for_discord_channel,
     _parse_ask_confirmation_custom_id,
     _parse_ask_reply_modal_custom_id,
-    _parse_discord_interaction_command,
     _resolve_discord_interactions_public_key,
+    _validate_discord_interaction_signature,
+)
+from orchestrator.api.discord.interactions.parser import (
+    _discord_issue_autocomplete_choices,
+    _find_focused_discord_option,
+    _find_tenant_for_discord_channel,
+    _parse_discord_interaction_command,
+)
+from orchestrator.api.discord.interactions.followup import (
     _run_discord_ask_confirmation_followup,
     _run_discord_command_followup,
-    _validate_discord_interaction_signature,
 )
 from orchestrator.core.config import get_settings
 
