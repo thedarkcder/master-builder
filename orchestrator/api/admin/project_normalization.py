@@ -94,7 +94,7 @@ def sanitize_discord_channel_name(value: str) -> str:
 
 
 def resolve_project_discord_channel_name(*, settings, tenant: Tenant, project: Project) -> str:  # noqa: ANN001
-    template = str(settings.discord_channel_name_template or "").strip() or "proj-{jira_project_key}-{project_name}"
+    template = str(settings.discord_channel_name_template or "").strip() or "{project_name}"
     includes_project_token = "{project_name}" in template or "{project_id}" in template
     rendered = template.format(
         tenant_id=tenant.tenant_id,
@@ -103,9 +103,5 @@ def resolve_project_discord_channel_name(*, settings, tenant: Tenant, project: P
         jira_project_key=project.jira_project_key,
     )
     if not includes_project_token:
-        rendered = f"{rendered}-{project.jira_project_key}-{project.name}"
-    sanitized = sanitize_discord_channel_name(rendered)
-    if sanitized:
-        return sanitized
-    fallback = sanitize_discord_channel_name(f"proj-{project.jira_project_key}-{project.name}")
-    return fallback or f"proj-{project.jira_project_key}"[:100]
+        rendered = f"{rendered}-{project.name}"
+    return sanitize_discord_channel_name(rendered)

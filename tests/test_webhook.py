@@ -1130,11 +1130,16 @@ class JiraWebhookTests(unittest.TestCase):
             )
 
     def test_discord_followup_executes_with_discord_ingress_contract(self) -> None:
+        from unittest.mock import create_autospec
+
+        from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
+
+        command_executor = create_autospec(
+            execute_tenant_discord_ingress_command,
+            return_value=DiscordCommandResponse(ok=True, command="help", message="ok", data=None),
+        )
         with (
-            patch(
-                "orchestrator.api.discord.interactions.followup.execute_discord_ingress_command",
-                return_value=DiscordCommandResponse(ok=True, command="help", message="ok", data=None),
-            ) as command_mock,
+            patch("orchestrator.api.discord.interactions.followup.execute_discord_ingress_command", command_executor) as command_mock,
             patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup"),
         ):
             asyncio.run(

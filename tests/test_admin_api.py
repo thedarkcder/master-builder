@@ -184,13 +184,13 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(put_response.status_code, 200)
-        self.assertEqual(put_response.json()["secret_ref"], "secret/github-webhook")
+        self.assertEqual(put_response.json()["secret_ref"], "platform/secret/github-webhook")
         self.assertEqual(put_response.json()["source"], "managed")
 
         list_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)
         refs = [item["secret_ref"] for item in list_response.json()]
-        self.assertIn("secret/github-webhook", refs)
+        self.assertIn("platform/secret/github-webhook", refs)
 
         resolve_response = self.client.post(
             "/api/admin/secrets/resolve",
@@ -200,6 +200,45 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(resolve_response.status_code, 200)
         self.assertTrue(resolve_response.json()["resolved"])
         self.assertEqual(resolve_response.json()["source"], "managed")
+
+    def test_platform_secret_list_excludes_tenant_and_project_scoped_refs(self) -> None:
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        self.client.put(
+            "/api/admin/secrets/platform%2FDISCORD_BOT_TOKEN",
+            json={"value": "platform-token"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/tenants/tenant-a/secrets/DISCORD_BOT_TOKEN",
+            json={"value": "tenant-token"},
+            auth=("admin", "secret"),
+        )
+
+        platform_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
+        self.assertEqual(platform_response.status_code, 200)
+        platform_refs = {item["secret_ref"] for item in platform_response.json()}
+        self.assertIn("platform/DISCORD_BOT_TOKEN", platform_refs)
+        self.assertNotIn("tenant/tenant-a/DISCORD_BOT_TOKEN", platform_refs)
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a/secrets", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        tenant_refs = {item["secret_ref"] for item in tenant_response.json()}
+        self.assertIn("tenant/tenant-a/DISCORD_BOT_TOKEN", tenant_refs)
+
+    def test_platform_secrets_endpoint_rejects_tenant_scoped_secret_ref(self) -> None:
+        response = self.client.put(
+            "/api/admin/secrets/tenant%2Ftenant-a%2FDISCORD_BOT_TOKEN",
+            json={"value": "tenant-token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
 
     def test_managed_secret_delete(self) -> None:
         put_response = self.client.put(
@@ -638,7 +677,7 @@ class AdminApiTests(unittest.TestCase):
         )
         settings = SimpleNamespace(discord_channel_name_template="team-core")
         channel_name = _resolve_project_discord_channel_name(settings=settings, tenant=tenant, project=project)
-        self.assertEqual(channel_name, "team-core-mab-master-builder-api")
+        self.assertEqual(channel_name, "team-core-master-builder-api")
 
     def test_list_runs_supports_project_filter(self) -> None:
         payload = self._tenant_payload()
@@ -740,12 +779,12 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.client.put(
-            "/api/admin/secrets/tenant/tenant-a/GITHUB_APP_ID",
+            "/api/admin/tenants/tenant-a/secrets/GITHUB_APP_ID",
             json={"value": "tenant-app-id"},
             auth=("admin", "secret"),
         )
         self.client.put(
-            "/api/admin/secrets/tenant/tenant-a/GITHUB_APP_PRIVATE_KEY",
+            "/api/admin/tenants/tenant-a/secrets/GITHUB_APP_PRIVATE_KEY",
             json={"value": "tenant-private-key"},
             auth=("admin", "secret"),
         )

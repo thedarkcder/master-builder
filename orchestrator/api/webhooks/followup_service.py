@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.core.communications.integration_contracts import InteractiveReplyTransport
+from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -154,13 +156,25 @@ class DiscordWebhookFollowupService:
                     except HTTPException as exc:
                         detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                         content = f"<@{user_id}> Command failed: {detail}"
-                    except Exception:  # pragma: no cover - defensive logging path
+                    except Exception as exc:  # pragma: no cover - defensive logging path
+                        error_ref = uuid4().hex[:8]
                         logger.exception(
-                            "discord_command_followup_failed tenant_id=%s user_id=%s",
+                            "discord_command_followup_failed tenant_id=%s user_id=%s error_ref=%s",
                             tenant_id,
                             user_id,
+                            error_ref,
                         )
-                        content = f"<@{user_id}> Command failed due to an internal error."
+                        emit_hard_error(
+                            event="discord_command_followup_failed",
+                            error_ref=error_ref,
+                            exc=exc,
+                            context={
+                                "tenant_id": tenant_id,
+                                "user_id": user_id,
+                                "channel_id": channel_id,
+                            },
+                        )
+                        content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
                     if reply_to_message_id and not sent_to_thread:
                         try:
                             self._reply_transport.send_thread_reply(
@@ -180,12 +194,25 @@ class DiscordWebhookFollowupService:
                                 user_id,
                                 reply_to_message_id,
                             )
-        except Exception:  # pragma: no cover - defensive logging path
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            error_ref = uuid4().hex[:8]
             logger.exception(
-                "discord_command_followup_runtime_failed tenant_id=%s user_id=%s",
+                "discord_command_followup_runtime_failed tenant_id=%s user_id=%s error_ref=%s",
                 tenant_id,
                 user_id,
+                error_ref,
             )
+            emit_hard_error(
+                event="discord_command_followup_runtime_failed",
+                error_ref=error_ref,
+                exc=exc,
+                context={
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "channel_id": channel_id,
+                },
+            )
+            content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
         if sent_to_thread:
             return
         try:
@@ -198,11 +225,23 @@ class DiscordWebhookFollowupService:
                 reply_to_message_id=reply_to_message_id,
                 channel_id=channel_id,
             )
-        except Exception:  # pragma: no cover - defensive logging path
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            error_ref = uuid4().hex[:8]
             logger.exception(
-                "discord_command_followup_send_failed tenant_id=%s user_id=%s",
+                "discord_command_followup_send_failed tenant_id=%s user_id=%s error_ref=%s",
                 tenant_id,
                 user_id,
+                error_ref,
+            )
+            emit_hard_error(
+                event="discord_command_followup_send_failed",
+                error_ref=error_ref,
+                exc=exc,
+                context={
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "channel_id": channel_id,
+                },
             )
 
     async def run_discord_ask_confirmation_followup(
@@ -268,19 +307,44 @@ class DiscordWebhookFollowupService:
                                 except HTTPException as exc:
                                     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                                     content = f"<@{user_id}> Approved action failed: {detail}"
-                                except Exception:  # pragma: no cover - defensive path
+                                except Exception as exc:  # pragma: no cover - defensive path
+                                    error_ref = uuid4().hex[:8]
                                     logger.exception(
-                                        "discord_ask_approval_execute_failed tenant_id=%s user_id=%s",
+                                        "discord_ask_approval_execute_failed tenant_id=%s user_id=%s error_ref=%s",
                                         tenant_id,
                                         user_id,
+                                        error_ref,
                                     )
-                                    content = f"<@{user_id}> Approved action failed due to an internal error."
-        except Exception:  # pragma: no cover - defensive logging path
+                                    emit_hard_error(
+                                        event="discord_ask_approval_execute_failed",
+                                        error_ref=error_ref,
+                                        exc=exc,
+                                        context={
+                                            "tenant_id": tenant_id,
+                                            "user_id": user_id,
+                                            "channel_id": channel_id,
+                                        },
+                                    )
+                                    content = f"<@{user_id}> Approved action failed due to an internal error. Ref: `{error_ref}`"
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            error_ref = uuid4().hex[:8]
             logger.exception(
-                "discord_ask_approval_runtime_failed tenant_id=%s user_id=%s",
+                "discord_ask_approval_runtime_failed tenant_id=%s user_id=%s error_ref=%s",
                 tenant_id,
                 user_id,
+                error_ref,
             )
+            emit_hard_error(
+                event="discord_ask_approval_runtime_failed",
+                error_ref=error_ref,
+                exc=exc,
+                context={
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "channel_id": channel_id,
+                },
+            )
+            content = f"<@{user_id}> Approved action failed due to an internal error. Ref: `{error_ref}`"
         try:
             self._reply_transport.send_interaction_followup(
                 application_id=application_id,
@@ -288,9 +352,21 @@ class DiscordWebhookFollowupService:
                 content=content,
                 ephemeral=False,
             )
-        except Exception:  # pragma: no cover - defensive logging path
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            error_ref = uuid4().hex[:8]
             logger.exception(
-                "discord_ask_approval_send_failed tenant_id=%s user_id=%s",
+                "discord_ask_approval_send_failed tenant_id=%s user_id=%s error_ref=%s",
                 tenant_id,
                 user_id,
+                error_ref,
+            )
+            emit_hard_error(
+                event="discord_ask_approval_send_failed",
+                error_ref=error_ref,
+                exc=exc,
+                context={
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "channel_id": channel_id,
+                },
             )

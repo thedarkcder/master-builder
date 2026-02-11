@@ -63,7 +63,13 @@ def execute_tenant_discord_ingress_command(
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
     allow_plain_ask: bool = False,
+    ingress_source: str = "discord",
 ) -> DiscordCommandResponse:
+    if ingress_source != "discord":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Discord ingress command wrapper only supports ingress_source='discord'",
+        )
     return _execute_registered_command(
         tenant_id=tenant_id,
         payload=payload,
@@ -83,7 +89,13 @@ def execute_tenant_jira_comment_command(
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
     allow_plain_ask: bool = False,
+    ingress_source: str = "jira_comment",
 ) -> DiscordCommandResponse:
+    if ingress_source != "jira_comment":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Jira comment command wrapper only supports ingress_source='jira_comment'",
+        )
     return _execute_registered_command(
         tenant_id=tenant_id,
         payload=payload,
