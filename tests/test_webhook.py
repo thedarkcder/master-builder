@@ -13,13 +13,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
-from orchestrator.api.discord.interactions.service import (
+from orchestrator.api.discord.interactions.followup import (
     _build_command_followup_message,
+    _run_discord_command_followup,
+    _send_discord_thread_followup,
+)
+from orchestrator.api.discord.interactions.parser import (
     _discord_issue_autocomplete_choices,
     _find_tenant_for_discord_channel,
     _parse_discord_interaction_command,
-    _run_discord_command_followup,
-    _send_discord_thread_followup,
 )
 from orchestrator.api.routes.webhook import (
     _parse_jira_comment_command,
