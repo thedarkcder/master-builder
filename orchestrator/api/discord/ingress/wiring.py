@@ -6,8 +6,8 @@ from orchestrator.api.discord.commands.issues import dispatch_issues_command
 from orchestrator.api.discord.commands.parser import resolve_discord_command
 from orchestrator.api.discord.commands.run_controls import dispatch_run_control_command
 from orchestrator.api.discord.commands.dispatcher import dispatch_simple_discord_command
-from orchestrator.api.discord.followup_format import resolve_tenant_jira_browse_base_url
-from orchestrator.api.discord.ingress_service import DiscordIngressDependencies, DiscordIngressHandlers
+from orchestrator.api.discord.shared.followup_format import resolve_tenant_jira_browse_base_url
+from orchestrator.api.discord.ingress.service import DiscordIngressDependencies, DiscordIngressHandlers
 
 
 def build_discord_ingress_dependencies(

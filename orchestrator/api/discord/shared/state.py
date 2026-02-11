@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.state_repository import (
+from orchestrator.api.discord.shared.state_repository import (
     resolve_project_for_discord_channel,
     save_project_allowlist_requests,
     save_seed_followups,

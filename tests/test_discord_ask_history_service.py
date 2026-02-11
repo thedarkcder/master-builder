@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from orchestrator.api.discord.ask_history_service import DiscordAskHistoryService
+from orchestrator.api.discord.ask.history_service import DiscordAskHistoryService
 
 
 def _tenant(discord_config: dict | None = None) -> SimpleNamespace:
