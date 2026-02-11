@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import MagicMock
-from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from orchestrator.api.command_entrypoint import execute_tenant_discord_command
-from orchestrator.api.command_entrypoint import execute_tenant_discord_ingress_command, execute_tenant_jira_comment_command
-from orchestrator.api.command_executor_registry import clear_tenant_command_executor, register_tenant_command_executor
+from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
+from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command, execute_tenant_jira_comment_command
+from orchestrator.api.commands.executor_registry import clear_tenant_command_executor, register_tenant_command_executor
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 
 

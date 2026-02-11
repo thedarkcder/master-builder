@@ -8,9 +8,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.command_entrypoint import execute_tenant_discord_ingress_command
+from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.api.webhook_payload_utils import (
+from orchestrator.api.webhooks.payload_utils import (
     extract_webhook_token as _extract_webhook_token,
     read_json_payload as _read_json_payload,
 )

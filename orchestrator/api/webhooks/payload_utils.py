@@ -10,7 +10,7 @@ DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1_048_576
 HTTP_413_TOO_LARGE = getattr(
     status,
     "HTTP_413_CONTENT_TOO_LARGE",
-    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+    413,
 )
 
 logger = logging.getLogger(__name__)

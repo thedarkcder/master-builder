@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from orchestrator.api.command_execution_service import CommandExecutionDependencies, execute_tenant_command
+from orchestrator.api.commands.execution_service import CommandExecutionDependencies, execute_tenant_command
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.communications.command_pipeline import CommandScope
 

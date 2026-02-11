@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth_connection_service import tenant_jira_oauth_context
+from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.webhooks.github_payload_contracts import (
     extract_installation_id,
     extract_pull_request_targets,
@@ -25,7 +25,7 @@ from orchestrator.api.webhooks.jira_payload_contracts import (
     normalize_jira_webhook_event,
     parse_jira_comment_command,
 )
-from orchestrator.api.webhook_payload_utils import extract_webhook_token
+from orchestrator.api.webhooks.payload_utils import extract_webhook_token
 from orchestrator.core.project_routing import (
     find_active_project_for_issue_key,
     find_active_project_for_repo_full_name,
