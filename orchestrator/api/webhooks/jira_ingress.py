@@ -8,10 +8,10 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.command_entrypoint import execute_tenant_jira_comment_command
+from orchestrator.api.commands.entrypoint import execute_tenant_jira_comment_command
 from orchestrator.api.discord.ask.context import remove_issue_key_from_tenant_ask_history
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.api.webhook_payload_utils import read_json_payload as _read_json_payload
+from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
 from orchestrator.api.webhooks.contracts import (
     JIRA_COMMENT_EVENTS,
     extract_delivery_id,

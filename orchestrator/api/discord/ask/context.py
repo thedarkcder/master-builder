@@ -6,12 +6,12 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.ask.history_service import DiscordAskHistoryService
 from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
-from orchestrator.api.jira_oauth_connection_service import (
+from orchestrator.api.jira_oauth.connection_service import (
     resolve_tenant_jira_connection,
     tenant_jira_oauth_context,
 )
-from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth_client
-from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
+from orchestrator.api.jira_oauth.service import jira_oauth_client as _jira_oauth_client
+from orchestrator.api.jira_oauth.service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
 from orchestrator.core.config import get_settings
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError

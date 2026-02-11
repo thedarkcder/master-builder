@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.command_executor_registry import get_tenant_command_executor
+from orchestrator.api.commands.executor_registry import get_tenant_command_executor
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 
 

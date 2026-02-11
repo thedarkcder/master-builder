@@ -4,7 +4,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from orchestrator.api.webhook_followup_service import DiscordWebhookFollowupService
+from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
 
 
 class DiscordWebhookFollowupServiceTests(unittest.TestCase):

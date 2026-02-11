@@ -10,7 +10,7 @@ from urllib.request import Request as UrlRequest, urlopen
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.command_entrypoint import execute_tenant_discord_ingress_command
+from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.ask.context import consume_pending_ask_action
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
@@ -20,7 +20,7 @@ from orchestrator.api.discord.shared.followup_format import (
 from orchestrator.api.discord.shared.reply_transport import DiscordReplyTransport
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.api.webhook_followup_service import DiscordWebhookFollowupService
+from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
 from orchestrator.core.config import get_settings
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory

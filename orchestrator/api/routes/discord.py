@@ -74,8 +74,8 @@ from orchestrator.api.discord.ask.memory import (
 )
 from orchestrator.api.discord.ask.board_service import ask_board_message as _ask_board_message_impl
 from orchestrator.api.discord.seed.issue_service import seed_issues_with_codex as _seed_issues_with_codex_impl
-from orchestrator.api.jira_oauth_connection_service import resolve_tenant_jira_connection
-from orchestrator.api.command_executor_registry import register_tenant_command_executor
+from orchestrator.api.jira_oauth.connection_service import resolve_tenant_jira_connection
+from orchestrator.api.commands.executor_registry import register_tenant_command_executor
 from orchestrator.api.discord.shared.state import (
     assert_channel_scope as _assert_channel_scope,
     assert_sensitive_command_permission as _assert_sensitive_command_permission,
@@ -84,8 +84,8 @@ from orchestrator.api.discord.shared.state import (
     normalize_status_name as _normalize_status_name,
     store_seed_followup_context as _store_seed_followup_context,
 )
-from orchestrator.api.jira_oauth_service import jira_oauth_client as _jira_oauth_client
-from orchestrator.api.jira_oauth_service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
+from orchestrator.api.jira_oauth.service import jira_oauth_client as _jira_oauth_client
+from orchestrator.api.jira_oauth.service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,

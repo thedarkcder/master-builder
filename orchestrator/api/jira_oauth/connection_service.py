@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth_service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthClient
 

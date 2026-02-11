@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from orchestrator.api.command_entrypoint import execute_tenant_discord_command
+from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,

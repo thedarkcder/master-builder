@@ -7,7 +7,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from orchestrator.api.webhook_payload_utils import read_json_payload as _read_json_payload
+from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
 from orchestrator.api.webhooks.contracts import (
     extract_delivery_id as _extract_delivery_id,
     extract_installation_id as _extract_installation_id,
