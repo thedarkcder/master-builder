@@ -133,6 +133,43 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         client.post_message.assert_called_once_with(channel_id="thread-1", content="hello", components=None)
         client.ensure_thread_for_message.assert_not_called()
 
+    def test_send_discord_thread_followup_recovers_existing_thread_by_name_suffix(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _send_discord_thread_followup
+
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
+        settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
+        project = SimpleNamespace(
+            discord_config={
+                "ask_thread_channel_ids": ["thread-legacy"],
+            },
+            updated_at=None,
+        )
+
+        with (
+            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+        ):
+            client = MagicMock()
+            client.ensure_thread_for_message.side_effect = DiscordApiError("already has thread")
+            client.get_channel.return_value = {"name": "t1-ask-123456"}
+            client_cls.return_value = client
+            _send_discord_thread_followup(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                channel_id="parent-chan",
+                reply_to_message_id="msg-000123456",
+                content="hello",
+            )
+
+        client.post_message.assert_called_once_with(channel_id="thread-legacy", content="hello", components=None)
+        self.assertEqual(project.discord_config["ask_thread_by_message_id"]["msg-000123456"], "thread-legacy")
+        session.commit.assert_called_once()
+
     def test_send_discord_ask_response_with_thread_updates_project(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_ask_response_with_thread
 
