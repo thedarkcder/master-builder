@@ -157,15 +157,13 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(response.json()["enqueued"])
         self.assertEqual(response.json()["reason"], "tenant_disabled")
 
-    def test_webhook_requires_ready_status(self) -> None:
+    def test_webhook_enqueues_todo_status(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["enqueued"])
-        self.assertEqual(response.json()["reason"], "status_not_ready")
-        self.assertIn("Move the issue to a ready status", response.json()["guidance"])
+        self.assertTrue(response.json()["enqueued"])
 
     def test_webhook_ignores_done_issue_status(self) -> None:
         payload = self._jira_issue_payload(
@@ -196,6 +194,24 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.json()["reason"], "run_already_active")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
         self.assertEqual(second.json()["trigger_reason"], "ready_status_recheck")
+
+    def test_webhook_enqueue_skip_sends_discord_reason(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-124", labels=["agent:ready"])
+        first = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.json()["enqueued"])
+
+        with patch("orchestrator.api.webhooks.jira_ingress.send_tenant_discord_message") as notify_mock:
+            second = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(second.json()["enqueued"])
+        self.assertEqual(second.json()["reason"], "run_already_active")
+        notify_mock.assert_called_once()
+        sent_message = notify_mock.call_args.kwargs["message"]
+        self.assertIn("did not queue a run", sent_message)
+        self.assertIn("run_already_active", sent_message)
+        self.assertIn("already active", sent_message)
 
     def test_webhook_records_last_delivery_metadata(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-777", labels=["agent:ready"])
@@ -423,7 +439,7 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["enqueued"])
-        self.assertEqual(response.json()["trigger_reason"], "status_transition_to_ready")
+        self.assertEqual(response.json()["trigger_reason"], "status_transition")
 
     def test_webhook_deduplicates_delivery_identifier(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
@@ -571,6 +587,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "tenant_concurrency_limit_reached")
+        self.assertIn("concurrency limit", second.json()["guidance"].lower())
 
     def test_webhook_unknown_tenant_returns_404(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-999", labels=["agent:ready"])
