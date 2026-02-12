@@ -4,7 +4,7 @@ import asyncio
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
 
@@ -82,6 +82,22 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         with patch("orchestrator.core.discord.gateway_listener.websockets", None):
             asyncio.run(listener._run_loop())
 
+    def test_start_and_stop_handle_thread_lifecycle(self) -> None:
+        listener, _session = self._listener()
+        fake_thread = MagicMock()
+        fake_thread.is_alive.return_value = True
+        listener._thread = fake_thread
+        listener.start()
+        fake_thread.start.assert_not_called()
+
+        listener.stop()
+        fake_thread.join.assert_called_once()
+
+    def test_run_thread_catches_asyncio_run_failure(self) -> None:
+        listener, _session = self._listener()
+        with patch("orchestrator.core.discord.gateway_listener.asyncio.run", side_effect=RuntimeError("boom")):
+            listener._run_thread()
+
     def test_run_loop_waits_for_token_then_runs_connection(self) -> None:
         listener, _session = self._listener()
         calls = {"sleep": 0, "connect": 0}
@@ -155,6 +171,48 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             asyncio.run(listener._run_single_connection(bot_token="bot-token"))
 
         self.assertEqual(ws_resume.sent_payloads[0]["op"], 6)
+
+    def test_run_single_connection_handles_invalid_session_opcode(self) -> None:
+        listener, _session = self._listener()
+        listener._session_id = "sess-1"
+        listener._sequence = 3
+        ws = _FakeWebSocket(
+            [
+                {"d": {"heartbeat_interval": 100}},
+                {"op": 9, "t": "", "d": {}, "s": 4},
+            ]
+        )
+
+        async def _fake_sleep(_seconds: float) -> None:
+            return
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener.websockets", SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws))),
+            patch("orchestrator.core.discord.gateway_listener.asyncio.create_task", side_effect=self._fake_create_task),
+            patch("orchestrator.core.discord.gateway_listener.asyncio.sleep", side_effect=_fake_sleep),
+        ):
+            asyncio.run(listener._run_single_connection(bot_token="bot-token"))
+
+        self.assertIsNone(listener._session_id)
+        self.assertIsNone(listener._sequence)
+
+    def test_heartbeat_loop_sends_sequence(self) -> None:
+        listener, _session = self._listener()
+        listener._sequence = 42
+        websocket = SimpleNamespace(send=AsyncMock())
+        calls = {"count": 0}
+
+        async def _fake_sleep(_seconds: float) -> None:
+            calls["count"] += 1
+            listener._stop_event.set()
+
+        with patch("orchestrator.core.discord.gateway_listener.asyncio.sleep", side_effect=_fake_sleep):
+            asyncio.run(listener._heartbeat_loop(websocket, 0.01))
+
+        websocket.send.assert_awaited_once()
+        sent_payload = json.loads(websocket.send.await_args.args[0])
+        self.assertEqual(sent_payload["op"], 1)
+        self.assertEqual(sent_payload["d"], 42)
 
     def test_run_single_connection_dispatches_message_create(self) -> None:
         listener, _session = self._listener()

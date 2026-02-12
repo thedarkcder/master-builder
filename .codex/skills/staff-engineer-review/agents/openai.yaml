@@ -1,0 +1,4 @@
+interface:
+  display_name: "Staff Engineer Review"
+  short_description: "Run a rigorous design and risk review before implementation."
+  default_prompt: "Use $staff-engineer-review to produce a full staff-level design review and verdict before coding."

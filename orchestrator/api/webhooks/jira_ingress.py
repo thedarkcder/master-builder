@@ -34,6 +34,7 @@ from orchestrator.storage.models import Project, Tenant
 logger = logging.getLogger(__name__)
 
 execute_jira_comment_command = execute_tenant_jira_comment_command
+NON_ENQUEUE_ISSUE_WEBHOOK_EVENTS = {"issue_created"}
 
 
 def _notify_jira_enqueue_skipped(
@@ -290,6 +291,14 @@ def stage_handle_comment_ask_command(
         if not response_text:
             response_text = "I processed your question but returned no response text."
     except HTTPException as exc:
+        logger.exception(
+            "jira_comment_ask_command_failed request_id=%s tenant_id=%s issue_key=%s detail=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc.detail,
+            exc,
+        )
         response_text = f"Unable to process `/mb ask`: {exc.detail}"
 
     posted, post_error = post_jira_comment(
@@ -371,6 +380,21 @@ async def ingest_jira_webhook_event(
     )
     if comment_ask_response is not None:
         return comment_ask_response
+
+    if context.webhook_event in NON_ENQUEUE_ISSUE_WEBHOOK_EVENTS:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=non_enqueue_issue_event webhook_event=%s",
+            request_id,
+            tenant_id,
+            context.issue_key,
+            context.webhook_event,
+        )
+        return jira_webhook_response(
+            context,
+            enqueued=False,
+            reason="non_enqueue_issue_event",
+            webhook_event=context.webhook_event,
+        )
 
     if context.issue_status is None:
         logger.info(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -34,6 +35,7 @@ from orchestrator.api.discord.interactions.followup import (
 from orchestrator.core.config import get_settings
 
 router = APIRouter(tags=["discord-interactions"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/discord/interactions")
@@ -86,7 +88,14 @@ async def ingest_discord_interaction(
                 channel_id=channel_id.strip(),
                 current_value=focused_value,
             )
-        except HTTPException:
+        except HTTPException as exc:
+            logger.exception(
+                "discord_autocomplete_failed tenant_id=%s channel_id=%s detail=%s error=%s",
+                tenant.tenant_id,
+                channel_id.strip(),
+                exc.detail,
+                exc,
+            )
             choices = []
         return _discord_autocomplete_response(choices=choices)
 
@@ -94,12 +103,6 @@ async def ingest_discord_interaction(
         channel_id = payload.get("channel_id")
         if not isinstance(channel_id, str) or not channel_id.strip():
             return _discord_interaction_response(content="Missing interaction channel_id", ephemeral=True)
-        tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id.strip())
-        if tenant is None:
-            return _discord_interaction_response(
-                content="No enabled tenant is configured for this Discord channel.",
-                ephemeral=True,
-            )
 
         application_id = str(payload.get("application_id") or "").strip()
         interaction_token = str(payload.get("token") or "").strip()
@@ -153,7 +156,7 @@ async def ingest_discord_interaction(
 
         asyncio.create_task(
             _run_discord_ask_confirmation_followup(
-                tenant_id=tenant.tenant_id,
+                tenant_id=None,
                 user_id=user_id,
                 channel_id=channel_id.strip(),
                 decision=decision,
@@ -168,12 +171,6 @@ async def ingest_discord_interaction(
         channel_id = payload.get("channel_id")
         if not isinstance(channel_id, str) or not channel_id.strip():
             return _discord_interaction_response(content="Missing interaction channel_id", ephemeral=True)
-        tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id.strip())
-        if tenant is None:
-            return _discord_interaction_response(
-                content="No enabled tenant is configured for this Discord channel.",
-                ephemeral=True,
-            )
 
         application_id = str(payload.get("application_id") or "").strip()
         interaction_token = str(payload.get("token") or "").strip()
@@ -213,7 +210,7 @@ async def ingest_discord_interaction(
 
         asyncio.create_task(
             _run_discord_command_followup(
-                tenant_id=tenant.tenant_id,
+                tenant_id=None,
                 user_id=user_id,
                 channel_id=channel_id.strip(),
                 command_text=f"!ask {question}",
@@ -268,14 +265,13 @@ async def ingest_discord_interaction(
     try:
         user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload)
     except HTTPException as exc:
-        return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
-
-    tenant = _find_tenant_for_discord_channel(session=session, channel_id=channel_id)
-    if tenant is None:
-        return _discord_interaction_response(
-            content="No enabled tenant is configured for this Discord channel.",
-            ephemeral=True,
+        logger.exception(
+            "discord_interaction_parse_failed request_id=%s detail=%s error=%s",
+            request_id,
+            exc.detail,
+            exc,
         )
+        return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
 
     application_id = str(payload.get("application_id") or "").strip()
     interaction_token = str(payload.get("token") or "").strip()
@@ -287,7 +283,7 @@ async def ingest_discord_interaction(
 
     asyncio.create_task(
         _run_discord_command_followup(
-            tenant_id=tenant.tenant_id,
+            tenant_id=None,
             user_id=user_id,
             channel_id=channel_id,
             command_text=command_text,

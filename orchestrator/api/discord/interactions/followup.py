@@ -22,6 +22,7 @@ from orchestrator.api.discord.shared.state_repository import resolve_project_for
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
 from orchestrator.core.config import get_settings
+from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
@@ -146,7 +147,13 @@ def _resolve_thread_id_by_message_suffix(
     for thread_id in thread_ids:
         try:
             channel = client.get_channel(channel_id=thread_id)
-        except (DiscordApiError, ValueError):
+        except (DiscordApiError, ValueError) as exc:
+            logger.exception(
+                "discord_thread_lookup_failed thread_id=%s message_id=%s error=%s",
+                thread_id,
+                message_id,
+                exc,
+            )
             continue
         channel_name = str(channel.get("name") or "").strip()
         if channel_name.endswith(suffix):
@@ -302,7 +309,14 @@ def _send_discord_thread_followup(
             tenant.updated_at = datetime.now(timezone.utc)
             session.commit()
         client.post_message(channel_id=thread_channel_id, content=content, components=components)
-    except DiscordApiError:
+    except DiscordApiError as exc:
+        logger.exception(
+            "discord_thread_followup_failed tenant_id=%s channel_id=%s reply_to_message_id=%s error=%s",
+            tenant.tenant_id,
+            channel_id,
+            reply_to_message_id,
+            exc,
+        )
         if project is not None:
             project_discord_config = dict(project.discord_config or {})
             raw_thread_ids = project_discord_config.get("ask_thread_channel_ids")
@@ -512,7 +526,7 @@ def _send_discord_seed_followup_with_thread(
 
 async def _run_discord_command_followup(
     *,
-    tenant_id: str,
+    tenant_id: str | None,
     user_id: str,
     channel_id: str,
     command_text: str,
@@ -522,6 +536,23 @@ async def _run_discord_command_followup(
     command_params: dict[str, str] | None = None,
     attachments: list[dict[str, str]] | None = None,
 ) -> None:
+    resolved_tenant_id = str(tenant_id or "").strip()
+    if not resolved_tenant_id:
+        session_factory = create_session_factory()
+        with session_factory() as session:
+            tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
+            resolved_tenant_id = tenant.tenant_id if tenant is not None else ""
+    if not resolved_tenant_id:
+        _send_discord_interaction_followup(
+            application_id=application_id,
+            interaction_token=interaction_token,
+            content="No enabled tenant is configured for this Discord channel.",
+            ephemeral=True,
+            reply_to_message_id=reply_to_message_id,
+            channel_id=channel_id,
+        )
+        return
+
     service = DiscordWebhookFollowupService(
         session_factory=create_session_factory(),
         settings_factory=get_settings,
@@ -539,7 +570,7 @@ async def _run_discord_command_followup(
         consume_pending_ask_action=consume_pending_ask_action,
     )
     await service.run_discord_command_followup(
-        tenant_id=tenant_id,
+        tenant_id=resolved_tenant_id,
         user_id=user_id,
         channel_id=channel_id,
         command_text=command_text,
@@ -553,7 +584,7 @@ async def _run_discord_command_followup(
 
 async def _run_discord_ask_confirmation_followup(
     *,
-    tenant_id: str,
+    tenant_id: str | None,
     user_id: str,
     channel_id: str,
     decision: str,
@@ -561,6 +592,21 @@ async def _run_discord_ask_confirmation_followup(
     application_id: str,
     interaction_token: str,
 ) -> None:
+    resolved_tenant_id = str(tenant_id or "").strip()
+    if not resolved_tenant_id:
+        session_factory = create_session_factory()
+        with session_factory() as session:
+            tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
+            resolved_tenant_id = tenant.tenant_id if tenant is not None else ""
+    if not resolved_tenant_id:
+        _send_discord_interaction_followup(
+            application_id=application_id,
+            interaction_token=interaction_token,
+            content="No enabled tenant is configured for this Discord channel.",
+            ephemeral=True,
+        )
+        return
+
     service = DiscordWebhookFollowupService(
         session_factory=create_session_factory(),
         settings_factory=get_settings,
@@ -578,7 +624,7 @@ async def _run_discord_ask_confirmation_followup(
         consume_pending_ask_action=consume_pending_ask_action,
     )
     await service.run_discord_ask_confirmation_followup(
-        tenant_id=tenant_id,
+        tenant_id=resolved_tenant_id,
         user_id=user_id,
         channel_id=channel_id,
         decision=decision,

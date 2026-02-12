@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import os
 import unittest
+from io import BytesIO
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from jwt.exceptions import InvalidKeyError
 
 from orchestrator.tools.github_app import (
+    GitHubApiError,
     GitHubAppClient,
     GitHubAppConfig,
     InstallationRepository,
@@ -89,6 +92,17 @@ class GitHubAppClientTests(unittest.TestCase):
 
         with patch("orchestrator.tools.github_app.jwt.encode", side_effect=InvalidKeyError("invalid key")):
             with self.assertRaisesRegex(ValueError, "Invalid GitHub App private key secret"):
+                client.create_app_jwt()
+
+    def test_create_app_jwt_invalid_key_error_from_jwt_encode(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        )
+        client = GitHubAppClient(config)
+        with patch("orchestrator.tools.github_app.jwt.encode", side_effect=InvalidKeyError("bad key")):
+            with self.assertRaisesRegex(ValueError, "expected PEM"):
                 client.create_app_jwt()
 
     def test_installation_token_is_cached_until_expiry(self) -> None:
@@ -213,6 +227,179 @@ class GitHubAppClientTests(unittest.TestCase):
         finally:
             os.environ.pop("TEST_GH_APP_ID", None)
             os.environ.pop("TEST_GH_PRIVATE_KEY", None)
+
+    def test_github_client_from_tenant_config_rejects_invalid_mode_and_missing_installation(self) -> None:
+        with self.assertRaisesRegex(ValueError, "supported"):
+            github_client_from_tenant_config({"mode": "token"})
+
+        with self.assertRaisesRegex(ValueError, "required config fields"):
+            github_client_from_tenant_config({"mode": "github_app", "installation_id": ""})
+
+    def test_request_json_http_error_and_empty_body_paths(self) -> None:
+        config = GitHubAppConfig(app_id="1", installation_id="2", private_key_pem="pem")
+        client = GitHubAppClient(config)
+        error = HTTPError(
+            url="https://api.github.com",
+            code=500,
+            msg="boom",
+            hdrs=None,
+            fp=BytesIO(b'{"message":"failed"}'),
+        )
+        with patch("orchestrator.tools.github_app.urlopen", side_effect=error):
+            with self.assertRaisesRegex(GitHubApiError, "request failed"):
+                client._request_json(method="GET", path="/x", bearer_token="t")
+
+        class _EmptyResponse:
+            def read(self) -> bytes:
+                return b""
+
+            def __enter__(self):  # noqa: ANN204
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        with patch("orchestrator.tools.github_app.urlopen", return_value=_EmptyResponse()):
+            result = client._request_json(method="GET", path="/x", bearer_token="t")
+        self.assertEqual(result, {})
+
+    def test_get_installation_token_validates_required_fields(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+
+        with patch.object(client, "create_app_jwt", return_value="jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            return_value=_FakeHTTPResponse({"expires_at": "2099-01-01T00:00:00Z"}),
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "include token"):
+                client.get_installation_token()
+
+        with patch.object(client, "create_app_jwt", return_value="jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            return_value=_FakeHTTPResponse({"token": "abc"}),
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "include expires_at"):
+                client.get_installation_token()
+
+    def test_create_pull_request_validates_response_shape(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"html_url": "https://example/pull/1"}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "numeric PR number"):
+                client.create_pull_request(
+                    repo_full_name="example/repo",
+                    github_repository="https://github.com/example/repo",
+                    title="title",
+                    head_branch="h",
+                    base_branch="b",
+                    body="body",
+                )
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"number": 1}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "html_url"):
+                client.create_pull_request(
+                    repo_full_name="example/repo",
+                    github_repository="https://github.com/example/repo",
+                    title="title",
+                    head_branch="h",
+                    base_branch="b",
+                    body="body",
+                )
+
+    def test_get_pull_request_details_validates_fields(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"number": "x", "html_url": "https://example"}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "numeric PR number"):
+                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"number": 1, "head": {"sha": "abc"}}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "html_url"):
+                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"number": 1, "html_url": "https://example", "head": {}}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "head SHA"):
+                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
+
+    def test_list_check_suites_validates_payload_and_sanitizes_conclusion(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "check_suites"):
+                client.list_check_suites(repo_full_name="example/repo", ref="abc")
+
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={
+                "check_suites": [
+                    {"name": "CI", "status": "queued", "conclusion": 123, "app": {"slug": "github-actions"}},
+                    {"name": "", "status": "queued", "app": {"slug": "github-actions"}},
+                ]
+            },
+        ):
+            suites = client.list_check_suites(repo_full_name="example/repo", ref="abc")
+        self.assertEqual(suites, [WorkflowCheckSuite(name="CI", status="queued", conclusion=None)])
+
+    def test_list_pull_request_files_validates_response_type_and_patch_type(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "was not a list"):
+                client.list_pull_request_files(repo_full_name="example/repo", pr_number=1)
+
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value=[{"filename": "a.txt", "patch": {"bad": True}}]
+        ):
+            files = client.list_pull_request_files(repo_full_name="example/repo", pr_number=1)
+        self.assertEqual(files, [PullRequestFileChange(filename="a.txt", patch=None)])
+
+    def test_list_installation_repositories_validates_response_and_defaults(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "include repositories"):
+                client.list_installation_repositories()
+
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={
+                "repositories": [
+                    {
+                        "full_name": "example/repo",
+                        "html_url": "https://github.com/example/repo",
+                        "default_branch": "",
+                        "private": "no",
+                    }
+                ]
+            },
+        ):
+            repos = client.list_installation_repositories()
+        self.assertEqual(
+            repos,
+            [
+                InstallationRepository(
+                    full_name="example/repo",
+                    html_url="https://github.com/example/repo",
+                    default_branch="main",
+                    private=False,
+                )
+            ],
+        )
 
     def test_get_pull_request_details_extracts_head_sha(self) -> None:
         config = GitHubAppConfig(

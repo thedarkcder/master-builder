@@ -5,6 +5,7 @@ import logging
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import Session
 
 RUN_QUEUE_NOTIFY_CHANNEL = "run_queue_events"
@@ -15,7 +16,8 @@ logger = logging.getLogger(__name__)
 def is_postgres_database_url(database_url: str) -> bool:
     try:
         parsed = make_url(database_url)
-    except Exception:
+    except ArgumentError as exc:
+        logger.error("run_queue_database_url_parse_failed error=%s", exc)
         return False
     return parsed.get_backend_name() == "postgresql"
 
@@ -54,11 +56,12 @@ def notify_run_enqueued(
             text("SELECT pg_notify(:channel, :payload)"),
             {"channel": RUN_QUEUE_NOTIFY_CHANNEL, "payload": payload},
         )
-    except Exception:
+    except Exception as exc:
         logger.exception(
-            "run_queue_notify_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s",
+            "run_queue_notify_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s error=%s",
             tenant_id,
             project_id,
             run_id,
             issue_key,
+            exc,
         )

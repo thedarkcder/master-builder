@@ -1768,6 +1768,27 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(deleted_batches, [[31001]])
         self.assertIn("Deleted 1 conflicting Jira webhook URL subscription(s).", response.json()["details"])
 
+    def test_reset_tenant_jira_webhooks_unhandled_error_returns_error_ref(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        with patch("orchestrator.api.routes.admin._provision_jira_webhook", side_effect=RuntimeError("boom")):
+            with TestClient(create_app(), raise_server_exceptions=False) as non_raising_client:
+                response = non_raising_client.post(
+                    "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                    auth=("admin", "secret"),
+                )
+
+        self.assertEqual(response.status_code, 500)
+        detail = response.json().get("detail", "")
+        self.assertTrue(detail.startswith("Internal server error. Ref: "))
+
 
 if __name__ == "__main__":
     unittest.main()

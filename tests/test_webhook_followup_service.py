@@ -86,6 +86,37 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         transport.send_thread_reply.assert_called_once()
         transport.send_interaction_followup.assert_not_called()
 
+    def test_command_followup_thread_reply_failure_falls_back_to_interaction_reply_reference(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(
+            return_value=SimpleNamespace(
+                command="ask",
+                message="Done",
+                data={"issue_key": "YANA-46"},
+            )
+        )
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        transport.send_thread_reply.side_effect = DiscordApiError("thread unavailable")
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!ask status?",
+                application_id="app-1",
+                interaction_token="token-1",
+                reply_to_message_id="123456789012345678",
+            )
+        )
+
+        transport.send_thread_reply.assert_called_once()
+        transport.send_interaction_followup.assert_called_once()
+        kwargs = transport.send_interaction_followup.call_args.kwargs
+        self.assertEqual(kwargs["reply_to_message_id"], "123456789012345678")
+        self.assertEqual(kwargs["channel_id"], "c-1")
+
     def test_command_followup_ask_confirmation_incomplete_payload(self) -> None:
         session = MagicMock()
         session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
