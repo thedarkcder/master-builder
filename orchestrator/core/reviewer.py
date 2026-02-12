@@ -36,7 +36,6 @@ class ReviewAgentGate:
         *,
         repo_full_name: str,
         pr_number: int,
-        review_summary_present: bool,
     ) -> ReviewerSignal:
         pr = self._github_client.get_pull_request_details(
             repo_full_name=repo_full_name,
@@ -68,7 +67,7 @@ class ReviewAgentGate:
             len(must_fix_findings),
         )
         readiness = evaluate_pr_readiness(
-            review_summary_present=review_summary_present,
+            review_summary_markdown=pr.body,
             required_workflows=self._required_workflows,
             workflow_checks=checks,
         )
@@ -81,6 +80,16 @@ class ReviewAgentGate:
                 message=f"PR blocked by policy violations: {summary}",
                 readiness=readiness,
                 must_fix_findings=tuple(must_fix_findings),
+                policy_pack=selected_policy_pack_key,
+            )
+
+        if _source_changes_present(changed_files) and not _test_changes_present(changed_files):
+            return ReviewerSignal(
+                ready=False,
+                state="missing_test_coverage",
+                message="PR blocked: source changes detected without test file updates",
+                readiness=readiness,
+                must_fix_findings=("Add or update tests that cover the changed behavior.",),
                 policy_pack=selected_policy_pack_key,
             )
 
@@ -99,6 +108,16 @@ class ReviewAgentGate:
                 ready=True,
                 state="ready",
                 message=ready_signal,
+                readiness=readiness,
+                policy_pack=selected_policy_pack_key,
+            )
+
+        if readiness.state == "missing_review_sections":
+            missing_sections = ", ".join(readiness.missing_review_sections)
+            return ReviewerSignal(
+                ready=False,
+                state="missing_review_sections",
+                message=f"PR review summary missing required sections: {missing_sections}",
                 readiness=readiness,
                 policy_pack=selected_policy_pack_key,
             )
@@ -140,3 +159,45 @@ class ReviewAgentGate:
             readiness=readiness,
             policy_pack=selected_policy_pack_key,
         )
+
+
+def _source_changes_present(changed_files) -> bool:  # noqa: ANN001
+    source_suffixes = {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".java",
+        ".kt",
+        ".swift",
+        ".go",
+        ".rb",
+        ".rs",
+        ".cs",
+    }
+    for change in changed_files:
+        filename = str(getattr(change, "filename", "")).strip().lower()
+        if not filename:
+            continue
+        if "/tests/" in filename or filename.startswith("tests/") or "__tests__/" in filename:
+            continue
+        if filename.endswith((".md", ".txt", ".json", ".yaml", ".yml")):
+            continue
+        if any(filename.endswith(ext) for ext in source_suffixes):
+            return True
+    return False
+
+
+def _test_changes_present(changed_files) -> bool:  # noqa: ANN001
+    for change in changed_files:
+        filename = str(getattr(change, "filename", "")).strip().lower()
+        if not filename:
+            continue
+        if filename.startswith("tests/") or "/tests/" in filename or "__tests__/" in filename:
+            return True
+        if filename.startswith("test_") or "/test_" in filename:
+            return True
+        if filename.endswith(("_test.py", ".test.js", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", ".spec.js")):
+            return True
+    return False
