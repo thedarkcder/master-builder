@@ -87,6 +87,9 @@ from orchestrator.api.admin.runs_service import (
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as _project_execution_metrics_impl,
 )
+from orchestrator.api.admin.tenant_health_service import (
+    tenant_health as _tenant_health_impl,
+)
 from orchestrator.api.admin.observability_service import (
     platform_observability as _platform_observability_impl,
     tenant_observability as _tenant_observability_impl,
@@ -151,6 +154,7 @@ from orchestrator.api.schemas import (
     RepoBootstrapStateRead,
     RunRead,
     ProjectExecutionMetricsRead,
+    TenantHealthRead,
     TenantCreate,
     TenantRead,
     TenantUpdate,
@@ -841,6 +845,18 @@ def get_project_execution_metrics(
         project_id=project_id,
         sla_seconds=sla_seconds,
         stale_queue_seconds=stale_queue_seconds,
+    )
+
+
+@router.get("/tenants/{tenant_id}/health", response_model=TenantHealthRead)
+def get_tenant_health(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantHealthRead:
+    return _tenant_health_impl(
+        session=session,
+        tenant_id=tenant_id,
     )
 
 
