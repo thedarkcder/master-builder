@@ -63,10 +63,10 @@ class ApiErrorObservabilityTests(unittest.TestCase):
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch("orchestrator.api.main.DiscordGatewayListener.start"),
             patch("orchestrator.api.main.DiscordGatewayListener.stop"),
-            patch("builtins.print") as print_log,
+            patch("orchestrator.api.main.logger.info") as info_log,
             TestClient(app, raise_server_exceptions=False) as client,
         ):
             response = client.get("/jira/webhook/example")
 
         self.assertEqual(response.status_code, 405)
-        self.assertGreaterEqual(print_log.call_count, 1)
+        self.assertGreaterEqual(info_log.call_count, 1)
