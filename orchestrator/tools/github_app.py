@@ -37,6 +37,7 @@ class PullRequestDetails:
     number: int
     html_url: str
     head_sha: str
+    body: str | None = None
 
 
 @dataclass(frozen=True)
@@ -267,6 +268,8 @@ class GitHubAppClient:
         html_url = response.get("html_url")
         head = response.get("head")
         head_sha = head.get("sha") if isinstance(head, dict) else None
+        raw_body = response.get("body")
+        body = raw_body.strip() if isinstance(raw_body, str) and raw_body.strip() else None
 
         if not isinstance(number, int):
             raise GitHubApiError("GitHub PR details response did not include numeric PR number")
@@ -275,7 +278,7 @@ class GitHubAppClient:
         if not isinstance(head_sha, str) or not head_sha:
             raise GitHubApiError("GitHub PR details response did not include head SHA")
 
-        return PullRequestDetails(number=number, html_url=html_url, head_sha=head_sha)
+        return PullRequestDetails(number=number, html_url=html_url, head_sha=head_sha, body=body)
 
     def list_check_suites(self, *, repo_full_name: str, ref: str) -> list[WorkflowCheckSuite]:
         installation_token = self.get_installation_token()
