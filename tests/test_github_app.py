@@ -17,6 +17,7 @@ from orchestrator.tools.github_app import (
     PullRequestDetails,
     PullRequestFileChange,
     PullRequestResult,
+    PullRequestSummary,
     WorkflowCheckSuite,
     github_client_from_tenant_config,
 )
@@ -639,3 +640,79 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(len(files), 101)
         self.assertEqual(files[0].filename, "src/file-0.ts")
         self.assertEqual(files[-1].filename, "README.md")
+
+    def test_list_open_pull_requests_parses_pr_summary(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_8",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            [
+                {
+                    "number": 123,
+                    "title": "Sync staging before release",
+                    "state": "open",
+                    "html_url": "https://github.com/example/repo/pull/123",
+                    "updated_at": "2026-02-12T17:00:00Z",
+                    "head": {"ref": "jira/MAB-118-agent-lifecycle-heartbeat"},
+                    "base": {"ref": "staging"},
+                }
+            ],
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            pull_requests = client.list_open_pull_requests(repo_full_name="example/repo", limit=10)
+
+        self.assertEqual(
+            pull_requests,
+            [
+                PullRequestSummary(
+                    number=123,
+                    title="Sync staging before release",
+                    state="open",
+                    html_url="https://github.com/example/repo/pull/123",
+                    head_ref="jira/MAB-118-agent-lifecycle-heartbeat",
+                    base_ref="staging",
+                    updated_at="2026-02-12T17:00:00Z",
+                )
+            ],
+        )
+
+    def test_list_open_pull_requests_rejects_non_list_payload(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_9",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            {"unexpected": True},
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "response was not a list"):
+                client.list_open_pull_requests(repo_full_name="example/repo")

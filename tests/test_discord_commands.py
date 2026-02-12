@@ -2,6 +2,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
@@ -13,6 +14,7 @@ from orchestrator.api.routes.discord import (
     _ask_board_message,
     _build_discord_bug_description,
     _build_seed_issue_description,
+    _collect_github_ask_context,
     _collect_ask_context,
     _create_discord_bug_issue,
     _project_filter_jql,
@@ -24,6 +26,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.tools.github_app import GitHubApiError
 from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssuePreview
 
 
@@ -673,6 +676,48 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(command_response.command, "ask")
         self.assertEqual(plan_mock.call_args.kwargs["project_keys"], ["OTH"])
 
+    def test_ask_confirmation_passes_github_context_to_intent_planner(self) -> None:
+        github_context = {
+            "available": True,
+            "repositories": [
+                {
+                    "repo_full_name": "example/repo",
+                    "project_keys": ["TP"],
+                    "open_pull_requests": [{"number": 42, "title": "Update staging flow"}],
+                }
+            ],
+        }
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.routes.discord._collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch("orchestrator.api.routes.discord._collect_github_ask_context", return_value=github_context),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "Board answer"},
+            ) as plan_mock,
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                return_value="Board answer",
+            ),
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask review staging against current tickets",
+                ),
+                session=session,
+                require_ask_confirmation=True,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(plan_mock.call_args.kwargs["github_context"], github_context)
+
     def test_ask_follow_up_reuses_recent_scoped_issue_key(self) -> None:
         collect_calls: list[str | None] = []
 
@@ -714,6 +759,124 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(second.ok)
         self.assertEqual(collect_calls[0], "TP-77")
         self.assertEqual(collect_calls[1], "TP-77")
+
+    def test_ask_board_message_passes_github_context_to_codex(self) -> None:
+        github_context = {
+            "available": True,
+            "repositories": [
+                {
+                    "repo_full_name": "example/repo",
+                    "project_keys": ["TP"],
+                    "open_pull_requests": [{"number": 7, "title": "Refactor worker"}],
+                }
+            ],
+        }
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes.discord._collect_ask_context", return_value=(None, None, [], {})),
+            patch("orchestrator.api.routes.discord._collect_github_ask_context", return_value=github_context),
+            patch("orchestrator.api.routes.discord.build_codex_runtime"),
+            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+        ):
+            response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask compare staging to in-progress tickets",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(answer_mock.call_args.kwargs["github_context"], github_context)
+
+    def test_collect_github_ask_context_partitions_staging_prs(self) -> None:
+        fake_prs = [
+            SimpleNamespace(
+                number=1,
+                title="Feature to staging",
+                state="open",
+                head_ref="jira/feature-1",
+                base_ref="staging",
+                html_url="https://github.com/example/repo/pull/1",
+                updated_at="2026-02-12T17:00:00Z",
+            ),
+            SimpleNamespace(
+                number=2,
+                title="Feature to main",
+                state="open",
+                head_ref="jira/feature-2",
+                base_ref="main",
+                html_url="https://github.com/example/repo/pull/2",
+                updated_at="2026-02-12T17:05:00Z",
+            ),
+        ]
+        fake_client = SimpleNamespace(list_open_pull_requests=lambda **_kwargs: fake_prs)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            with (
+                patch("orchestrator.api.routes.discord.github_client_from_tenant_config", return_value=fake_client),
+                patch(
+                    "orchestrator.api.routes.discord.collect_local_repo_context",
+                    return_value=SimpleNamespace(
+                        available=True,
+                        reason=None,
+                        repo_dir="/tmp/repo",
+                        current_branch="staging",
+                        head_sha="abc123",
+                        branches=["staging", "jira/TP-1"],
+                        recent_commits=["abc123 TP-1: update"],
+                    ),
+                ),
+            ):
+                context = _collect_github_ask_context(
+                    session=session,
+                    tenant=tenant,
+                    project_keys=["TP"],
+                )
+
+        self.assertTrue(context["available"])
+        repositories = context["repositories"]
+        self.assertEqual(len(repositories), 1)
+        self.assertEqual(len(repositories[0]["open_pull_requests"]), 2)
+        self.assertEqual(len(repositories[0]["staging_pull_requests"]), 1)
+        self.assertEqual(repositories[0]["staging_pull_requests"][0]["number"], 1)
+        self.assertTrue(repositories[0]["local_repo"]["available"])
+        self.assertEqual(repositories[0]["local_repo"]["current_branch"], "staging")
+
+    def test_collect_github_ask_context_marks_degraded_when_pr_fetch_fails(self) -> None:
+        fake_client = SimpleNamespace(
+            list_open_pull_requests=lambda **_kwargs: (_ for _ in ()).throw(GitHubApiError("rate limited"))
+        )
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            with (
+                patch("orchestrator.api.routes.discord.github_client_from_tenant_config", return_value=fake_client),
+                patch(
+                    "orchestrator.api.routes.discord.collect_local_repo_context",
+                    return_value=SimpleNamespace(
+                        available=False,
+                        reason="repository_not_cloned",
+                        repo_dir="/tmp/repo",
+                        current_branch=None,
+                        head_sha=None,
+                        branches=[],
+                        recent_commits=[],
+                    ),
+                ),
+            ):
+                context = _collect_github_ask_context(
+                    session=session,
+                    tenant=tenant,
+                    project_keys=["TP"],
+                )
+
+        self.assertFalse(context["available"])
+        self.assertEqual(context["reason"], "github_pull_requests_unavailable")
+        self.assertIn("example/repo", context["degraded_repositories"])
 
     def test_ask_history_scope_isolated_by_channel(self) -> None:
         create_project = self.client.post(
