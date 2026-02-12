@@ -965,6 +965,98 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(missing_project.status_code, 404)
         self.assertEqual(missing_project.json()["detail"], "Project not found")
 
+    def test_observability_uses_nearest_rank_p95_and_failure_finished_at_window(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Run(
+                        run_id="obs-p95-short",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-11",
+                        issue_summary="short",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/repo",
+                        branch=None,
+                        pr_url=None,
+                        status="succeeded",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=40),
+                        started_at=now - timedelta(minutes=39),
+                        finished_at=now - timedelta(minutes=38, seconds=50),
+                    ),
+                    Run(
+                        run_id="obs-p95-long",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-12",
+                        issue_summary="long",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/repo",
+                        branch=None,
+                        pr_url=None,
+                        status="succeeded",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=30),
+                        started_at=now - timedelta(minutes=29),
+                        finished_at=now - timedelta(minutes=27, seconds=20),
+                    ),
+                    Run(
+                        run_id="obs-failed-old-created-recent-finished",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-13",
+                        issue_summary="failed-recent",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/repo",
+                        branch=None,
+                        pr_url=None,
+                        status="failed",
+                        last_error="boom",
+                        plan=None,
+                        created_at=now - timedelta(days=2),
+                        started_at=None,
+                        finished_at=now - timedelta(minutes=10),
+                    ),
+                    Run(
+                        run_id="obs-failed-old-finished",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-14",
+                        issue_summary="failed-old",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/repo",
+                        branch=None,
+                        pr_url=None,
+                        status="failed",
+                        last_error="boom",
+                        plan=None,
+                        created_at=now - timedelta(days=2, minutes=10),
+                        started_at=None,
+                        finished_at=now - timedelta(days=2, minutes=8),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/observability/platform", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["failed_runs_last_24h"], 1)
+        self.assertEqual(body["run_duration"]["p95_seconds"], 100.0)
+
     def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
         payload = self._tenant_payload()
         payload["github"]["installation_id"] = "12345"
