@@ -2,6 +2,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
@@ -13,6 +14,7 @@ from orchestrator.api.routes.discord import (
     _ask_board_message,
     _build_discord_bug_description,
     _build_seed_issue_description,
+    _collect_github_ask_context,
     _collect_ask_context,
     _create_discord_bug_issue,
     _project_filter_jql,
@@ -787,6 +789,45 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         self.assertTrue(response.ok)
         self.assertEqual(answer_mock.call_args.kwargs["github_context"], github_context)
+
+    def test_collect_github_ask_context_partitions_staging_prs(self) -> None:
+        fake_prs = [
+            SimpleNamespace(
+                number=1,
+                title="Feature to staging",
+                state="open",
+                head_ref="jira/feature-1",
+                base_ref="staging",
+                html_url="https://github.com/example/repo/pull/1",
+                updated_at="2026-02-12T17:00:00Z",
+            ),
+            SimpleNamespace(
+                number=2,
+                title="Feature to main",
+                state="open",
+                head_ref="jira/feature-2",
+                base_ref="main",
+                html_url="https://github.com/example/repo/pull/2",
+                updated_at="2026-02-12T17:05:00Z",
+            ),
+        ]
+        fake_client = SimpleNamespace(list_open_pull_requests=lambda **_kwargs: fake_prs)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            with patch("orchestrator.api.routes.discord.github_client_from_tenant_config", return_value=fake_client):
+                context = _collect_github_ask_context(
+                    session=session,
+                    tenant=tenant,
+                    project_keys=["TP"],
+                )
+
+        self.assertTrue(context["available"])
+        repositories = context["repositories"]
+        self.assertEqual(len(repositories), 1)
+        self.assertEqual(len(repositories[0]["open_pull_requests"]), 2)
+        self.assertEqual(len(repositories[0]["staging_pull_requests"]), 1)
+        self.assertEqual(repositories[0]["staging_pull_requests"][0]["number"], 1)
 
     def test_ask_history_scope_isolated_by_channel(self) -> None:
         create_project = self.client.post(
