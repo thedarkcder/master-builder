@@ -85,8 +85,8 @@ class DiscordGatewayListener:
     def _run_thread(self) -> None:
         try:
             asyncio.run(self._run_loop())
-        except Exception:  # pragma: no cover - defensive
-            logger.exception("discord_gateway_listener_stopped_unexpectedly")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("discord_gateway_listener_stopped_unexpectedly error=%s", exc)
 
     async def _run_loop(self) -> None:
         if websockets is None:
@@ -105,8 +105,8 @@ class DiscordGatewayListener:
                 continue
             try:
                 await self._run_single_connection(bot_token=bot_token)
-            except Exception:
-                logger.exception("discord_gateway_listener_connection_failed")
+            except Exception as exc:
+                logger.exception("discord_gateway_listener_connection_failed error=%s", exc)
             if not self._stop_event.is_set():
                 await asyncio.sleep(3)
 
@@ -197,8 +197,12 @@ class DiscordGatewayListener:
                     await asyncio.to_thread(self._handle_message_create, data, bot_token)
             finally:
                 heartbeat_task.cancel()
-                with contextlib.suppress(Exception):
+                try:
                     await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    logger.exception("discord_gateway_heartbeat_shutdown_failed error=%s", exc)
 
     async def _heartbeat_loop(self, websocket: Any, interval_seconds: float) -> None:
         wait_seconds = max(1.0, interval_seconds)
@@ -287,15 +291,24 @@ class DiscordGatewayListener:
                     if request_id:
                         components = build_ask_confirmation_components(request_id)
             except HTTPException as exc:
+                logger.exception(
+                    "discord_gateway_command_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
+                    tenant.tenant_id,
+                    user_id,
+                    channel_id,
+                    exc.detail,
+                    exc,
+                )
                 message_content = f"<@{user_id}> Command failed: {exc.detail}"
             except Exception as exc:
                 error_ref = uuid4().hex[:8]
                 logger.exception(
-                    "discord_gateway_command_failed tenant_id=%s user_id=%s channel_id=%s error_ref=%s",
+                    "discord_gateway_command_failed tenant_id=%s user_id=%s channel_id=%s error_ref=%s error=%s",
                     tenant.tenant_id,
                     user_id,
                     channel_id,
                     error_ref,
+                    exc,
                 )
                 emit_hard_error(
                     event="discord_gateway_command_failed",
@@ -315,11 +328,12 @@ class DiscordGatewayListener:
                 content=message_content,
                 components=components,
             )
-        except DiscordApiError:
+        except DiscordApiError as exc:
             logger.exception(
-                "discord_gateway_post_failed user_id=%s channel_id=%s",
+                "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
                 user_id,
                 channel_id,
+                exc,
             )
 
     def _find_tenant_for_channel(self, *, session, channel_id: str) -> Tenant | None:  # noqa: ANN001

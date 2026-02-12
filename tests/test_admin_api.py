@@ -240,6 +240,56 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
 
+    def test_platform_secret_resolve_rejects_tenant_scoped_secret_ref(self) -> None:
+        response = self.client.post(
+            "/api/admin/secrets/resolve",
+            json={"secret_ref": "tenant/tenant-a/DISCORD_BOT_TOKEN"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
+
+    def test_tenant_secret_endpoints_require_existing_tenant(self) -> None:
+        list_response = self.client.get("/api/admin/tenants/missing/secrets", auth=("admin", "secret"))
+        self.assertEqual(list_response.status_code, 404)
+        self.assertIn("Tenant not found", list_response.json()["detail"])
+
+        put_response = self.client.put(
+            "/api/admin/tenants/missing/secrets/DISCORD_BOT_TOKEN",
+            json={"value": "token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(put_response.status_code, 404)
+
+        resolve_response = self.client.post(
+            "/api/admin/tenants/missing/secrets/resolve",
+            json={"secret_ref": "DISCORD_BOT_TOKEN"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(resolve_response.status_code, 404)
+
+        delete_response = self.client.delete(
+            "/api/admin/tenants/missing/secrets/DISCORD_BOT_TOKEN",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(delete_response.status_code, 404)
+
+    def test_tenant_secret_rejects_prefixed_secret_key(self) -> None:
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        response = self.client.put(
+            "/api/admin/tenants/tenant-a/secrets/platform%2FDISCORD_BOT_TOKEN",
+            json={"value": "token"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Tenant secret key must not include a scope prefix", response.json()["detail"])
+
     def test_managed_secret_delete(self) -> None:
         put_response = self.client.put(
             "/api/admin/secrets/temporary-secret",
@@ -1717,6 +1767,27 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.json()["webhook_ids"], [33003])
         self.assertEqual(deleted_batches, [[31001]])
         self.assertIn("Deleted 1 conflicting Jira webhook URL subscription(s).", response.json()["details"])
+
+    def test_reset_tenant_jira_webhooks_unhandled_error_returns_error_ref(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        with patch("orchestrator.api.routes.admin._provision_jira_webhook", side_effect=RuntimeError("boom")):
+            with TestClient(create_app(), raise_server_exceptions=False) as non_raising_client:
+                response = non_raising_client.post(
+                    "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                    auth=("admin", "secret"),
+                )
+
+        self.assertEqual(response.status_code, 500)
+        detail = response.json().get("detail", "")
+        self.assertTrue(detail.startswith("Internal server error. Ref: "))
 
 
 if __name__ == "__main__":

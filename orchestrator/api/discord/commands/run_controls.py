@@ -9,18 +9,12 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.communications.command_pipeline import CommandScope
+from orchestrator.core.communications.enqueue_reason_contract import (
+    format_enqueue_conflict_detail,
+)
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import cancel_run, enqueue_run
 from orchestrator.storage.models import Run, Tenant
-
-
-def _queue_conflict_detail(*, prefix: str, enqueue_reason: str, enqueue_run_obj: Run | None) -> str:
-    if enqueue_reason != "run_already_active" or enqueue_run_obj is None:
-        return f"{prefix}: {enqueue_reason}"
-    return (
-        f"{prefix}: {enqueue_reason} "
-        f"(active run: {enqueue_run_obj.run_id}, status: {enqueue_run_obj.status})"
-    )
 
 
 def dispatch_run_control_command(
@@ -70,7 +64,7 @@ def dispatch_run_control_command(
         if not enqueue_result.enqueued:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=_queue_conflict_detail(
+                detail=format_enqueue_conflict_detail(
                     prefix="Run could not be queued",
                     enqueue_reason=str(enqueue_result.reason),
                     enqueue_run_obj=enqueue_result.run,
@@ -160,7 +154,7 @@ def dispatch_run_control_command(
         if not enqueue_result.enqueued:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=_queue_conflict_detail(
+                detail=format_enqueue_conflict_detail(
                     prefix="Retry could not be queued",
                     enqueue_reason=str(enqueue_result.reason),
                     enqueue_run_obj=enqueue_result.run,

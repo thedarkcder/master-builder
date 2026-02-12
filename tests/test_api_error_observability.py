@@ -78,7 +78,6 @@ class ApiErrorObservabilityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["detail"], "Unauthorized")
         self.assertEqual(response.headers.get("WWW-Authenticate"), "Bearer")
-
     def test_method_not_allowed_is_request_logged(self) -> None:
         app = create_app()
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -9,6 +10,8 @@ from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools.jira_oauth import JiraOAuthError
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_discord_channel_name(
@@ -36,7 +39,13 @@ def resolve_discord_channel_name(
     api_client = DiscordApiClient(bot_token=bot_token)
     try:
         response = api_client.get_channel(channel_id=normalized_channel_id)
-    except Exception:  # pragma: no cover - network/service failures are non-fatal for display name lookup
+    except Exception as exc:  # pragma: no cover - network/service failures are non-fatal for display name lookup
+        logger.exception(
+            "discord_channel_lookup_failed tenant_id=%s channel_id=%s error=%s",
+            tenant.tenant_id,
+            normalized_channel_id,
+            exc,
+        )
         return None
     if isinstance(response, dict):
         channel_name = str(response.get("name") or "").strip()
