@@ -41,6 +41,7 @@ def _service() -> AdminProjectService:
         with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
         resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
         sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
+        ensure_project_repository_checkout=lambda **_kwargs: None,
         project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
         settings_factory=lambda: SimpleNamespace(),
     )
@@ -67,3 +68,40 @@ def test_get_project_raises_when_project_missing() -> None:
         assert False, "expected HTTPException"
     except HTTPException as exc:
         assert exc.status_code == 404
+
+
+def test_create_project_clones_repository_before_commit() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None))
+    checkout_calls: list[tuple[str, str]] = []
+    service = AdminProjectService(
+        normalize_project_repo=lambda value: value.strip(),
+        normalize_project_key=lambda value: value.strip().upper(),
+        normalize_project_policy_overrides=lambda value: value or {},
+        normalize_string_map=lambda value: value or {},
+        normalize_project_discord_config=lambda value: value or {},
+        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
+        sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
+        ensure_project_repository_checkout=lambda **kwargs: checkout_calls.append(
+            (kwargs["tenant"].tenant_id, kwargs["project"].github_repository)
+        ),
+        project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
+        settings_factory=lambda: SimpleNamespace(),
+    )
+    payload = SimpleNamespace(
+        name="Sample",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="tp",
+        policy_overrides=None,
+        environment=None,
+        secret_refs=None,
+        discord=None,
+    )
+
+    result = service.create_project(session=session, tenant_id="t1", payload=payload)
+
+    assert result["name"] == "Sample"
+    assert checkout_calls == [("t1", "https://github.com/example/repo")]
