@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -28,13 +29,54 @@ from orchestrator.api.webhooks.contracts import (
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.runs import RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED, RUN_STATUS_FAILED, enqueue_run
+from orchestrator.api.discord.shared.state import normalize_status_name
 from orchestrator.storage.models import Run
 from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
 
 execute_jira_comment_command = execute_tenant_jira_comment_command
-NON_ENQUEUE_ISSUE_WEBHOOK_EVENTS = {"issue_created"}
+TODO_STATUS = "to do"
+DECISION_GATE_COOLDOWN = timedelta(minutes=10)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_todo_status(status_name: str) -> bool:
+    return normalize_status_name(status_name) == TODO_STATUS
+
+
+def _latest_decision_gate_blocked_run(
+    *,
+    session: Session,
+    tenant_id: str,
+    issue_key: str,
+) -> Run | None:
+    return session.execute(
+        select(Run)
+        .where(
+            Run.tenant_id == tenant_id,
+            Run.issue_key == issue_key,
+            Run.status == RUN_STATUS_BLOCKED,
+            Run.last_error.is_not(None),
+            Run.last_error.like("Decision Gate required:%"),
+        )
+        .order_by(Run.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _decision_gate_cooldown_remaining_seconds(*, blocked_run: Run, now: datetime) -> int:
+    blocked_at = blocked_run.finished_at or blocked_run.created_at
+    if blocked_at is None:
+        return 0
+    if blocked_at.tzinfo is None:
+        blocked_at = blocked_at.replace(tzinfo=timezone.utc)
+    elapsed = now - blocked_at
+    remaining = DECISION_GATE_COOLDOWN - elapsed
+    return max(0, int(remaining.total_seconds()))
 
 
 def _notify_jira_enqueue_skipped(
@@ -381,21 +423,6 @@ async def ingest_jira_webhook_event(
     if comment_ask_response is not None:
         return comment_ask_response
 
-    if context.webhook_event in NON_ENQUEUE_ISSUE_WEBHOOK_EVENTS:
-        logger.info(
-            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=non_enqueue_issue_event webhook_event=%s",
-            request_id,
-            tenant_id,
-            context.issue_key,
-            context.webhook_event,
-        )
-        return jira_webhook_response(
-            context,
-            enqueued=False,
-            reason="non_enqueue_issue_event",
-            webhook_event=context.webhook_event,
-        )
-
     if context.issue_status is None:
         logger.info(
             "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=issue_status_missing",
@@ -449,22 +476,22 @@ async def ingest_jira_webhook_event(
         )
 
     from_status, to_status = extract_status_transition(context.payload)
-    trigger_reason = "ready_status_recheck"
+    trigger_reason = "status_recheck"
     if context.comment_command == "run":
         trigger_reason = "comment_command_run"
     elif context.comment_command == "retry":
         trigger_reason = "comment_command_retry"
     elif context.webhook_event == "issue_created":
-        trigger_reason = "issue_created_ready"
+        trigger_reason = "issue_created"
     elif (
         to_status is not None
-        and to_status.casefold() in normalized_ready_statuses
         and from_status is not None
         and from_status.casefold() != to_status.casefold()
+        and _is_todo_status(to_status)
     ):
-        trigger_reason = "status_transition_to_ready"
+        trigger_reason = "status_transition_to_todo"
     logger.info(
-        "jira_webhook_ready_trigger request_id=%s tenant_id=%s issue_key=%s trigger_reason=%s issue_status=%s from_status=%s to_status=%s",
+        "jira_webhook_trigger request_id=%s tenant_id=%s issue_key=%s trigger_reason=%s issue_status=%s from_status=%s to_status=%s",
         request_id,
         tenant_id,
         context.issue_key,
@@ -473,6 +500,57 @@ async def ingest_jira_webhook_event(
         from_status,
         to_status,
     )
+
+    if not _is_todo_status(context.issue_status):
+        logger.info(
+            "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=ready_for_agent_backlog issue_status=%s",
+            request_id,
+            tenant_id,
+            context.issue_key,
+            context.issue_status,
+        )
+        return jira_webhook_response(
+            context,
+            enqueued=False,
+            reason="ready_for_agent_backlog",
+            ready_for_agent=True,
+            trigger_reason=trigger_reason,
+            webhook_event=context.webhook_event,
+        )
+
+    latest_decision_gate_block = _latest_decision_gate_blocked_run(
+        session=session,
+        tenant_id=tenant_id,
+        issue_key=context.issue_key,
+    )
+    if latest_decision_gate_block is not None:
+        remaining_seconds = _decision_gate_cooldown_remaining_seconds(
+            blocked_run=latest_decision_gate_block,
+            now=_utcnow(),
+        )
+        if remaining_seconds > 0:
+            logger.info(
+                "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=decision_gate_cooldown_active remaining_seconds=%s run_id=%s",
+                request_id,
+                tenant_id,
+                context.issue_key,
+                remaining_seconds,
+                latest_decision_gate_block.run_id,
+            )
+            return jira_webhook_response(
+                context,
+                enqueued=False,
+                reason="decision_gate_cooldown_active",
+                guidance=(
+                    "Decision Gate was recently required for this issue. "
+                    "Wait for the cooldown to expire, then rerun."
+                ),
+                run_id=latest_decision_gate_block.run_id,
+                cooldown_seconds_remaining=remaining_seconds,
+                ready_for_agent=True,
+                trigger_reason=trigger_reason,
+                webhook_event=context.webhook_event,
+            )
 
     retry_source_run = None
     resolved_issue_description = context.issue_description
