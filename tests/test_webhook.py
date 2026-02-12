@@ -167,6 +167,18 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.json()["reason"], "status_not_ready")
         self.assertIn("Move the issue to a ready status", response.json()["guidance"])
 
+    def test_webhook_does_not_enqueue_issue_created_event(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-130", status_name="Ready for Agent", labels=["agent:ready"])
+        payload["webhookEvent"] = "jira:issue_created"
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "non_enqueue_issue_event")
+        self.assertEqual(body["webhook_event"], "issue_created")
+
     def test_webhook_ignores_done_issue_status(self) -> None:
         payload = self._jira_issue_payload(
             issue_key="TP-123",
