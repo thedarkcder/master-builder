@@ -87,6 +87,15 @@ from orchestrator.api.admin.runs_service import (
 from orchestrator.api.admin.agent_activity_service import (
     list_agent_activity as _list_agent_activity_impl,
 )
+from orchestrator.api.admin.project_metrics_service import (
+    project_execution_metrics as _project_execution_metrics_impl,
+)
+from orchestrator.api.admin.alert_policy_service import (
+    evaluate_alerts as _evaluate_alerts_impl,
+)
+from orchestrator.api.admin.tenant_health_service import (
+    tenant_health as _tenant_health_impl,
+)
 from orchestrator.api.admin.observability_service import (
     platform_observability as _platform_observability_impl,
     tenant_observability as _tenant_observability_impl,
@@ -151,6 +160,9 @@ from orchestrator.api.schemas import (
     RepoBootstrapStateRead,
     RunRead,
     AgentActivityRead,
+    ProjectExecutionMetricsRead,
+    AlertEvaluationRead,
+    TenantHealthRead,
     TenantCreate,
     TenantRead,
     TenantUpdate,
@@ -837,6 +849,50 @@ def list_agent_activity(
         tenant_id=tenant_id,
         project_id=project_id,
         heartbeat_timeout_seconds=heartbeat_timeout_seconds,
+    )
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/metrics", response_model=ProjectExecutionMetricsRead)
+def get_project_execution_metrics(
+    tenant_id: str,
+    project_id: str,
+    sla_seconds: int = Query(default=1800, ge=1, le=86400),
+    stale_queue_seconds: int = Query(default=7200, ge=1, le=604800),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectExecutionMetricsRead:
+    return _project_execution_metrics_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        sla_seconds=sla_seconds,
+        stale_queue_seconds=stale_queue_seconds,
+    )
+
+
+@router.get("/alerts/evaluate", response_model=AlertEvaluationRead)
+def evaluate_alerts(
+    tenant_id: str | None = Query(default=None),
+    cooldown_seconds: int = Query(default=600, ge=1, le=3600),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> AlertEvaluationRead:
+    return _evaluate_alerts_impl(
+        session=session,
+        tenant_id=tenant_id,
+        cooldown_seconds=cooldown_seconds,
+    )
+
+
+@router.get("/tenants/{tenant_id}/health", response_model=TenantHealthRead)
+def get_tenant_health(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantHealthRead:
+    return _tenant_health_impl(
+        session=session,
+        tenant_id=tenant_id,
     )
 
 
