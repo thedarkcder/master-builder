@@ -24,6 +24,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("webhook_deliveries", inspector.get_table_names())
             self.assertIn("repo_bootstrap_states", inspector.get_table_names())
             self.assertIn("managed_secrets", inspector.get_table_names())
+            self.assertIn("agent_lifecycle_events", inspector.get_table_names())
 
     def test_initial_migration_uses_boolean_default_for_tenants_enabled(self) -> None:
         migration_file = (

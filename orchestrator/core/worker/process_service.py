@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
 
@@ -30,6 +29,8 @@ def process_next_queued_run(
     run_failed_update_fn,
     finalize_cancelled_run_fn,
     finalize_workflow_result_fn,
+    emit_agent_event_fn,
+    resolve_agent_id_fn,
     run_status_queued: str,
     run_status_running: str,
     run_status_failed: str,
@@ -49,125 +50,175 @@ def process_next_queued_run(
         return None
     run = selection.run
     tenant = selection.tenant
-    context_tokens = set_log_context(
-        correlation_id=run.run_id,
+    agent_id = resolve_agent_id_fn()
+
+    emit_agent_event_fn(
+        event_type="ISSUE_ASSIGNED",
         tenant_id=run.tenant_id,
         project_id=run.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
     )
+
+    decision_gate_run, decision_gate_meta = apply_decision_gate_fn(
+        session=session,
+        run=run,
+        tenant=tenant,
+        settings=settings,
+        send_discord_message_fn=send_discord_message_fn,
+        send_jira_message_fn=send_jira_message_fn,
+        ask_reply_components_fn=ask_reply_components_fn,
+        blocked_status=run_status_blocked,
+        failed_status=run_status_failed,
+    )
+    if decision_gate_run is not None:
+        if decision_gate_meta and isinstance(decision_gate_meta.get("send_result"), object):
+            send_result = decision_gate_meta["send_result"]
+            stage_update = decision_gate_meta["stage_update"]
+            if not send_result.sent:
+                logger.info(
+                    "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
+                    run.tenant_id,
+                    run.run_id,
+                    stage_update["stage"],
+                    send_result.reason,
+                )
+        return decision_gate_run
+
+    project = resolve_project_for_run_fn(session, run=run)
+    if project is None:
+        return fail_missing_project_mapping_fn(session, run=run)
+    if project.is_archived:
+        return block_archived_project_fn(session, run=run, project=project)
+
+    notifier = RunStageNotifier(
+        session=session,
+        tenant=tenant,
+        run=run,
+        settings=settings,
+        project=project,
+        send_discord_message=send_discord_message_fn,
+        send_jira_message=send_jira_message_fn,
+    )
+    start_run_fn(session, run=run)
+    emit_agent_event_fn(
+        event_type="TASK_STARTED",
+        tenant_id=run.tenant_id,
+        project_id=project.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
+    )
+
+    bind_run_project_fn(session, run=run, project=project)
+    effective_policy = resolve_effective_policy(
+        tenant_policy=tenant.policy_config,
+        project_overrides=project.policy_overrides,
+    )
+
     try:
-
-        decision_gate_run, decision_gate_meta = apply_decision_gate_fn(
-            session=session,
-            run=run,
-            tenant=tenant,
-            settings=settings,
-            send_discord_message_fn=send_discord_message_fn,
-            send_jira_message_fn=send_jira_message_fn,
-            ask_reply_components_fn=ask_reply_components_fn,
-            blocked_status=run_status_blocked,
-            failed_status=run_status_failed,
-        )
-        if decision_gate_run is not None:
-            if decision_gate_meta and isinstance(decision_gate_meta.get("send_result"), object):
-                send_result = decision_gate_meta["send_result"]
-                stage_update = decision_gate_meta["stage_update"]
-                if not send_result.sent:
-                    logger.info(
-                        "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
-                        run.tenant_id,
-                        run.run_id,
-                        stage_update["stage"],
-                        send_result.reason,
-                    )
-            return decision_gate_run
-
-        project = resolve_project_for_run_fn(session, run=run)
-        if project is None:
-            return fail_missing_project_mapping_fn(session, run=run)
-        if project.is_archived:
-            return block_archived_project_fn(session, run=run, project=project)
-
-        notifier = RunStageNotifier(
-            session=session,
-            tenant=tenant,
-            run=run,
-            settings=settings,
+        workflow_request = workflow_request_for_run_fn(
+            tenant,
+            run,
             project=project,
-            send_discord_message=send_discord_message_fn,
-            send_jira_message=send_jira_message_fn,
+            effective_policy=effective_policy,
         )
-        start_run_fn(session, run=run)
+    except (PermissionError, ValueError) as exc:
+        return fail_guardrail_violation_fn(session, run=run, error=str(exc))
 
-        bind_run_project_fn(session, run=run, project=project)
-        effective_policy = resolve_effective_policy(
-            tenant_policy=tenant.policy_config,
-            project_overrides=project.policy_overrides,
+    jira_issue_url = tenant_jira_issue_url_fn(session=session, tenant=tenant, issue_key=run.issue_key)
+    notifier.append(
+        lock_acquired_update_fn(
+            tenant_id=run.tenant_id,
+            issue_key=run.issue_key,
+            run_id=run.run_id,
+            jira_url=jira_issue_url,
         )
+    )
 
-        try:
-            workflow_request = workflow_request_for_run_fn(
-                tenant,
-                run,
-                project=project,
-                effective_policy=effective_policy,
-            )
-        except (PermissionError, ValueError) as exc:
-            return fail_guardrail_violation_fn(session, run=run, error=str(exc))
-
-        jira_issue_url = tenant_jira_issue_url_fn(session=session, tenant=tenant, issue_key=run.issue_key)
+    workflow_result = runner.run(workflow_request)
+    session.refresh(run)
+    if run.status == run_status_cancelled:
+        return finalize_cancelled_run_fn(session, run=run, stage_updates=notifier.stage_updates)
+    if workflow_result.plan is not None:
         notifier.append(
-            lock_acquired_update_fn(
+            plan_posted_update_fn(
                 tenant_id=run.tenant_id,
                 issue_key=run.issue_key,
                 run_id=run.run_id,
                 jira_url=jira_issue_url,
             )
         )
-
-        workflow_result = runner.run(workflow_request)
-        session.refresh(run)
-        if run.status == run_status_cancelled:
-            return finalize_cancelled_run_fn(session, run=run, stage_updates=notifier.stage_updates)
-        if workflow_result.plan is not None:
-            notifier.append(
-                plan_posted_update_fn(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    jira_url=jira_issue_url,
-                )
+    if workflow_result.pr_url:
+        notifier.append(
+            pr_opened_update_fn(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                jira_url=jira_issue_url,
+                pr_url=workflow_result.pr_url,
             )
-        if workflow_result.pr_url:
-            notifier.append(
-                pr_opened_update_fn(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    jira_url=jira_issue_url,
-                    pr_url=workflow_result.pr_url,
-                )
-            )
-        if not workflow_result.succeeded:
-            error_text = (
-                workflow_result.diagnostics.message
-                if workflow_result.diagnostics is not None
-                else "Workflow failed without diagnostics"
-            )
-            notifier.append(
-                run_failed_update_fn(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    jira_url=jira_issue_url,
-                    error=error_text,
-                )
-            )
-
-        return finalize_workflow_result_fn(
-            session,
-            run=run,
-            workflow_result=workflow_result,
-            stage_updates=notifier.stage_updates,
         )
-    finally:
-        reset_log_context(context_tokens)
+    if not workflow_result.succeeded:
+        error_text = (
+            workflow_result.diagnostics.message
+            if workflow_result.diagnostics is not None
+            else "Workflow failed without diagnostics"
+        )
+        notifier.append(
+            run_failed_update_fn(
+                tenant_id=run.tenant_id,
+                issue_key=run.issue_key,
+                run_id=run.run_id,
+                jira_url=jira_issue_url,
+                error=error_text,
+            )
+        )
+        emit_agent_event_fn(
+            event_type="TASK_FAILED",
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
+        )
+        diagnostics_stage = (
+            workflow_result.diagnostics.stage.upper()
+            if workflow_result.diagnostics is not None and workflow_result.diagnostics.stage
+            else ""
+        )
+        if diagnostics_stage == "BUILD":
+            emit_agent_event_fn(
+                event_type="BUILD_FAILED",
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+                issue_key=run.issue_key,
+                agent_id=agent_id,
+            )
+        if diagnostics_stage == "TEST":
+            emit_agent_event_fn(
+                event_type="TEST_FAILED",
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+                issue_key=run.issue_key,
+                agent_id=agent_id,
+            )
+    else:
+        emit_agent_event_fn(
+            event_type="TASK_COMPLETED",
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
+        )
+
+    return finalize_workflow_result_fn(
+        session,
+        run=run,
+        workflow_result=workflow_result,
+        stage_updates=notifier.stage_updates,
+    )

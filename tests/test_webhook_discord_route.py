@@ -79,6 +79,28 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"accepted":true', response.body)
 
+    async def test_issue_seed_command_sets_defer_seed_flag(self) -> None:
+        tenant = SimpleNamespace(is_enabled=True, discord_config={})
+        execute_mock = MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True}))
+        response = await self._call(
+            payload={"user_id": "user1", "command": "!issues seed Draft stories", "channel_id": "c1"},
+            tenant=tenant,
+            execute_discord_ingress_command=execute_mock,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(execute_mock.call_args.kwargs["defer_seed_issues"])
+
+    async def test_non_seed_command_keeps_defer_seed_disabled(self) -> None:
+        tenant = SimpleNamespace(is_enabled=True, discord_config={})
+        execute_mock = MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True}))
+        response = await self._call(
+            payload={"user_id": "user1", "command": "!status", "channel_id": "c1"},
+            tenant=tenant,
+            execute_discord_ingress_command=execute_mock,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(execute_mock.call_args.kwargs["defer_seed_issues"])
+
 
 if __name__ == "__main__":
     unittest.main()
