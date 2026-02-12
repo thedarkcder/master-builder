@@ -272,18 +272,18 @@ async def ingest_github_webhook_event(
             {
                 "pr_number": pr_number,
                 "accepted": True,
-                "gate": signal.gate,
-                "status": signal.status,
-                "summary": signal.summary,
+                "gate": signal.ready,
+                "status": signal.state,
+                "summary": signal.message,
             }
         )
 
-        if signal.gate:
+        if signal.ready:
             send_tenant_discord_message(
                 session,
                 tenant_id=tenant.tenant_id,
                 event="pr_review_gate",
-                message=signal.summary,
+                message=signal.message,
                 issue_key=None,
                 run_id=None,
                 project_id=project.project_id,
@@ -303,4 +303,3 @@ async def ingest_github_webhook_event(
             "signals": signals,
         },
     )
-
