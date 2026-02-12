@@ -26,6 +26,7 @@ from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.core.sentry import initialize_sentry
 from orchestrator.storage.migrations import run_migrations
 
@@ -35,7 +36,11 @@ request_logger = logging.getLogger("master_builder.request")
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(
+        settings.log_level,
+        environment=settings.sentry_environment,
+        platform_version=settings.sentry_release or "dev-local",
+    )
     initialize_sentry(settings=settings)
     cors_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
 
@@ -64,10 +69,13 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         start = time.perf_counter()
+        correlation_id = request.headers.get("X-Request-Id") or uuid4().hex
+        context_tokens = set_log_context(correlation_id=correlation_id)
         status_code = 500
         try:
             response = await call_next(request)
             status_code = response.status_code
+            response.headers["X-Request-Id"] = correlation_id
             return response
         except HTTPException as exc:
             status_code = exc.status_code
@@ -79,8 +87,21 @@ def create_app() -> FastAPI:
                 f"{client_ip} {request.method} {request.url.path} "
                 f"Status: {status_code} Time: {duration_ms}ms"
             )
-            request_logger.info(message)
-            print(message, flush=True)
+            request_logger.info(
+                message,
+                extra={
+                    "event_type": "http_request",
+                    "correlation_id": correlation_id,
+                    "metadata": {
+                        "client_ip": client_ip,
+                        "http_method": request.method,
+                        "http_path": request.url.path,
+                        "status_code": status_code,
+                        "duration_ms": duration_ms,
+                    },
+                },
+            )
+            reset_log_context(context_tokens)
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -91,6 +112,14 @@ def create_app() -> FastAPI:
             request.url.path,
             error_ref,
             exc,
+            extra={
+                "event_type": "api_unhandled_exception",
+                "metadata": {
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error_ref": error_ref,
+                },
+            },
         )
         emit_hard_error(
             event="api_unhandled_exception",
