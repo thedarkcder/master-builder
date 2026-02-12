@@ -5,6 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.agent_observability import agent_observability_tracker
 from orchestrator.core.decision_gate import evaluate_decision_gate
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
@@ -105,6 +106,8 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         run_failed_update_fn=run_failed_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
+        emit_agent_event_fn=agent_observability_tracker.record_event,
+        resolve_agent_id_fn=lambda: get_settings().agent_id,
         run_status_queued=RUN_STATUS_QUEUED,
         run_status_running=RUN_STATUS_RUNNING,
         run_status_failed=RUN_STATUS_FAILED,
@@ -148,6 +151,8 @@ def process_next_queued_run_with_dependencies(
         run_failed_update_fn=run_failed_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
+        emit_agent_event_fn=agent_observability_tracker.record_event,
+        resolve_agent_id_fn=lambda: get_settings().agent_id,
         run_status_queued=RUN_STATUS_QUEUED,
         run_status_running=RUN_STATUS_RUNNING,
         run_status_failed=RUN_STATUS_FAILED,

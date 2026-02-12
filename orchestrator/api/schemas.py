@@ -260,6 +260,22 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class AgentEventRead(BaseModel):
+    event_type: str
+    run_id: str
+    issue_key: str | None = None
+    project_id: str | None = None
+    recorded_at: datetime
+
+
+class AgentActivityRead(BaseModel):
+    tenant_id: str
+    agent_id: str
+    last_seen_at: datetime
+    is_dark: bool
+    events: list[AgentEventRead] = Field(default_factory=list)
+
+
 class DiscordCommandRequest(BaseModel):
     user_id: str = Field(min_length=1)
     command: str = Field(min_length=2)
