@@ -154,3 +154,22 @@ class ReviewerGateTests(unittest.TestCase):
         )
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_test_coverage")
+
+    def test_reviewer_accepts_jest_test_js_coverage(self) -> None:
+        gate = ReviewAgentGate(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.test.js", patch="+ test"),
+                ],
+            )
+        )
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=16,
+        )
+        self.assertNotEqual(signal.state, "missing_test_coverage")

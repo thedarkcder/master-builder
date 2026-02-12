@@ -198,6 +198,6 @@ def _test_changes_present(changed_files) -> bool:  # noqa: ANN001
             return True
         if filename.startswith("test_") or "/test_" in filename:
             return True
-        if filename.endswith(("_test.py", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", ".spec.js")):
+        if filename.endswith(("_test.py", ".test.js", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", ".spec.js")):
             return True
     return False

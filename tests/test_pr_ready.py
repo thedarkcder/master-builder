@@ -90,3 +90,20 @@ class PrReadinessTests(unittest.TestCase):
         self.assertFalse(result.ready)
         self.assertEqual(result.state, "missing_checks")
         self.assertEqual(result.missing_workflows, ("Security",))
+
+    def test_accepts_risk_impact_heading(self) -> None:
+        review_summary = (
+            "Good:\n- completed implementation\n\n"
+            "Risk/Impact:\n- low\n\n"
+            "Must-fix:\n- none\n\n"
+            "Tests:\n- pytest -q\n\n"
+            "Questions:\n- none\n\n"
+            "Follow-ups:\n- none\n"
+        )
+        result = evaluate_pr_readiness(
+            review_summary_markdown=review_summary,
+            required_workflows=("CI",),
+            workflow_checks=[WorkflowCheckSuite(name="CI", status="completed", conclusion="success")],
+        )
+        self.assertTrue(result.ready)
+        self.assertEqual(result.state, "ready")
