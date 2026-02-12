@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
+from orchestrator.api.discord.shared.state import command_matches
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.payload_utils import (
     extract_webhook_token as _extract_webhook_token,
@@ -22,11 +23,6 @@ router = APIRouter(tags=["discord-webhook"])
 logger = logging.getLogger(__name__)
 
 execute_discord_ingress_command = execute_tenant_discord_ingress_command
-
-
-def _is_issue_seed_command(command_text: str) -> bool:
-    normalized = command_text.strip().lower()
-    return normalized == "!issues seed" or normalized.startswith("!issues seed ")
 
 
 @router.post("/discord/webhook/{tenant_id}")
@@ -100,7 +96,7 @@ async def ingest_discord_webhook(
             channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
         ),
         session=session,
-        defer_seed_issues=_is_issue_seed_command(command.strip()),
+        defer_seed_issues=command_matches(command, command_name="issues", subcommand="seed"),
         allow_plain_ask=True,
     )
     return JSONResponse(

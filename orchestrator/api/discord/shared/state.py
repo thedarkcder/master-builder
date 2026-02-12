@@ -54,6 +54,20 @@ def parse_command_text(command_text: str) -> tuple[str, list[str]]:
     return command_name, arguments
 
 
+def command_matches(command_text: str, *, command_name: str, subcommand: str | None = None) -> bool:
+    try:
+        parsed_command_name, arguments = parse_command_text(command_text)
+    except HTTPException:
+        return False
+    if parsed_command_name != command_name.strip().lower():
+        return False
+    if subcommand is None:
+        return True
+    if not arguments:
+        return False
+    return arguments[0].strip().lower() == subcommand.strip().lower()
+
+
 def tenant_allowlisted_user_ids(tenant: Tenant) -> set[str]:
     return normalize_allowlisted_user_ids(tenant.discord_config or {})
 

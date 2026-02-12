@@ -22,6 +22,13 @@ class DiscordSharedStateTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             state_module.parse_command_text("!unsupported")
 
+    def test_command_matches_normalizes_internal_whitespace(self) -> None:
+        self.assertTrue(
+            state_module.command_matches("!issues   seed   draft", command_name="issues", subcommand="seed")
+        )
+        self.assertTrue(state_module.command_matches("!   ask   status", command_name="ask"))
+        self.assertFalse(state_module.command_matches("!issues followup text", command_name="issues", subcommand="seed"))
+
     def test_allowlist_helpers(self) -> None:
         tenant = SimpleNamespace(discord_config={"allowed_user_ids": ["u1", " "]})
         project = SimpleNamespace(discord_config={"allowed_user_ids": ["u2", "u3"]})
