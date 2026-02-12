@@ -26,6 +26,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.tools.github_app import GitHubApiError
 from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssuePreview
 
 
@@ -844,6 +845,38 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(repositories[0]["staging_pull_requests"][0]["number"], 1)
         self.assertTrue(repositories[0]["local_repo"]["available"])
         self.assertEqual(repositories[0]["local_repo"]["current_branch"], "staging")
+
+    def test_collect_github_ask_context_marks_degraded_when_pr_fetch_fails(self) -> None:
+        fake_client = SimpleNamespace(
+            list_open_pull_requests=lambda **_kwargs: (_ for _ in ()).throw(GitHubApiError("rate limited"))
+        )
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            with (
+                patch("orchestrator.api.routes.discord.github_client_from_tenant_config", return_value=fake_client),
+                patch(
+                    "orchestrator.api.routes.discord.collect_local_repo_context",
+                    return_value=SimpleNamespace(
+                        available=False,
+                        reason="repository_not_cloned",
+                        repo_dir="/tmp/repo",
+                        current_branch=None,
+                        head_sha=None,
+                        branches=[],
+                        recent_commits=[],
+                    ),
+                ),
+            ):
+                context = _collect_github_ask_context(
+                    session=session,
+                    tenant=tenant,
+                    project_keys=["TP"],
+                )
+
+        self.assertFalse(context["available"])
+        self.assertEqual(context["reason"], "github_pull_requests_unavailable")
+        self.assertIn("example/repo", context["degraded_repositories"])
 
     def test_ask_history_scope_isolated_by_channel(self) -> None:
         create_project = self.client.post(

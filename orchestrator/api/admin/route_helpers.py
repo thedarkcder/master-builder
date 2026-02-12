@@ -341,6 +341,15 @@ def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, proj
             github_config,
             secret_lookup=lambda secret_ref: app_id if secret_ref == app_id_ref else private_key,
         )
+    except ValueError:
+        logger.info(
+            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_configuration_incomplete",
+            tenant.tenant_id,
+            project.project_id,
+        )
+        return
+
+    try:
         installation_token = github_client.get_installation_token()
         ensure_project_checkout(
             base_dir=settings.project_repo_checkout_base_dir,
@@ -348,13 +357,13 @@ def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, proj
             project=project,
             github_installation_token=installation_token,
         )
-    except (ValueError, GitHubApiError, ProjectRepoCheckoutError) as exc:
-        logger.warning(
-            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=%s",
+    except (GitHubApiError, ProjectRepoCheckoutError) as exc:
+        logger.exception(
+            "project_repository_checkout_failed tenant_id=%s project_id=%s",
             tenant.tenant_id,
             project.project_id,
-            exc,
         )
+        raise ProjectRepoCheckoutError(str(exc)) from exc
 
 
 def provision_jira_webhook(

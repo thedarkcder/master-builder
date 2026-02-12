@@ -585,6 +585,7 @@ def _collect_github_ask_context(
         }
 
     repo_contexts: list[dict] = []
+    degraded_repositories: list[str] = []
     for repo_full_name in sorted(repo_map.keys())[:5]:
         repo_entry = repo_map[repo_full_name]
         try:
@@ -594,6 +595,7 @@ def _collect_github_ask_context(
             )
         except (GitHubApiError, ValueError):
             pull_requests = []
+            degraded_repositories.append(repo_full_name)
         repo_entry["open_pull_requests"] = [
             {
                 "number": pr.number,
@@ -612,6 +614,13 @@ def _collect_github_ask_context(
             if str(pr_entry.get("base_ref") or "").strip().lower() == "staging"
         ]
         repo_contexts.append(repo_entry)
+    if degraded_repositories:
+        return {
+            "available": False,
+            "reason": "github_pull_requests_unavailable",
+            "degraded_repositories": degraded_repositories,
+            "repositories": repo_contexts,
+        }
     return {"available": True, "repositories": repo_contexts}
 
 
