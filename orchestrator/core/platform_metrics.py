@@ -165,8 +165,8 @@ class PlatformMetrics:
             )
 
         total_requests = sum(api_requests.values())
-        total_errors = sum(api_request_errors.values())
-        error_rate = 0.0 if total_requests <= 0 else total_errors / total_requests
+        failed_requests = sum(value for (_, _, status_class), value in api_requests.items() if status_class == "5xx")
+        error_rate = 0.0 if total_requests <= 0 else failed_requests / total_requests
         lines.extend(
             [
                 "# HELP master_builder_api_error_rate_ratio API error rate ratio (errors/requests).",
