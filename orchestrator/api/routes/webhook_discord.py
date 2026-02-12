@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 execute_discord_ingress_command = execute_tenant_discord_ingress_command
 
 
+def _is_issue_seed_command(command_text: str) -> bool:
+    normalized = command_text.strip().lower()
+    return normalized == "!issues seed" or normalized.startswith("!issues seed ")
+
+
 @router.post("/discord/webhook/{tenant_id}")
 async def ingest_discord_webhook(
     tenant_id: str,
@@ -95,6 +100,7 @@ async def ingest_discord_webhook(
             channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
         ),
         session=session,
+        defer_seed_issues=_is_issue_seed_command(command.strip()),
         allow_plain_ask=True,
     )
     return JSONResponse(
