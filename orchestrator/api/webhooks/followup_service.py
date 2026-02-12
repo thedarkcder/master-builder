@@ -55,217 +55,219 @@ class DiscordWebhookFollowupService:
         attachments: list[dict[str, str]] | None = None,
     ) -> None:
         correlation_id = reply_to_message_id or uuid4().hex
-        context_tokens = set_log_context(
-            correlation_id=correlation_id,
-            tenant_id=tenant_id,
-            agent_id=user_id,
-        )
-        settings = self._settings_factory()
+        context_tokens = None
         content = f"<@{user_id}> Command failed due to an internal error."
         components: list[dict] | None = None
         sent_to_thread = False
         try:
-            with self._session_factory() as session:
-                tenant = session.get(Tenant, tenant_id)
-                if tenant is None or not tenant.is_enabled:
-                    content = f"<@{user_id}> Command failed: tenant is unavailable."
-                else:
-                    try:
-                        command_response = self._execute_command_ingress(
-                            tenant_id=tenant_id,
-                            payload=self._command_request_factory(
-                                user_id=user_id,
-                                command=command_text,
-                                channel_id=channel_id,
-                                command_params=command_params,
-                                attachments=attachments or [],
-                            ),
-                            session=session,
-                            defer_seed_issues=False,
-                            require_ask_confirmation=True,
-                            ingress_source="discord",
-                        )
-                        data = command_response.data if isinstance(command_response.data, dict) else {}
-                        requires_confirmation = (
-                            bool(data.get("requires_confirmation")) and command_response.command == "ask"
-                        )
-                        if requires_confirmation:
-                            request_id = str(data.get("request_id") or "").strip()
-                            proposed_command = str(data.get("proposed_command") or "").strip()
-                            summary = str(data.get("summary") or command_response.message or "").strip()
-                            if request_id and proposed_command:
-                                lines = [
-                                    f"<@{user_id}> {summary}",
-                                    "",
-                                    f"Proposed action: `{proposed_command}`",
-                                    "Approve this action?",
-                                ]
-                                content = "\n".join(lines)
-                                components = self._ask_confirmation_components(request_id)
-                            else:
-                                content = f"<@{user_id}> Command failed: ask confirmation payload was incomplete."
-                        else:
-                            content = self._build_command_followup_message(
+            context_tokens = set_log_context(
+                correlation_id=correlation_id,
+                tenant_id=tenant_id,
+                agent_id=user_id,
+            )
+            settings = self._settings_factory()
+            try:
+                with self._session_factory() as session:
+                    tenant = session.get(Tenant, tenant_id)
+                    if tenant is None or not tenant.is_enabled:
+                        content = f"<@{user_id}> Command failed: tenant is unavailable."
+                    else:
+                        try:
+                            command_response = self._execute_command_ingress(
+                                tenant_id=tenant_id,
+                                payload=self._command_request_factory(
+                                    user_id=user_id,
+                                    command=command_text,
+                                    channel_id=channel_id,
+                                    command_params=command_params,
+                                    attachments=attachments or [],
+                                ),
                                 session=session,
-                                tenant=tenant,
-                                user_id=user_id,
-                                command_response=command_response,
+                                defer_seed_issues=False,
+                                require_ask_confirmation=True,
+                                ingress_source="discord",
                             )
-                            if command_response.command == "ask" and not reply_to_message_id:
-                                try:
-                                    self._reply_transport.send_ask_with_thread(
-                                        session=session,
-                                        settings=settings,
-                                        tenant=tenant,
-                                        channel_id=channel_id,
-                                        user_id=user_id,
-                                        content=content,
-                                    )
-                                    sent_to_thread = True
-                                except (DiscordApiError, RuntimeError, ValueError) as exc:
-                                    logger.exception(
-                                        "discord_ask_thread_send_failed tenant_id=%s user_id=%s error=%s",
-                                        tenant_id,
-                                        user_id,
-                                        exc,
-                                    )
-                                    components = self._ask_reply_components()
-                            elif (
-                                command_response.command == "issues"
-                                and bool(data.get("requires_input"))
-                                and not reply_to_message_id
-                            ):
-                                followup_request_id = str(data.get("followup_request_id") or "").strip()
-                                question_values = data.get("questions")
-                                questions = (
-                                    [str(value).strip() for value in question_values if str(value).strip()]
-                                    if isinstance(question_values, list)
-                                    else []
+                            data = command_response.data if isinstance(command_response.data, dict) else {}
+                            requires_confirmation = (
+                                bool(data.get("requires_confirmation")) and command_response.command == "ask"
+                            )
+                            if requires_confirmation:
+                                request_id = str(data.get("request_id") or "").strip()
+                                proposed_command = str(data.get("proposed_command") or "").strip()
+                                summary = str(data.get("summary") or command_response.message or "").strip()
+                                if request_id and proposed_command:
+                                    lines = [
+                                        f"<@{user_id}> {summary}",
+                                        "",
+                                        f"Proposed action: `{proposed_command}`",
+                                        "Approve this action?",
+                                    ]
+                                    content = "\n".join(lines)
+                                    components = self._ask_confirmation_components(request_id)
+                                else:
+                                    content = f"<@{user_id}> Command failed: ask confirmation payload was incomplete."
+                            else:
+                                content = self._build_command_followup_message(
+                                    session=session,
+                                    tenant=tenant,
+                                    user_id=user_id,
+                                    command_response=command_response,
                                 )
-                                if followup_request_id:
+                                if command_response.command == "ask" and not reply_to_message_id:
                                     try:
-                                        self._reply_transport.send_seed_with_thread(
+                                        self._reply_transport.send_ask_with_thread(
                                             session=session,
                                             settings=settings,
                                             tenant=tenant,
                                             channel_id=channel_id,
                                             user_id=user_id,
                                             content=content,
-                                            request_id=followup_request_id,
-                                            questions=questions,
                                         )
                                         sent_to_thread = True
                                     except (DiscordApiError, RuntimeError, ValueError) as exc:
                                         logger.exception(
-                                            "discord_seed_followup_thread_send_failed tenant_id=%s user_id=%s error=%s",
+                                            "discord_ask_thread_send_failed tenant_id=%s user_id=%s error=%s",
                                             tenant_id,
                                             user_id,
                                             exc,
                                         )
-                    except HTTPException as exc:
-                        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-                        logger.exception(
-                            "discord_command_followup_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
-                            tenant_id,
-                            user_id,
-                            channel_id,
-                            detail,
-                            exc,
-                        )
-                        content = f"<@{user_id}> Command failed: {detail}"
-                    except Exception as exc:  # pragma: no cover - defensive logging path
-                        error_ref = uuid4().hex[:8]
-                        logger.exception(
-                            "discord_command_followup_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
-                            tenant_id,
-                            user_id,
-                            error_ref,
-                            exc,
-                        )
-                        emit_hard_error(
-                            event="discord_command_followup_failed",
-                            error_ref=error_ref,
-                            exc=exc,
-                            context={
-                                "tenant_id": tenant_id,
-                                "user_id": user_id,
-                                "channel_id": channel_id,
-                            },
-                        )
-                        content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
-                    if reply_to_message_id and not sent_to_thread:
-                        try:
-                            self._reply_transport.send_thread_reply(
-                                session=session,
-                                settings=settings,
-                                tenant=tenant,
-                                channel_id=channel_id,
-                                reply_to_message_id=reply_to_message_id,
-                                content=content,
-                                components=components,
-                            )
-                            sent_to_thread = True
-                        except (DiscordApiError, RuntimeError, ValueError) as exc:
+                                        components = self._ask_reply_components()
+                                elif (
+                                    command_response.command == "issues"
+                                    and bool(data.get("requires_input"))
+                                    and not reply_to_message_id
+                                ):
+                                    followup_request_id = str(data.get("followup_request_id") or "").strip()
+                                    question_values = data.get("questions")
+                                    questions = (
+                                        [str(value).strip() for value in question_values if str(value).strip()]
+                                        if isinstance(question_values, list)
+                                        else []
+                                    )
+                                    if followup_request_id:
+                                        try:
+                                            self._reply_transport.send_seed_with_thread(
+                                                session=session,
+                                                settings=settings,
+                                                tenant=tenant,
+                                                channel_id=channel_id,
+                                                user_id=user_id,
+                                                content=content,
+                                                request_id=followup_request_id,
+                                                questions=questions,
+                                            )
+                                            sent_to_thread = True
+                                        except (DiscordApiError, RuntimeError, ValueError) as exc:
+                                            logger.exception(
+                                                "discord_seed_followup_thread_send_failed tenant_id=%s user_id=%s error=%s",
+                                                tenant_id,
+                                                user_id,
+                                                exc,
+                                            )
+                        except HTTPException as exc:
+                            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                             logger.exception(
-                                "discord_thread_followup_send_failed tenant_id=%s user_id=%s message_id=%s error=%s",
+                                "discord_command_followup_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
                                 tenant_id,
                                 user_id,
-                                reply_to_message_id,
+                                channel_id,
+                                detail,
                                 exc,
                             )
-        except Exception as exc:  # pragma: no cover - defensive logging path
-            error_ref = uuid4().hex[:8]
-            logger.exception(
-                "discord_command_followup_runtime_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
-                tenant_id,
-                user_id,
-                error_ref,
-                exc,
-            )
-            emit_hard_error(
-                event="discord_command_followup_runtime_failed",
-                error_ref=error_ref,
-                exc=exc,
-                context={
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "channel_id": channel_id,
-                },
-            )
-            content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
-        if sent_to_thread:
-            return
-        try:
-            self._reply_transport.send_interaction_followup(
-                application_id=application_id,
-                interaction_token=interaction_token,
-                content=content,
-                ephemeral=False,
-                components=components,
-                reply_to_message_id=reply_to_message_id,
-                channel_id=channel_id,
-            )
-        except Exception as exc:  # pragma: no cover - defensive logging path
-            error_ref = uuid4().hex[:8]
-            logger.exception(
-                "discord_command_followup_send_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
-                tenant_id,
-                user_id,
-                error_ref,
-                exc,
-            )
-            emit_hard_error(
-                event="discord_command_followup_send_failed",
-                error_ref=error_ref,
-                exc=exc,
-                context={
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "channel_id": channel_id,
-                },
-            )
+                            content = f"<@{user_id}> Command failed: {detail}"
+                        except Exception as exc:  # pragma: no cover - defensive logging path
+                            error_ref = uuid4().hex[:8]
+                            logger.exception(
+                                "discord_command_followup_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
+                                tenant_id,
+                                user_id,
+                                error_ref,
+                                exc,
+                            )
+                            emit_hard_error(
+                                event="discord_command_followup_failed",
+                                error_ref=error_ref,
+                                exc=exc,
+                                context={
+                                    "tenant_id": tenant_id,
+                                    "user_id": user_id,
+                                    "channel_id": channel_id,
+                                },
+                            )
+                            content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
+                        if reply_to_message_id and not sent_to_thread:
+                            try:
+                                self._reply_transport.send_thread_reply(
+                                    session=session,
+                                    settings=settings,
+                                    tenant=tenant,
+                                    channel_id=channel_id,
+                                    reply_to_message_id=reply_to_message_id,
+                                    content=content,
+                                    components=components,
+                                )
+                                sent_to_thread = True
+                            except (DiscordApiError, RuntimeError, ValueError) as exc:
+                                logger.exception(
+                                    "discord_thread_followup_send_failed tenant_id=%s user_id=%s message_id=%s error=%s",
+                                    tenant_id,
+                                    user_id,
+                                    reply_to_message_id,
+                                    exc,
+                                )
+            except Exception as exc:  # pragma: no cover - defensive logging path
+                error_ref = uuid4().hex[:8]
+                logger.exception(
+                    "discord_command_followup_runtime_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
+                    tenant_id,
+                    user_id,
+                    error_ref,
+                    exc,
+                )
+                emit_hard_error(
+                    event="discord_command_followup_runtime_failed",
+                    error_ref=error_ref,
+                    exc=exc,
+                    context={
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "channel_id": channel_id,
+                    },
+                )
+                content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
+            if not sent_to_thread:
+                try:
+                    self._reply_transport.send_interaction_followup(
+                        application_id=application_id,
+                        interaction_token=interaction_token,
+                        content=content,
+                        ephemeral=False,
+                        components=components,
+                        reply_to_message_id=reply_to_message_id,
+                        channel_id=channel_id,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive logging path
+                    error_ref = uuid4().hex[:8]
+                    logger.exception(
+                        "discord_command_followup_send_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
+                        tenant_id,
+                        user_id,
+                        error_ref,
+                        exc,
+                    )
+                    emit_hard_error(
+                        event="discord_command_followup_send_failed",
+                        error_ref=error_ref,
+                        exc=exc,
+                        context={
+                            "tenant_id": tenant_id,
+                            "user_id": user_id,
+                            "channel_id": channel_id,
+                        },
+                    )
         finally:
-            reset_log_context(context_tokens)
+            if context_tokens is not None:
+                reset_log_context(context_tokens)
 
     async def run_discord_ask_confirmation_followup(
         self,
