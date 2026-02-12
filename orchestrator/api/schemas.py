@@ -260,6 +260,23 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class ProjectExecutionMetricsRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    tasks_started: int
+    tasks_completed: int
+    tasks_failed: int
+    tasks_blocked: int
+    success_rate_ratio: float
+    average_duration_seconds: float
+    median_duration_seconds: float
+    p95_duration_seconds: float
+    queue_length: int
+    average_time_in_queue_seconds: float
+    stale_queued_tasks: int
+    sla_breaches: int
+
+
 class AlertRead(BaseModel):
     alert_key: str
     severity: str

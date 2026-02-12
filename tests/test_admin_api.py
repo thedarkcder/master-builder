@@ -13,10 +13,8 @@ from sqlalchemy import select
 from orchestrator.api.main import create_app
 from orchestrator.api.routes.admin import _resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
-from orchestrator.core.alerting import reset_alert_dedup_registry_for_tests
 from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
-from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
@@ -45,8 +43,6 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
-        reset_alert_dedup_registry_for_tests()
-        reset_webhook_health_tracker_for_tests()
         run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
@@ -76,8 +72,6 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
-        reset_alert_dedup_registry_for_tests()
-        reset_webhook_health_tracker_for_tests()
 
     def _tenant_payload(self) -> dict:
         return {
@@ -814,63 +808,127 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(filtered_runs[0]["run_id"], "run-created-project")
         self.assertEqual(filtered_runs[0]["project_id"], created_project_id)
 
-    def test_alert_evaluation_emits_platform_and_tenant_alerts(self) -> None:
+    def test_project_execution_metrics_includes_queue_duration_and_sla_signals(self) -> None:
         payload = self._tenant_payload()
-        payload["github"]["installation_id"] = None
-        payload["jira"]["connection_id"] = None
+        self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
             "/api/admin/tenants",
             json=payload,
             auth=("admin", "secret"),
         )
         self.assertEqual(create_tenant.status_code, 201)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "mobile-app",
+                "github_repository": "https://github.com/example/mobile-app",
+                "jira_project_key": "MBAPP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
 
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            for index in range(6):
-                session.add(
+            session.add_all(
+                [
                     Run(
-                        run_id=f"alert-run-{index}",
+                        run_id="metrics-run-queued-stale",
                         tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key=f"TP-{100 + index}",
-                        issue_summary="run",
+                        project_id=project_id,
+                        issue_key="MBAPP-1",
+                        issue_summary="stale queued",
                         issue_description="desc",
-                        repo_url="https://github.com/example/repo",
+                        repo_url="https://github.com/example/mobile-app",
                         branch=None,
                         pr_url=None,
-                        status="failed" if index < 4 else "succeeded",
-                        last_error="failed" if index < 4 else None,
+                        status="queued",
+                        last_error=None,
                         plan=None,
-                        created_at=now - timedelta(minutes=20 - index),
-                        started_at=now - timedelta(minutes=19 - index),
-                        finished_at=now - timedelta(minutes=18 - index),
-                    )
-                )
+                        created_at=now - timedelta(hours=3),
+                        started_at=None,
+                        finished_at=None,
+                    ),
+                    Run(
+                        run_id="metrics-run-queued-fresh",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-2",
+                        issue_summary="fresh queued",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="queued",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=30),
+                        started_at=None,
+                        finished_at=None,
+                    ),
+                    Run(
+                        run_id="metrics-run-succeeded",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-3",
+                        issue_summary="succeeded",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="succeeded",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=20),
+                        started_at=now - timedelta(minutes=18),
+                        finished_at=now - timedelta(minutes=10),
+                    ),
+                    Run(
+                        run_id="metrics-run-failed",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-4",
+                        issue_summary="failed",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="failed",
+                        last_error="boom",
+                        plan=None,
+                        created_at=now - timedelta(minutes=8),
+                        started_at=now - timedelta(minutes=7),
+                        finished_at=now - timedelta(minutes=1),
+                    ),
+                ]
+            )
             session.commit()
 
-        response = self.client.get("/api/admin/alerts/evaluate", auth=("admin", "secret"))
+        response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/metrics?sla_seconds=300&stale_queue_seconds=3600",
+            auth=("admin", "secret"),
+        )
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["cooldown_seconds"], 600)
-        alerts = body["alerts"]
-        keys = {alert["alert_key"] for alert in alerts}
-        self.assertIn("platform:error_rate_spike", keys)
-        self.assertIn("tenant:tenant-a:jira_disconnected", keys)
-        self.assertIn("tenant:tenant-a:github_disconnected", keys)
-        self.assertIn("tenant:tenant-a:run_failure_rate_high", keys)
+        self.assertEqual(body["tenant_id"], "tenant-a")
+        self.assertEqual(body["project_id"], project_id)
+        self.assertEqual(body["tasks_started"], 2)
+        self.assertEqual(body["tasks_completed"], 2)
+        self.assertEqual(body["tasks_failed"], 1)
+        self.assertEqual(body["tasks_blocked"], 0)
+        self.assertEqual(body["queue_length"], 2)
+        self.assertEqual(body["stale_queued_tasks"], 1)
+        self.assertEqual(body["sla_breaches"], 2)
+        self.assertGreater(body["average_duration_seconds"], 0.0)
+        self.assertEqual(body["p95_duration_seconds"], 480.0)
+        self.assertGreater(body["average_time_in_queue_seconds"], 0.0)
+        self.assertEqual(body["success_rate_ratio"], 0.5)
 
-        severities = {alert["alert_key"]: alert["severity"] for alert in alerts}
-        self.assertEqual(severities["platform:error_rate_spike"], "CRITICAL")
-        self.assertEqual(severities["tenant:tenant-a:jira_disconnected"], "HIGH")
-        self.assertEqual(severities["tenant:tenant-a:github_disconnected"], "HIGH")
-        self.assertEqual(severities["tenant:tenant-a:run_failure_rate_high"], "MEDIUM")
-
-    def test_alert_evaluation_deduplicates_within_cooldown_and_scopes_by_tenant(self) -> None:
+    def test_project_execution_metrics_returns_404_for_mismatched_scope(self) -> None:
         payload = self._tenant_payload()
-        payload["github"]["installation_id"] = None
-        payload["jira"]["connection_id"] = None
         create_tenant = self.client.post(
             "/api/admin/tenants",
             json=payload,
@@ -878,65 +936,12 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_tenant.status_code, 201)
 
-        first = self.client.get(
-            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
+        response = self.client.get(
+            "/api/admin/tenants/tenant-b/projects/tenant-a-default/metrics",
             auth=("admin", "secret"),
         )
-        self.assertEqual(first.status_code, 200)
-        self.assertGreater(len(first.json()["alerts"]), 0)
-
-        second = self.client.get(
-            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(second.json()["alerts"], [])
-
-    def test_alert_evaluation_preserves_other_tenant_cooldown_state(self) -> None:
-        payload_a = self._tenant_payload()
-        payload_a["name"] = "Tenant A"
-        payload_a["github"]["installation_id"] = None
-        payload_a["jira"]["connection_id"] = None
-        create_tenant_a = self.client.post(
-            "/api/admin/tenants",
-            json=payload_a,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant_a.status_code, 201)
-        self.assertEqual(create_tenant_a.json()["tenant_id"], "tenant-a")
-
-        payload_b = self._tenant_payload()
-        payload_b["name"] = "Tenant B"
-        payload_b["github"]["installation_id"] = None
-        payload_b["jira"]["connection_id"] = None
-        create_tenant_b = self.client.post(
-            "/api/admin/tenants",
-            json=payload_b,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant_b.status_code, 201)
-        self.assertEqual(create_tenant_b.json()["tenant_id"], "tenant-b")
-
-        first_tenant_b = self.client.get(
-            "/api/admin/alerts/evaluate?tenant_id=tenant-b&cooldown_seconds=600",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(first_tenant_b.status_code, 200)
-        self.assertGreater(len(first_tenant_b.json()["alerts"]), 0)
-
-        tenant_a = self.client.get(
-            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(tenant_a.status_code, 200)
-        self.assertGreater(len(tenant_a.json()["alerts"]), 0)
-
-        second_tenant_b = self.client.get(
-            "/api/admin/alerts/evaluate?tenant_id=tenant-b&cooldown_seconds=600",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(second_tenant_b.status_code, 200)
-        self.assertEqual(second_tenant_b.json()["alerts"], [])
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Project not found")
 
     def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
         payload = self._tenant_payload()
