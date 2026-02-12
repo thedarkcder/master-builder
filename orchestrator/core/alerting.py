@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -15,10 +16,12 @@ class AlertCandidate:
 
 class AlertDedupRegistry:
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._active_last_emitted: dict[str, datetime] = {}
 
     def reset(self) -> None:
-        self._active_last_emitted.clear()
+        with self._lock:
+            self._active_last_emitted.clear()
 
     def filter_candidates(
         self,
@@ -28,20 +31,21 @@ class AlertDedupRegistry:
         cooldown_seconds: int,
         prune_missing_keys: bool = True,
     ) -> list[AlertCandidate]:
-        if prune_missing_keys:
-            next_keys = {candidate.alert_key for candidate in candidates}
-            stale_keys = [key for key in self._active_last_emitted if key not in next_keys]
-            for key in stale_keys:
-                self._active_last_emitted.pop(key, None)
+        with self._lock:
+            if prune_missing_keys:
+                next_keys = {candidate.alert_key for candidate in candidates}
+                stale_keys = [key for key in self._active_last_emitted if key not in next_keys]
+                for key in stale_keys:
+                    self._active_last_emitted.pop(key, None)
 
-        emitted: list[AlertCandidate] = []
-        cooldown = timedelta(seconds=max(1, cooldown_seconds))
-        for candidate in candidates:
-            last_emitted = self._active_last_emitted.get(candidate.alert_key)
-            if last_emitted is None or (now - last_emitted) >= cooldown:
-                emitted.append(candidate)
-                self._active_last_emitted[candidate.alert_key] = now
-        return emitted
+            emitted: list[AlertCandidate] = []
+            cooldown = timedelta(seconds=max(1, cooldown_seconds))
+            for candidate in candidates:
+                last_emitted = self._active_last_emitted.get(candidate.alert_key)
+                if last_emitted is None or (now - last_emitted) >= cooldown:
+                    emitted.append(candidate)
+                    self._active_last_emitted[candidate.alert_key] = now
+            return emitted
 
 
 def utcnow() -> datetime:
