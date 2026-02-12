@@ -49,6 +49,15 @@ def _is_todo_status(status_name: str) -> bool:
     return normalize_status_name(status_name) == TODO_STATUS
 
 
+def _resolve_ready_trigger_mode_for_tenant(tenant: Tenant) -> str:
+    raw_mode = tenant.jira_config.get("ready_trigger_mode")
+    if isinstance(raw_mode, str):
+        normalized_mode = raw_mode.strip().lower()
+        if normalized_mode in {"status_recheck", "transition_only"}:
+            return normalized_mode
+    return "status_recheck"
+
+
 def _latest_decision_gate_blocked_run(
     *,
     session: Session,
@@ -479,6 +488,7 @@ async def ingest_jira_webhook_event(
             )
 
         from_status, to_status = extract_status_transition(context.payload)
+        ready_trigger_mode = _resolve_ready_trigger_mode_for_tenant(context.tenant)
         trigger_reason = "status_recheck"
         if context.comment_command == "run":
             trigger_reason = "comment_command_run"
@@ -490,9 +500,25 @@ async def ingest_jira_webhook_event(
             to_status is not None
             and from_status is not None
             and from_status.casefold() != to_status.casefold()
-            and _is_todo_status(to_status)
         ):
-            trigger_reason = "status_transition_to_todo"
+            trigger_reason = "status_transition_to_ready"
+        if trigger_reason == "status_recheck" and ready_trigger_mode == "transition_only":
+            logger.info(
+                "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=ready_status_recheck_disabled trigger_mode=%s",
+                request_id,
+                tenant_id,
+                context.issue_key,
+                ready_trigger_mode,
+            )
+            return jira_webhook_response(
+                context,
+                enqueued=False,
+                reason="ready_status_recheck_disabled",
+                trigger_reason=trigger_reason,
+                trigger_mode=ready_trigger_mode,
+                issue_status=context.issue_status,
+                webhook_event=context.webhook_event,
+            )
         logger.info(
             "jira_webhook_trigger request_id=%s tenant_id=%s issue_key=%s trigger_reason=%s issue_status=%s from_status=%s to_status=%s",
             request_id,
