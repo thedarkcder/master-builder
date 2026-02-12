@@ -280,8 +280,18 @@ def _send_discord_thread_followup(
         ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
         mapped_thread_id = ask_message_map.get(reply_to_message_id)
         if mapped_thread_id:
-            client.post_message(channel_id=mapped_thread_id, content=content, components=components)
-            return
+            try:
+                client.post_message(channel_id=mapped_thread_id, content=content, components=components)
+                return
+            except DiscordApiError as exc:
+                logger.exception(
+                    "discord_thread_mapped_followup_failed tenant_id=%s channel_id=%s mapped_thread_id=%s reply_to_message_id=%s error=%s",
+                    tenant.tenant_id,
+                    channel_id,
+                    mapped_thread_id,
+                    reply_to_message_id,
+                    exc,
+                )
 
     thread_name = f"{tenant.tenant_id}-ask-{reply_to_message_id[-6:]}".replace(" ", "-")
     try:
