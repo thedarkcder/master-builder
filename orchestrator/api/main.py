@@ -101,7 +101,6 @@ def create_app() -> FastAPI:
                     },
                 },
             )
-            print(message, flush=True)
             reset_log_context(context_tokens)
 
     @app.exception_handler(Exception)

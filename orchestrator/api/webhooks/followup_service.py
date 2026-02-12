@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.communications.integration_contracts import InteractiveReplyTransport
 from orchestrator.core.error_observability import emit_hard_error
+from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -53,6 +54,12 @@ class DiscordWebhookFollowupService:
         command_params: dict[str, str] | None = None,
         attachments: list[dict[str, str]] | None = None,
     ) -> None:
+        correlation_id = reply_to_message_id or uuid4().hex
+        context_tokens = set_log_context(
+            correlation_id=correlation_id,
+            tenant_id=tenant_id,
+            agent_id=user_id,
+        )
         settings = self._settings_factory()
         content = f"<@{user_id}> Command failed due to an internal error."
         components: list[dict] | None = None
@@ -257,6 +264,8 @@ class DiscordWebhookFollowupService:
                     "channel_id": channel_id,
                 },
             )
+        finally:
+            reset_log_context(context_tokens)
 
     async def run_discord_ask_confirmation_followup(
         self,
