@@ -105,8 +105,18 @@ export default function TenantWebhooksPage() {
         setGithubHealth({ ok: false, details: githubHealthResult.reason instanceof Error ? githubHealthResult.reason.message : "GitHub health check failed" });
       }
 
+      const failedSections: string[] = [];
+      if (tenantResult.status !== "fulfilled") failedSections.push("tenant config");
+      if (diagnosticsResult.status !== "fulfilled") failedSections.push("jira diagnostics");
+      if (jiraHealthResult.status !== "fulfilled") failedSections.push("jira health");
+      if (githubHealthResult.status !== "fulfilled") failedSections.push("github health");
+
       setLastRefreshedAt(new Date().toISOString());
-      setStatusLine("Diagnostics refreshed.");
+      if (failedSections.length > 0) {
+        setStatusLine(`Refresh completed with warnings: failed to load ${failedSections.join(", ")}.`);
+      } else {
+        setStatusLine("Diagnostics refreshed.");
+      }
     } catch (error) {
       setStatusLine(`Refresh failed: ${(error as Error).message}`);
     } finally {
