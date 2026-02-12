@@ -54,6 +54,31 @@ class ApiErrorObservabilityTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"], "forced 500")
         self.assertGreaterEqual(error_log.call_count, 1)
 
+    def test_http_exception_headers_are_preserved(self) -> None:
+        app = create_app()
+
+        @app.get("/_test/http-401")
+        def _http_401() -> dict:
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        with (
+            patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.register_discord_command_executor"),
+            patch("orchestrator.api.main.sync_discord_guild_commands"),
+            patch("orchestrator.api.main.DiscordGatewayListener.start"),
+            patch("orchestrator.api.main.DiscordGatewayListener.stop"),
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
+            response = client.get("/_test/http-401")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["detail"], "Unauthorized")
+        self.assertEqual(response.headers.get("WWW-Authenticate"), "Bearer")
+
     def test_method_not_allowed_is_request_logged(self) -> None:
         app = create_app()
 
