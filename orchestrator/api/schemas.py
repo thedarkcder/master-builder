@@ -260,6 +260,26 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class TenantIntegrationHealthRead(BaseModel):
+    jira_connected: bool
+    github_connected: bool
+    jira_webhook_healthy: bool
+
+
+class TenantHealthRead(BaseModel):
+    tenant_id: str
+    active_projects: int
+    active_agents: int
+    total_runs: int
+    failed_runs: int
+    run_failure_rate_ratio: float
+    average_task_duration_seconds: float
+    webhook_events_received: int
+    webhook_events_failed: int
+    webhook_failure_rate_ratio: float
+    integrations: TenantIntegrationHealthRead
+
+
 class ObservabilityDurationStatsRead(BaseModel):
     average_seconds: float
     median_seconds: float
