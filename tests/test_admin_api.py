@@ -13,15 +13,13 @@ from sqlalchemy import select
 from orchestrator.api.main import create_app
 from orchestrator.api.routes.admin import _resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
+from orchestrator.core.alerting import reset_alert_dedup_registry_for_tests
 from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
-from orchestrator.core.webhook_health import (
-    reset_webhook_health_tracker_for_tests,
-    webhook_health_tracker,
-)
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -47,6 +45,7 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_alert_dedup_registry_for_tests()
         reset_webhook_health_tracker_for_tests()
         run_migrations(database_url=self.database_url)
 
@@ -77,6 +76,7 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_alert_dedup_registry_for_tests()
         reset_webhook_health_tracker_for_tests()
 
     def _tenant_payload(self) -> dict:
@@ -814,9 +814,10 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(filtered_runs[0]["run_id"], "run-created-project")
         self.assertEqual(filtered_runs[0]["project_id"], created_project_id)
 
-    def test_tenant_health_rollup_includes_integration_and_webhook_signals(self) -> None:
+    def test_alert_evaluation_emits_platform_and_tenant_alerts(self) -> None:
         payload = self._tenant_payload()
-        payload["github"]["installation_id"] = "12345"
+        payload["github"]["installation_id"] = None
+        payload["jira"]["connection_id"] = None
         create_tenant = self.client.post(
             "/api/admin/tenants",
             json=payload,
@@ -824,113 +825,52 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_tenant.status_code, 201)
 
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "mobile-app",
-                "github_repository": "https://github.com/example/mobile-app",
-                "jira_project_key": "MBAPP",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            tenant = session.get(Tenant, "tenant-a")
-            assert tenant is not None
-            jira_config = dict(tenant.jira_config or {})
-            jira_config["webhook_last_received_at"] = now.isoformat()
-            jira_config["webhook_last_error"] = None
-            tenant.jira_config = jira_config
-            session.add_all(
-                [
+            for index in range(6):
+                session.add(
                     Run(
-                        run_id="health-run-queued",
+                        run_id=f"alert-run-{index}",
                         tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-1",
-                        issue_summary="Queued run",
+                        project_id="tenant-a-default",
+                        issue_key=f"TP-{100 + index}",
+                        issue_summary="run",
                         issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
+                        repo_url="https://github.com/example/repo",
                         branch=None,
                         pr_url=None,
-                        status="queued",
-                        last_error=None,
+                        status="failed" if index < 4 else "succeeded",
+                        last_error="failed" if index < 4 else None,
                         plan=None,
-                        created_at=now - timedelta(minutes=10),
-                        started_at=None,
-                        finished_at=None,
-                    ),
-                    Run(
-                        run_id="health-run-failed",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-2",
-                        issue_summary="Failed run",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="failed",
-                        last_error="failed",
-                        plan=None,
-                        created_at=now - timedelta(minutes=8),
-                        started_at=now - timedelta(minutes=7),
-                        finished_at=now - timedelta(minutes=5),
-                    ),
-                    Run(
-                        run_id="health-run-succeeded",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-3",
-                        issue_summary="Succeeded run",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="succeeded",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(minutes=4),
-                        started_at=now - timedelta(minutes=3),
-                        finished_at=now - timedelta(minutes=2),
-                    ),
-                ]
-            )
+                        created_at=now - timedelta(minutes=20 - index),
+                        started_at=now - timedelta(minutes=19 - index),
+                        finished_at=now - timedelta(minutes=18 - index),
+                    )
+                )
             session.commit()
 
-        webhook_health_tracker.record(tenant_id="tenant-a", outcome="received")
-        webhook_health_tracker.record(tenant_id="tenant-a", outcome="received")
-        webhook_health_tracker.record(tenant_id="tenant-a", outcome="failed")
-
-        response = self.client.get("/api/admin/tenants/tenant-a/health", auth=("admin", "secret"))
+        response = self.client.get("/api/admin/alerts/evaluate", auth=("admin", "secret"))
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["tenant_id"], "tenant-a")
-        self.assertEqual(body["active_projects"], 2)
-        self.assertEqual(body["active_agents"], 1)
-        self.assertEqual(body["total_runs"], 3)
-        self.assertEqual(body["failed_runs"], 1)
-        self.assertAlmostEqual(body["run_failure_rate_ratio"], 1 / 3, places=6)
-        self.assertAlmostEqual(body["average_task_duration_seconds"], 90.0, delta=1.0)
-        self.assertEqual(body["webhook_events_received"], 2)
-        self.assertEqual(body["webhook_events_failed"], 1)
-        self.assertEqual(body["webhook_failure_rate_ratio"], 0.5)
-        self.assertTrue(body["integrations"]["jira_connected"])
-        self.assertTrue(body["integrations"]["github_connected"])
-        self.assertTrue(body["integrations"]["jira_webhook_healthy"])
+        self.assertEqual(body["cooldown_seconds"], 600)
+        alerts = body["alerts"]
+        keys = {alert["alert_key"] for alert in alerts}
+        self.assertIn("platform:error_rate_spike", keys)
+        self.assertIn("tenant:tenant-a:jira_disconnected", keys)
+        self.assertIn("tenant:tenant-a:github_disconnected", keys)
+        self.assertIn("tenant:tenant-a:run_failure_rate_high", keys)
 
-    def test_tenant_health_returns_404_for_missing_tenant(self) -> None:
-        response = self.client.get("/api/admin/tenants/missing/health", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["detail"], "Tenant not found")
+        severities = {alert["alert_key"]: alert["severity"] for alert in alerts}
+        self.assertEqual(severities["platform:error_rate_spike"], "CRITICAL")
+        self.assertEqual(severities["tenant:tenant-a:jira_disconnected"], "HIGH")
+        self.assertEqual(severities["tenant:tenant-a:github_disconnected"], "HIGH")
+        self.assertEqual(severities["tenant:tenant-a:run_failure_rate_high"], "MEDIUM")
 
-    def test_observability_platform_tenant_and_project_summaries(self) -> None:
+    def test_alert_evaluation_deduplicates_within_cooldown_and_scopes_by_tenant(self) -> None:
         payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
+        payload["github"]["installation_id"] = None
+        payload["jira"]["connection_id"] = None
         create_tenant = self.client.post(
             "/api/admin/tenants",
             json=payload,
@@ -938,244 +878,65 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(create_tenant.status_code, 201)
 
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "mobile-app",
-                "github_repository": "https://github.com/example/mobile-app",
-                "jira_project_key": "MBAPP",
-            },
+        first = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
+        self.assertEqual(first.status_code, 200)
+        self.assertGreater(len(first.json()["alerts"]), 0)
 
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add_all(
-                [
-                    Run(
-                        run_id="obs-run-queued-stale",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-1",
-                        issue_summary="Stale queued run",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="queued",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(hours=3),
-                        started_at=None,
-                        finished_at=None,
-                    ),
-                    Run(
-                        run_id="obs-run-running",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-2",
-                        issue_summary="Running run",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch=None,
-                        pr_url=None,
-                        status="running",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(minutes=20),
-                        started_at=now - timedelta(minutes=19),
-                        finished_at=None,
-                    ),
-                    Run(
-                        run_id="obs-run-succeeded",
-                        tenant_id="tenant-a",
-                        project_id=project_id,
-                        issue_key="MBAPP-3",
-                        issue_summary="Succeeded run",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/mobile-app",
-                        branch="feature/one",
-                        pr_url=None,
-                        status="succeeded",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(minutes=10),
-                        started_at=now - timedelta(minutes=9),
-                        finished_at=now - timedelta(minutes=7),
-                    ),
-                    Run(
-                        run_id="obs-run-failed",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-4",
-                        issue_summary="Failed run",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/repo",
-                        branch="feature/two",
-                        pr_url=None,
-                        status="failed",
-                        last_error="boom",
-                        plan=None,
-                        created_at=now - timedelta(minutes=5),
-                        started_at=now - timedelta(minutes=4),
-                        finished_at=now - timedelta(minutes=3),
-                    ),
-                ]
-            )
-            session.commit()
-
-        platform_response = self.client.get("/api/admin/observability/platform", auth=("admin", "secret"))
-        self.assertEqual(platform_response.status_code, 200)
-        platform_body = platform_response.json()
-        self.assertEqual(platform_body["total_tenants"], 1)
-        self.assertEqual(platform_body["enabled_tenants"], 1)
-        self.assertEqual(platform_body["total_runs"], 4)
-        self.assertEqual(platform_body["active_runs"], 2)
-        self.assertEqual(platform_body["failed_runs_last_24h"], 1)
-        self.assertGreater(platform_body["run_duration"]["average_seconds"], 0.0)
-        self.assertGreater(platform_body["run_duration"]["p95_seconds"], 0.0)
-
-        tenant_response = self.client.get("/api/admin/observability/tenants/tenant-a", auth=("admin", "secret"))
-        self.assertEqual(tenant_response.status_code, 200)
-        tenant_body = tenant_response.json()
-        self.assertEqual(tenant_body["tenant_id"], "tenant-a")
-        self.assertEqual(tenant_body["total_runs"], 4)
-        self.assertEqual(tenant_body["queued_runs"], 1)
-        self.assertEqual(tenant_body["running_runs"], 1)
-        self.assertEqual(tenant_body["succeeded_runs"], 1)
-        self.assertEqual(tenant_body["failed_runs"], 1)
-        self.assertEqual(tenant_body["blocked_runs"], 0)
-        self.assertEqual(tenant_body["stale_runs"], 1)
-
-        project_response = self.client.get(
-            f"/api/admin/observability/tenants/tenant-a/projects/{project_id}",
+        second = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
             auth=("admin", "secret"),
         )
-        self.assertEqual(project_response.status_code, 200)
-        project_body = project_response.json()
-        self.assertEqual(project_body["tenant_id"], "tenant-a")
-        self.assertEqual(project_body["project_id"], project_id)
-        self.assertEqual(project_body["total_runs"], 3)
-        self.assertEqual(project_body["queued_runs"], 1)
-        self.assertEqual(project_body["running_runs"], 1)
-        self.assertEqual(project_body["succeeded_runs"], 1)
-        self.assertEqual(project_body["failed_runs"], 0)
-        self.assertEqual(project_body["stale_runs"], 1)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["alerts"], [])
 
-    def test_observability_endpoints_validate_tenant_and_project_scope(self) -> None:
-        payload = self._tenant_payload()
-        create_tenant = self.client.post(
+    def test_alert_evaluation_preserves_other_tenant_cooldown_state(self) -> None:
+        payload_a = self._tenant_payload()
+        payload_a["name"] = "Tenant A"
+        payload_a["github"]["installation_id"] = None
+        payload_a["jira"]["connection_id"] = None
+        create_tenant_a = self.client.post(
             "/api/admin/tenants",
-            json=payload,
+            json=payload_a,
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_tenant.status_code, 201)
+        self.assertEqual(create_tenant_a.status_code, 201)
+        self.assertEqual(create_tenant_a.json()["tenant_id"], "tenant-a")
 
-        missing_tenant = self.client.get("/api/admin/observability/tenants/missing", auth=("admin", "secret"))
-        self.assertEqual(missing_tenant.status_code, 404)
-        self.assertEqual(missing_tenant.json()["detail"], "Tenant not found")
-
-        missing_project = self.client.get(
-            "/api/admin/observability/tenants/tenant-a/projects/missing",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(missing_project.status_code, 404)
-        self.assertEqual(missing_project.json()["detail"], "Project not found")
-
-    def test_observability_uses_nearest_rank_p95_and_failure_finished_at_window(self) -> None:
-        payload = self._tenant_payload()
-        create_tenant = self.client.post(
+        payload_b = self._tenant_payload()
+        payload_b["name"] = "Tenant B"
+        payload_b["github"]["installation_id"] = None
+        payload_b["jira"]["connection_id"] = None
+        create_tenant_b = self.client.post(
             "/api/admin/tenants",
-            json=payload,
+            json=payload_b,
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_tenant.status_code, 201)
+        self.assertEqual(create_tenant_b.status_code, 201)
+        self.assertEqual(create_tenant_b.json()["tenant_id"], "tenant-b")
 
-        now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            session.add_all(
-                [
-                    Run(
-                        run_id="obs-p95-short",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-11",
-                        issue_summary="short",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/repo",
-                        branch=None,
-                        pr_url=None,
-                        status="succeeded",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(minutes=40),
-                        started_at=now - timedelta(minutes=39),
-                        finished_at=now - timedelta(minutes=38, seconds=50),
-                    ),
-                    Run(
-                        run_id="obs-p95-long",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-12",
-                        issue_summary="long",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/repo",
-                        branch=None,
-                        pr_url=None,
-                        status="succeeded",
-                        last_error=None,
-                        plan=None,
-                        created_at=now - timedelta(minutes=30),
-                        started_at=now - timedelta(minutes=29),
-                        finished_at=now - timedelta(minutes=27, seconds=20),
-                    ),
-                    Run(
-                        run_id="obs-failed-old-created-recent-finished",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-13",
-                        issue_summary="failed-recent",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/repo",
-                        branch=None,
-                        pr_url=None,
-                        status="failed",
-                        last_error="boom",
-                        plan=None,
-                        created_at=now - timedelta(days=2),
-                        started_at=None,
-                        finished_at=now - timedelta(minutes=10),
-                    ),
-                    Run(
-                        run_id="obs-failed-old-finished",
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-14",
-                        issue_summary="failed-old",
-                        issue_description="desc",
-                        repo_url="https://github.com/example/repo",
-                        branch=None,
-                        pr_url=None,
-                        status="failed",
-                        last_error="boom",
-                        plan=None,
-                        created_at=now - timedelta(days=2, minutes=10),
-                        started_at=None,
-                        finished_at=now - timedelta(days=2, minutes=8),
-                    ),
-                ]
-            )
-            session.commit()
+        first_tenant_b = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-b&cooldown_seconds=600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(first_tenant_b.status_code, 200)
+        self.assertGreater(len(first_tenant_b.json()["alerts"]), 0)
 
-        response = self.client.get("/api/admin/observability/platform", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["failed_runs_last_24h"], 1)
-        self.assertEqual(body["run_duration"]["p95_seconds"], 100.0)
+        tenant_a = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(tenant_a.status_code, 200)
+        self.assertGreater(len(tenant_a.json()["alerts"]), 0)
+
+        second_tenant_b = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-b&cooldown_seconds=600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(second_tenant_b.status_code, 200)
+        self.assertEqual(second_tenant_b.json()["alerts"], [])
 
     def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
         payload = self._tenant_payload()

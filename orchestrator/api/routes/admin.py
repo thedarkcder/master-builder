@@ -84,6 +84,9 @@ from orchestrator.api.admin.runs_service import (
     get_run as _get_run_impl,
     list_runs as _list_runs_impl,
 )
+from orchestrator.api.admin.alert_policy_service import (
+    evaluate_alerts as _evaluate_alerts_impl,
+)
 from orchestrator.api.admin.tenant_health_service import (
     tenant_health as _tenant_health_impl,
 )
@@ -150,6 +153,7 @@ from orchestrator.api.schemas import (
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
     RunRead,
+    AlertEvaluationRead,
     TenantHealthRead,
     TenantCreate,
     TenantRead,
@@ -823,6 +827,20 @@ def get_run(
         run_id=run_id,
         run_model=Run,
         run_to_schema_fn=_run_to_schema,
+    )
+
+
+@router.get("/alerts/evaluate", response_model=AlertEvaluationRead)
+def evaluate_alerts(
+    tenant_id: str | None = Query(default=None),
+    cooldown_seconds: int = Query(default=600, ge=1, le=3600),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> AlertEvaluationRead:
+    return _evaluate_alerts_impl(
+        session=session,
+        tenant_id=tenant_id,
+        cooldown_seconds=cooldown_seconds,
     )
 
 
