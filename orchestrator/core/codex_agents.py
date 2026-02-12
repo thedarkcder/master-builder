@@ -183,8 +183,10 @@ def answer_board_question_with_codex(
     issues: list[dict],
     status_counts: dict[str, int],
     history: list[dict] | None = None,
+    github_context: dict | None = None,
 ) -> str:
     normalized_history = history or []
+    normalized_github_context = github_context or {}
     payload = runtime.run_json(
         system_prompt=(
             "You answer Discord board questions for an engineering team. "
@@ -197,6 +199,7 @@ def answer_board_question_with_codex(
             f"Question: {question}\n"
             f"Projects: {json.dumps(project_keys)}\n"
             f"Status counts: {json.dumps(status_counts)}\n"
+            f"GitHub context: {json.dumps(normalized_github_context)}\n"
             f"Recent conversation context: {json.dumps(normalized_history[:6])}\n"
             f"Issues (sample): {json.dumps(issues[:40])}\n"
             "Answer directly and include specific issue keys when helpful."
@@ -216,8 +219,10 @@ def plan_discord_ask_intent_with_codex(
     issues: list[dict],
     status_counts: dict[str, int],
     history: list[dict] | None = None,
+    github_context: dict | None = None,
 ) -> dict:
     normalized_history = history or []
+    normalized_github_context = github_context or {}
     payload = runtime.run_json(
         system_prompt=(
             "You route Discord /ask requests for an engineering orchestration bot. "
@@ -234,6 +239,7 @@ def plan_discord_ask_intent_with_codex(
             f"Question: {question}\n"
             f"Projects: {json.dumps(project_keys)}\n"
             f"Status counts: {json.dumps(status_counts)}\n"
+            f"GitHub context: {json.dumps(normalized_github_context)}\n"
             f"Recent conversation context: {json.dumps(normalized_history[:6])}\n"
             f"Issues (sample): {json.dumps(issues[:40])}\n"
             "Choose command mode only when the user is clearly requesting an operational action."
