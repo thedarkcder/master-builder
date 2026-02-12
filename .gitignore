@@ -8,5 +8,7 @@ __pycache__/
 dist/
 *.egg-info/
 *.egg-info
+.coverage
+coverage.xml
 .cloudflared/*.json
 !.cloudflared/config.yml

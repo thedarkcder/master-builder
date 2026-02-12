@@ -252,7 +252,6 @@ def _refresh_jira_connection_tokens(
         connection=connection,
         settings=settings,
         tenant_id=tenant_id,
-        jira_oauth_client_fn=_jira_oauth_client,
     )
 
 

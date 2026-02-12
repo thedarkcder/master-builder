@@ -22,6 +22,7 @@ from orchestrator.api.discord.shared.state_repository import resolve_project_for
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
 from orchestrator.core.config import get_settings
+from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
@@ -81,6 +82,83 @@ def _project_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[
                 if normalized:
                     channel_ids.add(normalized)
     return channel_ids
+
+
+def _project_ask_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        raw_thread_ids = (project.discord_config or {}).get("ask_thread_channel_ids")
+        if not isinstance(raw_thread_ids, list):
+            continue
+        for value in raw_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
+    return channel_ids
+
+
+def _project_seed_followup_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        raw_thread_ids = (project.discord_config or {}).get("seed_followup_thread_channel_ids")
+        if not isinstance(raw_thread_ids, list):
+            continue
+        for value in raw_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
+    return channel_ids
+
+
+def _ask_thread_message_map_from_config(discord_config: dict) -> dict[str, str]:
+    raw_map = discord_config.get("ask_thread_by_message_id")
+    if not isinstance(raw_map, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in raw_map.items():
+        message_id = str(key or "").strip()
+        thread_id = str(value or "").strip()
+        if message_id and thread_id:
+            normalized[message_id] = thread_id
+    return normalized
+
+
+def _resolve_thread_id_by_message_suffix(
+    *,
+    client: DiscordApiClient,
+    thread_ids: list[str],
+    message_id: str,
+) -> str | None:
+    suffix = message_id.strip()[-6:]
+    if not suffix:
+        return None
+    for thread_id in thread_ids:
+        try:
+            channel = client.get_channel(channel_id=thread_id)
+        except (DiscordApiError, ValueError) as exc:
+            logger.exception(
+                "discord_thread_lookup_failed thread_id=%s message_id=%s error=%s",
+                thread_id,
+                message_id,
+                exc,
+            )
+            continue
+        channel_name = str(channel.get("name") or "").strip()
+        if channel_name.endswith(suffix):
+            return thread_id
+    return None
 
 
 def _ask_confirmation_components(request_id: str) -> list[dict]:
@@ -184,22 +262,94 @@ def _send_discord_thread_followup(
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
     client = DiscordApiClient(bot_token=bot_token)
-    known_thread_ids = _tenant_discord_channel_ids(
-        tenant=tenant,
-        project_channel_ids=_project_channel_ids_for_tenant(session=session, tenant_id=tenant.tenant_id),
+    ask_thread_ids = _project_ask_thread_channel_ids_for_tenant(
+        session=session,
+        tenant_id=tenant.tenant_id,
     )
+    seed_thread_ids = _project_seed_followup_thread_channel_ids_for_tenant(
+        session=session,
+        tenant_id=tenant.tenant_id,
+    )
+    known_thread_ids = ask_thread_ids | seed_thread_ids
     if channel_id in known_thread_ids:
         client.post_message(channel_id=channel_id, content=content, components=components)
         return
-    thread_name = f"{tenant.tenant_id}-{reply_to_message_id[-6:]}".replace(" ", "-")
+    project = _resolve_project_for_channel(session=session, tenant=tenant, channel_id=channel_id)
+    if project is not None:
+        project_discord_config = dict(project.discord_config or {})
+        ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
+        mapped_thread_id = ask_message_map.get(reply_to_message_id)
+        if mapped_thread_id:
+            try:
+                client.post_message(channel_id=mapped_thread_id, content=content, components=components)
+                return
+            except DiscordApiError as exc:
+                logger.exception(
+                    "discord_thread_mapped_followup_failed tenant_id=%s channel_id=%s mapped_thread_id=%s reply_to_message_id=%s error=%s",
+                    tenant.tenant_id,
+                    channel_id,
+                    mapped_thread_id,
+                    reply_to_message_id,
+                    exc,
+                )
+
+    thread_name = f"{tenant.tenant_id}-ask-{reply_to_message_id[-6:]}".replace(" ", "-")
     try:
         thread_channel_id = client.ensure_thread_for_message(
             channel_id=channel_id,
             message_id=reply_to_message_id,
             thread_name=thread_name[:100],
         )
+        if project is not None:
+            project_discord_config = dict(project.discord_config or {})
+            raw_thread_ids = project_discord_config.get("ask_thread_channel_ids")
+            thread_ids = (
+                [str(value).strip() for value in raw_thread_ids if str(value).strip()]
+                if isinstance(raw_thread_ids, list)
+                else []
+            )
+            if thread_channel_id not in thread_ids:
+                thread_ids.append(thread_channel_id)
+            ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
+            ask_message_map[reply_to_message_id] = thread_channel_id
+            project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
+            project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
+            project.discord_config = project_discord_config
+            project.updated_at = datetime.now(timezone.utc)
+            tenant.updated_at = datetime.now(timezone.utc)
+            session.commit()
         client.post_message(channel_id=thread_channel_id, content=content, components=components)
-    except DiscordApiError:
+    except DiscordApiError as exc:
+        logger.exception(
+            "discord_thread_followup_failed tenant_id=%s channel_id=%s reply_to_message_id=%s error=%s",
+            tenant.tenant_id,
+            channel_id,
+            reply_to_message_id,
+            exc,
+        )
+        if project is not None:
+            project_discord_config = dict(project.discord_config or {})
+            raw_thread_ids = project_discord_config.get("ask_thread_channel_ids")
+            thread_ids = (
+                [str(value).strip() for value in raw_thread_ids if str(value).strip()]
+                if isinstance(raw_thread_ids, list)
+                else []
+            )
+            matched_thread_id = _resolve_thread_id_by_message_suffix(
+                client=client,
+                thread_ids=thread_ids,
+                message_id=reply_to_message_id,
+            )
+            if matched_thread_id:
+                ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
+                ask_message_map[reply_to_message_id] = matched_thread_id
+                project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
+                project.discord_config = project_discord_config
+                project.updated_at = datetime.now(timezone.utc)
+                tenant.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                client.post_message(channel_id=matched_thread_id, content=content, components=components)
+                return
         client.post_message(channel_id=channel_id, content=content, components=components)
 
 
@@ -224,6 +374,18 @@ def _send_discord_ask_response_with_thread(
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
     client = DiscordApiClient(bot_token=bot_token)
+    ask_thread_channel_ids = _project_ask_thread_channel_ids_for_tenant(
+        session=session,
+        tenant_id=tenant.tenant_id,
+    )
+    if channel_id in ask_thread_channel_ids:
+        client.post_message(
+            channel_id=channel_id,
+            content=content,
+            components=_ask_reply_components(),
+        )
+        return
+
     posted = client.post_message(
         channel_id=channel_id,
         content=content,
@@ -249,7 +411,10 @@ def _send_discord_ask_response_with_thread(
         )
         if thread_channel_id not in thread_ids:
             thread_ids.append(thread_channel_id)
+        ask_message_map = _ask_thread_message_map_from_config(project_discord_config)
+        ask_message_map[posted_message_id] = thread_channel_id
         project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
+        project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
         project.discord_config = project_discord_config
         project.updated_at = datetime.now(timezone.utc)
     tenant.updated_at = datetime.now(timezone.utc)
@@ -284,6 +449,23 @@ def _send_discord_seed_followup_with_thread(
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
 
     client = DiscordApiClient(bot_token=bot_token)
+    seed_thread_channel_ids = _project_seed_followup_thread_channel_ids_for_tenant(
+        session=session,
+        tenant_id=tenant.tenant_id,
+    )
+    if channel_id in seed_thread_channel_ids:
+        numbered_questions = [f"{idx}. {value}" for idx, value in enumerate(questions, start=1) if value.strip()]
+        question_block = "\n".join(numbered_questions) if numbered_questions else "No additional questions."
+        client.post_message(
+            channel_id=channel_id,
+            content=(
+                f"{content}\n\n"
+                f"<@{user_id}> Continue here with details so I can refine and update the seeded tickets.\n"
+                f"{question_block}"
+            ),
+        )
+        return
+
     posted = client.post_message(channel_id=channel_id, content=content)
     posted_message_id = str(posted.get("id") or "").strip()
     if not posted_message_id:
@@ -354,7 +536,7 @@ def _send_discord_seed_followup_with_thread(
 
 async def _run_discord_command_followup(
     *,
-    tenant_id: str,
+    tenant_id: str | None,
     user_id: str,
     channel_id: str,
     command_text: str,
@@ -364,6 +546,23 @@ async def _run_discord_command_followup(
     command_params: dict[str, str] | None = None,
     attachments: list[dict[str, str]] | None = None,
 ) -> None:
+    resolved_tenant_id = str(tenant_id or "").strip()
+    if not resolved_tenant_id:
+        session_factory = create_session_factory()
+        with session_factory() as session:
+            tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
+            resolved_tenant_id = tenant.tenant_id if tenant is not None else ""
+    if not resolved_tenant_id:
+        _send_discord_interaction_followup(
+            application_id=application_id,
+            interaction_token=interaction_token,
+            content="No enabled tenant is configured for this Discord channel.",
+            ephemeral=True,
+            reply_to_message_id=reply_to_message_id,
+            channel_id=channel_id,
+        )
+        return
+
     service = DiscordWebhookFollowupService(
         session_factory=create_session_factory(),
         settings_factory=get_settings,
@@ -381,7 +580,7 @@ async def _run_discord_command_followup(
         consume_pending_ask_action=consume_pending_ask_action,
     )
     await service.run_discord_command_followup(
-        tenant_id=tenant_id,
+        tenant_id=resolved_tenant_id,
         user_id=user_id,
         channel_id=channel_id,
         command_text=command_text,
@@ -395,7 +594,7 @@ async def _run_discord_command_followup(
 
 async def _run_discord_ask_confirmation_followup(
     *,
-    tenant_id: str,
+    tenant_id: str | None,
     user_id: str,
     channel_id: str,
     decision: str,
@@ -403,6 +602,21 @@ async def _run_discord_ask_confirmation_followup(
     application_id: str,
     interaction_token: str,
 ) -> None:
+    resolved_tenant_id = str(tenant_id or "").strip()
+    if not resolved_tenant_id:
+        session_factory = create_session_factory()
+        with session_factory() as session:
+            tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
+            resolved_tenant_id = tenant.tenant_id if tenant is not None else ""
+    if not resolved_tenant_id:
+        _send_discord_interaction_followup(
+            application_id=application_id,
+            interaction_token=interaction_token,
+            content="No enabled tenant is configured for this Discord channel.",
+            ephemeral=True,
+        )
+        return
+
     service = DiscordWebhookFollowupService(
         session_factory=create_session_factory(),
         settings_factory=get_settings,
@@ -420,7 +634,7 @@ async def _run_discord_ask_confirmation_followup(
         consume_pending_ask_action=consume_pending_ask_action,
     )
     await service.run_discord_ask_confirmation_followup(
-        tenant_id=tenant_id,
+        tenant_id=resolved_tenant_id,
         user_id=user_id,
         channel_id=channel_id,
         decision=decision,

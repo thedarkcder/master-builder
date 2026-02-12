@@ -26,6 +26,11 @@ from orchestrator.api.admin.jira_webhook_delete import (
     delete_jira_webhooks as _delete_jira_webhooks_impl,
 )
 from orchestrator.api.admin.jira_webhook_helpers import (
+    extract_jira_webhook_conflict_url as _extract_jira_webhook_conflict_url,
+    is_jira_webhook_limit_error as _is_jira_webhook_limit_error,
+    is_jira_webhook_single_url_error as _is_jira_webhook_single_url_error,
+    jira_webhook_callback_url as _jira_webhook_callback_url,
+    jira_webhook_filter_jql as _jira_webhook_filter_jql,
     parse_jira_webhook_id as _parse_jira_webhook_id,
     parse_managed_webhook_ids as _parse_managed_webhook_ids,
 )
@@ -333,17 +338,6 @@ def provision_jira_webhook(
 
 def jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
     return _jira_webhook_action_status_code_impl(result)
-
-
-# Imported lazily at end to avoid circular references in type checking/import order.
-from orchestrator.api.admin.jira_webhook_helpers import (  # noqa: E402
-    extract_jira_webhook_conflict_url as _extract_jira_webhook_conflict_url,
-    is_jira_webhook_limit_error as _is_jira_webhook_limit_error,
-    is_jira_webhook_single_url_error as _is_jira_webhook_single_url_error,
-    jira_webhook_callback_url as _jira_webhook_callback_url,
-    jira_webhook_filter_jql as _jira_webhook_filter_jql,
-)
-
 
 JIRA_WEBHOOK_EVENTS = [
     "jira:issue_created",

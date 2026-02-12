@@ -4,6 +4,7 @@ import json
 import hmac
 import hashlib
 import unittest
+from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -131,7 +132,7 @@ class JiraWebhookTests(unittest.TestCase):
         *,
         issue_key: str,
         labels: list[str] | None = None,
-        status_name: str = "Ready for Agent",
+        status_name: str = "To Do",
         status_category_key: str = "indeterminate",
     ) -> dict:
         return {
@@ -157,18 +158,16 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(response.json()["enqueued"])
         self.assertEqual(response.json()["reason"], "tenant_disabled")
 
-    def test_webhook_requires_ready_status(self) -> None:
+    def test_webhook_enqueues_todo_status(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
 
         response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["enqueued"])
-        self.assertEqual(response.json()["reason"], "status_not_ready")
-        self.assertIn("Move the issue to a ready status", response.json()["guidance"])
+        self.assertTrue(response.json()["enqueued"])
 
-    def test_webhook_enqueues_ready_issue_created_event(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-130", status_name="Ready for Agent", labels=["agent:ready"])
+    def test_webhook_enqueues_issue_created_event_in_todo(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-130", status_name="To Do", labels=["agent:ready"])
         payload["webhookEvent"] = "jira:issue_created"
 
         response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
@@ -176,7 +175,22 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["enqueued"])
-        self.assertEqual(body["trigger_reason"], "issue_created_ready")
+        self.assertIsNone(body.get("reason"))
+        self.assertEqual(body["trigger_reason"], "issue_created")
+        self.assertEqual(body["webhook_event"], "issue_created")
+
+    def test_webhook_marks_issue_created_backlog_ready_without_enqueue(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-130", status_name="Ready for Agent", labels=["agent:ready"])
+        payload["webhookEvent"] = "jira:issue_created"
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "ready_for_agent_backlog")
+        self.assertTrue(body["ready_for_agent"])
+        self.assertEqual(body["trigger_reason"], "issue_created")
         self.assertEqual(body["webhook_event"], "issue_created")
 
     def test_webhook_ignores_done_issue_status(self) -> None:
@@ -201,13 +215,31 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertEqual(first.status_code, 200)
         self.assertTrue(first.json()["enqueued"])
-        self.assertEqual(first.json()["trigger_reason"], "ready_status_recheck")
+        self.assertEqual(first.json()["trigger_reason"], "status_recheck")
 
         self.assertEqual(second.status_code, 200)
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "run_already_active")
         self.assertEqual(second.json()["run_id"], first.json()["run_id"])
-        self.assertEqual(second.json()["trigger_reason"], "ready_status_recheck")
+        self.assertEqual(second.json()["trigger_reason"], "status_recheck")
+
+    def test_webhook_enqueue_skip_sends_discord_reason(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-124", labels=["agent:ready"])
+        first = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.json()["enqueued"])
+
+        with patch("orchestrator.api.webhooks.jira_ingress.send_tenant_discord_message") as notify_mock:
+            second = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(second.json()["enqueued"])
+        self.assertEqual(second.json()["reason"], "run_already_active")
+        notify_mock.assert_called_once()
+        sent_message = notify_mock.call_args.kwargs["message"]
+        self.assertIn("did not queue a run", sent_message)
+        self.assertIn("run_already_active", sent_message)
+        self.assertIn("already active", sent_message)
 
     def test_webhook_records_last_delivery_metadata(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-777", labels=["agent:ready"])
@@ -419,14 +451,14 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["webhook_event"], "comment_updated")
         self.assertEqual(body["removed_history_entries"], 0)
 
-    def test_webhook_marks_transition_into_ready_status(self) -> None:
+    def test_webhook_marks_transition_into_todo_status(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-128", labels=["agent:ready"])
         payload["changelog"] = {
             "items": [
                 {
                     "field": "status",
-                    "fromString": "To Do",
-                    "toString": "Ready for Agent",
+                    "fromString": "Backlog",
+                    "toString": "To Do",
                 }
             ]
         }
@@ -435,7 +467,82 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["enqueued"])
-        self.assertEqual(response.json()["trigger_reason"], "status_transition_to_ready")
+        self.assertEqual(response.json()["trigger_reason"], "status_transition_to_todo")
+
+    def test_webhook_marks_backlog_status_ready_for_agent_without_enqueue(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-803", status_name="In Progress")
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "ready_for_agent_backlog")
+        self.assertTrue(body["ready_for_agent"])
+
+    def test_webhook_suppresses_rerun_during_decision_gate_cooldown(self) -> None:
+        with self.session_factory() as session:
+            run = Run(
+                run_id="run-decision-gate-1",
+                tenant_id="tenant-webhook",
+                project_id=None,
+                issue_key="TP-804",
+                issue_summary="Need GTD",
+                issue_description="Missing sections",
+                repo_url="https://github.com/example/repo",
+                branch=None,
+                pr_url=None,
+                status="blocked",
+                last_error="Decision Gate required: Missing GTD sections",
+                plan=None,
+                created_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+                started_at=None,
+                finished_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+            )
+            session.add(run)
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-804", status_name="To Do")
+        with patch("orchestrator.api.webhooks.jira_ingress.send_tenant_discord_message") as notify_mock:
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "decision_gate_cooldown_active")
+        self.assertGreater(body["cooldown_seconds_remaining"], 0)
+        self.assertEqual(body["run_id"], "run-decision-gate-1")
+        notify_mock.assert_not_called()
+
+    def test_webhook_allows_rerun_after_decision_gate_cooldown(self) -> None:
+        with self.session_factory() as session:
+            run = Run(
+                run_id="run-decision-gate-2",
+                tenant_id="tenant-webhook",
+                project_id=None,
+                issue_key="TP-805",
+                issue_summary="Need GTD",
+                issue_description="Missing sections",
+                repo_url="https://github.com/example/repo",
+                branch=None,
+                pr_url=None,
+                status="blocked",
+                last_error="Decision Gate required: Missing GTD sections",
+                plan=None,
+                created_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+                started_at=None,
+                finished_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+            )
+            session.add(run)
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-805", status_name="To Do")
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["enqueued"])
+        self.assertEqual(body["trigger_reason"], "status_recheck")
 
     def test_webhook_deduplicates_delivery_identifier(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
@@ -583,6 +690,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertFalse(second.json()["enqueued"])
         self.assertEqual(second.json()["reason"], "tenant_concurrency_limit_reached")
+        self.assertIn("concurrency limit", second.json()["guidance"].lower())
 
     def test_webhook_unknown_tenant_returns_404(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-999", labels=["agent:ready"])
@@ -1052,7 +1160,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["data"]["flags"], 64)
         create_task_mock.assert_called_once()
         run_followup_mock.assert_called_once_with(
-            tenant_id="tenant-webhook",
+            tenant_id=None,
             user_id="discord-user-1",
             channel_id="discord-channel-1",
             command_text="!ask What changed since the previous update?",

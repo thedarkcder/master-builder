@@ -42,8 +42,10 @@ class RunQueueNotificationBridge:
         self._stop_event.set()
         with self._conn_lock:
             if self._conn is not None:
-                with contextlib.suppress(Exception):
+                try:
                     self._conn.close()
+                except Exception as exc:
+                    self._logger.exception("worker_queue_listener_close_failed error=%s", exc)
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
 
@@ -63,8 +65,8 @@ class RunQueueNotificationBridge:
                     if self._stop_event.is_set():
                         break
                     self._loop.call_soon_threadsafe(self._wake_event.set)
-        except Exception:
-            self._logger.exception("worker_queue_listener_failed")
+        except Exception as exc:
+            self._logger.exception("worker_queue_listener_failed error=%s", exc)
             self._loop.call_soon_threadsafe(self._wake_event.set)
         finally:
             with self._conn_lock:

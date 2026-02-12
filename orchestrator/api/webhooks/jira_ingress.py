@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -25,14 +26,82 @@ from orchestrator.api.webhooks.contracts import (
     resolve_active_project_for_issue,
     validate_webhook_auth,
 )
+from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.runs import RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED, RUN_STATUS_FAILED, enqueue_run
-from orchestrator.core.signal_templates import format_discord_ready_gate_guidance
+from orchestrator.api.discord.shared.state import normalize_status_name
 from orchestrator.storage.models import Run
 from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
 
 execute_jira_comment_command = execute_tenant_jira_comment_command
+TODO_STATUS = "to do"
+DECISION_GATE_COOLDOWN = timedelta(minutes=10)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_todo_status(status_name: str) -> bool:
+    return normalize_status_name(status_name) == TODO_STATUS
+
+
+def _latest_decision_gate_blocked_run(
+    *,
+    session: Session,
+    tenant_id: str,
+    issue_key: str,
+) -> Run | None:
+    return session.execute(
+        select(Run)
+        .where(
+            Run.tenant_id == tenant_id,
+            Run.issue_key == issue_key,
+            Run.status == RUN_STATUS_BLOCKED,
+            Run.last_error.is_not(None),
+            Run.last_error.like("Decision Gate required:%"),
+        )
+        .order_by(Run.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _decision_gate_cooldown_remaining_seconds(*, blocked_run: Run, now: datetime) -> int:
+    blocked_at = blocked_run.finished_at or blocked_run.created_at
+    if blocked_at is None:
+        return 0
+    if blocked_at.tzinfo is None:
+        blocked_at = blocked_at.replace(tzinfo=timezone.utc)
+    elapsed = now - blocked_at
+    remaining = DECISION_GATE_COOLDOWN - elapsed
+    return max(0, int(remaining.total_seconds()))
+
+
+def _notify_jira_enqueue_skipped(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+    reason: str,
+    extra_detail: str | None = None,
+) -> None:
+    detail = f" ({extra_detail})" if extra_detail else ""
+    guidance = enqueue_reason_guidance(reason)
+    message = (
+        f"Jira webhook did not queue a run for `{context.issue_key}`.\n"
+        f"Reason: `{reason}`{detail}\n"
+        f"Guidance: {guidance}\n"
+        f"Status: `{context.issue_status or 'unknown'}`"
+    )
+    send_tenant_discord_message(
+        session=session,
+        tenant=context.tenant,
+        project=context.project,
+        message=message,
+        settings=settings,
+    )
 
 
 @dataclass
@@ -264,6 +333,14 @@ def stage_handle_comment_ask_command(
         if not response_text:
             response_text = "I processed your question but returned no response text."
     except HTTPException as exc:
+        logger.exception(
+            "jira_comment_ask_command_failed request_id=%s tenant_id=%s issue_key=%s detail=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc.detail,
+            exc,
+        )
         response_text = f"Unable to process `/mb ask`: {exc.detail}"
 
     posted, post_error = post_jira_comment(
@@ -283,15 +360,6 @@ def stage_handle_comment_ask_command(
         comment_error=post_error,
         webhook_event=context.webhook_event,
     )
-
-
-def resolve_ready_statuses_for_tenant(tenant: Tenant) -> list[str]:
-    configured_ready_statuses = tenant.jira_config.get("ready_statuses")
-    if isinstance(configured_ready_statuses, list):
-        ready_statuses = [str(status).strip() for status in configured_ready_statuses if str(status).strip()]
-    else:
-        ready_statuses = []
-    return ready_statuses or ["Ready for Agent"]
 
 
 async def ingest_jira_webhook_event(
@@ -355,7 +423,6 @@ async def ingest_jira_webhook_event(
     if comment_ask_response is not None:
         return comment_ask_response
 
-    ready_statuses = resolve_ready_statuses_for_tenant(tenant)
     if context.issue_status is None:
         logger.info(
             "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=issue_status_missing",
@@ -386,29 +453,6 @@ async def ingest_jira_webhook_event(
             webhook_event=context.webhook_event,
         )
 
-    normalized_ready_statuses = {status.casefold() for status in ready_statuses}
-    if context.issue_status.casefold() not in normalized_ready_statuses:
-        logger.info(
-            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=status_not_ready issue_status=%s",
-            request_id,
-            tenant_id,
-            context.issue_key,
-            context.issue_status,
-        )
-        return jira_webhook_response(
-            context,
-            enqueued=False,
-            reason="status_not_ready",
-            issue_status=context.issue_status,
-            ready_statuses=ready_statuses,
-            guidance=format_discord_ready_gate_guidance(
-                issue_key=context.issue_key,
-                issue_status=context.issue_status,
-                ready_statuses=ready_statuses,
-            ),
-            webhook_event=context.webhook_event,
-        )
-
     if context.project is None:
         logger.info(
             "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=project_not_mapped",
@@ -416,31 +460,38 @@ async def ingest_jira_webhook_event(
             tenant_id,
             context.issue_key,
         )
+        _notify_jira_enqueue_skipped(
+            context=context,
+            session=session,
+            settings=settings,
+            reason="project_not_mapped",
+        )
         return jira_webhook_response(
             context,
             enqueued=False,
             reason="project_not_mapped",
+            guidance=enqueue_reason_guidance("project_not_mapped"),
             command=context.comment_command,
             webhook_event=context.webhook_event,
         )
 
     from_status, to_status = extract_status_transition(context.payload)
-    trigger_reason = "ready_status_recheck"
+    trigger_reason = "status_recheck"
     if context.comment_command == "run":
         trigger_reason = "comment_command_run"
     elif context.comment_command == "retry":
         trigger_reason = "comment_command_retry"
     elif context.webhook_event == "issue_created":
-        trigger_reason = "issue_created_ready"
+        trigger_reason = "issue_created"
     elif (
         to_status is not None
-        and to_status.casefold() in normalized_ready_statuses
         and from_status is not None
         and from_status.casefold() != to_status.casefold()
+        and _is_todo_status(to_status)
     ):
-        trigger_reason = "status_transition_to_ready"
+        trigger_reason = "status_transition_to_todo"
     logger.info(
-        "jira_webhook_ready_trigger request_id=%s tenant_id=%s issue_key=%s trigger_reason=%s issue_status=%s from_status=%s to_status=%s",
+        "jira_webhook_trigger request_id=%s tenant_id=%s issue_key=%s trigger_reason=%s issue_status=%s from_status=%s to_status=%s",
         request_id,
         tenant_id,
         context.issue_key,
@@ -449,6 +500,57 @@ async def ingest_jira_webhook_event(
         from_status,
         to_status,
     )
+
+    if not _is_todo_status(context.issue_status):
+        logger.info(
+            "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=ready_for_agent_backlog issue_status=%s",
+            request_id,
+            tenant_id,
+            context.issue_key,
+            context.issue_status,
+        )
+        return jira_webhook_response(
+            context,
+            enqueued=False,
+            reason="ready_for_agent_backlog",
+            ready_for_agent=True,
+            trigger_reason=trigger_reason,
+            webhook_event=context.webhook_event,
+        )
+
+    latest_decision_gate_block = _latest_decision_gate_blocked_run(
+        session=session,
+        tenant_id=tenant_id,
+        issue_key=context.issue_key,
+    )
+    if latest_decision_gate_block is not None:
+        remaining_seconds = _decision_gate_cooldown_remaining_seconds(
+            blocked_run=latest_decision_gate_block,
+            now=_utcnow(),
+        )
+        if remaining_seconds > 0:
+            logger.info(
+                "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=decision_gate_cooldown_active remaining_seconds=%s run_id=%s",
+                request_id,
+                tenant_id,
+                context.issue_key,
+                remaining_seconds,
+                latest_decision_gate_block.run_id,
+            )
+            return jira_webhook_response(
+                context,
+                enqueued=False,
+                reason="decision_gate_cooldown_active",
+                guidance=(
+                    "Decision Gate was recently required for this issue. "
+                    "Wait for the cooldown to expire, then rerun."
+                ),
+                run_id=latest_decision_gate_block.run_id,
+                cooldown_seconds_remaining=remaining_seconds,
+                ready_for_agent=True,
+                trigger_reason=trigger_reason,
+                webhook_event=context.webhook_event,
+            )
 
     retry_source_run = None
     resolved_issue_description = context.issue_description
@@ -471,10 +573,17 @@ async def ingest_jira_webhook_event(
                 tenant_id,
                 context.issue_key,
             )
+            _notify_jira_enqueue_skipped(
+                context=context,
+                session=session,
+                settings=settings,
+                reason="no_retryable_run",
+            )
             return jira_webhook_response(
                 context,
                 enqueued=False,
                 reason="no_retryable_run",
+                guidance=enqueue_reason_guidance("no_retryable_run"),
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
             )
@@ -500,10 +609,18 @@ async def ingest_jira_webhook_event(
             enqueue_result.reason,
             enqueue_result.run.run_id,
         )
+        _notify_jira_enqueue_skipped(
+            context=context,
+            session=session,
+            settings=settings,
+            reason=enqueue_result.reason,
+            extra_detail=f"run_id={enqueue_result.run.run_id}",
+        )
         return jira_webhook_response(
             context,
             enqueued=False,
             reason=enqueue_result.reason,
+            guidance=enqueue_reason_guidance(enqueue_result.reason),
             run_id=enqueue_result.run.run_id,
             trigger_reason=trigger_reason,
             command=context.comment_command,
@@ -534,7 +651,6 @@ __all__ = [
     "extract_status_transition",
     "ingest_jira_webhook_event",
     "jira_webhook_response",
-    "resolve_ready_statuses_for_tenant",
     "stage_handle_comment_ask_command",
     "stage_handle_comment_event_memory",
     "stage_handle_comment_without_command",
