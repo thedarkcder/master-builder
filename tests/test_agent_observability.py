@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from orchestrator.core.agent_observability import (
+    MAX_IN_MEMORY_EVENT_HISTORY,
     agent_observability_tracker,
     reset_agent_observability_for_tests,
 )
@@ -51,6 +52,20 @@ class AgentObservabilityTests(unittest.TestCase):
         )
         events, _ = agent_observability_tracker.snapshot()
         self.assertEqual(events[0].event_type, "TASK_FAILED")
+
+    def test_event_history_is_bounded_in_memory(self) -> None:
+        for idx in range(MAX_IN_MEMORY_EVENT_HISTORY + 25):
+            agent_observability_tracker.record_event(
+                event_type="TASK_STARTED",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id=f"run-{idx}",
+                issue_key=f"TP-{idx}",
+                agent_id="worker-1",
+            )
+
+        events, _ = agent_observability_tracker.snapshot()
+        self.assertEqual(len(events), MAX_IN_MEMORY_EVENT_HISTORY)
 
 
 if __name__ == "__main__":

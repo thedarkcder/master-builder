@@ -15,7 +15,7 @@ from orchestrator.api.routes.admin import _resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.agent_observability import (
-    agent_observability_tracker,
+    record_agent_lifecycle_event,
     reset_agent_observability_for_tests,
 )
 from orchestrator.core.secrets import encrypt_value
@@ -824,24 +824,29 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_response.status_code, 201)
 
         now = datetime.now(timezone.utc)
-        agent_observability_tracker.record_event(
-            event_type="TASK_STARTED",
-            tenant_id="tenant-a",
-            project_id="tenant-a-default",
-            run_id="run-active",
-            issue_key="TP-1",
-            agent_id="worker-active",
-            recorded_at=now,
-        )
-        agent_observability_tracker.record_event(
-            event_type="TASK_FAILED",
-            tenant_id="tenant-a",
-            project_id="tenant-a-default",
-            run_id="run-stale",
-            issue_key="TP-2",
-            agent_id="worker-stale",
-            recorded_at=now - timedelta(minutes=20),
-        )
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            record_agent_lifecycle_event(
+                session=session,
+                event_type="TASK_STARTED",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-active",
+                issue_key="TP-1",
+                agent_id="worker-active",
+                recorded_at=now,
+            )
+            record_agent_lifecycle_event(
+                session=session,
+                event_type="TASK_FAILED",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-stale",
+                issue_key="TP-2",
+                agent_id="worker-stale",
+                recorded_at=now - timedelta(minutes=20),
+            )
+            session.commit()
 
         response = self.client.get(
             "/api/admin/agents/activity?tenant_id=tenant-a&heartbeat_timeout_seconds=300",

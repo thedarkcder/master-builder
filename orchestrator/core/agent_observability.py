@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from uuid import uuid4
 import threading
+
+from sqlalchemy import delete, desc, select
+from sqlalchemy.orm import Session
+
+from orchestrator.storage.models import AgentLifecycleEvent
 
 ALLOWED_AGENT_EVENTS = {
     "ISSUE_ASSIGNED",
@@ -15,6 +21,8 @@ ALLOWED_AGENT_EVENTS = {
     "BUILD_FAILED",
     "TEST_FAILED",
 }
+MAX_IN_MEMORY_EVENT_HISTORY = 1000
+MAX_PERSISTED_EVENTS_PER_TENANT = 5000
 
 
 def _utcnow() -> datetime:
@@ -73,6 +81,9 @@ class AgentObservabilityTracker:
         )
         with self._lock:
             self._events.append(event)
+            if len(self._events) > MAX_IN_MEMORY_EVENT_HISTORY:
+                overflow = len(self._events) - MAX_IN_MEMORY_EVENT_HISTORY
+                del self._events[:overflow]
             self._heartbeats[(event.tenant_id, event.agent_id)] = timestamp
 
     def snapshot(self) -> tuple[list[AgentEventRecord], dict[tuple[str, str], datetime]]:
@@ -80,9 +91,59 @@ class AgentObservabilityTracker:
             return list(self._events), dict(self._heartbeats)
 
 
+def record_agent_lifecycle_event(
+    *,
+    session: Session,
+    event_type: str,
+    tenant_id: str,
+    project_id: str | None,
+    run_id: str,
+    issue_key: str | None,
+    agent_id: str,
+    recorded_at: datetime | None = None,
+    max_events_per_tenant: int = MAX_PERSISTED_EVENTS_PER_TENANT,
+) -> None:
+    timestamp = recorded_at or _utcnow()
+    normalized_tenant = str(tenant_id or "").strip()
+    if not normalized_tenant:
+        return
+    normalized_project = str(project_id or "").strip() or None
+    normalized_run = str(run_id or "").strip()
+    if not normalized_run:
+        return
+    normalized_agent = str(agent_id or "").strip() or "unknown-agent"
+
+    session.add(
+        AgentLifecycleEvent(
+            event_id=uuid4().hex,
+            tenant_id=normalized_tenant,
+            project_id=normalized_project,
+            run_id=normalized_run,
+            issue_key=str(issue_key or "").strip() or None,
+            agent_id=normalized_agent,
+            event_type=_normalize_event_type(event_type),
+            recorded_at=timestamp,
+        )
+    )
+    session.flush()
+
+    cutoff_ids = session.execute(
+        select(AgentLifecycleEvent.event_id)
+        .where(AgentLifecycleEvent.tenant_id == normalized_tenant)
+        .order_by(desc(AgentLifecycleEvent.recorded_at), desc(AgentLifecycleEvent.event_id))
+        .offset(max(0, max_events_per_tenant))
+    ).scalars().all()
+    if cutoff_ids:
+        session.execute(
+            delete(AgentLifecycleEvent).where(
+                AgentLifecycleEvent.tenant_id == normalized_tenant,
+                AgentLifecycleEvent.event_id.in_(cutoff_ids),
+            )
+        )
+
+
 agent_observability_tracker = AgentObservabilityTracker()
 
 
 def reset_agent_observability_for_tests() -> None:
     agent_observability_tracker.reset()
-
