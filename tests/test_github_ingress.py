@@ -114,7 +114,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         gate = MagicMock()
         gate.evaluate_pr.side_effect = [
             ValueError("boom"),
-            SimpleNamespace(gate=True, status="blocked", summary="Need review"),
+            SimpleNamespace(ready=True, state="ready", message="Need review"),
         ]
         review_gate_cls = MagicMock(return_value=gate)
         send_discord = MagicMock()
