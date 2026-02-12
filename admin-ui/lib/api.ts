@@ -563,6 +563,10 @@ export function listManagedSecrets(credentials: Credentials): Promise<ManagedSec
   return request<ManagedSecretRecord[]>(credentials, "/api/admin/secrets");
 }
 
+export function listTenantManagedSecrets(credentials: Credentials, tenantId: string): Promise<ManagedSecretRecord[]> {
+  return request<ManagedSecretRecord[]>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/secrets`);
+}
+
 export function listDiscordAllowlistRequests(
   credentials: Credentials,
   tenantId: string,
@@ -613,5 +617,46 @@ export function resolveManagedSecret(
   return request<ManagedSecretResolveResult>(credentials, "/api/admin/secrets/resolve", {
     method: "POST",
     body: JSON.stringify({ secret_ref: secretRef })
+  });
+}
+
+export function upsertTenantManagedSecret(
+  credentials: Credentials,
+  tenantId: string,
+  secretKey: string,
+  value: string
+): Promise<ManagedSecretRecord> {
+  return request<ManagedSecretRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/secrets/${encodeURIComponent(secretKey)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ value })
+    }
+  );
+}
+
+export async function deleteTenantManagedSecret(
+  credentials: Credentials,
+  tenantId: string,
+  secretKey: string
+): Promise<void> {
+  await request<void>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/secrets/${encodeURIComponent(secretKey)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
+export function resolveTenantManagedSecret(
+  credentials: Credentials,
+  tenantId: string,
+  secretKey: string
+): Promise<ManagedSecretResolveResult> {
+  return request<ManagedSecretResolveResult>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/secrets/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ secret_ref: secretKey })
   });
 }

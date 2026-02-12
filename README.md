@@ -424,7 +424,12 @@ Bootstrap persistence is tracked per tenant/repo in `repo_bootstrap_states`.
 
 ## Tests
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
+pytest -q
+```
+
+## Coverage
+```bash
+pytest -q --cov=orchestrator --cov-report=term-missing --cov-report=xml
 ```
 
 ## Lint

@@ -10,10 +10,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  deleteManagedSecret,
-  listManagedSecrets,
-  resolveManagedSecret,
-  upsertManagedSecret,
+  deleteTenantManagedSecret,
+  listTenantManagedSecrets,
+  resolveTenantManagedSecret,
+  upsertTenantManagedSecret,
   type ManagedSecretRecord
 } from "@/lib/api";
 
@@ -44,10 +44,6 @@ export default function TenantSecretsPage() {
   const [secretValue, setSecretValue] = useState("");
   const [editingSecretRef, setEditingSecretRef] = useState<string | null>(null);
 
-  function toScopedRef(key: string): string {
-    return `${tenantPrefix}${key.trim()}`;
-  }
-
   function fromScopedRef(secretRef: string): string {
     return secretRef.startsWith(tenantPrefix) ? secretRef.slice(tenantPrefix.length) : secretRef;
   }
@@ -58,10 +54,9 @@ export default function TenantSecretsPage() {
     }
     setLoading(true);
     try {
-      const refs = await listManagedSecrets(credentials);
-      const scoped = refs.filter((item) => item.secret_ref.startsWith(tenantPrefix));
-      setItems(scoped);
-      setStatusLine(`Loaded ${scoped.length} tenant secret reference(s).`);
+      const refs = await listTenantManagedSecrets(credentials, tenantId);
+      setItems(refs);
+      setStatusLine(`Loaded ${refs.length} tenant secret reference(s).`);
     } catch (error) {
       setStatusLine(`Failed to load tenant secrets: ${(error as Error).message}`);
     } finally {
@@ -84,8 +79,8 @@ export default function TenantSecretsPage() {
 
     setSaving(true);
     try {
-      const scopedRef = toScopedRef(secretKey);
-      const saved = await upsertManagedSecret(credentials, scopedRef, secretValue);
+      const scopedRef = secretKey.trim();
+      const saved = await upsertTenantManagedSecret(credentials, tenantId, scopedRef, secretValue);
       const wasEditing = editingSecretRef === saved.secret_ref;
       setSecretKey("");
       setSecretValue("");
@@ -110,7 +105,7 @@ export default function TenantSecretsPage() {
 
     setSaving(true);
     try {
-      const result = await resolveManagedSecret(credentials, toScopedRef(secretKey));
+      const result = await resolveTenantManagedSecret(credentials, tenantId, secretKey.trim());
       setStatusLine(
         `Resolution for ${result.secret_ref}: ${result.resolved ? "resolved" : "missing"} (source=${result.source}).`
       );
@@ -130,7 +125,7 @@ export default function TenantSecretsPage() {
     }
     setSaving(true);
     try {
-      await deleteManagedSecret(credentials, secretRefToDelete);
+      await deleteTenantManagedSecret(credentials, tenantId, fromScopedRef(secretRefToDelete));
       setStatusLine(`Deleted ${secretRefToDelete}.`);
       if (editingSecretRef === secretRefToDelete) {
         setEditingSecretRef(null);

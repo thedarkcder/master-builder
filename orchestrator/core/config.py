@@ -24,15 +24,21 @@ class Settings(BaseSettings):
     required_codex_assets_version: str = ""
     discord_guild_id: str = ""
     discord_guild_id_secret_ref: str = "DISCORD_GUILD_ID"
-    discord_channel_name_template: str = "proj-{jira_project_key}-{project_name}"
+    discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
     discord_bot_token_secret_ref: str = "DISCORD_BOT_TOKEN"
     codex_cli_command: str = "codex"
     codex_model: str = "gpt-5-codex"
     codex_timeout_seconds: int = 120
     codex_max_output_tokens: int = 1800
+    project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
     worker_poll_interval_seconds: int = 5
     auto_migrate_on_startup: bool = True
+    sentry_dsn: str = ""
+    sentry_environment: str = "dev"
+    sentry_release: str = ""
+    sentry_traces_sample_rate: float = 0.0
+    agent_id: str = "worker-local"
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",

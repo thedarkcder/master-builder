@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from orchestrator.core.config import Settings
-from orchestrator.core.discord_notifications import send_tenant_discord_message
+from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -63,8 +63,8 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client = Mock()
         fake_client.post_message.return_value = {"id": "msg-123"}
         with (
-            patch("orchestrator.core.discord_notifications.resolve_scoped_secret_ref", return_value="bot-token"),
-            patch("orchestrator.core.discord_notifications.DiscordApiClient", return_value=fake_client),
+            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
                 session=None,  # type: ignore[arg-type]
@@ -85,8 +85,8 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client = Mock()
         fake_client.post_message.return_value = {"id": "msg-123"}
         with (
-            patch("orchestrator.core.discord_notifications.resolve_scoped_secret_ref", return_value="bot-token"),
-            patch("orchestrator.core.discord_notifications.DiscordApiClient", return_value=fake_client),
+            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
                 session=None,  # type: ignore[arg-type]
@@ -106,8 +106,8 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client = Mock()
         fake_client.post_message.return_value = {"id": "msg-123"}
         with (
-            patch("orchestrator.core.discord_notifications.resolve_scoped_secret_ref", return_value="bot-token"),
-            patch("orchestrator.core.discord_notifications.DiscordApiClient", return_value=fake_client),
+            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
                 session=None,  # type: ignore[arg-type]
@@ -128,8 +128,8 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client.post_message.return_value = {"id": "msg-123"}
         fake_client.create_thread_from_message.return_value = "thread-456"
         with (
-            patch("orchestrator.core.discord_notifications.resolve_scoped_secret_ref", return_value="bot-token"),
-            patch("orchestrator.core.discord_notifications.DiscordApiClient", return_value=fake_client),
+            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
                 session=None,  # type: ignore[arg-type]
@@ -148,7 +148,37 @@ class DiscordNotificationTests(unittest.TestCase):
         self.assertTrue(result.sent)
         fake_client.create_thread_from_message.assert_called_once()
         fake_client.post_message.assert_any_call(channel_id="discord-channel-1", content="decision gate required")
-        fake_client.post_message.assert_any_call(channel_id="thread-456", content="Reply here")
+        fake_client.post_message.assert_any_call(channel_id="thread-456", content="Reply here", components=None)
+
+    def test_event_enabled_can_open_thread_with_intro_components(self) -> None:
+        fake_client = Mock()
+        fake_client.post_message.return_value = {"id": "msg-123"}
+        fake_client.create_thread_from_message.return_value = "thread-456"
+        with (
+            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
+        ):
+            result = send_tenant_discord_message(
+                session=None,  # type: ignore[arg-type]
+                tenant=_tenant(notify_events=[]),
+                project=_project(notify_events=["decision_gate_required"]),
+                message="decision gate required",
+                settings=Settings(
+                    discord_bot_token_secret_ref="DISCORD_BOT_TOKEN",
+                    secrets_encryption_key="test-key",
+                ),
+                event="decision_gate_required",
+                open_thread=True,
+                thread_name="TP-302-decision-gate",
+                thread_intro="Reply here",
+                thread_intro_components=[{"type": 1, "components": [{"type": 2, "custom_id": "ask.reply.open"}]}],
+            )
+        self.assertTrue(result.sent)
+        fake_client.post_message.assert_any_call(
+            channel_id="thread-456",
+            content="Reply here",
+            components=[{"type": 1, "components": [{"type": 2, "custom_id": "ask.reply.open"}]}],
+        )
 
 
 if __name__ == "__main__":
