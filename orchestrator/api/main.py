@@ -26,6 +26,7 @@ from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.sentry import initialize_sentry
 from orchestrator.storage.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ request_logger = logging.getLogger("master_builder.request")
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
+    initialize_sentry(settings=settings)
     cors_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
 
     @asynccontextmanager
@@ -114,7 +116,11 @@ def create_app() -> FastAPI:
                 exc.status_code,
                 exc.detail,
             )
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
 
     app.include_router(admin_router)
     app.include_router(admin_auth_router)

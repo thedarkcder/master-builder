@@ -15,6 +15,7 @@ dependencies = [
   "psycopg[binary]>=3.2.0",
   "PyJWT>=2.8.0",
   "pydantic-settings>=2.5.0",
+  "sentry-sdk[fastapi]>=2.14.0",
   "sqlalchemy>=2.0.34",
   "uvicorn>=0.30.0",
   "websockets>=12.0",
