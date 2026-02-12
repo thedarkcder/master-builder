@@ -5,6 +5,10 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.agent_observability import (
+    agent_observability_tracker,
+    reset_agent_observability_for_tests,
+)
 from orchestrator.core.runs import enqueue_run
 from orchestrator.core.workflow.runner import (
     PmPlan,
@@ -69,6 +73,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_agent_observability_for_tests()
         run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
         self._create_tenant()
@@ -77,6 +82,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         self.temp_dir.cleanup()
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_agent_observability_for_tests()
 
     def _create_tenant(self) -> None:
         now = datetime.now(timezone.utc)
@@ -199,6 +205,12 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIn("Good To Do", runner.last_request.issue_description)
             self.assertIn("Decision Gate", runner.last_request.issue_description)
 
+        events, _ = agent_observability_tracker.snapshot()
+        event_types = [event.event_type for event in events]
+        self.assertIn("ISSUE_ASSIGNED", event_types)
+        self.assertIn("TASK_STARTED", event_types)
+        self.assertIn("TASK_COMPLETED", event_types)
+
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
         run_id = self._queue_run("TP-301")
 
@@ -224,6 +236,11 @@ class WorkerWorkflowTests(unittest.TestCase):
                 "Max workflow attempts reached after test failures",
                 stage_updates[-1]["jira_message"],
             )
+
+        events, _ = agent_observability_tracker.snapshot()
+        event_types = [event.event_type for event in events]
+        self.assertIn("TASK_FAILED", event_types)
+        self.assertIn("TEST_FAILED", event_types)
 
     def test_process_next_queued_run_blocks_when_decision_gate_is_required(self) -> None:
         run_id = self._queue_run(

@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     sentry_environment: str = "dev"
     sentry_release: str = ""
     sentry_traces_sample_rate: float = 0.0
+    agent_id: str = "worker-local"
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",
