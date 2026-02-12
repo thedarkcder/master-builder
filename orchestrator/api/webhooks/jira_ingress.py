@@ -33,6 +33,7 @@ from orchestrator.storage.models import Project, Tenant
 logger = logging.getLogger(__name__)
 
 execute_jira_comment_command = execute_tenant_jira_comment_command
+NON_ENQUEUE_ISSUE_WEBHOOK_EVENTS = {"issue_created"}
 
 
 @dataclass
@@ -354,6 +355,21 @@ async def ingest_jira_webhook_event(
     )
     if comment_ask_response is not None:
         return comment_ask_response
+
+    if context.webhook_event in NON_ENQUEUE_ISSUE_WEBHOOK_EVENTS:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=non_enqueue_issue_event webhook_event=%s",
+            request_id,
+            tenant_id,
+            context.issue_key,
+            context.webhook_event,
+        )
+        return jira_webhook_response(
+            context,
+            enqueued=False,
+            reason="non_enqueue_issue_event",
+            webhook_event=context.webhook_event,
+        )
 
     ready_statuses = resolve_ready_statuses_for_tenant(tenant)
     if context.issue_status is None:
