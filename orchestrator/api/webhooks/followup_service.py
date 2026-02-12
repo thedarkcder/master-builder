@@ -115,11 +115,12 @@ class DiscordWebhookFollowupService:
                                         content=content,
                                     )
                                     sent_to_thread = True
-                                except (DiscordApiError, RuntimeError, ValueError):
+                                except (DiscordApiError, RuntimeError, ValueError) as exc:
                                     logger.exception(
-                                        "discord_ask_thread_send_failed tenant_id=%s user_id=%s",
+                                        "discord_ask_thread_send_failed tenant_id=%s user_id=%s error=%s",
                                         tenant_id,
                                         user_id,
+                                        exc,
                                     )
                                     components = self._ask_reply_components()
                             elif (
@@ -147,22 +148,32 @@ class DiscordWebhookFollowupService:
                                             questions=questions,
                                         )
                                         sent_to_thread = True
-                                    except (DiscordApiError, RuntimeError, ValueError):
+                                    except (DiscordApiError, RuntimeError, ValueError) as exc:
                                         logger.exception(
-                                            "discord_seed_followup_thread_send_failed tenant_id=%s user_id=%s",
+                                            "discord_seed_followup_thread_send_failed tenant_id=%s user_id=%s error=%s",
                                             tenant_id,
                                             user_id,
+                                            exc,
                                         )
                     except HTTPException as exc:
                         detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                        logger.exception(
+                            "discord_command_followup_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
+                            tenant_id,
+                            user_id,
+                            channel_id,
+                            detail,
+                            exc,
+                        )
                         content = f"<@{user_id}> Command failed: {detail}"
                     except Exception as exc:  # pragma: no cover - defensive logging path
                         error_ref = uuid4().hex[:8]
                         logger.exception(
-                            "discord_command_followup_failed tenant_id=%s user_id=%s error_ref=%s",
+                            "discord_command_followup_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
                             tenant_id,
                             user_id,
                             error_ref,
+                            exc,
                         )
                         emit_hard_error(
                             event="discord_command_followup_failed",
@@ -187,20 +198,22 @@ class DiscordWebhookFollowupService:
                                 components=components,
                             )
                             sent_to_thread = True
-                        except (DiscordApiError, RuntimeError, ValueError):
+                        except (DiscordApiError, RuntimeError, ValueError) as exc:
                             logger.exception(
-                                "discord_thread_followup_send_failed tenant_id=%s user_id=%s message_id=%s",
+                                "discord_thread_followup_send_failed tenant_id=%s user_id=%s message_id=%s error=%s",
                                 tenant_id,
                                 user_id,
                                 reply_to_message_id,
+                                exc,
                             )
         except Exception as exc:  # pragma: no cover - defensive logging path
             error_ref = uuid4().hex[:8]
             logger.exception(
-                "discord_command_followup_runtime_failed tenant_id=%s user_id=%s error_ref=%s",
+                "discord_command_followup_runtime_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
                 tenant_id,
                 user_id,
                 error_ref,
+                exc,
             )
             emit_hard_error(
                 event="discord_command_followup_runtime_failed",
@@ -228,10 +241,11 @@ class DiscordWebhookFollowupService:
         except Exception as exc:  # pragma: no cover - defensive logging path
             error_ref = uuid4().hex[:8]
             logger.exception(
-                "discord_command_followup_send_failed tenant_id=%s user_id=%s error_ref=%s",
+                "discord_command_followup_send_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
                 tenant_id,
                 user_id,
                 error_ref,
+                exc,
             )
             emit_hard_error(
                 event="discord_command_followup_send_failed",
@@ -306,14 +320,23 @@ class DiscordWebhookFollowupService:
                                     )
                                 except HTTPException as exc:
                                     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                                    logger.exception(
+                                        "discord_ask_approval_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
+                                        tenant_id,
+                                        user_id,
+                                        channel_id,
+                                        detail,
+                                        exc,
+                                    )
                                     content = f"<@{user_id}> Approved action failed: {detail}"
                                 except Exception as exc:  # pragma: no cover - defensive path
                                     error_ref = uuid4().hex[:8]
                                     logger.exception(
-                                        "discord_ask_approval_execute_failed tenant_id=%s user_id=%s error_ref=%s",
+                                        "discord_ask_approval_execute_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
                                         tenant_id,
                                         user_id,
                                         error_ref,
+                                        exc,
                                     )
                                     emit_hard_error(
                                         event="discord_ask_approval_execute_failed",
@@ -329,10 +352,11 @@ class DiscordWebhookFollowupService:
         except Exception as exc:  # pragma: no cover - defensive logging path
             error_ref = uuid4().hex[:8]
             logger.exception(
-                "discord_ask_approval_runtime_failed tenant_id=%s user_id=%s error_ref=%s",
+                "discord_ask_approval_runtime_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
                 tenant_id,
                 user_id,
                 error_ref,
+                exc,
             )
             emit_hard_error(
                 event="discord_ask_approval_runtime_failed",
@@ -355,10 +379,11 @@ class DiscordWebhookFollowupService:
         except Exception as exc:  # pragma: no cover - defensive logging path
             error_ref = uuid4().hex[:8]
             logger.exception(
-                "discord_ask_approval_send_failed tenant_id=%s user_id=%s error_ref=%s",
+                "discord_ask_approval_send_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
                 tenant_id,
                 user_id,
                 error_ref,
+                exc,
             )
             emit_hard_error(
                 event="discord_ask_approval_send_failed",

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
-from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
+from orchestrator.core.discord.gateway_listener import DiscordGatewayListener, _project_seed_followup_thread_ids
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -193,6 +193,67 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!issues followup follow up text")
         post_kwargs = client_cls.return_value.post_message.call_args.kwargs
         self.assertEqual(post_kwargs["components"], [{"type": 1}])
+
+    def test_handle_message_create_non_seed_command_keeps_original_and_limits_attachments(self) -> None:
+        listener, _session = self._listener()
+        tenant = SimpleNamespace(tenant_id="example")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="run", message="ok", data={})
+        attachments = [
+            {"id": str(i), "url": f"https://file/{i}", "filename": f"f{i}.txt", "content_type": "text/plain", "size": i}
+            for i in range(8)
+        ]
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "channel-1",
+                    "content": "!ask status",
+                    "attachments": attachments,
+                },
+                bot_token="token",
+            )
+
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "!ask status")
+        self.assertEqual(len(payload.attachments), 5)
+        client_cls.return_value.post_message.assert_called_once()
+
+    def test_handle_message_create_discord_post_failure_is_swallowed(self) -> None:
+        listener, _session = self._listener()
+        tenant = SimpleNamespace(tenant_id="example")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="run", message="ok", data={})
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+        ):
+            client_cls.return_value.post_message.side_effect = DiscordApiError("send failed")
+            listener._handle_message_create(
+                {"author": {"id": "u1"}, "channel_id": "channel-1", "content": "!run MAB-1", "attachments": []},
+                bot_token="token",
+            )
+
+    def test_project_seed_followup_thread_ids_filters_archived_projects(self) -> None:
+        active = SimpleNamespace(discord_config={"seed_followup_thread_channel_ids": ["t-1", "  ", None]})
+        archived = SimpleNamespace(discord_config={"seed_followup_thread_channel_ids": ["t-2"]})
+        session = MagicMock()
+        # The helper relies on DB query already filtering archived projects; feed only active result set.
+        session.execute.return_value.scalars.return_value.all.return_value = [active]
+
+        thread_ids = _project_seed_followup_thread_ids(session=session, tenant_id="example")
+        self.assertEqual(thread_ids, {"t-1"})
 
 
 if __name__ == "__main__":

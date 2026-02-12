@@ -83,8 +83,21 @@ def post_jira_comment(
         )
         return True, None
     except HTTPException as exc:
+        logger.exception(
+            "jira_comment_post_failed_http tenant_id=%s issue_key=%s detail=%s error=%s",
+            tenant.tenant_id,
+            issue_key,
+            exc.detail,
+            exc,
+        )
         return False, str(exc.detail)
     except (JiraOAuthError, ValueError) as exc:
+        logger.exception(
+            "jira_comment_post_failed tenant_id=%s issue_key=%s error=%s",
+            tenant.tenant_id,
+            issue_key,
+            exc,
+        )
         return False, str(exc)
 
 

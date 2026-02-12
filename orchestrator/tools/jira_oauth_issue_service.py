@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -12,6 +13,8 @@ from orchestrator.tools.jira_oauth_models import (
     JiraOAuthError,
     JiraProject,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class JiraOAuthIssueService:
@@ -291,7 +294,13 @@ class JiraOAuthIssueService:
         ):
             try:
                 payload = self._get_json(url=endpoint, access_token=access_token)
-            except JiraOAuthError:
+            except JiraOAuthError as exc:
+                logger.exception(
+                    "jira_issue_type_discovery_endpoint_failed project_key=%s endpoint=%s error=%s",
+                    normalized_project_key,
+                    endpoint,
+                    exc,
+                )
                 continue
             parsed = _parse_issue_type_names_from_payload(payload)
             if parsed:

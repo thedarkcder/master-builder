@@ -120,6 +120,31 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(b"Unsupported interaction action", unsupported.body)
 
+        from_direct_user = await self._call(
+            {
+                "type": 3,
+                "channel_id": "c1",
+                "application_id": "app",
+                "token": "tok",
+                "data": {"custom_id": "ask.confirm.approve.req-1"},
+                "user": {"id": "u-direct"},
+            },
+            _parse_ask_confirmation_custom_id=MagicMock(return_value=("approve", "req-1")),
+        )
+        self.assertEqual(from_direct_user.body, b"deferred")
+
+        missing_user = await self._call(
+            {
+                "type": 3,
+                "channel_id": "c1",
+                "application_id": "app",
+                "token": "tok",
+                "data": {"custom_id": "ask.confirm.approve.req-1"},
+            },
+            _parse_ask_confirmation_custom_id=MagicMock(return_value=("approve", "req-1")),
+        )
+        self.assertIn(b"Missing interaction user_id", missing_user.body)
+
     async def test_modal_submit_paths(self) -> None:
         missing_data = await self._call({"type": 5, "channel_id": "c1", "application_id": "app", "token": "tok", "data": None})
         self.assertIn(b"Missing modal interaction data", missing_data.body)
@@ -135,6 +160,23 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             _discord_modal_text_value=MagicMock(return_value=""),
         )
         self.assertIn(b"Please provide a follow-up question", missing_question.body)
+
+        from_direct_user = await self._call(
+            {
+                "type": 5,
+                "channel_id": "c1",
+                "application_id": "app",
+                "token": "tok",
+                "data": {"custom_id": "ask.reply.m1"},
+                "user": {"id": "u-direct"},
+            },
+        )
+        self.assertEqual(from_direct_user.body, b"deferred")
+
+        missing_user = await self._call(
+            {"type": 5, "channel_id": "c1", "application_id": "app", "token": "tok", "data": {"custom_id": "ask.reply.m1"}},
+        )
+        self.assertIn(b"Missing interaction user_id", missing_user.body)
 
     async def test_application_command_reply_and_command_paths(self) -> None:
         wrong_type = await self._call({"type": 2, "data": {"name": "reply", "type": 1}})
@@ -162,6 +204,12 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             _parse_discord_interaction_command=MagicMock(side_effect=HTTPException(status_code=400, detail="bad command")),
         )
         self.assertIn(b"bad command", parse_error.body)
+
+        missing_context = await self._call(
+            {"type": 2, "application_id": "", "token": "", "data": {"name": "ask"}},
+            _parse_discord_interaction_command=MagicMock(return_value=("u1", "c1", "!ask test", None, [])),
+        )
+        self.assertIn(b"Missing Discord interaction context", missing_context.body)
 
         ok = await self._call(
             {"type": 2, "application_id": "app", "token": "tok", "data": {"name": "ask"}},
