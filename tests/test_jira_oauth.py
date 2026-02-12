@@ -193,6 +193,68 @@ class JiraOAuthTests(unittest.TestCase):
         }
         self.assertEqual(_to_adf_description(adf_doc), adf_doc)
 
+    def test_client_delegates_to_callback_issue_and_webhook_services(self) -> None:
+        client = JiraOAuthClient(
+            JiraOAuthClientConfig(
+                client_id="client-id",
+                client_secret="client-secret",
+                redirect_uri="https://example.test/callback",
+            )
+        )
+
+        with (
+            patch.object(client._callback_flow, "exchange_code", return_value="tokens") as exchange_mock,
+            patch.object(client._callback_flow, "refresh_tokens", return_value="refreshed") as refresh_mock,
+            patch.object(client._callback_flow, "list_accessible_resources", return_value=["resource"]) as resources_mock,
+            patch.object(client._issue_service, "list_projects", return_value=["project"]) as list_projects_mock,
+            patch.object(client._issue_service, "get_issue_detail", return_value="detail") as issue_detail_mock,
+            patch.object(client._issue_service, "update_issue_fields") as update_mock,
+            patch.object(client._issue_service, "add_issue_comment", return_value={"id": "c1"}) as comment_mock,
+            patch.object(client._webhook_manager, "register_webhook", return_value=[1]) as register_mock,
+            patch.object(client._webhook_manager, "list_webhooks", return_value=[{"id": 1}]) as list_webhooks_mock,
+            patch.object(client._webhook_manager, "delete_webhooks") as delete_mock,
+        ):
+            self.assertEqual(client.exchange_code(code="abc"), "tokens")
+            self.assertEqual(client.refresh_tokens(refresh_token="r1"), "refreshed")
+            self.assertEqual(client.list_accessible_resources(access_token="tok"), ["resource"])
+            self.assertEqual(client.list_projects(access_token="tok", cloud_id="cloud"), ["project"])
+            self.assertEqual(client.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"), "detail")
+            client.update_issue_fields(
+                access_token="tok",
+                cloud_id="cloud",
+                issue_id_or_key="MAB-1",
+                summary="Summary",
+                description="Desc",
+                labels=["a"],
+            )
+            self.assertEqual(
+                client.add_issue_comment(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1", comment="hi"),
+                {"id": "c1"},
+            )
+            self.assertEqual(
+                client.register_webhook(
+                    access_token="tok",
+                    cloud_id="cloud",
+                    callback_url="https://callback",
+                    jql_filter="project = MAB",
+                    events=["jira:issue_updated"],
+                ),
+                [1],
+            )
+            self.assertEqual(client.list_webhooks(access_token="tok", cloud_id="cloud"), [{"id": 1}])
+            client.delete_webhooks(access_token="tok", cloud_id="cloud", webhook_ids=[1])
+
+        exchange_mock.assert_called_once()
+        refresh_mock.assert_called_once()
+        resources_mock.assert_called_once()
+        list_projects_mock.assert_called_once()
+        issue_detail_mock.assert_called_once()
+        update_mock.assert_called_once()
+        comment_mock.assert_called_once()
+        register_mock.assert_called_once()
+        list_webhooks_mock.assert_called_once()
+        delete_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

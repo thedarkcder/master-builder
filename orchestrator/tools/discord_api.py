@@ -116,6 +116,18 @@ class DiscordApiClient:
             raise DiscordApiError("Discord create message response was not an object")
         return data
 
+    def get_channel(self, *, channel_id: str) -> dict:
+        normalized_channel_id = channel_id.strip()
+        if not normalized_channel_id:
+            raise ValueError("Discord channel ID cannot be empty")
+        data = self._request_json(
+            method="GET",
+            path=f"/channels/{normalized_channel_id}",
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord get channel response was not an object")
+        return data
+
     def get_message(self, *, channel_id: str, message_id: str) -> dict:
         normalized_channel_id = channel_id.strip()
         normalized_message_id = message_id.strip()

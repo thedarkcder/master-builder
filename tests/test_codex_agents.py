@@ -2,7 +2,7 @@ import unittest
 
 from orchestrator.core.codex_agents import CodexWorkflowAgents, answer_board_question_with_codex
 from orchestrator.core.codex_runtime import CodexRuntime
-from orchestrator.core.workflow_runner import WorkflowRequest
+from orchestrator.core.workflow.runner import WorkflowRequest
 
 
 class _RuntimeQueue:
