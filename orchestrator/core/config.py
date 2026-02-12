@@ -31,12 +31,14 @@ class Settings(BaseSettings):
     codex_model: str = "gpt-5-codex"
     codex_timeout_seconds: int = 120
     codex_max_output_tokens: int = 1800
+    project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
     worker_poll_interval_seconds: int = 5
     auto_migrate_on_startup: bool = True
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
     sentry_release: str = ""
     sentry_traces_sample_rate: float = 0.0
+    agent_id: str = "worker-local"
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",

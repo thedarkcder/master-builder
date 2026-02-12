@@ -14,6 +14,10 @@ from orchestrator.api.main import create_app
 from orchestrator.api.routes.admin import _resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import EnforcementAssetsError
+from orchestrator.core.agent_observability import (
+    record_agent_lifecycle_event,
+    reset_agent_observability_for_tests,
+)
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -43,6 +47,7 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_agent_observability_for_tests()
         run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
@@ -72,6 +77,7 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_agent_observability_for_tests()
 
     def _tenant_payload(self) -> dict:
         return {
@@ -808,28 +814,64 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(filtered_runs[0]["run_id"], "run-created-project")
         self.assertEqual(filtered_runs[0]["project_id"], created_project_id)
 
-    def test_project_execution_metrics_includes_queue_duration_and_sla_signals(self) -> None:
+    def test_list_agent_activity_returns_dark_and_active_agents(self) -> None:
         payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
+        create_response = self.client.post(
             "/api/admin/tenants",
             json=payload,
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_tenant.status_code, 201)
+        self.assertEqual(create_response.status_code, 201)
 
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "mobile-app",
-                "github_repository": "https://github.com/example/mobile-app",
-                "jira_project_key": "MBAPP",
-            },
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            record_agent_lifecycle_event(
+                session=session,
+                event_type="TASK_STARTED",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-active",
+                issue_key="TP-1",
+                agent_id="worker-active",
+                recorded_at=now,
+            )
+            record_agent_lifecycle_event(
+                session=session,
+                event_type="TASK_FAILED",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-stale",
+                issue_key="TP-2",
+                agent_id="worker-stale",
+                recorded_at=now - timedelta(minutes=20),
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/agents/activity?tenant_id=tenant-a&heartbeat_timeout_seconds=300",
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body), 2)
+        by_agent = {entry["agent_id"]: entry for entry in body}
+        self.assertIn("worker-active", by_agent)
+        self.assertIn("worker-stale", by_agent)
+        self.assertFalse(by_agent["worker-active"]["is_dark"])
+        self.assertTrue(by_agent["worker-stale"]["is_dark"])
+        self.assertGreaterEqual(len(by_agent["worker-active"]["events"]), 1)
 
+    def test_project_execution_metrics_includes_queue_duration_and_sla_signals(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        project_id = "tenant-a-default"
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:

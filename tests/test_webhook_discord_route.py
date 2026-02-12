@@ -115,6 +115,5 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(execute_mock.call_args.kwargs["defer_seed_issues"])
 
-
 if __name__ == "__main__":
     unittest.main()

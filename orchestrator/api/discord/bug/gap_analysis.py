@@ -80,6 +80,7 @@ def run_gap_analysis(
     tenant: Tenant,
     issue_key: str,
     issue_key_pattern,
+    collect_project_repo_context_fn=None,
 ) -> tuple[str, dict]:  # noqa: ANN001
     normalized_issue_key = issue_key.strip().upper()
     if not issue_key_pattern.match(normalized_issue_key):
@@ -127,6 +128,12 @@ def run_gap_analysis(
     if not next_actions:
         next_actions.append("Re-validate acceptance criteria against latest merged code before release.")
 
+    repo_context = (
+        collect_project_repo_context_fn(session=session, tenant=tenant, issue_key=normalized_issue_key)
+        if collect_project_repo_context_fn is not None
+        else None
+    )
+
     issue_label = format_issue_markdown_link(
         issue_key=normalized_issue_key,
         browse_base_url=jira_base_url,
@@ -166,6 +173,18 @@ def run_gap_analysis(
 
     lines.extend(["", "Next actions:"])
     lines.extend([f"- {action}" for action in next_actions[:4]])
+    if isinstance(repo_context, dict) and repo_context.get("available"):
+        issue_commits = repo_context.get("issue_related_commits") or []
+        lines.extend(["", "Repository evidence:"])
+        lines.append(
+            f"- Current branch: `{repo_context.get('current_branch') or 'unknown'}` | HEAD `{repo_context.get('head_sha') or 'unknown'}`"
+        )
+        if issue_commits:
+            lines.append(f"- Commits mentioning {normalized_issue_key}:")
+            for commit_line in issue_commits[:5]:
+                lines.append(f"  - `{commit_line}`")
+        else:
+            lines.append(f"- No commits currently reference `{normalized_issue_key}` in local checkout.")
 
     return (
         "\n".join(lines),
@@ -179,5 +198,6 @@ def run_gap_analysis(
             "acceptance_criteria": acceptance,
             "gaps": gaps,
             "confidence": confidence,
+            "local_repo": repo_context,
         },
     )

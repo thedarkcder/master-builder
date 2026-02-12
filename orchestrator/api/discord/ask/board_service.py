@@ -20,6 +20,7 @@ def ask_board_message(
     normalize_scope_channel_id_fn,
     channel_scope_repository,
     answer_board_question_with_codex_fn,
+    collect_github_ask_context_fn,
     codex_runtime_error_type,
     store_ask_history_entry_fn,
 ):  # noqa: ANN001
@@ -44,6 +45,11 @@ def ask_board_message(
         )
         if scope is not None:
             scoped_project_keys = [scope.jira_project_key]
+    github_context = collect_github_ask_context_fn(
+        session=session,
+        tenant=tenant,
+        project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
+    )
     try:
         message = answer_board_question_with_codex_fn(
             runtime=runtime,
@@ -52,6 +58,7 @@ def ask_board_message(
             issues=issues,
             status_counts=status_counts,
             history=history_context,
+            github_context=github_context,
         )
     except codex_runtime_error_type as exc:
         raise HTTPException(
