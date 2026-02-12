@@ -502,6 +502,7 @@ def _collect_github_ask_context(
                 "repo_full_name": repo_full_name,
                 "project_keys": [],
                 "open_pull_requests": [],
+                "staging_pull_requests": [],
             },
         )
         project_key = project.jira_project_key.strip().upper()
@@ -550,6 +551,11 @@ def _collect_github_ask_context(
                 "updated_at": pr.updated_at,
             }
             for pr in pull_requests
+        ]
+        repo_entry["staging_pull_requests"] = [
+            pr_entry
+            for pr_entry in repo_entry["open_pull_requests"]
+            if str(pr_entry.get("base_ref") or "").strip().lower() == "staging"
         ]
         repo_contexts.append(repo_entry)
     return {"available": True, "repositories": repo_contexts}
