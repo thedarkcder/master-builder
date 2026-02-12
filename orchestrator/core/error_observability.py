@@ -38,6 +38,6 @@ def emit_hard_error(
             "context": context or {},
         },
     }
-    print(redact_sensitive_text(f"HARD_ERROR {json.dumps(payload, sort_keys=True)}"), flush=True)
+    print(redact_sensitive_text(json.dumps(payload, sort_keys=True)), flush=True)
     traceback_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     print(redact_sensitive_text(traceback_text), flush=True)
