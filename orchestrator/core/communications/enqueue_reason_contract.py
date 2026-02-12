@@ -14,6 +14,8 @@ _ENQUEUE_REASON_GUIDANCE = {
     "duplicate_delivery": "This webhook delivery was already processed.",
     "project_not_mapped": "Issue key is not mapped to an active project.",
     "no_retryable_run": "No failed/blocked/cancelled run is available to retry for this issue.",
+    "ready_for_agent_backlog": "Issue is ready-for-agent in backlog; move it to To Do to start execution.",
+    "decision_gate_cooldown_active": "Decision Gate was recently required for this issue. Wait for cooldown, then rerun.",
 }
 
 
@@ -38,4 +40,3 @@ def format_enqueue_conflict_detail(
             f"{guidance}"
         )
     return f"{prefix}: {enqueue_reason}. {guidance}"
-
