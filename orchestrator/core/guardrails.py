@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import traceback
 from collections.abc import Iterable
 
 _DANGEROUS_COMMAND_PATTERNS = (
@@ -89,6 +90,7 @@ class SensitiveDataRedactionFilter(logging.Filter):
             try:
                 rendered = str(record.msg) % redacted_args
             except Exception:
+                traceback.print_exc()
                 rendered = f"{record.msg} {redacted_args}"
             record.msg = rendered
             record.args = ()

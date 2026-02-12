@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from sqlalchemy import text
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,14 @@ from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.storage.models import ManagedSecret
 
 _SECRET_REF_PATTERN = re.compile(r"^[A-Za-z0-9._:/-]{1,255}$")
+_SECRET_SCOPE_ALL = "all"
+_SECRET_SCOPE_PLATFORM = "platform"
+_SECRET_SCOPE_TENANT = "tenant"
+_VALID_SECRET_SCOPES = {
+    _SECRET_SCOPE_ALL,
+    _SECRET_SCOPE_PLATFORM,
+    _SECRET_SCOPE_TENANT,
+}
 
 
 @dataclass(frozen=True)
@@ -30,9 +39,15 @@ def normalize_secret_ref(secret_ref: str) -> str:
     return normalized
 
 
-def list_managed_secret_refs(session: Session) -> list[SecretRefMetadata]:
+def list_managed_secret_refs(
+    session: Session,
+    *,
+    scope: str = _SECRET_SCOPE_ALL,
+    tenant_id: str | None = None,
+) -> list[SecretRefMetadata]:
+    _apply_secret_scope_context(session=session, scope=scope, tenant_id=tenant_id)
     rows = session.execute(select(ManagedSecret).order_by(ManagedSecret.secret_ref.asc())).scalars().all()
-    return [
+    metadata = [
         SecretRefMetadata(
             secret_ref=row.secret_ref,
             source="managed",
@@ -40,6 +55,13 @@ def list_managed_secret_refs(session: Session) -> list[SecretRefMetadata]:
         )
         for row in rows
     ]
+    if scope == _SECRET_SCOPE_PLATFORM:
+        return [item for item in metadata if item.secret_ref.startswith("platform/")]
+    if scope == _SECRET_SCOPE_TENANT:
+        normalized_tenant_id = (tenant_id or "").strip()
+        prefix = f"tenant/{normalized_tenant_id}/"
+        return [item for item in metadata if item.secret_ref.startswith(prefix)]
+    return metadata
 
 
 def upsert_managed_secret(
@@ -48,7 +70,10 @@ def upsert_managed_secret(
     secret_ref: str,
     plaintext_value: str,
     encryption_key: str,
+    scope: str = _SECRET_SCOPE_ALL,
+    tenant_id: str | None = None,
 ) -> SecretRefMetadata:
+    _apply_secret_scope_context(session=session, scope=scope, tenant_id=tenant_id)
     normalized_ref = normalize_secret_ref(secret_ref)
     normalized_value = plaintext_value.strip()
     if not normalized_value:
@@ -77,7 +102,10 @@ def resolve_secret_ref(
     *,
     secret_ref: str,
     encryption_key: str,
+    scope: str = _SECRET_SCOPE_ALL,
+    tenant_id: str | None = None,
 ) -> str | None:
+    _apply_secret_scope_context(session=session, scope=scope, tenant_id=tenant_id)
     normalized_ref = normalize_secret_ref(secret_ref)
     row = session.get(ManagedSecret, normalized_ref)
     if row is not None:
@@ -137,7 +165,10 @@ def resolve_secret_ref_metadata(
     session: Session,
     *,
     secret_ref: str,
+    scope: str = _SECRET_SCOPE_ALL,
+    tenant_id: str | None = None,
 ) -> SecretRefMetadata:
+    _apply_secret_scope_context(session=session, scope=scope, tenant_id=tenant_id)
     normalized_ref = normalize_secret_ref(secret_ref)
     row = session.get(ManagedSecret, normalized_ref)
     if row is not None:
@@ -146,3 +177,32 @@ def resolve_secret_ref_metadata(
     if os.environ.get(normalized_ref):
         return SecretRefMetadata(secret_ref=normalized_ref, source="environment", updated_at=None)
     return SecretRefMetadata(secret_ref=normalized_ref, source="missing", updated_at=None)
+
+
+def _apply_secret_scope_context(
+    *,
+    session: Session,
+    scope: str,
+    tenant_id: str | None = None,
+) -> None:
+    if scope not in _VALID_SECRET_SCOPES:
+        raise ValueError(f"Unsupported secret scope: {scope}")
+
+    if scope == _SECRET_SCOPE_TENANT:
+        normalized_tenant_id = (tenant_id or "").strip()
+        if not normalized_tenant_id:
+            raise ValueError("tenant_id is required for tenant secret scope")
+    else:
+        normalized_tenant_id = ""
+
+    if session.bind is None or session.bind.dialect.name != "postgresql":
+        return
+
+    session.execute(
+        text("SELECT set_config('app.secret_scope', :scope, true)"),
+        {"scope": scope},
+    )
+    session.execute(
+        text("SELECT set_config('app.secret_tenant_id', :tenant_id, true)"),
+        {"tenant_id": normalized_tenant_id},
+    )

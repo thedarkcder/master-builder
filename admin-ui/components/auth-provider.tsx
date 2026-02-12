@@ -48,12 +48,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const parsed = JSON.parse(raw) as Credentials;
-        if (parsed.apiBaseUrl && parsed.accessToken) {
-          await verifyAdminCredentials(parsed);
+        if (parsed.accessToken) {
+          const sessionFromEnv: Credentials = {
+            apiBaseUrl: DEFAULT_API_BASE_URL,
+            accessToken: parsed.accessToken
+          };
+          await verifyAdminCredentials(sessionFromEnv);
           if (!isMounted) {
             return;
           }
-          setCredentials(parsed);
+          setCredentials(sessionFromEnv);
+          window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(sessionFromEnv));
           writeSessionCookie(true);
         } else {
           window.localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -82,7 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ready,
       login: async (nextCredentials: AdminLoginInput) => {
         const session = await authenticateAdmin({
-          apiBaseUrl: nextCredentials.apiBaseUrl.trim() || DEFAULT_API_BASE_URL,
+          apiBaseUrl: DEFAULT_API_BASE_URL,
           username: nextCredentials.username.trim(),
           password: nextCredentials.password
         });

@@ -277,7 +277,11 @@ export function TenantProjectDetailsPage() {
                   <TableBody>
                     {runs.map((run) => (
                       <TableRow key={run.run_id}>
-                        <TableCell className="font-medium">{run.run_id}</TableCell>
+                        <TableCell className="font-medium">
+                          <Link className="text-primary hover:underline" href={`/runs/${encodeURIComponent(run.run_id)}`}>
+                            {run.run_id}
+                          </Link>
+                        </TableCell>
                         <TableCell>{run.issue_key}</TableCell>
                         <TableCell>{statusBadge(run.status)}</TableCell>
                         <TableCell>{new Date(run.created_at).toLocaleString()}</TableCell>
