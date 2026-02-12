@@ -43,13 +43,8 @@ export default function TenantWebhooksPage() {
   const [loading, setLoading] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
-<<<<<<< HEAD
   const apiBaseUrl = (credentials?.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/$/, "");
   const docs: WebhookDoc[] = useMemo(() => [
-=======
-  const apiBaseUrl = (credentials?.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/$/, "");
-  const docs: WebhookDoc[] = [
->>>>>>> origin/staging
     {
       key: "jira",
       name: "Jira Webhook URL",
