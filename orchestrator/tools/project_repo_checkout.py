@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,13 +31,14 @@ def _safe_git_error(stderr: str, stdout: str) -> str:
     return re.sub(r"https://x-access-token:[^@]+@", "https://x-access-token:[REDACTED]@", message)
 
 
-def _run_git(args: list[str], *, cwd: Path) -> str:
+def _run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
     process = subprocess.run(
         ["git", *args],
         cwd=str(cwd),
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     if process.returncode != 0:
         raise ProjectRepoCheckoutError(_safe_git_error(process.stderr, process.stdout))
@@ -61,8 +64,19 @@ def ensure_project_checkout(
         return repo_dir
 
     repo_full_name = _repo_full_name(project.github_repository)
-    clone_url = f"https://x-access-token:{github_installation_token}@github.com/{repo_full_name}.git"
-    _run_git(["clone", "--origin", "origin", clone_url, str(repo_dir)], cwd=repo_root)
+    clone_url = f"https://github.com/{repo_full_name}.git"
+    clone_env = {
+        **os.environ,
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {github_installation_token}",
+    }
+    try:
+        _run_git(["clone", "--origin", "origin", clone_url, str(repo_dir)], cwd=repo_root, env=clone_env)
+    except ProjectRepoCheckoutError:
+        if repo_dir.exists():
+            shutil.rmtree(repo_dir, ignore_errors=True)
+        raise
     _run_git(["remote", "set-url", "origin", project.github_repository], cwd=repo_dir)
     return repo_dir
 

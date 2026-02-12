@@ -106,17 +106,6 @@ class AdminProjectService:
                     detail=f"Unable to provision Discord channel: {exc}",
                 ) from exc
         project.discord_config = normalized_discord
-        try:
-            self._ensure_project_repository_checkout(
-                session=session,
-                tenant=tenant,
-                project=project,
-            )
-        except ProjectRepoCheckoutError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Unable to clone project repository: {exc}",
-            ) from exc
         session.add(project)
         tenant.updated_at = now
         self._sync_tenant_jira_project_keys(session, tenant=tenant)
@@ -127,6 +116,23 @@ class AdminProjectService:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A project with the same repository or Jira project key already exists for this tenant",
+            ) from exc
+        try:
+            self._ensure_project_repository_checkout(
+                session=session,
+                tenant=tenant,
+                project=project,
+            )
+        except ProjectRepoCheckoutError as exc:
+            session.rollback()
+            persisted_project = session.get(Project, project.project_id)
+            if persisted_project is not None:
+                session.delete(persisted_project)
+            self._sync_tenant_jira_project_keys(session, tenant=tenant)
+            session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Unable to clone project repository: {exc}",
             ) from exc
         session.refresh(project)
         return self._project_to_schema(project, tenant_policy=tenant.policy_config)
