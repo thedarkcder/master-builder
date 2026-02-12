@@ -22,7 +22,10 @@ _REVIEW_SECTION_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
         re.compile(r"(?im)^\s{0,3}(?:#+\s*)?good\s*:"),
         re.compile(r"(?im)^\s{0,3}(?:#+\s*)?what changed\s*:"),
     ),
-    "risks": (re.compile(r"(?im)^\s{0,3}(?:#+\s*)?risks?\s*:") ,),
+    "risks": (
+        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?risks?\s*:"),
+        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?risk\s*/\s*impact\s*:"),
+    ),
     "must-fix": (
         re.compile(r"(?im)^\s{0,3}(?:#+\s*)?must[- ]fix(?: findings)?\s*:"),
         re.compile(r"(?im)^\s{0,3}(?:#+\s*)?must[- ]fix\s*:"),
