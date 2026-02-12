@@ -915,7 +915,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["total_runs"], 3)
         self.assertEqual(body["failed_runs"], 1)
         self.assertAlmostEqual(body["run_failure_rate_ratio"], 1 / 3, places=6)
-        self.assertGreater(body["average_task_duration_seconds"], 0.0)
+        self.assertAlmostEqual(body["average_task_duration_seconds"], 90.0, delta=1.0)
         self.assertEqual(body["webhook_events_received"], 2)
         self.assertEqual(body["webhook_events_failed"], 1)
         self.assertEqual(body["webhook_failure_rate_ratio"], 0.5)
