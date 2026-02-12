@@ -2,9 +2,10 @@ import logging
 import logging.config
 
 from orchestrator.core.guardrails import SensitiveDataRedactionFilter
+from orchestrator.core.observability import ObservabilityJsonFormatter
 
 
-def configure_logging(level: str = "INFO") -> None:
+def configure_logging(level: str = "INFO", *, environment: str = "dev", platform_version: str = "unknown") -> None:
     normalized_level = level.upper()
     logging.config.dictConfig(
         {
@@ -16,22 +17,24 @@ def configure_logging(level: str = "INFO") -> None:
                 }
             },
             "formatters": {
-                "standard": {
-                    "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+                "structured_json": {
+                    "()": ObservabilityJsonFormatter,
+                    "environment": environment,
+                    "platform_version": platform_version,
                 }
             },
             "handlers": {
                 "stdout": {
                     "class": "logging.StreamHandler",
                     "level": normalized_level,
-                    "formatter": "standard",
+                    "formatter": "structured_json",
                     "filters": ["sensitive_data_redaction"],
                     "stream": "ext://sys.stdout",
                 },
                 "stderr": {
                     "class": "logging.StreamHandler",
                     "level": "ERROR",
-                    "formatter": "standard",
+                    "formatter": "structured_json",
                     "filters": ["sensitive_data_redaction"],
                     "stream": "ext://sys.stderr",
                 },
