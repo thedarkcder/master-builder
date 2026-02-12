@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from math import ceil
 from statistics import median
 
 from fastapi import HTTPException, status
@@ -41,7 +42,7 @@ def _duration_stats(runs: list[Run]) -> ObservabilityDurationStatsRead:
     if not durations:
         return ObservabilityDurationStatsRead(average_seconds=0.0, median_seconds=0.0, p95_seconds=0.0)
     ordered = sorted(durations)
-    p95_index = max(0, int(len(ordered) * 0.95) - 1)
+    p95_index = max(0, ceil(len(ordered) * 0.95) - 1)
     return ObservabilityDurationStatsRead(
         average_seconds=round(sum(ordered) / len(ordered), 3),
         median_seconds=round(float(median(ordered)), 3),
@@ -76,8 +77,13 @@ def platform_observability(*, session) -> PlatformObservabilityRead:  # noqa: AN
     total_runs = len(runs)
     active_runs = sum(1 for run in runs if run.status in ACTIVE_RUN_STATUSES)
     cutoff = _utcnow() - timedelta(hours=24)
+    failed_at_or_created = (
+        _coerce_aware(run.finished_at) if run.finished_at is not None else _coerce_aware(run.created_at)
+        for run in runs
+        if run.status == "failed"
+    )
     failed_runs_last_24h = sum(
-        1 for run in runs if run.status == "failed" and _coerce_aware(run.created_at) >= cutoff
+        1 for failed_timestamp in failed_at_or_created if failed_timestamp >= cutoff
     )
     return PlatformObservabilityRead(
         total_tenants=total_tenants,
