@@ -217,6 +217,14 @@ class RepoBootstrapStateRead(BaseModel):
     updated_at: datetime
 
 
+class ReleaseBootstrapReportRead(BaseModel):
+    tenant_id: str
+    ok: bool
+    checks: dict[str, bool] = Field(default_factory=dict)
+    details: list[str] = Field(default_factory=list)
+    checked_at: str
+
+
 class ManagedSecretUpsert(BaseModel):
     value: str = Field(min_length=1)
 
@@ -251,6 +259,118 @@ class RunRead(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class AgentEventRead(BaseModel):
+    event_type: str
+    run_id: str
+    issue_key: str | None = None
+    project_id: str | None = None
+    recorded_at: datetime
+
+
+class AgentActivityRead(BaseModel):
+    tenant_id: str
+    agent_id: str
+    last_seen_at: datetime
+    is_dark: bool
+    events: list[AgentEventRead] = Field(default_factory=list)
+
+
+class ProjectExecutionMetricsRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    tasks_started: int
+    tasks_completed: int
+    tasks_failed: int
+    tasks_blocked: int
+    success_rate_ratio: float
+    average_duration_seconds: float
+    median_duration_seconds: float
+    p95_duration_seconds: float
+    queue_length: int
+    average_time_in_queue_seconds: float
+    stale_queued_tasks: int
+    sla_breaches: int
+
+
+class AlertRead(BaseModel):
+    alert_key: str
+    severity: str
+    scope_type: str
+    scope_id: str | None = None
+    reason: str
+    emitted_at: datetime
+
+
+class AlertEvaluationRead(BaseModel):
+    evaluated_at: datetime
+    cooldown_seconds: int
+    alerts: list[AlertRead] = Field(default_factory=list)
+
+
+class TenantIntegrationHealthRead(BaseModel):
+    jira_connected: bool
+    github_connected: bool
+    jira_webhook_healthy: bool
+
+
+class TenantHealthRead(BaseModel):
+    tenant_id: str
+    active_projects: int
+    active_agents: int
+    total_runs: int
+    failed_runs: int
+    run_failure_rate_ratio: float
+    average_task_duration_seconds: float
+    webhook_events_received: int
+    webhook_events_failed: int
+    webhook_failure_rate_ratio: float
+    integrations: TenantIntegrationHealthRead
+
+
+class ObservabilityDurationStatsRead(BaseModel):
+    average_seconds: float
+    median_seconds: float
+    p95_seconds: float
+
+
+class PlatformObservabilityRead(BaseModel):
+    total_tenants: int
+    enabled_tenants: int
+    total_projects: int
+    active_projects: int
+    total_runs: int
+    active_runs: int
+    failed_runs_last_24h: int
+    run_duration: ObservabilityDurationStatsRead
+
+
+class TenantObservabilityRead(BaseModel):
+    tenant_id: str
+    total_projects: int
+    active_projects: int
+    total_runs: int
+    queued_runs: int
+    running_runs: int
+    succeeded_runs: int
+    failed_runs: int
+    blocked_runs: int
+    stale_runs: int
+    run_duration: ObservabilityDurationStatsRead
+
+
+class ProjectObservabilityRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    total_runs: int
+    queued_runs: int
+    running_runs: int
+    succeeded_runs: int
+    failed_runs: int
+    blocked_runs: int
+    stale_runs: int
+    run_duration: ObservabilityDurationStatsRead
 
 
 class DiscordCommandRequest(BaseModel):

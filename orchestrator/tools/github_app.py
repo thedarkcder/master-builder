@@ -53,6 +53,17 @@ class PullRequestFileChange:
 
 
 @dataclass(frozen=True)
+class PullRequestSummary:
+    number: int
+    title: str
+    state: str
+    html_url: str
+    head_ref: str
+    base_ref: str
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
 class InstallationRepository:
     full_name: str
     html_url: str
@@ -331,6 +342,55 @@ class GitHubAppClient:
                 break
             page += 1
 
+        return parsed
+
+    def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
+        installation_token = self.get_installation_token()
+        safe_limit = min(max(1, int(limit)), 100)
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/pulls?state=open&sort=updated&direction=desc&per_page={safe_limit}",
+            bearer_token=installation_token,
+        )
+        if not isinstance(response, list):
+            raise GitHubApiError("GitHub pull request list response was not a list")
+
+        parsed: list[PullRequestSummary] = []
+        for item in response:
+            if not isinstance(item, dict):
+                continue
+            number = item.get("number")
+            title = item.get("title")
+            state = item.get("state")
+            html_url = item.get("html_url")
+            updated_at = item.get("updated_at")
+            head = item.get("head")
+            base = item.get("base")
+            head_ref = head.get("ref") if isinstance(head, dict) else None
+            base_ref = base.get("ref") if isinstance(base, dict) else None
+            if not isinstance(number, int):
+                continue
+            if not isinstance(title, str) or not title.strip():
+                continue
+            if not isinstance(state, str) or not state.strip():
+                continue
+            if not isinstance(html_url, str) or not html_url.strip():
+                continue
+            if not isinstance(head_ref, str) or not head_ref.strip():
+                continue
+            if not isinstance(base_ref, str) or not base_ref.strip():
+                continue
+            parsed.append(
+                PullRequestSummary(
+                    number=number,
+                    title=title.strip(),
+                    state=state.strip(),
+                    html_url=html_url.strip(),
+                    head_ref=head_ref.strip(),
+                    base_ref=base_ref.strip(),
+                    updated_at=updated_at.strip() if isinstance(updated_at, str) and updated_at.strip() else None,
+                )
+            )
         return parsed
 
     def list_installation_repositories(self) -> list[InstallationRepository]:

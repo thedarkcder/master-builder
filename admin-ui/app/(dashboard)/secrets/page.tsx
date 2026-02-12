@@ -37,6 +37,21 @@ export default function SecretsPage() {
   const [secretValue, setSecretValue] = useState("");
   const [editingSecretRef, setEditingSecretRef] = useState<string | null>(null);
 
+  function toPlatformRef(rawRef: string): string {
+    const normalized = rawRef.trim();
+    if (!normalized) {
+      return "";
+    }
+    if (normalized.startsWith("tenant/") || normalized.startsWith("project/")) {
+      throw new Error("Platform secrets page only supports platform/* refs.");
+    }
+    return normalized.startsWith("platform/") ? normalized : `platform/${normalized}`;
+  }
+
+  function fromPlatformRef(secretRefValue: string): string {
+    return secretRefValue.startsWith("platform/") ? secretRefValue.slice("platform/".length) : secretRefValue;
+  }
+
   async function refresh(): Promise<void> {
     if (!credentials) {
       return;
@@ -45,7 +60,7 @@ export default function SecretsPage() {
     try {
       const refs = await listManagedSecrets(credentials);
       setItems(refs);
-      setStatusLine(`Loaded ${refs.length} managed secret reference(s).`);
+      setStatusLine(`Loaded ${refs.length} platform secret reference(s).`);
     } catch (error) {
       setStatusLine(`Failed to load secrets: ${(error as Error).message}`);
     } finally {
@@ -68,7 +83,12 @@ export default function SecretsPage() {
 
     setSaving(true);
     try {
-      const saved = await upsertManagedSecret(credentials, secretRef.trim(), secretValue);
+      const scopedRef = toPlatformRef(secretRef);
+      if (!scopedRef) {
+        setStatusLine("Secret ref and value are required.");
+        return;
+      }
+      const saved = await upsertManagedSecret(credentials, scopedRef, secretValue);
       const wasEditing = editingSecretRef === saved.secret_ref;
       setSecretRef("");
       setSecretValue("");
@@ -93,7 +113,12 @@ export default function SecretsPage() {
 
     setSaving(true);
     try {
-      const result = await resolveManagedSecret(credentials, secretRef.trim());
+      const scopedRef = toPlatformRef(secretRef);
+      if (!scopedRef) {
+        setStatusLine("Enter a secret ref to resolve.");
+        return;
+      }
+      const result = await resolveManagedSecret(credentials, scopedRef);
       setStatusLine(
         `Resolution for ${result.secret_ref}: ${result.resolved ? "resolved" : "missing"} (source=${result.source}).`
       );
@@ -131,7 +156,7 @@ export default function SecretsPage() {
   }
 
   function startEditingSecret(secretRefToEdit: string) {
-    setSecretRef(secretRefToEdit);
+    setSecretRef(fromPlatformRef(secretRefToEdit));
     setSecretValue("");
     setEditingSecretRef(secretRefToEdit);
     setStatusLine(`Editing ${secretRefToEdit}. Enter a new value to replace the stored secret.`);
@@ -156,6 +181,7 @@ export default function SecretsPage() {
       <CardContent className="space-y-4">
         <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto_auto]">
           <Input
+            placeholder="Secret key (example: DISCORD_BOT_TOKEN)"
             value={secretRef}
             onChange={(event) => setSecretRef(event.target.value)}
           />
@@ -196,7 +222,7 @@ export default function SecretsPage() {
           <table className="w-full min-w-[560px] text-left text-sm">
             <thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 font-medium">Secret Ref</th>
+                <th className="px-3 py-2 font-medium">Key</th>
                 <th className="px-3 py-2 font-medium">Source</th>
                 <th className="px-3 py-2 font-medium">Updated</th>
                 <th className="px-3 py-2 font-medium">Actions</th>
@@ -212,7 +238,10 @@ export default function SecretsPage() {
               ) : (
                 items.map((item) => (
                   <tr key={item.secret_ref} className="border-t">
-                    <td className="px-3 py-2 font-mono text-xs">{item.secret_ref}</td>
+                    <td className="px-3 py-2">
+                      <div className="font-mono text-xs">{fromPlatformRef(item.secret_ref)}</div>
+                      <div className="text-[11px] text-muted-foreground">{item.secret_ref}</div>
+                    </td>
                     <td className="px-3 py-2">{item.source}</td>
                     <td className="px-3 py-2">{formatTimestamp(item.updated_at)}</td>
                     <td className="px-3 py-2">
