@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from orchestrator.api.routes.admin import router as admin_router
@@ -26,6 +27,7 @@ from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.sentry import initialize_sentry
 from orchestrator.storage.migrations import run_migrations
 
@@ -65,15 +67,24 @@ def create_app() -> FastAPI:
     async def log_requests(request: Request, call_next):
         start = time.perf_counter()
         status_code = 500
+        route_label = "__unmatched__"
         try:
             response = await call_next(request)
             status_code = response.status_code
+            route = request.scope.get("route")
+            if route is not None and getattr(route, "path", None):
+                route_label = str(route.path)
             return response
         except HTTPException as exc:
             status_code = exc.status_code
             raise
         finally:
-            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            duration_seconds = max(0.0, time.perf_counter() - start)
+            duration_ms = round(duration_seconds * 1000, 2)
+            if route_label == "__unmatched__":
+                route = request.scope.get("route")
+                if route is not None and getattr(route, "path", None):
+                    route_label = str(route.path)
             client_ip = request.client.host if request.client is not None else "-"
             message = (
                 f"{client_ip} {request.method} {request.url.path} "
@@ -81,10 +92,23 @@ def create_app() -> FastAPI:
             )
             request_logger.info(message)
             print(message, flush=True)
+            platform_metrics.record_api_request(
+                method=request.method,
+                route=route_label,
+                status_code=status_code,
+                duration_seconds=duration_seconds,
+            )
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
         error_ref = uuid4().hex[:8]
+        route = request.scope.get("route")
+        route_label = str(route.path) if route is not None and getattr(route, "path", None) else "__unmatched__"
+        platform_metrics.record_api_exception(
+            method=request.method,
+            route=route_label,
+            error_type=type(exc).__name__,
+        )
         logger.exception(
             "api_unhandled_exception method=%s path=%s error_ref=%s error=%s",
             request.method,
@@ -109,6 +133,13 @@ def create_app() -> FastAPI:
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         if exc.status_code >= 500:
+            route = request.scope.get("route")
+            route_label = str(route.path) if route is not None and getattr(route, "path", None) else "__unmatched__"
+            platform_metrics.record_api_exception(
+                method=request.method,
+                route=route_label,
+                error_type=f"http_{exc.status_code}",
+            )
             logger.error(
                 "api_http_exception_5xx method=%s path=%s status=%s detail=%s",
                 request.method,
@@ -137,6 +168,13 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics() -> PlainTextResponse:
+        return PlainTextResponse(
+            content=platform_metrics.render_prometheus(),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     return app
 
