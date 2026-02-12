@@ -6,6 +6,7 @@ Repository execution policy for Codex terminal sessions.
 - Read `.codex/POLICY.md`.
 - Read `.codex/ENGINEERING_STANDARDS.md`.
 - Read `.codex/OPERATING.md`.
+- Read `.codex/skills/staff-engineer-review/SKILL.md`.
 - Read the most relevant language file from `.codex/policy_pack.*.json`.
 - If requirements or design/NFR trade-offs are unclear, run a Decision Gate using `.codex/DECISION_GATE_TEMPLATE.md` and stop coding.
 

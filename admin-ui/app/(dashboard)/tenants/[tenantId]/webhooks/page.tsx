@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ArrowLeft, Check, Copy } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -23,7 +24,7 @@ export default function TenantWebhooksPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState("Copy webhook URLs for this tenant.");
 
-  const apiBaseUrl = credentials?.apiBaseUrl?.replace(/\/$/, "") ?? "http://localhost:4000";
+  const apiBaseUrl = (credentials?.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/$/, "");
   const docs: WebhookDoc[] = [
     {
       key: "jira",

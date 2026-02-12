@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow
 } from "@/components/ui/table";
-import { getRun, listRuns, type RunRecord } from "@/lib/api";
+import { listRuns, type RunRecord } from "@/lib/api";
 
 function statusBadge(status: string) {
   if (status === "succeeded") {
@@ -31,7 +31,6 @@ function statusBadge(status: string) {
 export default function RunsPage() {
   const { credentials, ready } = useAuth();
   const [runs, setRuns] = useState<RunRecord[]>([]);
-  const [runDetail, setRunDetail] = useState<RunRecord | null>(null);
 
   const [tenantFilter, setTenantFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -63,20 +62,6 @@ export default function RunsPage() {
       void loadRuns();
     }
   }, [ready, credentials]);
-
-  async function loadRunDetail(runId: string) {
-    if (!credentials) {
-      return;
-    }
-
-    try {
-      const payload = await getRun(credentials, runId);
-      setRunDetail(payload);
-      setStatusLine(`Loaded details for ${runId}.`);
-    } catch (error) {
-      setStatusLine(`Failed loading run detail: ${(error as Error).message}`);
-    }
-  }
 
   return (
     <Card>
@@ -115,7 +100,11 @@ export default function RunsPage() {
           <TableBody>
             {runs.map((run) => (
               <TableRow key={run.run_id}>
-                <TableCell className="font-medium">{run.run_id}</TableCell>
+                <TableCell className="font-medium">
+                  <Link className="text-primary hover:underline" href={`/runs/${encodeURIComponent(run.run_id)}`}>
+                    {run.run_id}
+                  </Link>
+                </TableCell>
                 <TableCell>{run.tenant_id}</TableCell>
                 <TableCell>{run.issue_key}</TableCell>
                 <TableCell>{statusBadge(run.status)}</TableCell>
@@ -129,21 +118,14 @@ export default function RunsPage() {
                   )}
                 </TableCell>
                 <TableCell>
-                  <Button size="sm" variant="outline" onClick={() => void loadRunDetail(run.run_id)}>
-                    View
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/runs/${encodeURIComponent(run.run_id)}`}>View</Link>
                   </Button>
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-
-        <div className="rounded-md border bg-muted/40 p-3">
-          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Run detail</p>
-          <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap text-xs">
-            {runDetail ? JSON.stringify(runDetail, null, 2) : "Select a run to inspect details."}
-          </pre>
-        </div>
 
         <p className="text-sm text-muted-foreground">{statusLine}</p>
       </CardContent>

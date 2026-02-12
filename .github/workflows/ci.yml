@@ -279,12 +279,12 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f "pyproject.toml" ]; then
             python -m pip install -e .[dev] || python -m pip install -e .
-            python -m pip install ruff pytest httpx
+            python -m pip install ruff pytest pytest-cov httpx
           elif [ -f "requirements.txt" ]; then
             python -m pip install -r requirements.txt
-            python -m pip install ruff pytest httpx
+            python -m pip install ruff pytest pytest-cov httpx
           else
-            python -m pip install ruff pytest httpx
+            python -m pip install ruff pytest pytest-cov httpx
           fi
 
       - name: Ruff
@@ -293,11 +293,18 @@ jobs:
           set -euo pipefail
           ruff check . || (echo "ruff failed" && exit 1)
 
-      - name: Pytest
+      - name: Pytest with coverage
         shell: bash
         run: |
           set -euo pipefail
-          pytest -q
+          pytest -q --cov=orchestrator --cov-report=term-missing --cov-report=xml
+
+      - name: Upload Python coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-xml
+          path: coverage.xml
+          if-no-files-found: error
 
       - name: Build package
         shell: bash
