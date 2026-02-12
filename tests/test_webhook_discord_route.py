@@ -72,12 +72,26 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_success(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
+        execute_mock = MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True}))
         response = await self._call(
             payload={"user_id": "  user1 ", "command": " !ask status ", "channel_id": " c1 "},
             tenant=tenant,
+            execute_discord_ingress_command=execute_mock,
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"accepted":true', response.body)
+        self.assertFalse(execute_mock.call_args.kwargs["defer_seed_issues"])
+
+    async def test_seed_command_defers_with_repeated_whitespace(self) -> None:
+        tenant = SimpleNamespace(is_enabled=True, discord_config={})
+        execute_mock = MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True}))
+        response = await self._call(
+            payload={"user_id": "user1", "command": "!issues   seed   build stories", "channel_id": "c1"},
+            tenant=tenant,
+            execute_discord_ingress_command=execute_mock,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(execute_mock.call_args.kwargs["defer_seed_issues"])
 
     async def test_issue_seed_command_sets_defer_seed_flag(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
