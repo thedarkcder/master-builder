@@ -649,6 +649,8 @@ def _remove_managed_webhook_id_from_tenants(*, session: Session, webhook_id: int
 
 def _with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:
     merged = dict(proposed)
+    if "ready_trigger_mode" not in merged and "ready_trigger_mode" in existing:
+        merged["ready_trigger_mode"] = existing.get("ready_trigger_mode")
     for key in (
         "managed_webhook_ids",
         "webhook_last_provisioned_at",
@@ -1500,7 +1502,7 @@ def update_tenant(
     tenant.is_enabled = payload.is_enabled
     tenant.jira_config = _with_preserved_jira_system_fields(
         existing=dict(tenant.jira_config),
-        proposed=payload.jira.model_dump(),
+        proposed=payload.jira.model_dump(exclude_unset=True),
     )
     tenant.github_config = _with_managed_github_refs(payload.github.model_dump())
     tenant.repos_config = payload.repos.model_dump()
