@@ -30,6 +30,7 @@ from orchestrator.api.routes.webhook import (
 from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.discord.channel_tenant_index import invalidate_discord_channel_tenant_index
 from orchestrator.core.config import get_settings
+from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests, webhook_health_tracker
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant
@@ -56,6 +57,7 @@ class JiraWebhookTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         invalidate_discord_channel_tenant_index()
+        reset_webhook_health_tracker_for_tests()
         run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
 
@@ -72,6 +74,7 @@ class JiraWebhookTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         invalidate_discord_channel_tenant_index()
+        reset_webhook_health_tracker_for_tests()
 
     def _create_tenant(
         self,
@@ -698,6 +701,16 @@ class JiraWebhookTests(unittest.TestCase):
         response = self.client.post("/jira/webhook/missing-tenant", json=payload)
 
         self.assertEqual(response.status_code, 404)
+
+    def test_webhook_unknown_tenant_does_not_record_health_metrics(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-998", labels=["agent:ready"])
+
+        response = self.client.post("/jira/webhook/missing-tenant", json=payload)
+
+        self.assertEqual(response.status_code, 404)
+        rollup = webhook_health_tracker.rollup(tenant_id="missing-tenant")
+        self.assertEqual(rollup["received_total"], 0.0)
+        self.assertEqual(rollup["failed_total"], 0.0)
 
     def test_webhook_requires_valid_token_when_secret_ref_configured(self) -> None:
         self._create_tenant("tenant-auth", webhook_secret_ref=self.webhook_secret_env)
