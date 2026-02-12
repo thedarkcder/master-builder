@@ -49,11 +49,13 @@ class PlatformMetrics:
             if histogram is None:
                 histogram = _HistogramState(bucket_counts=[0 for _ in REQUEST_DURATION_BUCKETS_SECONDS])
                 self._api_request_duration[histogram_key] = histogram
+            normalized_duration = max(0.0, duration_seconds)
             histogram.count += 1
-            histogram.sum_seconds += max(0.0, duration_seconds)
+            histogram.sum_seconds += normalized_duration
             for index, bucket in enumerate(REQUEST_DURATION_BUCKETS_SECONDS):
-                if duration_seconds <= bucket:
+                if normalized_duration <= bucket:
                     histogram.bucket_counts[index] += 1
+                    break
             if status_code >= 500:
                 self._api_request_errors_total[(normalized_method, normalized_route, "http_5xx")] += 1
 
@@ -301,4 +303,3 @@ platform_metrics = PlatformMetrics()
 
 def reset_platform_metrics_for_tests() -> None:
     platform_metrics.reset()
-

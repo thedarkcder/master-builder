@@ -90,6 +90,24 @@ class PlatformMetricsTests(unittest.TestCase):
         self.assertIn('master_builder_worker_failures_total{kind="dependency"} 1', payload)
         self.assertIn('master_builder_worker_failures_total{kind="crash"} 1', payload)
 
+    def test_request_duration_histogram_buckets_count_each_request_once(self) -> None:
+        platform_metrics.record_api_request(method="GET", route="/histogram", status_code=200, duration_seconds=0.2)
+        payload = platform_metrics.render_prometheus()
+        bucket_values: dict[str, int] = {}
+        for line in payload.splitlines():
+            if not line.startswith("master_builder_api_request_duration_seconds_bucket"):
+                continue
+            if 'method="GET"' not in line or 'route="/histogram"' not in line:
+                continue
+            labels, value = line.split("} ", maxsplit=1)
+            bucket = labels.split('le="', maxsplit=1)[1].split('"', maxsplit=1)[0]
+            bucket_values[bucket] = int(float(value))
+
+        self.assertEqual(bucket_values["0.1"], 0)
+        self.assertEqual(bucket_values["0.25"], 1)
+        self.assertEqual(bucket_values["0.5"], 1)
+        self.assertEqual(bucket_values["+Inf"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
