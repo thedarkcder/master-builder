@@ -277,6 +277,21 @@ class ProjectExecutionMetricsRead(BaseModel):
     sla_breaches: int
 
 
+class AlertRead(BaseModel):
+    alert_key: str
+    severity: str
+    scope_type: str
+    scope_id: str | None = None
+    reason: str
+    emitted_at: datetime
+
+
+class AlertEvaluationRead(BaseModel):
+    evaluated_at: datetime
+    cooldown_seconds: int
+    alerts: list[AlertRead] = Field(default_factory=list)
+
+
 class TenantIntegrationHealthRead(BaseModel):
     jira_connected: bool
     github_connected: bool
