@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     codex_max_output_tokens: int = 1800
     worker_poll_interval_seconds: int = 5
     auto_migrate_on_startup: bool = True
+    sentry_dsn: str = ""
+    sentry_environment: str = "dev"
+    sentry_release: str = ""
+    sentry_traces_sample_rate: float = 0.0
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",
