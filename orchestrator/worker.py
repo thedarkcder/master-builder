@@ -8,6 +8,7 @@ from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.logging import configure_logging
+from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.worker.execution_service import (
     process_next_queued_run_with_dependencies as _process_next_queued_run_with_dependencies,
 )
@@ -29,6 +30,10 @@ except ImportError:  # pragma: no cover - dependency is required at runtime
     psycopg = None
 
 logger = logging.getLogger(__name__)
+
+
+class WorkerDependencyFailure(RuntimeError):
+    pass
 
 
 def process_next_queued_run(session, runner):  # noqa: ANN001
@@ -80,10 +85,16 @@ async def run_worker() -> None:
                     try:
                         runner = build_workflow_runner_for_session(session=session)
                     except CodexRuntimeError as exc:
-                        raise RuntimeError(f"Worker runtime unavailable: {exc}") from exc
+                        platform_metrics.record_worker_failure(kind="dependency")
+                        raise WorkerDependencyFailure(f"Worker runtime unavailable: {exc}") from exc
                     processed = process_next_queued_run(session, runner)
                 if processed is None:
                     break
+    except WorkerDependencyFailure:
+        raise
+    except Exception:
+        platform_metrics.record_worker_failure(kind="crash")
+        raise
     finally:
         listener.stop()
         logger.info("worker_stopped")
