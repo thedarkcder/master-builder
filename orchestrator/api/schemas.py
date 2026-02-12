@@ -11,6 +11,7 @@ class JiraConfig(BaseModel):
     connection_id: str | None = None
     project_keys: list[str] = Field(default_factory=list)
     ready_statuses: list[str] = Field(default_factory=lambda: ["Ready for Agent"], min_length=1)
+    ready_trigger_mode: str = Field(default="status_recheck", pattern="^(status_recheck|transition_only)$")
     ready_jql: str | None = None
     ready_label: str = Field(default="agent:ready", min_length=1)
     in_progress_label: str = Field(default="agent:in-progress", min_length=1)

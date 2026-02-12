@@ -430,6 +430,32 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
 
+    def test_update_tenant_preserves_ready_trigger_mode_when_omitted(self) -> None:
+        payload = self._tenant_payload()
+        payload["jira"]["ready_trigger_mode"] = "transition_only"
+        self._insert_jira_connection(connection_id="conn-1")
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.json()["jira"]["ready_trigger_mode"], "transition_only")
+
+        update_payload = self._tenant_payload()
+        update_payload["name"] = "Tenant A Updated"
+        update_payload["is_enabled"] = False
+        update_payload["jira"].pop("ready_trigger_mode", None)
+
+        update_response = self.client.put(
+            "/api/admin/tenants/tenant-a",
+            json=update_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.json()["jira"]["ready_trigger_mode"], "transition_only")
+
     def test_ready_preview_returns_eligible_issues(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")

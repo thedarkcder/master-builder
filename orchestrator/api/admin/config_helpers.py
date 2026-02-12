@@ -40,6 +40,8 @@ def validate_codex_assets_for_tenant_init(
 
 def with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:
     merged = dict(proposed)
+    if "ready_trigger_mode" not in merged and "ready_trigger_mode" in existing:
+        merged["ready_trigger_mode"] = existing.get("ready_trigger_mode")
     for key in (
         "managed_webhook_ids",
         "webhook_last_provisioned_at",

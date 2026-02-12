@@ -73,7 +73,7 @@ def update_tenant(
     tenant.is_enabled = payload.is_enabled
     tenant.jira_config = with_preserved_jira_system_fields_fn(
         existing=dict(tenant.jira_config),
-        proposed=payload.jira.model_dump(),
+        proposed=payload.jira.model_dump(exclude_unset=True),
     )
     tenant.github_config = with_managed_github_refs_fn(payload.github.model_dump())
     tenant.repos_config = payload.repos.model_dump()

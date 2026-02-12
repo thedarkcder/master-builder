@@ -84,6 +84,7 @@ class JiraWebhookTests(unittest.TestCase):
         github_installation_id: str = "12345",
         is_enabled: bool = True,
         max_concurrent_runs: int = 2,
+        ready_trigger_mode: str = "status_recheck",
     ) -> None:
         payload = {
             "name": tenant_id,
@@ -92,6 +93,7 @@ class JiraWebhookTests(unittest.TestCase):
                 "mcp_endpoint": "https://mcp.example.test",
                 "project_keys": ["TP"],
                 "ready_statuses": ["Ready for Agent"],
+                "ready_trigger_mode": ready_trigger_mode,
                 "ready_jql": 'project = TP AND status = "Ready for Agent"',
                 "ready_label": "agent:ready",
                 "in_progress_label": "agent:in-progress",
@@ -546,6 +548,36 @@ class JiraWebhookTests(unittest.TestCase):
         body = response.json()
         self.assertTrue(body["enqueued"])
         self.assertEqual(body["trigger_reason"], "status_recheck")
+
+    def test_webhook_transition_only_mode_ignores_status_recheck_without_transition(self) -> None:
+        self._create_tenant("tenant-transition-only", ready_trigger_mode="transition_only")
+        payload = self._jira_issue_payload(issue_key="TP-129", labels=["agent:ready"])
+
+        response = self.client.post("/jira/webhook/tenant-transition-only", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "ready_status_recheck_disabled")
+        self.assertEqual(response.json()["trigger_mode"], "transition_only")
+
+    def test_webhook_transition_only_mode_allows_transition_into_ready_status(self) -> None:
+        self._create_tenant("tenant-transition-only-2", ready_trigger_mode="transition_only")
+        payload = self._jira_issue_payload(issue_key="TP-130", labels=["agent:ready"])
+        payload["changelog"] = {
+            "items": [
+                {
+                    "field": "status",
+                    "fromString": "To Do",
+                    "toString": "Ready for Agent",
+                }
+            ]
+        }
+
+        response = self.client.post("/jira/webhook/tenant-transition-only-2", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+        self.assertEqual(response.json()["trigger_reason"], "status_transition_to_ready")
 
     def test_webhook_deduplicates_delivery_identifier(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
