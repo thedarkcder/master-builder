@@ -579,6 +579,49 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertTrue(response.json()["enqueued"])
         self.assertEqual(response.json()["trigger_reason"], "status_transition_to_ready")
 
+    def test_webhook_ignores_backlog_followup_issue_created_event(self) -> None:
+        payload = self._jira_issue_payload(
+            issue_key="TP-130",
+            labels=["backlog-only"],
+            status_name="Ready for Agent",
+        )
+        payload["webhookEvent"] = "jira:issue_created"
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "backlog_followup_issue_created")
+        self.assertEqual(response.json()["webhook_event"], "issue_created")
+
+    def test_webhook_allows_manual_run_command_path_for_backlog_followup_label(self) -> None:
+        payload = self._jira_issue_payload(
+            issue_key="TP-131",
+            labels=["backlog-only"],
+            status_name="Ready for Agent",
+        )
+        payload["webhookEvent"] = "comment_updated"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-1"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "/mb run"}],
+                    }
+                ],
+            },
+        }
+
+        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "ready_for_agent_backlog")
+        self.assertEqual(response.json()["trigger_reason"], "comment_command_run")
+
     def test_webhook_deduplicates_delivery_identifier(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
         headers = {"X-Atlassian-Webhook-Identifier": "delivery-123"}
