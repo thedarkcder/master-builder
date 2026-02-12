@@ -87,6 +87,11 @@ from orchestrator.api.admin.runs_service import (
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as _project_execution_metrics_impl,
 )
+from orchestrator.api.admin.observability_service import (
+    platform_observability as _platform_observability_impl,
+    tenant_observability as _tenant_observability_impl,
+    project_observability as _project_observability_impl,
+)
 from orchestrator.api.admin.jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
 )
@@ -136,8 +141,11 @@ from orchestrator.api.schemas import (
     JiraWebhookDiagnosticsRead,
     ReadyGatePreviewRead,
     JiraProjectRead,
+    PlatformObservabilityRead,
+    ProjectObservabilityRead,
     ProjectCreate,
     ProjectRead,
+    TenantObservabilityRead,
     ProjectUpdate,
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
@@ -833,4 +841,41 @@ def get_project_execution_metrics(
         project_id=project_id,
         sla_seconds=sla_seconds,
         stale_queue_seconds=stale_queue_seconds,
+    )
+
+
+@router.get("/observability/platform", response_model=PlatformObservabilityRead)
+def platform_observability(
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> PlatformObservabilityRead:
+    return _platform_observability_impl(session=session)
+
+
+@router.get("/observability/tenants/{tenant_id}", response_model=TenantObservabilityRead)
+def tenant_observability(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantObservabilityRead:
+    return _tenant_observability_impl(
+        session=session,
+        tenant_id=tenant_id,
+    )
+
+
+@router.get(
+    "/observability/tenants/{tenant_id}/projects/{project_id}",
+    response_model=ProjectObservabilityRead,
+)
+def project_observability(
+    tenant_id: str,
+    project_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectObservabilityRead:
+    return _project_observability_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
     )
