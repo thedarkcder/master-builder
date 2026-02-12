@@ -84,6 +84,9 @@ from orchestrator.api.admin.runs_service import (
     get_run as _get_run_impl,
     list_runs as _list_runs_impl,
 )
+from orchestrator.api.admin.tenant_health_service import (
+    tenant_health as _tenant_health_impl,
+)
 from orchestrator.api.admin.observability_service import (
     platform_observability as _platform_observability_impl,
     tenant_observability as _tenant_observability_impl,
@@ -147,6 +150,7 @@ from orchestrator.api.schemas import (
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
     RunRead,
+    TenantHealthRead,
     TenantCreate,
     TenantRead,
     TenantUpdate,
@@ -819,6 +823,18 @@ def get_run(
         run_id=run_id,
         run_model=Run,
         run_to_schema_fn=_run_to_schema,
+    )
+
+
+@router.get("/tenants/{tenant_id}/health", response_model=TenantHealthRead)
+def get_tenant_health(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantHealthRead:
+    return _tenant_health_impl(
+        session=session,
+        tenant_id=tenant_id,
     )
 
 

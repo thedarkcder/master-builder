@@ -18,6 +18,10 @@ from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.core.webhook_health import (
+    reset_webhook_health_tracker_for_tests,
+    webhook_health_tracker,
+)
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -43,6 +47,7 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_webhook_health_tracker_for_tests()
         run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
@@ -72,6 +77,7 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_webhook_health_tracker_for_tests()
 
     def _tenant_payload(self) -> dict:
         return {
@@ -807,6 +813,120 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len(filtered_runs), 1)
         self.assertEqual(filtered_runs[0]["run_id"], "run-created-project")
         self.assertEqual(filtered_runs[0]["project_id"], created_project_id)
+
+    def test_tenant_health_rollup_includes_integration_and_webhook_signals(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = "12345"
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        create_project = self.client.post(
+            "/api/admin/tenants/tenant-a/projects",
+            json={
+                "name": "mobile-app",
+                "github_repository": "https://github.com/example/mobile-app",
+                "jira_project_key": "MBAPP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_project.status_code, 201)
+        project_id = create_project.json()["project_id"]
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            assert tenant is not None
+            jira_config = dict(tenant.jira_config or {})
+            jira_config["webhook_last_received_at"] = now.isoformat()
+            jira_config["webhook_last_error"] = None
+            tenant.jira_config = jira_config
+            session.add_all(
+                [
+                    Run(
+                        run_id="health-run-queued",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-1",
+                        issue_summary="Queued run",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="queued",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=10),
+                        started_at=None,
+                        finished_at=None,
+                    ),
+                    Run(
+                        run_id="health-run-failed",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-2",
+                        issue_summary="Failed run",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="failed",
+                        last_error="failed",
+                        plan=None,
+                        created_at=now - timedelta(minutes=8),
+                        started_at=now - timedelta(minutes=7),
+                        finished_at=now - timedelta(minutes=5),
+                    ),
+                    Run(
+                        run_id="health-run-succeeded",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-3",
+                        issue_summary="Succeeded run",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="succeeded",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=4),
+                        started_at=now - timedelta(minutes=3),
+                        finished_at=now - timedelta(minutes=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        webhook_health_tracker.record(tenant_id="tenant-a", outcome="received")
+        webhook_health_tracker.record(tenant_id="tenant-a", outcome="received")
+        webhook_health_tracker.record(tenant_id="tenant-a", outcome="failed")
+
+        response = self.client.get("/api/admin/tenants/tenant-a/health", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["tenant_id"], "tenant-a")
+        self.assertEqual(body["active_projects"], 2)
+        self.assertEqual(body["active_agents"], 1)
+        self.assertEqual(body["total_runs"], 3)
+        self.assertEqual(body["failed_runs"], 1)
+        self.assertAlmostEqual(body["run_failure_rate_ratio"], 1 / 3, places=6)
+        self.assertAlmostEqual(body["average_task_duration_seconds"], 90.0, delta=1.0)
+        self.assertEqual(body["webhook_events_received"], 2)
+        self.assertEqual(body["webhook_events_failed"], 1)
+        self.assertEqual(body["webhook_failure_rate_ratio"], 0.5)
+        self.assertTrue(body["integrations"]["jira_connected"])
+        self.assertTrue(body["integrations"]["github_connected"])
+        self.assertTrue(body["integrations"]["jira_webhook_healthy"])
+
+    def test_tenant_health_returns_404_for_missing_tenant(self) -> None:
+        response = self.client.get("/api/admin/tenants/missing/health", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Tenant not found")
 
     def test_observability_platform_tenant_and_project_summaries(self) -> None:
         payload = self._tenant_payload()
