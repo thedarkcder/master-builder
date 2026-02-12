@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 
 from orchestrator.api.schemas import TenantHealthRead, TenantIntegrationHealthRead
 from orchestrator.core.webhook_health import webhook_health_tracker
@@ -38,34 +38,42 @@ def tenant_health(*, session, tenant_id: str) -> TenantHealthRead:  # noqa: ANN0
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
-    active_projects = len(
+    active_projects = int(
         session.execute(
-            select(Project).where(
+            select(func.count(Project.project_id)).where(
                 Project.tenant_id == tenant_id,
                 Project.is_archived.is_(False),
             )
-        )
-        .scalars()
-        .all()
+        ).scalar_one()
     )
 
-    runs = session.execute(select(Run).where(Run.tenant_id == tenant_id)).scalars().all()
-    total_runs = len(runs)
-    failed_runs = sum(1 for run in runs if run.status == "failed")
-    active_agents = sum(1 for run in runs if run.status in ACTIVE_RUN_STATUSES)
+    total_runs, failed_runs, active_agents = session.execute(
+        select(
+            func.count(Run.run_id),
+            func.coalesce(func.sum(case((Run.status == "failed", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Run.status.in_(ACTIVE_RUN_STATUSES), 1), else_=0)), 0),
+        ).where(Run.tenant_id == tenant_id)
+    ).one()
+    total_runs = int(total_runs or 0)
+    failed_runs = int(failed_runs or 0)
+    active_agents = int(active_agents or 0)
 
     run_failure_rate_ratio = 0.0 if total_runs <= 0 else failed_runs / total_runs
 
-    durations: list[float] = []
-    for run in runs:
-        started = _to_aware(run.started_at)
-        finished = _to_aware(run.finished_at)
-        if started is None or finished is None:
-            continue
-        seconds = (finished - started).total_seconds()
-        if seconds >= 0:
-            durations.append(seconds)
-    average_duration = 0.0 if not durations else round(sum(durations) / len(durations), 3)
+    duration_seconds_expr = (
+        (func.julianday(Run.finished_at) - func.julianday(Run.started_at)) * 86400.0
+        if session.bind is not None and session.bind.dialect.name == "sqlite"
+        else func.extract("epoch", Run.finished_at - Run.started_at)
+    )
+    average_duration_value = session.execute(
+        select(func.avg(duration_seconds_expr)).where(
+            Run.tenant_id == tenant_id,
+            Run.started_at.is_not(None),
+            Run.finished_at.is_not(None),
+            Run.finished_at >= Run.started_at,
+        )
+    ).scalar_one()
+    average_duration = 0.0 if average_duration_value is None else round(float(average_duration_value), 3)
 
     webhook_rollup = webhook_health_tracker.rollup(tenant_id=tenant_id)
     jira_config = dict(tenant.jira_config or {})
@@ -92,4 +100,3 @@ def tenant_health(*, session, tenant_id: str) -> TenantHealthRead:  # noqa: ANN0
         webhook_failure_rate_ratio=webhook_rollup["failure_rate_ratio"],
         integrations=integrations,
     )
-
