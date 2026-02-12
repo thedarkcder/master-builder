@@ -923,6 +923,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["stale_queued_tasks"], 1)
         self.assertEqual(body["sla_breaches"], 2)
         self.assertGreater(body["average_duration_seconds"], 0.0)
+        self.assertEqual(body["p95_duration_seconds"], 480.0)
         self.assertGreater(body["average_time_in_queue_seconds"], 0.0)
         self.assertEqual(body["success_rate_ratio"], 0.5)
 
