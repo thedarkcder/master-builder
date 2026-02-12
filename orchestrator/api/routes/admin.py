@@ -84,6 +84,9 @@ from orchestrator.api.admin.runs_service import (
     get_run as _get_run_impl,
     list_runs as _list_runs_impl,
 )
+from orchestrator.api.admin.project_metrics_service import (
+    project_execution_metrics as _project_execution_metrics_impl,
+)
 from orchestrator.api.admin.jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
 )
@@ -139,6 +142,7 @@ from orchestrator.api.schemas import (
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
     RunRead,
+    ProjectExecutionMetricsRead,
     TenantCreate,
     TenantRead,
     TenantUpdate,
@@ -811,4 +815,22 @@ def get_run(
         run_id=run_id,
         run_model=Run,
         run_to_schema_fn=_run_to_schema,
+    )
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/metrics", response_model=ProjectExecutionMetricsRead)
+def get_project_execution_metrics(
+    tenant_id: str,
+    project_id: str,
+    sla_seconds: int = Query(default=1800, ge=1, le=86400),
+    stale_queue_seconds: int = Query(default=7200, ge=1, le=604800),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectExecutionMetricsRead:
+    return _project_execution_metrics_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        sla_seconds=sla_seconds,
+        stale_queue_seconds=stale_queue_seconds,
     )
