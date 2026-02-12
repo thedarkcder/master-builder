@@ -171,7 +171,11 @@ export default function DashboardPage() {
             recentRuns.map((run) => (
               <div key={run.run_id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
                 <div>
-                  <p className="text-sm font-medium">{run.issue_key || run.run_id}</p>
+                  <p className="text-sm font-medium">
+                    <Link className="text-primary hover:underline" href={`/runs/${encodeURIComponent(run.run_id)}`}>
+                      {run.issue_key || run.run_id}
+                    </Link>
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     {run.tenant_id} • {new Date(run.created_at).toLocaleString()}
                   </p>

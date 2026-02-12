@@ -74,7 +74,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           setTenantProjects(projects);
         }
       })
-      .catch(() => {
+      .catch((error) => {
+        console.error("Failed to load tenant projects for sidebar", error);
         if (!cancelled) {
           setTenantProjects([]);
         }

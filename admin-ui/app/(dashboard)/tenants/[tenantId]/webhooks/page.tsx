@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Check, Copy, RefreshCcw } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -42,8 +43,13 @@ export default function TenantWebhooksPage() {
   const [loading, setLoading] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
-  const apiBaseUrl = credentials?.apiBaseUrl?.replace(/\/$/, "") ?? "http://localhost:4000";
+<<<<<<< HEAD
+  const apiBaseUrl = (credentials?.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/$/, "");
   const docs: WebhookDoc[] = useMemo(() => [
+=======
+  const apiBaseUrl = (credentials?.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/$/, "");
+  const docs: WebhookDoc[] = [
+>>>>>>> origin/staging
     {
       key: "jira",
       name: "Jira Webhook URL",
