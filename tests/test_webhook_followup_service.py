@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
+from orchestrator.core.observability import current_log_context, reset_log_context, set_log_context
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -18,11 +19,12 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         execute_command_ingress,
         ask_reply_components=None,
         consume_pending_ask_action=None,
+        settings_factory=None,
     ) -> tuple[DiscordWebhookFollowupService, MagicMock]:
         reply_transport = MagicMock()
         service = DiscordWebhookFollowupService(
             session_factory=lambda: nullcontext(session),
-            settings_factory=lambda: SimpleNamespace(),
+            settings_factory=settings_factory or (lambda: SimpleNamespace()),
             execute_command_ingress=execute_command_ingress,
             command_request_factory=lambda **kwargs: SimpleNamespace(**kwargs),
             build_command_followup_message=lambda **_kwargs: "formatted followup",
@@ -230,6 +232,40 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         emit_mock.assert_called_once()
         sent_content = transport.send_interaction_followup.call_args.kwargs["content"]
         self.assertIn("Ref:", sent_content)
+
+    def test_command_followup_resets_log_context_when_settings_factory_fails(self) -> None:
+        session = MagicMock()
+        execute = MagicMock()
+
+        def _fail_settings() -> SimpleNamespace:
+            raise RuntimeError("settings unavailable")
+
+        service, transport = self._build_service(
+            session=session,
+            execute_command_ingress=execute,
+            settings_factory=_fail_settings,
+        )
+        parent_tokens = set_log_context(correlation_id="parent-cid", tenant_id="parent-tenant", agent_id="parent-agent")
+        try:
+            with self.assertRaises(RuntimeError):
+                asyncio.run(
+                    service.run_discord_command_followup(
+                        tenant_id="tenant-1",
+                        user_id="u-1",
+                        channel_id="c-1",
+                        command_text="!ask",
+                        application_id="app-1",
+                        interaction_token="token-1",
+                    )
+                )
+            context = current_log_context()
+            self.assertEqual(context["correlation_id"], "parent-cid")
+            self.assertEqual(context["tenant_id"], "parent-tenant")
+            self.assertEqual(context["agent_id"], "parent-agent")
+        finally:
+            reset_log_context(parent_tokens)
+        execute.assert_not_called()
+        transport.send_interaction_followup.assert_not_called()
 
     def test_command_followup_issues_requires_input_creates_seed_thread(self) -> None:
         session = MagicMock()
