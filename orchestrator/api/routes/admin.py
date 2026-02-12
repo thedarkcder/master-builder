@@ -84,6 +84,9 @@ from orchestrator.api.admin.runs_service import (
     get_run as _get_run_impl,
     list_runs as _list_runs_impl,
 )
+from orchestrator.api.admin.agent_activity_service import (
+    list_agent_activity as _list_agent_activity_impl,
+)
 from orchestrator.api.admin.jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
 )
@@ -139,6 +142,7 @@ from orchestrator.api.schemas import (
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
     RunRead,
+    AgentActivityRead,
     TenantCreate,
     TenantRead,
     TenantUpdate,
@@ -811,4 +815,18 @@ def get_run(
         run_id=run_id,
         run_model=Run,
         run_to_schema_fn=_run_to_schema,
+    )
+
+
+@router.get("/agents/activity", response_model=list[AgentActivityRead])
+def list_agent_activity(
+    tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    heartbeat_timeout_seconds: int = Query(default=300, ge=1, le=86400),
+    _: str = Depends(require_admin),
+) -> list[AgentActivityRead]:
+    return _list_agent_activity_impl(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        heartbeat_timeout_seconds=heartbeat_timeout_seconds,
     )

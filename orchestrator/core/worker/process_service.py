@@ -29,6 +29,8 @@ def process_next_queued_run(
     run_failed_update_fn,
     finalize_cancelled_run_fn,
     finalize_workflow_result_fn,
+    emit_agent_event_fn,
+    resolve_agent_id_fn,
     run_status_queued: str,
     run_status_running: str,
     run_status_failed: str,
@@ -48,6 +50,16 @@ def process_next_queued_run(
         return None
     run = selection.run
     tenant = selection.tenant
+    agent_id = resolve_agent_id_fn()
+
+    emit_agent_event_fn(
+        event_type="ISSUE_ASSIGNED",
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
+    )
 
     decision_gate_run, decision_gate_meta = apply_decision_gate_fn(
         session=session,
@@ -90,6 +102,14 @@ def process_next_queued_run(
         send_jira_message=send_jira_message_fn,
     )
     start_run_fn(session, run=run)
+    emit_agent_event_fn(
+        event_type="TASK_STARTED",
+        tenant_id=run.tenant_id,
+        project_id=project.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
+    )
 
     bind_run_project_fn(session, run=run, project=project)
     effective_policy = resolve_effective_policy(
@@ -154,6 +174,46 @@ def process_next_queued_run(
                 jira_url=jira_issue_url,
                 error=error_text,
             )
+        )
+        emit_agent_event_fn(
+            event_type="TASK_FAILED",
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
+        )
+        diagnostics_stage = (
+            workflow_result.diagnostics.stage.upper()
+            if workflow_result.diagnostics is not None and workflow_result.diagnostics.stage
+            else ""
+        )
+        if diagnostics_stage == "BUILD":
+            emit_agent_event_fn(
+                event_type="BUILD_FAILED",
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+                issue_key=run.issue_key,
+                agent_id=agent_id,
+            )
+        if diagnostics_stage == "TEST":
+            emit_agent_event_fn(
+                event_type="TEST_FAILED",
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+                issue_key=run.issue_key,
+                agent_id=agent_id,
+            )
+    else:
+        emit_agent_event_fn(
+            event_type="TASK_COMPLETED",
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
         )
 
     return finalize_workflow_result_fn(
