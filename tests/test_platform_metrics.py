@@ -108,6 +108,16 @@ class PlatformMetricsTests(unittest.TestCase):
         self.assertEqual(bucket_values["0.5"], 1)
         self.assertEqual(bucket_values["+Inf"], 1)
 
+    def test_error_rate_uses_failed_request_count_not_error_counter_sum(self) -> None:
+        platform_metrics.record_api_request(method="GET", route="/boom", status_code=500, duration_seconds=0.1)
+        platform_metrics.record_api_exception(method="GET", route="/boom", error_type="runtimeerror")
+        payload = platform_metrics.render_prometheus()
+        error_rate_line = next(
+            line for line in payload.splitlines() if line.startswith("master_builder_api_error_rate_ratio ")
+        )
+        error_rate = float(error_rate_line.split(" ", maxsplit=1)[1])
+        self.assertEqual(error_rate, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
