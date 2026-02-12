@@ -430,6 +430,8 @@ async def ingest_jira_webhook_event(
         trigger_reason = "comment_command_run"
     elif context.comment_command == "retry":
         trigger_reason = "comment_command_retry"
+    elif context.webhook_event == "issue_created":
+        trigger_reason = "issue_created_ready"
     elif (
         to_status is not None
         and to_status.casefold() in normalized_ready_statuses
