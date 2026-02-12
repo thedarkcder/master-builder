@@ -16,6 +16,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.alerting import reset_alert_dedup_registry_for_tests
 from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
@@ -45,6 +46,7 @@ class AdminApiTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_alert_dedup_registry_for_tests()
+        reset_webhook_health_tracker_for_tests()
         run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
@@ -75,6 +77,7 @@ class AdminApiTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_alert_dedup_registry_for_tests()
+        reset_webhook_health_tracker_for_tests()
 
     def _tenant_payload(self) -> dict:
         return {
