@@ -857,6 +857,129 @@ class AdminApiTests(unittest.TestCase):
         self.assertTrue(by_agent["worker-stale"]["is_dark"])
         self.assertGreaterEqual(len(by_agent["worker-active"]["events"]), 1)
 
+    def test_project_execution_metrics_includes_queue_duration_and_sla_signals(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        project_id = "tenant-a-default"
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Run(
+                        run_id="metrics-run-queued-stale",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-1",
+                        issue_summary="stale queued",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="queued",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(hours=3),
+                        started_at=None,
+                        finished_at=None,
+                    ),
+                    Run(
+                        run_id="metrics-run-queued-fresh",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-2",
+                        issue_summary="fresh queued",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="queued",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=30),
+                        started_at=None,
+                        finished_at=None,
+                    ),
+                    Run(
+                        run_id="metrics-run-succeeded",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-3",
+                        issue_summary="succeeded",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="succeeded",
+                        last_error=None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=20),
+                        started_at=now - timedelta(minutes=18),
+                        finished_at=now - timedelta(minutes=10),
+                    ),
+                    Run(
+                        run_id="metrics-run-failed",
+                        tenant_id="tenant-a",
+                        project_id=project_id,
+                        issue_key="MBAPP-4",
+                        issue_summary="failed",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/mobile-app",
+                        branch=None,
+                        pr_url=None,
+                        status="failed",
+                        last_error="boom",
+                        plan=None,
+                        created_at=now - timedelta(minutes=8),
+                        started_at=now - timedelta(minutes=7),
+                        finished_at=now - timedelta(minutes=1),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/metrics?sla_seconds=300&stale_queue_seconds=3600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["tenant_id"], "tenant-a")
+        self.assertEqual(body["project_id"], project_id)
+        self.assertEqual(body["tasks_started"], 2)
+        self.assertEqual(body["tasks_completed"], 2)
+        self.assertEqual(body["tasks_failed"], 1)
+        self.assertEqual(body["tasks_blocked"], 0)
+        self.assertEqual(body["queue_length"], 2)
+        self.assertEqual(body["stale_queued_tasks"], 1)
+        self.assertEqual(body["sla_breaches"], 2)
+        self.assertGreater(body["average_duration_seconds"], 0.0)
+        self.assertEqual(body["p95_duration_seconds"], 480.0)
+        self.assertGreater(body["average_time_in_queue_seconds"], 0.0)
+        self.assertEqual(body["success_rate_ratio"], 0.5)
+
+    def test_project_execution_metrics_returns_404_for_mismatched_scope(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        response = self.client.get(
+            "/api/admin/tenants/tenant-b/projects/tenant-a-default/metrics",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Project not found")
+
     def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
         payload = self._tenant_payload()
         payload["github"]["installation_id"] = "12345"
