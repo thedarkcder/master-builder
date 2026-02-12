@@ -87,6 +87,9 @@ from orchestrator.api.admin.runs_service import (
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as _project_execution_metrics_impl,
 )
+from orchestrator.api.admin.alert_policy_service import (
+    evaluate_alerts as _evaluate_alerts_impl,
+)
 from orchestrator.api.admin.tenant_health_service import (
     tenant_health as _tenant_health_impl,
 )
@@ -154,6 +157,7 @@ from orchestrator.api.schemas import (
     RepoBootstrapStateRead,
     RunRead,
     ProjectExecutionMetricsRead,
+    AlertEvaluationRead,
     TenantHealthRead,
     TenantCreate,
     TenantRead,
@@ -845,6 +849,20 @@ def get_project_execution_metrics(
         project_id=project_id,
         sla_seconds=sla_seconds,
         stale_queue_seconds=stale_queue_seconds,
+    )
+
+
+@router.get("/alerts/evaluate", response_model=AlertEvaluationRead)
+def evaluate_alerts(
+    tenant_id: str | None = Query(default=None),
+    cooldown_seconds: int = Query(default=600, ge=1, le=3600),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> AlertEvaluationRead:
+    return _evaluate_alerts_impl(
+        session=session,
+        tenant_id=tenant_id,
+        cooldown_seconds=cooldown_seconds,
     )
 
 
