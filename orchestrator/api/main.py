@@ -29,6 +29,7 @@ from orchestrator.core.logging import configure_logging
 from orchestrator.storage.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
+request_logger = logging.getLogger("master_builder.request")
 
 
 def create_app() -> FastAPI:
@@ -72,14 +73,12 @@ def create_app() -> FastAPI:
         finally:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             client_ip = request.client.host if request.client is not None else "-"
-            logger.info(
-                "%s %s %s Status: %s Time: %sms",
-                client_ip,
-                request.method,
-                request.url.path,
-                status_code,
-                duration_ms,
+            message = (
+                f"{client_ip} {request.method} {request.url.path} "
+                f"Status: {status_code} Time: {duration_ms}ms"
             )
+            request_logger.info(message)
+            print(message, flush=True)
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
