@@ -844,8 +844,10 @@ def list_agent_activity(
     project_id: str | None = Query(default=None),
     heartbeat_timeout_seconds: int = Query(default=300, ge=1, le=86400),
     _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
 ) -> list[AgentActivityRead]:
     return _list_agent_activity_impl(
+        session=session,
         tenant_id=tenant_id,
         project_id=project_id,
         heartbeat_timeout_seconds=heartbeat_timeout_seconds,
