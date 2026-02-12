@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from orchestrator.api.discord.shared.state import command_matches
 from orchestrator.core.communications.integration_contracts import InteractiveReplyTransport
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.observability import reset_log_context, set_log_context
@@ -307,7 +308,7 @@ class DiscordWebhookFollowupService:
                             proposed_command = str(pending.get("proposed_command") or "").strip()
                             if not proposed_command:
                                 content = f"<@{user_id}> Ask approval failed: missing proposed command."
-                            elif proposed_command.lower().startswith("!ask"):
+                            elif command_matches(proposed_command, command_name="ask"):
                                 content = f"<@{user_id}> Ask approval failed: recursive ask actions are not allowed."
                             else:
                                 try:

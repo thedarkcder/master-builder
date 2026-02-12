@@ -380,6 +380,33 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         content = transport.send_interaction_followup.call_args.kwargs["content"]
         self.assertIn("recursive ask actions are not allowed", content)
 
+    def test_ask_confirmation_blocks_recursive_ask_with_irregular_whitespace(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        pending = {"user_id": "u-1", "channel_id": "c-1", "proposed_command": "!   ask   again"}
+        execute = MagicMock()
+        service, transport = self._build_service(
+            session=session,
+            execute_command_ingress=execute,
+            consume_pending_ask_action=lambda **_kwargs: pending,
+        )
+
+        asyncio.run(
+            service.run_discord_ask_confirmation_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                decision="approve",
+                request_id="req-1",
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        execute.assert_not_called()
+        content = transport.send_interaction_followup.call_args.kwargs["content"]
+        self.assertIn("recursive ask actions are not allowed", content)
+
     def test_ask_confirmation_executes_and_formats_response(self) -> None:
         session = MagicMock()
         session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
