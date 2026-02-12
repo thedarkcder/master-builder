@@ -72,9 +72,13 @@ def create_app() -> FastAPI:
         finally:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             client_ip = request.client.host if request.client is not None else "-"
-            print(
-                f"{client_ip} {request.method} {request.url.path} Status: {status_code} Time: {duration_ms}ms",
-                flush=True,
+            logger.info(
+                "%s %s %s Status: %s Time: %sms",
+                client_ip,
+                request.method,
+                request.url.path,
+                status_code,
+                duration_ms,
             )
 
     @app.exception_handler(Exception)
