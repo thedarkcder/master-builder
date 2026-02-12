@@ -94,3 +94,4 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 405)
         self.assertGreaterEqual(info_log.call_count, 1)
+        self.assertTrue(response.headers.get("X-Request-Id"))
