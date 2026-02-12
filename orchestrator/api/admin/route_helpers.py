@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.config_helpers import (
@@ -70,7 +72,12 @@ from orchestrator.core.project_policy import normalize_project_policy_overrides
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
+from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_oauth import JiraOAuthClient
+from orchestrator.tools.project_repo_checkout import ensure_project_checkout
+from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
+
+logger = logging.getLogger(__name__)
 
 
 def slugify_tenant_name(name: str) -> str:
@@ -297,9 +304,57 @@ def admin_project_service() -> AdminProjectService:
         with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
         resolve_project_discord_channel_binding=resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=ensure_project_repository_checkout,
         project_to_schema=_project_to_schema,
         settings_factory=get_settings,
     )
+
+
+def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, project: Project) -> None:
+    settings = get_settings()
+    github_config = tenant.github_config or {}
+    if str(github_config.get("mode") or "").strip() != "github_app":
+        return
+    app_id_ref = str(github_config.get("app_id_ref") or settings.github_app_id_ref).strip()
+    private_key_ref = str(github_config.get("private_key_ref") or settings.github_private_key_ref).strip()
+    app_id = resolve_scoped_secret_ref(
+        session,
+        secret_ref=app_id_ref,
+        encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
+    )
+    private_key = resolve_scoped_secret_ref(
+        session,
+        secret_ref=private_key_ref,
+        encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant.tenant_id,
+    )
+    if not app_id or not private_key:
+        logger.info(
+            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_secrets_unavailable",
+            tenant.tenant_id,
+            project.project_id,
+        )
+        return
+    try:
+        github_client = github_client_from_tenant_config(
+            github_config,
+            secret_lookup=lambda secret_ref: app_id if secret_ref == app_id_ref else private_key,
+        )
+        installation_token = github_client.get_installation_token()
+        ensure_project_checkout(
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=tenant.tenant_id,
+            project=project,
+            github_installation_token=installation_token,
+        )
+    except (ValueError, GitHubApiError, ProjectRepoCheckoutError) as exc:
+        logger.warning(
+            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=%s",
+            tenant.tenant_id,
+            project.project_id,
+            exc,
+        )
 
 
 def provision_jira_webhook(

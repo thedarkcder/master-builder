@@ -106,6 +106,7 @@ from orchestrator.core.runs import (
 )
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.project_repo_checkout import collect_local_repo_context
 from orchestrator.tools.jira_oauth import JiraIssuePreview
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
@@ -165,7 +166,40 @@ def _run_gap_analysis(
         tenant=tenant,
         issue_key=issue_key,
         issue_key_pattern=ISSUE_KEY_PATTERN,
+        collect_project_repo_context_fn=_collect_project_repo_context_for_issue,
     )
+
+
+def _collect_project_repo_context_for_issue(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+) -> dict:
+    project = find_active_project_for_issue_key(
+        session,
+        tenant_id=tenant.tenant_id,
+        issue_key=issue_key,
+    )
+    if project is None:
+        return {"available": False, "reason": "project_not_mapped"}
+    settings = get_settings()
+    local_context = collect_local_repo_context(
+        base_dir=settings.project_repo_checkout_base_dir,
+        tenant_id=tenant.tenant_id,
+        project=project,
+        issue_key=issue_key,
+    )
+    return {
+        "available": local_context.available,
+        "reason": local_context.reason,
+        "repo_dir": local_context.repo_dir,
+        "current_branch": local_context.current_branch,
+        "head_sha": local_context.head_sha,
+        "branches": local_context.branches,
+        "recent_commits": local_context.recent_commits,
+        "issue_related_commits": local_context.issue_related_commits,
+    }
 
 
 def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
@@ -503,6 +537,7 @@ def _collect_github_ask_context(
                 "project_keys": [],
                 "open_pull_requests": [],
                 "staging_pull_requests": [],
+                "local_repo": {},
             },
         )
         project_key = project.jira_project_key.strip().upper()
@@ -513,6 +548,25 @@ def _collect_github_ask_context(
         return {"available": False, "reason": "no_github_repositories", "repositories": []}
 
     settings = get_settings()
+    for project in scoped_projects:
+        repo_full_name = _repo_full_name_from_repository_url(project.github_repository)
+        if not repo_full_name or repo_full_name not in repo_map:
+            continue
+        local_context = collect_local_repo_context(
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=tenant.tenant_id,
+            project=project,
+        )
+        repo_map[repo_full_name]["local_repo"] = {
+            "available": local_context.available,
+            "reason": local_context.reason,
+            "repo_dir": local_context.repo_dir,
+            "current_branch": local_context.current_branch,
+            "head_sha": local_context.head_sha,
+            "branches": local_context.branches,
+            "recent_commits": local_context.recent_commits,
+        }
+
     try:
         github_client = github_client_from_tenant_config(
             tenant.github_config,

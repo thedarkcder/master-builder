@@ -815,7 +815,21 @@ class DiscordCommandApiTests(unittest.TestCase):
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
-            with patch("orchestrator.api.routes.discord.github_client_from_tenant_config", return_value=fake_client):
+            with (
+                patch("orchestrator.api.routes.discord.github_client_from_tenant_config", return_value=fake_client),
+                patch(
+                    "orchestrator.api.routes.discord.collect_local_repo_context",
+                    return_value=SimpleNamespace(
+                        available=True,
+                        reason=None,
+                        repo_dir="/tmp/repo",
+                        current_branch="staging",
+                        head_sha="abc123",
+                        branches=["staging", "jira/TP-1"],
+                        recent_commits=["abc123 TP-1: update"],
+                    ),
+                ),
+            ):
                 context = _collect_github_ask_context(
                     session=session,
                     tenant=tenant,
@@ -828,6 +842,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(len(repositories[0]["open_pull_requests"]), 2)
         self.assertEqual(len(repositories[0]["staging_pull_requests"]), 1)
         self.assertEqual(repositories[0]["staging_pull_requests"][0]["number"], 1)
+        self.assertTrue(repositories[0]["local_repo"]["available"])
+        self.assertEqual(repositories[0]["local_repo"]["current_branch"], "staging")
 
     def test_ask_history_scope_isolated_by_channel(self) -> None:
         create_project = self.client.post(

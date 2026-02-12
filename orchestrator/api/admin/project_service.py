@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
+from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
 
 class AdminProjectService:
@@ -24,6 +25,7 @@ class AdminProjectService:
         with_preserved_discord_system_fields: Callable[[dict, dict], dict],
         resolve_project_discord_channel_binding: Callable[..., dict],
         sync_tenant_jira_project_keys: Callable[..., None],
+        ensure_project_repository_checkout: Callable[..., None],
         project_to_schema: Callable[..., object],
         settings_factory: Callable[[], object],
     ) -> None:
@@ -35,6 +37,7 @@ class AdminProjectService:
         self._with_preserved_discord_system_fields = with_preserved_discord_system_fields
         self._resolve_project_discord_channel_binding = resolve_project_discord_channel_binding
         self._sync_tenant_jira_project_keys = sync_tenant_jira_project_keys
+        self._ensure_project_repository_checkout = ensure_project_repository_checkout
         self._project_to_schema = project_to_schema
         self._settings_factory = settings_factory
 
@@ -103,6 +106,17 @@ class AdminProjectService:
                     detail=f"Unable to provision Discord channel: {exc}",
                 ) from exc
         project.discord_config = normalized_discord
+        try:
+            self._ensure_project_repository_checkout(
+                session=session,
+                tenant=tenant,
+                project=project,
+            )
+        except ProjectRepoCheckoutError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Unable to clone project repository: {exc}",
+            ) from exc
         session.add(project)
         tenant.updated_at = now
         self._sync_tenant_jira_project_keys(session, tenant=tenant)
