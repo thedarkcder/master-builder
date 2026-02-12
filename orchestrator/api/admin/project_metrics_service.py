@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from math import ceil
 from statistics import median
 
 from fastapi import HTTPException, status
@@ -67,7 +68,7 @@ def project_execution_metrics(
         ordered = sorted(durations)
         average_duration = round(sum(ordered) / len(ordered), 3)
         median_duration = round(float(median(ordered)), 3)
-        p95_index = max(0, int(len(ordered) * 0.95) - 1)
+        p95_index = max(0, ceil(len(ordered) * 0.95) - 1)
         p95_duration = round(float(ordered[p95_index]), 3)
 
     now = datetime.now(timezone.utc)
@@ -101,4 +102,3 @@ def project_execution_metrics(
         stale_queued_tasks=stale_queued,
         sla_breaches=sla_breaches,
     )
-
