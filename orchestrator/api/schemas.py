@@ -260,6 +260,21 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class AlertRead(BaseModel):
+    alert_key: str
+    severity: str
+    scope_type: str
+    scope_id: str | None = None
+    reason: str
+    emitted_at: datetime
+
+
+class AlertEvaluationRead(BaseModel):
+    evaluated_at: datetime
+    cooldown_seconds: int
+    alerts: list[AlertRead] = Field(default_factory=list)
+
+
 class DiscordCommandRequest(BaseModel):
     user_id: str = Field(min_length=1)
     command: str = Field(min_length=2)

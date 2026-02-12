@@ -13,6 +13,7 @@ from sqlalchemy import select
 from orchestrator.api.main import create_app
 from orchestrator.api.routes.admin import _resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
+from orchestrator.core.alerting import reset_alert_dedup_registry_for_tests
 from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -43,6 +44,7 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_alert_dedup_registry_for_tests()
         run_migrations(database_url=self.database_url)
 
         self.client = TestClient(create_app())
@@ -72,6 +74,7 @@ class AdminApiTests(unittest.TestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        reset_alert_dedup_registry_for_tests()
 
     def _tenant_payload(self) -> dict:
         return {
@@ -807,6 +810,84 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len(filtered_runs), 1)
         self.assertEqual(filtered_runs[0]["run_id"], "run-created-project")
         self.assertEqual(filtered_runs[0]["project_id"], created_project_id)
+
+    def test_alert_evaluation_emits_platform_and_tenant_alerts(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = None
+        payload["jira"]["connection_id"] = None
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            for index in range(6):
+                session.add(
+                    Run(
+                        run_id=f"alert-run-{index}",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key=f"TP-{100 + index}",
+                        issue_summary="run",
+                        issue_description="desc",
+                        repo_url="https://github.com/example/repo",
+                        branch=None,
+                        pr_url=None,
+                        status="failed" if index < 4 else "succeeded",
+                        last_error="failed" if index < 4 else None,
+                        plan=None,
+                        created_at=now - timedelta(minutes=20 - index),
+                        started_at=now - timedelta(minutes=19 - index),
+                        finished_at=now - timedelta(minutes=18 - index),
+                    )
+                )
+            session.commit()
+
+        response = self.client.get("/api/admin/alerts/evaluate", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["cooldown_seconds"], 600)
+        alerts = body["alerts"]
+        keys = {alert["alert_key"] for alert in alerts}
+        self.assertIn("platform:error_rate_spike", keys)
+        self.assertIn("tenant:tenant-a:jira_disconnected", keys)
+        self.assertIn("tenant:tenant-a:github_disconnected", keys)
+        self.assertIn("tenant:tenant-a:run_failure_rate_high", keys)
+
+        severities = {alert["alert_key"]: alert["severity"] for alert in alerts}
+        self.assertEqual(severities["platform:error_rate_spike"], "CRITICAL")
+        self.assertEqual(severities["tenant:tenant-a:jira_disconnected"], "HIGH")
+        self.assertEqual(severities["tenant:tenant-a:github_disconnected"], "HIGH")
+        self.assertEqual(severities["tenant:tenant-a:run_failure_rate_high"], "MEDIUM")
+
+    def test_alert_evaluation_deduplicates_within_cooldown_and_scopes_by_tenant(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = None
+        payload["jira"]["connection_id"] = None
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        first = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertGreater(len(first.json()["alerts"]), 0)
+
+        second = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["alerts"], [])
 
     def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
         payload = self._tenant_payload()
