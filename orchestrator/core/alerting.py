@@ -26,11 +26,13 @@ class AlertDedupRegistry:
         candidates: list[AlertCandidate],
         now: datetime,
         cooldown_seconds: int,
+        prune_missing_keys: bool = True,
     ) -> list[AlertCandidate]:
-        next_keys = {candidate.alert_key for candidate in candidates}
-        stale_keys = [key for key in self._active_last_emitted if key not in next_keys]
-        for key in stale_keys:
-            self._active_last_emitted.pop(key, None)
+        if prune_missing_keys:
+            next_keys = {candidate.alert_key for candidate in candidates}
+            stale_keys = [key for key in self._active_last_emitted if key not in next_keys]
+            for key in stale_keys:
+                self._active_last_emitted.pop(key, None)
 
         emitted: list[AlertCandidate] = []
         cooldown = timedelta(seconds=max(1, cooldown_seconds))
@@ -51,4 +53,3 @@ alert_dedup_registry = AlertDedupRegistry()
 
 def reset_alert_dedup_registry_for_tests() -> None:
     alert_dedup_registry.reset()
-

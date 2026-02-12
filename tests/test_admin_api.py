@@ -889,6 +889,52 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(second.json()["alerts"], [])
 
+    def test_alert_evaluation_preserves_other_tenant_cooldown_state(self) -> None:
+        payload_a = self._tenant_payload()
+        payload_a["name"] = "Tenant A"
+        payload_a["github"]["installation_id"] = None
+        payload_a["jira"]["connection_id"] = None
+        create_tenant_a = self.client.post(
+            "/api/admin/tenants",
+            json=payload_a,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant_a.status_code, 201)
+        self.assertEqual(create_tenant_a.json()["tenant_id"], "tenant-a")
+
+        payload_b = self._tenant_payload()
+        payload_b["name"] = "Tenant B"
+        payload_b["github"]["installation_id"] = None
+        payload_b["jira"]["connection_id"] = None
+        create_tenant_b = self.client.post(
+            "/api/admin/tenants",
+            json=payload_b,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant_b.status_code, 201)
+        self.assertEqual(create_tenant_b.json()["tenant_id"], "tenant-b")
+
+        first_tenant_b = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-b&cooldown_seconds=600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(first_tenant_b.status_code, 200)
+        self.assertGreater(len(first_tenant_b.json()["alerts"]), 0)
+
+        tenant_a = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-a&cooldown_seconds=600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(tenant_a.status_code, 200)
+        self.assertGreater(len(tenant_a.json()["alerts"]), 0)
+
+        second_tenant_b = self.client.get(
+            "/api/admin/alerts/evaluate?tenant_id=tenant-b&cooldown_seconds=600",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(second_tenant_b.status_code, 200)
+        self.assertEqual(second_tenant_b.json()["alerts"], [])
+
     def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
         payload = self._tenant_payload()
         payload["github"]["installation_id"] = "12345"

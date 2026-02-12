@@ -139,6 +139,7 @@ def evaluate_alerts(
         candidates=candidates,
         now=now,
         cooldown_seconds=cooldown_seconds,
+        prune_missing_keys=tenant_id is None,
     )
     alerts = [
         AlertRead(
@@ -156,4 +157,3 @@ def evaluate_alerts(
         cooldown_seconds=max(1, cooldown_seconds),
         alerts=alerts,
     )
-
