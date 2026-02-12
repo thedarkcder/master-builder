@@ -280,6 +280,50 @@ class TenantHealthRead(BaseModel):
     integrations: TenantIntegrationHealthRead
 
 
+class ObservabilityDurationStatsRead(BaseModel):
+    average_seconds: float
+    median_seconds: float
+    p95_seconds: float
+
+
+class PlatformObservabilityRead(BaseModel):
+    total_tenants: int
+    enabled_tenants: int
+    total_projects: int
+    active_projects: int
+    total_runs: int
+    active_runs: int
+    failed_runs_last_24h: int
+    run_duration: ObservabilityDurationStatsRead
+
+
+class TenantObservabilityRead(BaseModel):
+    tenant_id: str
+    total_projects: int
+    active_projects: int
+    total_runs: int
+    queued_runs: int
+    running_runs: int
+    succeeded_runs: int
+    failed_runs: int
+    blocked_runs: int
+    stale_runs: int
+    run_duration: ObservabilityDurationStatsRead
+
+
+class ProjectObservabilityRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    total_runs: int
+    queued_runs: int
+    running_runs: int
+    succeeded_runs: int
+    failed_runs: int
+    blocked_runs: int
+    stale_runs: int
+    run_duration: ObservabilityDurationStatsRead
+
+
 class DiscordCommandRequest(BaseModel):
     user_id: str = Field(min_length=1)
     command: str = Field(min_length=2)
