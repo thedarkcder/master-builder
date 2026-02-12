@@ -265,6 +265,50 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         client.post_message.assert_called_once_with(channel_id="thread-1", content="hello", components=None)
         client.ensure_thread_for_message.assert_not_called()
 
+    def test_send_discord_thread_followup_falls_back_when_mapped_thread_send_fails(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _send_discord_thread_followup
+
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
+        settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
+        project = SimpleNamespace(
+            discord_config={
+                "ask_thread_channel_ids": ["thread-1"],
+                "ask_thread_by_message_id": {"message-1": "thread-1"},
+            },
+            updated_at=None,
+        )
+
+        with (
+            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+        ):
+            client = MagicMock()
+            client.post_message.side_effect = [
+                DiscordApiError("mapped thread stale"),
+                {"id": "final-message"},
+            ]
+            client.ensure_thread_for_message.return_value = "thread-2"
+            client_cls.return_value = client
+            _send_discord_thread_followup(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                channel_id="parent-chan",
+                reply_to_message_id="message-1",
+                content="hello",
+            )
+
+        self.assertEqual(client.post_message.call_count, 2)
+        self.assertEqual(client.post_message.call_args_list[0].kwargs["channel_id"], "thread-1")
+        self.assertEqual(client.post_message.call_args_list[1].kwargs["channel_id"], "thread-2")
+        client.ensure_thread_for_message.assert_called_once()
+        self.assertEqual(project.discord_config["ask_thread_by_message_id"]["message-1"], "thread-2")
+        session.commit.assert_called_once()
+
     def test_send_discord_thread_followup_successfully_creates_and_persists_thread(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_thread_followup
 
