@@ -4,6 +4,7 @@ import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -96,6 +97,7 @@ from orchestrator.core.communications.command_pipeline import (
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
+from orchestrator.core.secret_manager import resolve_scoped_secret_ref
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
@@ -103,7 +105,9 @@ from orchestrator.core.runs import (
     RUN_STATUS_FAILED,
 )
 from orchestrator.storage.models import Project, Tenant
+from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_oauth import JiraIssuePreview
+from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
 router = APIRouter(tags=["discord"])
 _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
@@ -456,6 +460,101 @@ def _collect_ask_context_with_history_context(
     )
 
 
+def _repo_full_name_from_repository_url(repository_url: str) -> str | None:
+    normalized_repo = normalize_repo_identifier(repository_url)
+    github_prefix = "github.com/"
+    if not normalized_repo.startswith(github_prefix):
+        return None
+    repo_full_name = normalized_repo[len(github_prefix):].strip("/")
+    if repo_full_name.count("/") != 1:
+        return None
+    return repo_full_name
+
+
+def _collect_github_ask_context(
+    *,
+    session: Session,
+    tenant: Tenant,
+    project_keys: list[str],
+) -> dict:
+    normalized_project_keys = {str(value).strip().upper() for value in project_keys if str(value).strip()}
+    query = select(Project).where(
+        Project.tenant_id == tenant.tenant_id,
+        Project.is_archived.is_(False),
+    )
+    projects = session.execute(query).scalars().all()
+    scoped_projects = [
+        project
+        for project in projects
+        if not normalized_project_keys or project.jira_project_key.strip().upper() in normalized_project_keys
+    ]
+    if not scoped_projects:
+        return {"available": False, "reason": "no_active_projects", "repositories": []}
+
+    repo_map: dict[str, dict] = {}
+    for project in scoped_projects:
+        repo_full_name = _repo_full_name_from_repository_url(project.github_repository)
+        if not repo_full_name:
+            continue
+        entry = repo_map.setdefault(
+            repo_full_name,
+            {
+                "repo_full_name": repo_full_name,
+                "project_keys": [],
+                "open_pull_requests": [],
+            },
+        )
+        project_key = project.jira_project_key.strip().upper()
+        if project_key and project_key not in entry["project_keys"]:
+            entry["project_keys"].append(project_key)
+
+    if not repo_map:
+        return {"available": False, "reason": "no_github_repositories", "repositories": []}
+
+    settings = get_settings()
+    try:
+        github_client = github_client_from_tenant_config(
+            tenant.github_config,
+            secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+                tenant_id=tenant.tenant_id,
+            ),
+        )
+    except ValueError as exc:
+        return {
+            "available": False,
+            "reason": f"github_client_unavailable:{exc}",
+            "repositories": list(repo_map.values()),
+        }
+
+    repo_contexts: list[dict] = []
+    for repo_full_name in sorted(repo_map.keys())[:5]:
+        repo_entry = repo_map[repo_full_name]
+        try:
+            pull_requests = github_client.list_open_pull_requests(
+                repo_full_name=repo_full_name,
+                limit=15,
+            )
+        except (GitHubApiError, ValueError):
+            pull_requests = []
+        repo_entry["open_pull_requests"] = [
+            {
+                "number": pr.number,
+                "title": pr.title,
+                "state": pr.state,
+                "head_ref": pr.head_ref,
+                "base_ref": pr.base_ref,
+                "html_url": pr.html_url,
+                "updated_at": pr.updated_at,
+            }
+            for pr in pull_requests
+        ]
+        repo_contexts.append(repo_entry)
+    return {"available": True, "repositories": repo_contexts}
+
+
 def _store_pending_ask_action(
     *,
     session: Session,
@@ -586,6 +685,7 @@ def _ask_board_message(
         normalize_scope_channel_id_fn=_normalize_scope_channel_id,
         channel_scope_repository=_channel_scope_repository,
         answer_board_question_with_codex_fn=answer_board_question_with_codex,
+        collect_github_ask_context_fn=_collect_github_ask_context,
         codex_runtime_error_type=CodexRuntimeError,
         store_ask_history_entry_fn=_store_ask_history_entry,
     )
@@ -623,6 +723,7 @@ def execute_tenant_command_ingress(
             channel_id=channel_id,
         ),
         collect_ask_context_with_history_context_fn=_collect_ask_context_with_history_context,
+        collect_github_ask_context_fn=_collect_github_ask_context,
         store_pending_ask_action_fn=_store_pending_ask_action,
         store_ask_history_entry_fn=_store_ask_history_entry,
         ask_board_message_fn=_ask_board_message,

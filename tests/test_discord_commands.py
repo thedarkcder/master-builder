@@ -673,6 +673,48 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(command_response.command, "ask")
         self.assertEqual(plan_mock.call_args.kwargs["project_keys"], ["OTH"])
 
+    def test_ask_confirmation_passes_github_context_to_intent_planner(self) -> None:
+        github_context = {
+            "available": True,
+            "repositories": [
+                {
+                    "repo_full_name": "example/repo",
+                    "project_keys": ["TP"],
+                    "open_pull_requests": [{"number": 42, "title": "Update staging flow"}],
+                }
+            ],
+        }
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.routes.discord._collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch("orchestrator.api.routes.discord._collect_github_ask_context", return_value=github_context),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "Board answer"},
+            ) as plan_mock,
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                return_value="Board answer",
+            ),
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask review staging against current tickets",
+                ),
+                session=session,
+                require_ask_confirmation=True,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(plan_mock.call_args.kwargs["github_context"], github_context)
+
     def test_ask_follow_up_reuses_recent_scoped_issue_key(self) -> None:
         collect_calls: list[str | None] = []
 
@@ -714,6 +756,37 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(second.ok)
         self.assertEqual(collect_calls[0], "TP-77")
         self.assertEqual(collect_calls[1], "TP-77")
+
+    def test_ask_board_message_passes_github_context_to_codex(self) -> None:
+        github_context = {
+            "available": True,
+            "repositories": [
+                {
+                    "repo_full_name": "example/repo",
+                    "project_keys": ["TP"],
+                    "open_pull_requests": [{"number": 7, "title": "Refactor worker"}],
+                }
+            ],
+        }
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes.discord._collect_ask_context", return_value=(None, None, [], {})),
+            patch("orchestrator.api.routes.discord._collect_github_ask_context", return_value=github_context),
+            patch("orchestrator.api.routes.discord.build_codex_runtime"),
+            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+        ):
+            response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!ask compare staging to in-progress tickets",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(answer_mock.call_args.kwargs["github_context"], github_context)
 
     def test_ask_history_scope_isolated_by_channel(self) -> None:
         create_project = self.client.post(
