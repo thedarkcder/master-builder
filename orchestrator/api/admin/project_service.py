@@ -26,6 +26,7 @@ class AdminProjectService:
         resolve_project_discord_channel_binding: Callable[..., dict],
         sync_tenant_jira_project_keys: Callable[..., None],
         ensure_project_repository_checkout: Callable[..., None],
+        resolve_project_run_board_id: Callable[..., int | None],
         project_to_schema: Callable[..., object],
         settings_factory: Callable[[], object],
     ) -> None:
@@ -38,6 +39,7 @@ class AdminProjectService:
         self._resolve_project_discord_channel_binding = resolve_project_discord_channel_binding
         self._sync_tenant_jira_project_keys = sync_tenant_jira_project_keys
         self._ensure_project_repository_checkout = ensure_project_repository_checkout
+        self._resolve_project_run_board_id = resolve_project_run_board_id
         self._project_to_schema = project_to_schema
         self._settings_factory = settings_factory
 
@@ -75,13 +77,29 @@ class AdminProjectService:
             )
 
         now = datetime.now(timezone.utc)
+        normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+        try:
+            run_board_id = self._resolve_project_run_board_id(
+                session=session,
+                tenant=tenant,
+                jira_project_key=normalized_jira_key,
+                settings=self._settings_factory(),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
+            ) from exc
+        if run_board_id is not None:
+            normalized_policy_overrides["run_board_id"] = run_board_id
+
         project = Project(
             project_id=str(uuid4()),
             tenant_id=tenant_id,
             name=normalized_name,
             github_repository=normalized_repo,
             jira_project_key=normalized_jira_key,
-            policy_overrides=self._normalize_project_policy_overrides(payload.policy_overrides),
+            policy_overrides=normalized_policy_overrides,
             environment=self._normalize_string_map(payload.environment),
             secret_refs=self._normalize_string_map(payload.secret_refs),
             discord_config={},
@@ -157,7 +175,22 @@ class AdminProjectService:
         project.name = normalized_name
         project.github_repository = normalized_repo
         project.jira_project_key = normalized_jira_key
-        project.policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+        normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+        try:
+            run_board_id = self._resolve_project_run_board_id(
+                session=session,
+                tenant=tenant,
+                jira_project_key=normalized_jira_key,
+                settings=self._settings_factory(),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
+            ) from exc
+        if run_board_id is not None:
+            normalized_policy_overrides["run_board_id"] = run_board_id
+        project.policy_overrides = normalized_policy_overrides
         project.environment = self._normalize_string_map(payload.environment)
         project.secret_refs = self._normalize_string_map(payload.secret_refs)
         normalized_discord = self._with_preserved_discord_system_fields(

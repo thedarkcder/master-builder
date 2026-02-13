@@ -120,6 +120,7 @@ Enable with:
 
 Detailed setup:
 - `docs/release-train-automation.md`
+- `docs/run-decision-engine.md` (where run queue/start decisions are made)
 
 ## Public API
 - `GET /health`
