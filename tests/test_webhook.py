@@ -184,22 +184,6 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["trigger_reason"], "issue_created")
         self.assertEqual(body["webhook_event"], "issue_created")
 
-    def test_webhook_does_not_auto_enqueue_discord_intake_bug(self) -> None:
-        payload = self._jira_issue_payload(
-            issue_key="TP-131",
-            status_name="To Do",
-            labels=["discord-bug", "from-discord"],
-        )
-        payload["webhookEvent"] = "jira:issue_created"
-
-        response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertFalse(body["enqueued"])
-        self.assertEqual(body["reason"], "discord_bug_manual_start_required")
-        self.assertEqual(body["webhook_event"], "issue_created")
-
     def test_webhook_marks_issue_created_backlog_ready_without_enqueue(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-130", status_name="Ready for Agent", labels=["agent:ready"])
         payload["webhookEvent"] = "jira:issue_created"

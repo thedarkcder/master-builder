@@ -49,11 +49,6 @@ def _is_todo_status(status_name: str) -> bool:
     return normalize_status_name(status_name) == TODO_STATUS
 
 
-def _is_discord_intake_bug(labels: list[str]) -> bool:
-    normalized = {str(label).strip().casefold() for label in labels if str(label).strip()}
-    return "from-discord" in normalized or "discord-bug" in normalized
-
-
 def _resolve_ready_trigger_mode_for_tenant(tenant: Tenant) -> str:
     raw_mode = tenant.jira_config.get("ready_trigger_mode")
     if isinstance(raw_mode, str):
@@ -518,21 +513,6 @@ async def ingest_jira_webhook_event(
                 reason="project_not_mapped",
                 guidance=enqueue_reason_guidance("project_not_mapped"),
                 command=context.comment_command,
-                webhook_event=context.webhook_event,
-            )
-
-        if context.comment_command not in {"run", "retry"} and _is_discord_intake_bug(context.issue_labels):
-            logger.info(
-                "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=discord_bug_manual_start_required",
-                request_id,
-                tenant_id,
-                context.issue_key,
-            )
-            return jira_webhook_response(
-                context,
-                enqueued=False,
-                reason="discord_bug_manual_start_required",
-                guidance="Discord intake bugs do not auto-run. Use `/mb run` when ready.",
                 webhook_event=context.webhook_event,
             )
 
