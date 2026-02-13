@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
+from orchestrator.tools.jira_oauth import JiraOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
 
@@ -85,7 +86,7 @@ class AdminProjectService:
                 jira_project_key=normalized_jira_key,
                 settings=self._settings_factory(),
             )
-        except ValueError as exc:
+        except (ValueError, JiraOAuthError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
@@ -183,7 +184,7 @@ class AdminProjectService:
                 jira_project_key=normalized_jira_key,
                 settings=self._settings_factory(),
             )
-        except ValueError as exc:
+        except (ValueError, JiraOAuthError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",

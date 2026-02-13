@@ -35,7 +35,7 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
-from orchestrator.tools.jira_oauth import JiraIssuePreview
+from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError
 
 
 class JiraWebhookTests(unittest.TestCase):
@@ -313,6 +313,51 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["enqueued"])
+
+    def test_fetch_issue_board_location_still_checks_board_when_backlog_lookup_fails(self) -> None:
+        from orchestrator.api.webhooks.jira_ingress import JiraWebhookContext, _fetch_issue_board_location
+
+        context = JiraWebhookContext(
+            request_id="req-1",
+            tenant_id="tenant-webhook",
+            tenant=SimpleNamespace(tenant_id="tenant-webhook", jira_config={}),
+            payload={},
+            webhook_event="issue_updated",
+            issue_key="TP-123",
+            issue_labels=[],
+            issue_status="To Do",
+            issue_status_category_key="indeterminate",
+            issue_summary="Summary",
+            issue_description="Description",
+            comment_command=None,
+            comment_command_argument=None,
+            comment_command_error=None,
+            delivery_id=None,
+            project=None,
+        )
+        oauth_context = SimpleNamespace(
+            connection=SimpleNamespace(cloud_id="cloud-1"),
+            access_token="token",
+        )
+        http_client = MagicMock()
+        http_client.get_json.side_effect = [
+            JiraOAuthError("backlog endpoint unavailable"),
+            {"issues": [{"key": "TP-123"}]},
+        ]
+
+        with (
+            patch("orchestrator.api.webhooks.jira_ingress.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_ingress.JiraOAuthHttpClient", return_value=http_client),
+        ):
+            location, detail = _fetch_issue_board_location(
+                context=context,
+                session=MagicMock(),
+                settings=SimpleNamespace(),
+                board_id=1,
+            )
+
+        self.assertEqual(location, "board")
+        self.assertIsNone(detail)
 
     def test_webhook_enqueues_issue_created_event_in_todo(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-130", status_name="To Do", labels=["agent:ready"])
