@@ -149,7 +149,7 @@ jobs:
           fi
 
       - name: Ensure GitHub release exists
-        if: github.event_name != 'release' && inputs.dry_run != true
+        if: github.event_name != 'release' && inputs.dry_run != true && steps.issue-keys.outputs.issue_count != '0'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -252,7 +252,6 @@ jobs:
           fi
 
           python "${args[@]}"
-
       - name: Transition release-train Jira issues to Done
         if: steps.issue-keys.outputs.issue_count != '0'
         shell: bash
