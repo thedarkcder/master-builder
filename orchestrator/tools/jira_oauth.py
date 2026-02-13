@@ -37,7 +37,7 @@ __all__ = [
 
 
 class JiraOAuthClient:
-    """Compatibility facade for Jira OAuth and Jira API operations."""
+    """Jira OAuth and Jira API client operations."""
 
     def __init__(self, config: JiraOAuthClientConfig):
         self._http = JiraOAuthHttpClient(opener=lambda request, timeout=30: urlopen(request, timeout=timeout))

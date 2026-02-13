@@ -9,8 +9,9 @@ from orchestrator.core.guardrails import enforce_safe_command
 
 class JiraConfig(BaseModel):
     connection_id: str | None = None
-    project_keys: list[str] = Field(default_factory=list, min_length=1)
+    project_keys: list[str] = Field(default_factory=list)
     ready_statuses: list[str] = Field(default_factory=lambda: ["Ready for Agent"], min_length=1)
+    ready_trigger_mode: str = Field(default="status_recheck", pattern="^(status_recheck|transition_only)$")
     ready_jql: str | None = None
     ready_label: str = Field(default="agent:ready", min_length=1)
     in_progress_label: str = Field(default="agent:in-progress", min_length=1)
@@ -61,11 +62,19 @@ class PolicyConfig(BaseModel):
 
 
 class DiscordConfig(BaseModel):
+    guild_id: str | None = None
     channel_id: str | None = None
     channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
     allowed_user_ids: list[str] = Field(default_factory=list)
     allowlist_requests: list[dict] = Field(default_factory=list)
+
+
+class ProjectDiscordConfig(BaseModel):
+    channel_id: str | None = None
+    notify_events: list[str] = Field(default_factory=list)
+    ask_thread_channel_ids: list[str] = Field(default_factory=list)
+    seed_followup_thread_channel_ids: list[str] = Field(default_factory=list)
 
 
 class TenantCreate(BaseModel):
@@ -105,12 +114,20 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=1)
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
+    policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
+    discord: ProjectDiscordConfig | None = None
 
 
 class ProjectUpdate(BaseModel):
     name: str = Field(min_length=1)
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
+    policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
+    discord: ProjectDiscordConfig | None = None
     is_archived: bool = False
 
 
@@ -120,6 +137,11 @@ class ProjectRead(BaseModel):
     name: str
     github_repository: str
     jira_project_key: str
+    policy_overrides: dict = Field(default_factory=dict)
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
+    discord: ProjectDiscordConfig | None = None
+    effective_policy: PolicyConfig
     is_archived: bool
     created_at: datetime
     updated_at: datetime
@@ -195,6 +217,14 @@ class RepoBootstrapStateRead(BaseModel):
     updated_at: datetime
 
 
+class ReleaseBootstrapReportRead(BaseModel):
+    tenant_id: str
+    ok: bool
+    checks: dict[str, bool] = Field(default_factory=dict)
+    details: list[str] = Field(default_factory=list)
+    checked_at: str
+
+
 class ManagedSecretUpsert(BaseModel):
     value: str = Field(min_length=1)
 
@@ -231,6 +261,118 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class AgentEventRead(BaseModel):
+    event_type: str
+    run_id: str
+    issue_key: str | None = None
+    project_id: str | None = None
+    recorded_at: datetime
+
+
+class AgentActivityRead(BaseModel):
+    tenant_id: str
+    agent_id: str
+    last_seen_at: datetime
+    is_dark: bool
+    events: list[AgentEventRead] = Field(default_factory=list)
+
+
+class ProjectExecutionMetricsRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    tasks_started: int
+    tasks_completed: int
+    tasks_failed: int
+    tasks_blocked: int
+    success_rate_ratio: float
+    average_duration_seconds: float
+    median_duration_seconds: float
+    p95_duration_seconds: float
+    queue_length: int
+    average_time_in_queue_seconds: float
+    stale_queued_tasks: int
+    sla_breaches: int
+
+
+class AlertRead(BaseModel):
+    alert_key: str
+    severity: str
+    scope_type: str
+    scope_id: str | None = None
+    reason: str
+    emitted_at: datetime
+
+
+class AlertEvaluationRead(BaseModel):
+    evaluated_at: datetime
+    cooldown_seconds: int
+    alerts: list[AlertRead] = Field(default_factory=list)
+
+
+class TenantIntegrationHealthRead(BaseModel):
+    jira_connected: bool
+    github_connected: bool
+    jira_webhook_healthy: bool
+
+
+class TenantHealthRead(BaseModel):
+    tenant_id: str
+    active_projects: int
+    active_agents: int
+    total_runs: int
+    failed_runs: int
+    run_failure_rate_ratio: float
+    average_task_duration_seconds: float
+    webhook_events_received: int
+    webhook_events_failed: int
+    webhook_failure_rate_ratio: float
+    integrations: TenantIntegrationHealthRead
+
+
+class ObservabilityDurationStatsRead(BaseModel):
+    average_seconds: float
+    median_seconds: float
+    p95_seconds: float
+
+
+class PlatformObservabilityRead(BaseModel):
+    total_tenants: int
+    enabled_tenants: int
+    total_projects: int
+    active_projects: int
+    total_runs: int
+    active_runs: int
+    failed_runs_last_24h: int
+    run_duration: ObservabilityDurationStatsRead
+
+
+class TenantObservabilityRead(BaseModel):
+    tenant_id: str
+    total_projects: int
+    active_projects: int
+    total_runs: int
+    queued_runs: int
+    running_runs: int
+    succeeded_runs: int
+    failed_runs: int
+    blocked_runs: int
+    stale_runs: int
+    run_duration: ObservabilityDurationStatsRead
+
+
+class ProjectObservabilityRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    total_runs: int
+    queued_runs: int
+    running_runs: int
+    succeeded_runs: int
+    failed_runs: int
+    blocked_runs: int
+    stale_runs: int
+    run_duration: ObservabilityDurationStatsRead
+
+
 class DiscordCommandRequest(BaseModel):
     user_id: str = Field(min_length=1)
     command: str = Field(min_length=2)
@@ -247,6 +389,7 @@ class DiscordCommandResponse(BaseModel):
 
 
 class DiscordAllowlistRequestRead(BaseModel):
+    project_id: str | None = None
     user_id: str
     requested_at: str
     channel_id: str | None = None
@@ -257,6 +400,7 @@ class DiscordAllowlistRequestRead(BaseModel):
 class DiscordAllowlistApprovalResult(BaseModel):
     ok: bool
     details: str
+    project_id: str | None = None
     user_id: str
     notified: bool
 

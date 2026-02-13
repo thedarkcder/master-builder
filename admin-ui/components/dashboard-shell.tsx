@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import {
   Activity,
@@ -20,6 +20,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth-provider";
+import { listProjects, type ProjectRecord } from "@/lib/api";
 import {
   Sidebar,
   SidebarContent,
@@ -43,7 +44,6 @@ type NavItem = {
 const globalNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/tenants/select", label: "Select Tenant", icon: Building2 },
-  { href: "/runs", label: "Runs", icon: Activity },
   { href: "/secrets", label: "Secrets", icon: KeyRound }
 ];
 
@@ -51,6 +51,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { credentials, ready, logout } = useAuth();
+  const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
+  const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\//);
+  const tenantId = tenantMatch ? tenantMatch[1] : null;
 
   useEffect(() => {
     if (ready && !credentials) {
@@ -58,6 +61,29 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       router.replace("/login");
     }
   }, [credentials, logout, ready, router]);
+
+  useEffect(() => {
+    if (!credentials || !tenantId) {
+      setTenantProjects([]);
+      return;
+    }
+    let cancelled = false;
+    void listProjects(credentials, decodeURIComponent(tenantId))
+      .then((projects) => {
+        if (!cancelled) {
+          setTenantProjects(projects);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load tenant projects for sidebar", error);
+        if (!cancelled) {
+          setTenantProjects([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, tenantId]);
 
   if (!ready) {
     return <main className="p-8 text-sm text-muted-foreground">Loading session...</main>;
@@ -67,12 +93,21 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to login...</main>;
   }
 
+  const isWizardRoute =
+    pathname.startsWith("/tenants/new") || /^\/tenants\/[^/]+\/projects\/new(\/|$)/.test(pathname);
+
+  if (isWizardRoute) {
+    return (
+      <div className="min-h-screen bg-background px-4 py-10">
+        <div className="mx-auto w-full max-w-3xl">{children}</div>
+      </div>
+    );
+  }
+
   if (pathname === "/tenants/select") {
     return <div className="min-h-screen bg-background">{children}</div>;
   }
 
-  const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\//);
-  const tenantId = tenantMatch ? tenantMatch[1] : null;
   const tenantNavItems: NavItem[] = tenantId
       ? [
         {
@@ -98,6 +133,18 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           label: "Discord",
           icon: MessageSquare,
           matchPrefix: `/tenants/${tenantId}/edit/discord`
+        },
+        {
+          href: `/tenants/${tenantId}/secrets`,
+          label: "Secrets",
+          icon: KeyRound,
+          matchPrefix: `/tenants/${tenantId}/secrets`
+        },
+        {
+          href: `/tenants/${tenantId}/projects`,
+          label: "Projects",
+          icon: FolderKanban,
+          matchPrefix: `/tenants/${tenantId}/projects`
         },
         {
           href: `/tenants/${tenantId}/edit/health`,
@@ -128,7 +175,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       )
     : [];
   const tenantWorkspaceItems = tenantId
-    ? navItems.filter((item) => !integrationItems.some((integrationsItem) => integrationsItem.href === item.href))
+    ? navItems.filter(
+        (item) =>
+          item.href !== `/tenants/${tenantId}/projects` &&
+          !integrationItems.some((integrationsItem) => integrationsItem.href === item.href)
+      )
     : [];
 
   return (
@@ -175,6 +226,34 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                     </SidebarMenuItem>
                   );
                 })}
+                {tenantId ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={pathname.startsWith(`/tenants/${tenantId}/projects`)}
+                    >
+                      <Link href={`/tenants/${tenantId}/projects`}>
+                        <FolderKanban className="h-4 w-4" />
+                        Projects
+                      </Link>
+                    </SidebarMenuButton>
+                    {tenantProjects.length > 0 ? (
+                      <SidebarMenu className="mt-1 ml-5 space-y-0.5">
+                        {tenantProjects.map((project) => (
+                          <SidebarMenuItem key={project.project_id}>
+                            <SidebarMenuButton
+                              asChild
+                              className="py-1.5 text-xs"
+                              isActive={pathname.startsWith(`/tenants/${tenantId}/projects/${project.project_id}`)}
+                            >
+                              <Link href={`/tenants/${tenantId}/projects/${project.project_id}`}>{project.name}</Link>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    ) : null}
+                  </SidebarMenuItem>
+                ) : null}
               </SidebarMenu>
               <SidebarMenu>
                 <SidebarMenuLabel>Integrations</SidebarMenuLabel>

@@ -153,6 +153,7 @@ export function toCreatePayload(
     },
     discord: values.discordEnabled
       ? {
+          ...values.discord,
           notify_events: values.discord.notify_events
             .map((value) => value.trim())
             .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index)

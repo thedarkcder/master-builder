@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
 from orchestrator.core.runs import enqueue_run
-from orchestrator.core.worker_run_lifecycle import (
+from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
     fail_missing_project_mapping,
@@ -12,7 +12,7 @@ from orchestrator.core.worker_run_lifecycle import (
     resolve_project_for_run,
     start_run,
 )
-from orchestrator.core.workflow_runner import PmPlan, WorkflowDiagnostics, WorkflowResult
+from orchestrator.core.workflow.runner import PmPlan, WorkflowDiagnostics, WorkflowResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, RunLock, Tenant

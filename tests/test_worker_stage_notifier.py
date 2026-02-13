@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from orchestrator.core.worker_stage_notifier import RunStageNotifier
+from orchestrator.core.worker.stage_notifier import RunStageNotifier
 from orchestrator.storage.models import Run, Tenant
 
 
@@ -52,6 +52,7 @@ class WorkerStageNotifierTests(unittest.TestCase):
             tenant=tenant,
             run=run,
             settings=SimpleNamespace(),
+            project=None,
             send_discord_message=fake_discord,
             send_jira_message=fake_jira,
         )
