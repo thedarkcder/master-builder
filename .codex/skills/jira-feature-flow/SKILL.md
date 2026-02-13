@@ -54,7 +54,7 @@ If Jira is unavailable/auth fails:
 6) Add a Jira comment: what changed + how to validate (commands, URLs, steps).
 7) Transition the issue:
    - If outcome = Done -> transition to Done
-   - If outcome = Testing -> transition to Testing (or your team's equivalent)
+   - If outcome = Testing -> transition to Testing (and document how to test)
    - If outcome = Blocked -> transition to Blocked AND add a comment explaining the blocker + what's needed
 8) Final Jira comment: summary + links (PR, commit, build) if available.
 9) When creating or editing PR descriptions, use proper Markdown formatting:
