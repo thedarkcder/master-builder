@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
 from orchestrator.api.schemas import DiscordAllowlistRequestRead
 
 
@@ -53,14 +54,13 @@ def notify_discord_allowlist_approved(
     resolve_secret_ref_fn,
     discord_client_factory,
 ) -> bool:  # noqa: ANN001
-    bot_token_ref = settings.discord_bot_token_secret_ref.strip()
+    bot_token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not bot_token_ref:
         return False
     bot_token = resolve_secret_ref_fn(
         session,
         secret_ref=bot_token_ref,
         encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant_id,
     )
     if not bot_token:
         return False

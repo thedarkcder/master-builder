@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
+from uuid import uuid4
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-
 from orchestrator.api.discord.bug.service import build_discord_bug_description
 from orchestrator.api.discord.shared.response_format import build_jira_issue_url
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraOAuthError
+
+logger = logging.getLogger(__name__)
 
 
 def create_discord_bug_issue(
@@ -87,13 +91,26 @@ def create_discord_bug_issue(
         )
 
     created_issue = create_result.created[0]
-    uploaded_count, upload_warnings = upload_discord_attachments_to_jira_fn(
+    uploaded_count, upload_failures = upload_discord_attachments_to_jira_fn(
         client=oauth["client"],
         access_token=oauth["access_token"],
         cloud_id=oauth["connection"].cloud_id,
         issue_key=created_issue.key,
         attachments=attachments,
+        correlation_id=f"{created_issue.key}:{uuid4().hex}",
     )
+    if upload_failures:
+        attachment_failures = [failure.warning_message() for failure in upload_failures]
+        logger.error(
+            "discord_bug_issue_attachment_upload_failed issue_key=%s tenant_id=%s attachment_failures=%s",
+            created_issue.key,
+            tenant.tenant_id,
+            attachment_failures,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Bug created as {created_issue.key}, but attachment upload failed: {'; '.join(attachment_failures)}",
+        )
 
     browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
     issue_url = build_jira_issue_url(issue_key=created_issue.key, browse_base_url=browse_base_url)
@@ -105,8 +122,6 @@ def create_discord_bug_issue(
         message = f"{message}. Attached {uploaded_count}/{len(attachments)} file(s) to Jira."
     if create_result.errors:
         message = f"{message} (warnings: {'; '.join(create_result.errors)})"
-    if upload_warnings:
-        message = f"{message} (attachment warnings: {'; '.join(upload_warnings)})"
     return (
         message,
         {
@@ -115,6 +130,6 @@ def create_discord_bug_issue(
             "issue_type": "Bug",
             "project_key": project_key,
             "uploaded_attachment_count": uploaded_count,
-            "attachment_warnings": upload_warnings,
+            "attachment_warnings": [],
         },
     )

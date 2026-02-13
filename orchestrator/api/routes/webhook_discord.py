@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -12,12 +13,13 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.shared.state import command_matches
 from orchestrator.api.schemas import DiscordCommandRequest
+from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.api.webhooks.payload_utils import (
     extract_webhook_token as _extract_webhook_token,
     read_json_payload as _read_json_payload,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
 
@@ -25,6 +27,44 @@ router = APIRouter(tags=["discord-webhook"])
 logger = logging.getLogger(__name__)
 
 execute_discord_ingress_command = execute_tenant_discord_ingress_command
+
+
+def _discord_webhook_task_callback(
+    *,
+    tenant_id: str,
+    user_id: str,
+    command: str,
+) -> Any:
+    def _callback(task: asyncio.Task[Any]) -> None:
+        if task.cancelled():
+            logger.warning(
+                "discord_webhook_deferred_command_cancelled tenant_id=%s user_id=%s command=%s",
+                tenant_id,
+                user_id,
+                command,
+            )
+            return
+
+        exc = task.exception()
+        if exc is None:
+            return
+        error_ref = uuid4().hex[:8]
+        logger.exception(
+            "discord_webhook_deferred_command_failed tenant_id=%s user_id=%s command=%s error_ref=%s error=%s",
+            tenant_id,
+            user_id,
+            command,
+            error_ref,
+            exc,
+        )
+        emit_hard_error(
+            event="discord_webhook_deferred_command_failed",
+            error_ref=error_ref,
+            exc=exc,
+            context={"tenant_id": tenant_id, "user_id": user_id, "command": command},
+        )
+
+    return _callback
 
 
 async def _run_discord_webhook_command(
@@ -42,13 +82,6 @@ async def _run_discord_webhook_command(
             session=session,
             defer_seed_issues=defer_seed_issues,
             allow_plain_ask=True,
-        )
-    except Exception:
-        logger.exception(
-            "discord_webhook_deferred_command_failed tenant_id=%s user_id=%s command=%s",
-            tenant_id,
-            payload.user_id,
-            payload.command,
         )
     finally:
         session.close()
@@ -123,11 +156,18 @@ async def ingest_discord_webhook(
         command=normalized_command,
         channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
     )
-    asyncio.create_task(
+    task = asyncio.create_task(
         _run_discord_webhook_command(
             tenant_id=tenant_id,
             payload=command_payload,
             defer_seed_issues=command_matches(normalized_command, command_name="issues", subcommand="seed"),
+        )
+    )
+    task.add_done_callback(
+        _discord_webhook_task_callback(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            command=normalized_command,
         )
     )
     return JSONResponse(

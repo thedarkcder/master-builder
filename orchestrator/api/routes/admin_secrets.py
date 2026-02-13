@@ -10,13 +10,11 @@ from orchestrator.api.schemas import (
     ManagedSecretResolveResult,
     ManagedSecretUpsert,
 )
+from orchestrator.core.platform_secret_service import platform_secret_service
 from orchestrator.core.config import get_settings
+from orchestrator.core.tenant_secret_service import tenant_secret_service
 from orchestrator.core.secret_manager import (
-    list_managed_secret_refs,
     normalize_secret_ref,
-    resolve_secret_ref,
-    resolve_secret_ref_metadata,
-    upsert_managed_secret,
 )
 from orchestrator.core.security import require_admin
 from orchestrator.storage.models import ManagedSecret, Tenant
@@ -30,18 +28,6 @@ def _secret_metadata_to_schema(metadata) -> ManagedSecretRead:  # noqa: ANN001
         source=metadata.source,
         updated_at=metadata.updated_at,
     )
-
-
-def _normalize_platform_secret_ref(secret_ref: str) -> str:
-    normalized_ref = normalize_secret_ref(secret_ref)
-    if normalized_ref.startswith(("tenant/", "project/")):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Platform secrets must use platform/* refs",
-        )
-    if not normalized_ref.startswith("platform/"):
-        normalized_ref = f"platform/{normalized_ref}"
-    return normalized_ref
 
 
 def _build_tenant_secret_ref(*, tenant_id: str, secret_key: str) -> str:
@@ -64,7 +50,7 @@ def list_secrets(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[ManagedSecretRead]:
-    refs = list_managed_secret_refs(session, scope="platform")
+    refs = platform_secret_service.list_secret_refs(session=session)
     return [_secret_metadata_to_schema(metadata) for metadata in refs]
 
 
@@ -77,13 +63,11 @@ def upsert_secret(
 ) -> ManagedSecretRead:
     settings = get_settings()
     try:
-        platform_secret_ref = _normalize_platform_secret_ref(secret_ref)
-        metadata = upsert_managed_secret(
-            session,
-            secret_ref=platform_secret_ref,
+        metadata = platform_secret_service.upsert_secret(
+            session=session,
+            secret_ref=secret_ref,
             plaintext_value=payload.value,
             encryption_key=settings.secrets_encryption_key,
-            scope="platform",
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -98,18 +82,20 @@ def resolve_secret(
 ) -> ManagedSecretResolveResult:
     settings = get_settings()
     try:
-        secret_ref = _normalize_platform_secret_ref(payload.secret_ref)
-        metadata = resolve_secret_ref_metadata(session, secret_ref=secret_ref, scope="platform")
-        resolved_value = resolve_secret_ref(
-            session,
+        secret_ref = payload.secret_ref
+        metadata = platform_secret_service.resolve_secret_metadata(
+            session=session,
+            secret_ref=secret_ref,
+        )
+        resolved_value = platform_secret_service.get(
+            session=session,
             secret_ref=secret_ref,
             encryption_key=settings.secrets_encryption_key,
-            scope="platform",
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return ManagedSecretResolveResult(
-        secret_ref=secret_ref,
+        secret_ref=metadata.secret_ref,
         source=metadata.source,
         resolved=bool(resolved_value),
     )
@@ -121,9 +107,8 @@ def delete_secret(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> Response:
-    normalized_ref = _normalize_platform_secret_ref(secret_ref)
-    resolve_secret_ref_metadata(session, secret_ref=normalized_ref, scope="platform")
-    row = session.get(ManagedSecret, normalized_ref)
+    metadata = platform_secret_service.resolve_secret_metadata(session=session, secret_ref=secret_ref)
+    row = session.get(ManagedSecret, metadata.secret_ref)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found")
     session.delete(row)
@@ -138,7 +123,7 @@ def list_tenant_secrets(
     session: Session = Depends(get_session),
 ) -> list[ManagedSecretRead]:
     _require_tenant_exists(session=session, tenant_id=tenant_id)
-    refs = list_managed_secret_refs(session, scope="tenant", tenant_id=tenant_id)
+    refs = tenant_secret_service.list_secret_refs(session=session, tenant_id=tenant_id)
     return [_secret_metadata_to_schema(metadata) for metadata in refs]
 
 
@@ -154,12 +139,11 @@ def upsert_tenant_secret(
     _require_tenant_exists(session=session, tenant_id=tenant_id)
     secret_ref = _build_tenant_secret_ref(tenant_id=tenant_id, secret_key=secret_key)
     try:
-        metadata = upsert_managed_secret(
-            session,
+        metadata = tenant_secret_service.upsert_secret(
+            session=session,
             secret_ref=secret_ref,
             plaintext_value=payload.value,
             encryption_key=settings.secrets_encryption_key,
-            scope="tenant",
             tenant_id=tenant_id,
         )
     except ValueError as exc:
@@ -177,12 +161,15 @@ def resolve_tenant_secret(
     settings = get_settings()
     _require_tenant_exists(session=session, tenant_id=tenant_id)
     secret_ref = _build_tenant_secret_ref(tenant_id=tenant_id, secret_key=payload.secret_ref)
-    metadata = resolve_secret_ref_metadata(session, secret_ref=secret_ref, scope="tenant", tenant_id=tenant_id)
-    resolved_value = resolve_secret_ref(
-        session,
+    metadata = tenant_secret_service.resolve_secret_metadata(
+        session=session,
+        secret_ref=secret_ref,
+        tenant_id=tenant_id,
+    )
+    resolved_value = tenant_secret_service.resolve_secret_ref(
+        session=session,
         secret_ref=secret_ref,
         encryption_key=settings.secrets_encryption_key,
-        scope="tenant",
         tenant_id=tenant_id,
     )
     return ManagedSecretResolveResult(
@@ -201,7 +188,11 @@ def delete_tenant_secret(
 ) -> Response:
     _require_tenant_exists(session=session, tenant_id=tenant_id)
     secret_ref = _build_tenant_secret_ref(tenant_id=tenant_id, secret_key=secret_key)
-    resolve_secret_ref_metadata(session, secret_ref=secret_ref, scope="tenant", tenant_id=tenant_id)
+    tenant_secret_service.resolve_secret_metadata(
+        session=session,
+        secret_ref=secret_ref,
+        tenant_id=tenant_id,
+    )
     row = session.get(ManagedSecret, secret_ref)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found")

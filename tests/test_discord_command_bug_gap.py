@@ -152,6 +152,19 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         )
         self.assertEqual(create_bug.call_args.kwargs["selected_project_key"], "OTH")
 
+    def test_bug_attachment_failure_is_hard_error(self) -> None:
+        create_bug = Mock(side_effect=HTTPException(status_code=502, detail="attachment upload failed"))
+        with self.assertRaises(HTTPException) as exc:
+            self._dispatch(
+                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug login fails"),
+                command_name="bug",
+                arguments=["login", "fails"],
+                scoped_project_id="project-1",
+                scoped_project_keys=["TP"],
+                create_discord_bug_issue=create_bug,
+            )
+        self.assertEqual(exc.exception.status_code, 502)
+
     def test_bug_with_tenant_scope_fallback_does_not_select_project_key(self) -> None:
         create_bug = Mock(return_value=("Bug logged: OTH-1", {"created_issue_keys": ["OTH-1"]}))
         self._dispatch(

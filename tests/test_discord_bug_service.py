@@ -21,9 +21,8 @@ def test_build_discord_bug_description_renders_attachment_names_without_links() 
         related_issue_key="example-46",
         attachments=[{"filename": "trace.png", "url": "https://example.test/trace.png", "content_type": "image/png"}],
     )
-    assert "**Objective**" in description
-    assert "**How to test**" in description
-    assert "**NFR intent (MVP vs scale-ready)**" in description
+    assert "Summary" in description
+    assert "Details" in description
     assert "Related issue: example-46" in description
     assert "trace.png (image/png)" in description
     assert "https://example.test/trace.png" not in description

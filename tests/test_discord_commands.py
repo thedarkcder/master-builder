@@ -27,7 +27,7 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError
-from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssuePreview
+from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssuePreview, JiraOAuthError
 
 
 class DiscordCommandApiTests(unittest.TestCase):
@@ -1611,7 +1611,6 @@ class DiscordCommandApiTests(unittest.TestCase):
             )
 
         self.assertIn("Attached 1/1 file(s)", message)
-        self.assertEqual(data["uploaded_attachment_count"], 1)
         self.assertEqual(len(fake_client.upload_calls), 1)
         self.assertEqual(fake_client.upload_calls[0]["issue_id_or_key"], "TP-901")
         self.assertEqual(len(fake_client.created_issues), 1)
@@ -1619,6 +1618,76 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("Channel: triage-bugs (discord-channel-1)", created_description)
         self.assertIn("screen.png", created_description)
         self.assertNotIn("https://cdn.discordapp.com/x.png", created_description)
+
+    def test_bug_creation_fails_hard_on_attachment_failure(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            jira_config = dict(tenant.jira_config)
+            jira_config["connection_id"] = "conn-attach-fail"
+            tenant.jira_config = jira_config
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="conn-attach-fail",
+                    account_id="acct-1",
+                    account_email="dev@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://example.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted="enc",
+                    refresh_token_encrypted="enc",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.created_issues: list[object] = []
+
+            def create_issues_bulk(self, **kwargs: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                self.created_issues = list(kwargs.get("issues") or [])
+                return JiraIssueBulkCreateResult(
+                    created=[JiraIssueCreateResult(key="TP-903", issue_id="903")],
+                    errors=[],
+                )
+
+            def upload_issue_attachment(self, **kwargs: object) -> list[dict]:  # noqa: ANN003
+                del kwargs
+                raise JiraOAuthError("Jira attachment upload failed (403): permission denied")
+
+        fake_client = _FakeClient()
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes.discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes.discord._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.discord._resolve_discord_channel_name", return_value="triage-bugs"),
+            patch(
+                "orchestrator.api.routes.discord._download_discord_attachment",
+                return_value=(b"image-bytes", "image/png"),
+            ),
+        ):
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            with self.assertRaises(HTTPException) as exc:
+                _create_discord_bug_issue(
+                    session=session,
+                    tenant=tenant,
+                    summary="Login fails",
+                    details="See screenshot",
+                    reporter_user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    related_issue_key=None,
+                    attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+                    selected_project_key="TP",
+                )
+        self.assertEqual(exc.exception.status_code, 502)
+        self.assertIn("Bug created as TP-903", str(exc.exception.detail))
+        self.assertIn("permission denied", str(exc.exception.detail))
+        self.assertIn("Jira upload", str(exc.exception.detail))
 
     def test_bug_creation_falls_back_to_channel_id_when_name_lookup_unavailable(self) -> None:
         now = datetime.now(timezone.utc)
@@ -1780,7 +1849,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("screen.png", description)
         self.assertNotIn("https://cdn.discordapp.com/x.png", description)
         self.assertIn("Channel: triage-bugs (discord-channel-1)", description)
-        self.assertIn("**How to test**", description)
+        self.assertIn("Reported via Discord", description)
+        self.assertIn("Summary", description)
 
     def test_request_creates_pending_request(self) -> None:
         response = self.client.post(

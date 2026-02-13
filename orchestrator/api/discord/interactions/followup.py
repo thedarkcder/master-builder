@@ -27,7 +27,10 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    resolve_platform_secret_ref,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -259,14 +262,13 @@ def _send_discord_thread_followup(
     content: str,
     components: list[dict] | None = None,
 ) -> None:  # noqa: ANN001
-    token_ref = settings.discord_bot_token_secret_ref.strip()
+    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_scoped_secret_ref(
+    bot_token = resolve_platform_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
@@ -371,14 +373,13 @@ def _send_discord_ask_response_with_thread(
     user_id: str,
     content: str,
 ) -> None:  # noqa: ANN001
-    token_ref = settings.discord_bot_token_secret_ref.strip()
+    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_scoped_secret_ref(
+    bot_token = resolve_platform_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
@@ -445,14 +446,13 @@ def _send_discord_seed_followup_with_thread(
     request_id: str,
     questions: list[str],
 ) -> None:  # noqa: ANN001
-    token_ref = settings.discord_bot_token_secret_ref.strip()
+    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_scoped_secret_ref(
+    bot_token = resolve_platform_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")

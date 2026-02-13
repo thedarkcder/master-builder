@@ -33,17 +33,11 @@ class _SessionFactory:
 class DiscordCommandSyncRuntimeTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(
-            discord_bot_token_secret_ref="platform/DISCORD_BOT_TOKEN",
             discord_guild_id="guild-1",
-            discord_guild_id_secret_ref="",
             secrets_encryption_key="enc",
         )
 
     def test_sync_discord_guild_commands_guard_paths(self) -> None:
-        settings = self._settings()
-        settings.discord_bot_token_secret_ref = ""
-        self.assertFalse(sync_discord_guild_commands(settings=settings, session_factory=_SessionFactory(MagicMock())))
-
         settings = self._settings()
         resolver = MagicMock(return_value="")
         self.assertFalse(
@@ -56,8 +50,7 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
 
         settings = self._settings()
         settings.discord_guild_id = ""
-        settings.discord_guild_id_secret_ref = ""
-        resolver = MagicMock(return_value="token")
+        resolver = MagicMock(side_effect=lambda _session, **kwargs: "token" if kwargs["secret_ref"] != "DISCORD_GUILD_ID" else "")
         self.assertFalse(
             sync_discord_guild_commands(
                 settings=settings,
@@ -71,7 +64,7 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         session_factory = _SessionFactory(MagicMock())
 
         def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
-            if secret_ref == "platform/DISCORD_BOT_TOKEN":
+            if secret_ref == "DISCORD_BOT_TOKEN":
                 return "bot-token"
             return "guild-from-secret"
 
@@ -103,7 +96,6 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
 class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
     def _listener(self) -> tuple[DiscordGatewayListener, MagicMock]:
         settings = SimpleNamespace(
-            discord_bot_token_secret_ref="platform/DISCORD_BOT_TOKEN",
             secrets_encryption_key="enc",
         )
         session = MagicMock()

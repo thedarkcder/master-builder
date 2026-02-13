@@ -40,11 +40,6 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 
-        os.environ["GITHUB_APP_ID"] = "12345"
-        os.environ["GITHUB_APP_PRIVATE_KEY"] = "not-a-real-key-for-tests"
-        os.environ["JIRA_OAUTH_CLIENT_ID"] = "jira-client-id"
-        os.environ["JIRA_OAUTH_CLIENT_SECRET"] = "jira-client-secret"
-
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
@@ -52,7 +47,7 @@ class AdminApiTests(unittest.TestCase):
 
         self.client = TestClient(create_app())
         seed_slug_secret_response = self.client.put(
-            "/api/admin/secrets/GITHUB_APP_SLUG",
+            "/api/admin/secrets/platform%2FGITHUB_APP_SLUG",
             json={"value": "master-builder-app"},
             auth=("admin", "secret"),
         )
@@ -61,13 +56,29 @@ class AdminApiTests(unittest.TestCase):
                 f"Failed to seed GITHUB_APP_SLUG secret for tests: {seed_slug_secret_response.text}"
             )
 
+        self.client.put(
+            "/api/admin/secrets/platform%2FGITHUB_APP_ID",
+            json={"value": "12345"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/secrets/platform%2FGITHUB_APP_PRIVATE_KEY",
+            json={"value": "not-a-real-key-for-tests"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
+            json={"value": "jira-client-id"},
+            auth=("admin", "secret"),
+        )
+        self.client.put(
+            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
+            json={"value": "jira-client-secret"},
+            auth=("admin", "secret"),
+        )
+
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
-        os.environ.pop("GITHUB_APP_ID", None)
-        os.environ.pop("GITHUB_APP_PRIVATE_KEY", None)
-        os.environ.pop("JIRA_OAUTH_CLIENT_ID", None)
-        os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
-
         os.environ.pop("ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", None)
         os.environ.pop("ORCHESTRATOR_ADMIN_UI_BASE_URL", None)
         os.environ.pop("ORCHESTRATOR_PUBLIC_API_BASE_URL", None)
@@ -185,7 +196,7 @@ class AdminApiTests(unittest.TestCase):
 
     def test_managed_secret_upsert_and_resolve(self) -> None:
         put_response = self.client.put(
-            "/api/admin/secrets/secret%2Fgithub-webhook",
+            "/api/admin/secrets/platform%2Fsecret%2Fgithub-webhook",
             json={"value": "managed-webhook-secret"},
             auth=("admin", "secret"),
         )
@@ -200,7 +211,7 @@ class AdminApiTests(unittest.TestCase):
 
         resolve_response = self.client.post(
             "/api/admin/secrets/resolve",
-            json={"secret_ref": "secret/github-webhook"},
+            json={"secret_ref": "platform/secret/github-webhook"},
             auth=("admin", "secret"),
         )
         self.assertEqual(resolve_response.status_code, 200)
@@ -298,21 +309,21 @@ class AdminApiTests(unittest.TestCase):
 
     def test_managed_secret_delete(self) -> None:
         put_response = self.client.put(
-            "/api/admin/secrets/temporary-secret",
+            "/api/admin/secrets/platform%2Ftemporary-secret",
             json={"value": "temp-value"},
             auth=("admin", "secret"),
         )
         self.assertEqual(put_response.status_code, 200)
 
         delete_response = self.client.delete(
-            "/api/admin/secrets/temporary-secret",
+            "/api/admin/secrets/platform%2Ftemporary-secret",
             auth=("admin", "secret"),
         )
         self.assertEqual(delete_response.status_code, 204)
 
         resolve_response = self.client.post(
             "/api/admin/secrets/resolve",
-            json={"secret_ref": "temporary-secret"},
+            json={"secret_ref": "platform/temporary-secret"},
             auth=("admin", "secret"),
         )
         self.assertEqual(resolve_response.status_code, 200)
@@ -320,7 +331,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(resolve_response.json()["source"], "missing")
 
         missing_delete_response = self.client.delete(
-            "/api/admin/secrets/temporary-secret",
+            "/api/admin/secrets/platform%2Ftemporary-secret",
             auth=("admin", "secret"),
         )
         self.assertEqual(missing_delete_response.status_code, 404)
@@ -330,12 +341,12 @@ class AdminApiTests(unittest.TestCase):
         os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
 
         self.client.put(
-            "/api/admin/secrets/JIRA_OAUTH_CLIENT_ID",
+            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
             json={"value": "jira-client-id-managed"},
             auth=("admin", "secret"),
         )
         self.client.put(
-            "/api/admin/secrets/JIRA_OAUTH_CLIENT_SECRET",
+            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
             json={"value": "jira-client-secret-managed"},
             auth=("admin", "secret"),
         )
@@ -1011,7 +1022,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Project not found")
 
-    def test_github_secret_resolution_prefers_tenant_scope_over_platform(self) -> None:
+    def test_github_secret_resolution_prefers_platform_scope_for_unscoped_refs(self) -> None:
         payload = self._tenant_payload()
         payload["github"]["installation_id"] = "12345"
         create_response = self.client.post(
@@ -1056,8 +1067,8 @@ class AdminApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(captured["app_id"], "tenant-app-id")
-        self.assertEqual(captured["private_key"], "tenant-private-key")
+        self.assertEqual(captured["app_id"], "platform-app-id")
+        self.assertEqual(captured["private_key"], "platform-private-key")
 
     def test_delete_tenant(self) -> None:
         payload = self._tenant_payload()
@@ -1895,7 +1906,7 @@ class AdminApiTests(unittest.TestCase):
             session.commit()
 
         seed_token_secret = self.client.put(
-            "/api/admin/secrets/DISCORD_BOT_TOKEN",
+            "/api/admin/secrets/platform%2FDISCORD_BOT_TOKEN",
             json={"value": "test-discord-bot-token"},
             auth=("admin", "secret"),
         )

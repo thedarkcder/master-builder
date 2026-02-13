@@ -70,7 +70,12 @@ from orchestrator.api.schemas import (
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import validate_enforcement_assets
 from orchestrator.core.project_policy import normalize_project_policy_overrides
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_GITHUB_APP_ID_REF,
+    PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF,
+)
+from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
@@ -290,7 +295,7 @@ def notify_discord_allowlist_approved(
         settings=settings,
         tenant_id=tenant_id,
         user_id=user_id,
-        resolve_secret_ref_fn=resolve_scoped_secret_ref,
+        resolve_secret_ref_fn=resolve_platform_secret_ref,
         discord_client_factory=DiscordApiClient,
     )
 
@@ -408,8 +413,13 @@ def discover_project_run_board_id(
                         fallback_board_id = board_id
                 if fallback_board_id is not None:
                     return fallback_board_id
-    except (JiraOAuthError, ValueError):
-        pass
+    except (JiraOAuthError, ValueError) as exc:
+        logger.warning(
+            "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=board_list_lookup_failed error=%s",
+            tenant.tenant_id,
+            jira_project_key,
+            exc,
+        )
 
     for board_id in range(1, _MAX_BOARD_DISCOVERY_SCAN + 1):
         board_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/agile/1.0/board/{board_id}"
@@ -440,20 +450,28 @@ def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, proj
     github_config = tenant.github_config or {}
     if str(github_config.get("mode") or "").strip() != "github_app":
         return
-    app_id_ref = str(github_config.get("app_id_ref") or settings.github_app_id_ref).strip()
-    private_key_ref = str(github_config.get("private_key_ref") or settings.github_private_key_ref).strip()
-    app_id = resolve_scoped_secret_ref(
-        session,
-        secret_ref=app_id_ref,
-        encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
-    )
-    private_key = resolve_scoped_secret_ref(
-        session,
-        secret_ref=private_key_ref,
-        encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
-    )
+    app_id_ref = str(github_config.get("app_id_ref") or PLATFORM_SECRET_GITHUB_APP_ID_REF).strip()
+    private_key_ref = str(github_config.get("private_key_ref") or PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF).strip()
+
+    def _resolve_project_secret_ref(secret_ref: str) -> str | None:
+        normalized_secret_ref = secret_ref.strip()
+        if not normalized_secret_ref:
+            return None
+        if normalized_secret_ref.startswith(("tenant/", "project/")):
+            return resolve_scoped_secret_ref(
+                session,
+                secret_ref=normalized_secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+                tenant_id=tenant.tenant_id,
+            )
+        return resolve_platform_secret_ref(
+            session,
+            secret_ref=normalized_secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        )
+
+    app_id = _resolve_project_secret_ref(secret_ref=app_id_ref)
+    private_key = _resolve_project_secret_ref(secret_ref=private_key_ref)
     if not app_id or not private_key:
         logger.info(
             "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_secrets_unavailable",
