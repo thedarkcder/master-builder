@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from urllib.error import HTTPError
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -62,6 +63,21 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         )
         with patch("orchestrator.api.discord.interactions.followup.urlopen", side_effect=error):
             with self.assertRaisesRegex(RuntimeError, "500"):
+                _send_discord_interaction_followup(
+                    application_id="app",
+                    interaction_token="token",
+                    content="hello",
+                )
+
+        expired_error = HTTPError(
+            url="https://discord.com",
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=BytesIO(b'{"message":"Unknown Webhook","code":10015}'),
+        )
+        with patch("orchestrator.api.discord.interactions.followup.urlopen", side_effect=expired_error):
+            with self.assertRaises(DiscordInteractionWebhookExpiredError):
                 _send_discord_interaction_followup(
                     application_id="app",
                     interaction_token="token",

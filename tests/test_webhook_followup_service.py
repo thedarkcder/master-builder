@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
+from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.core.observability import current_log_context, reset_log_context, set_log_context
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -66,7 +67,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
         execute = MagicMock(
             return_value=SimpleNamespace(
-                command="ask",
+                command="runs",
                 message="Done",
                 data={"issue_key": "example-46"},
             )
@@ -118,6 +119,36 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         kwargs = transport.send_interaction_followup.call_args.kwargs
         self.assertEqual(kwargs["reply_to_message_id"], "123456789012345678")
         self.assertEqual(kwargs["channel_id"], "c-1")
+
+    def test_command_followup_unknown_interaction_webhook_falls_back_to_channel_send(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(
+            return_value=SimpleNamespace(
+                command="runs",
+                message="Done",
+                data={"issue_key": "example-46"},
+            )
+        )
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        transport.send_interaction_followup.side_effect = DiscordInteractionWebhookExpiredError("Unknown Webhook")
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!runs",
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        transport.send_interaction_followup.assert_called_once()
+        transport.send_thread_reply.assert_called_once()
+        kwargs = transport.send_thread_reply.call_args.kwargs
+        self.assertEqual(kwargs["channel_id"], "c-1")
+        self.assertTrue(kwargs["reply_to_message_id"].startswith("interaction-"))
 
     def test_command_followup_ask_confirmation_incomplete_payload(self) -> None:
         session = MagicMock()
