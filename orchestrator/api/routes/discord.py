@@ -605,11 +605,16 @@ def _collect_github_ask_context(
     try:
         github_client = github_client_from_tenant_config(
             tenant.github_config,
-            secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+            tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
                 session,
                 secret_ref=secret_ref,
                 encryption_key=settings.secrets_encryption_key,
                 tenant_id=tenant.tenant_id,
+            ),
+            platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                encryption_key=settings.secrets_encryption_key,
             ),
         )
     except ValueError as exc:

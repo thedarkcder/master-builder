@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -86,10 +85,29 @@ def _parse_github_datetime(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _is_scoped_secret_ref(secret_ref: str) -> bool:
+    return str(secret_ref).strip().startswith(("tenant/", "project/"))
+
+
+def _resolve_github_secret_ref(
+    secret_ref: str,
+    *,
+    tenant_secret_lookup: Callable[[str], str | None],
+    platform_secret_lookup: Callable[[str], str | None],
+) -> str | None:
+    normalized_secret_ref = str(secret_ref).strip()
+    if not normalized_secret_ref:
+        return None
+    if _is_scoped_secret_ref(normalized_secret_ref):
+        return tenant_secret_lookup(normalized_secret_ref)
+    return platform_secret_lookup(normalized_secret_ref)
+
+
 def github_client_from_tenant_config(
     tenant_github_config: dict,
     *,
-    secret_lookup: Callable[[str], str | None] | None = None,
+    tenant_secret_lookup: Callable[[str], str | None],
+    platform_secret_lookup: Callable[[str], str | None],
 ) -> "GitHubAppClient":
     mode = str(tenant_github_config.get("mode") or "")
     if mode != "github_app":
@@ -102,13 +120,19 @@ def github_client_from_tenant_config(
     if not installation_id:
         raise ValueError("Missing github_app required config fields")
 
-    resolver = secret_lookup or os.environ.get
-
-    app_id = resolver(app_id_ref)
+    app_id = _resolve_github_secret_ref(
+        app_id_ref,
+        tenant_secret_lookup=tenant_secret_lookup,
+        platform_secret_lookup=platform_secret_lookup,
+    )
     if not app_id:
         raise ValueError(f"Missing GitHub App ID secret for ref '{app_id_ref}'")
 
-    private_key_pem = resolver(private_key_ref)
+    private_key_pem = _resolve_github_secret_ref(
+        private_key_ref,
+        tenant_secret_lookup=tenant_secret_lookup,
+        platform_secret_lookup=platform_secret_lookup,
+    )
     if not private_key_pem:
         raise ValueError(f"Missing GitHub private key secret for ref '{private_key_ref}'")
 

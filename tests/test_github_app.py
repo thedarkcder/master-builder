@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 import unittest
 from io import BytesIO
 from urllib.error import HTTPError
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from jwt.exceptions import InvalidKeyError
 
@@ -215,26 +214,109 @@ class GitHubAppClientTests(unittest.TestCase):
             "installation_id": "101",
         }
 
-        os.environ.pop("TEST_GH_APP_ID", None)
-        os.environ.pop("TEST_GH_PRIVATE_KEY", None)
-        with self.assertRaises(ValueError):
-            github_client_from_tenant_config(config)
+        tenant_secret_lookup = MagicMock(return_value=None)
+        platform_secret_lookup = MagicMock(return_value=None)
 
-        os.environ["TEST_GH_APP_ID"] = "777"
-        os.environ["TEST_GH_PRIVATE_KEY"] = "fake-private-key"
-        try:
-            client = github_client_from_tenant_config(config)
-            self.assertIsInstance(client, GitHubAppClient)
-        finally:
-            os.environ.pop("TEST_GH_APP_ID", None)
-            os.environ.pop("TEST_GH_PRIVATE_KEY", None)
+        with self.assertRaises(ValueError):
+            github_client_from_tenant_config(config, tenant_secret_lookup=tenant_secret_lookup, platform_secret_lookup=platform_secret_lookup)
+
+        tenant_secret_lookup = MagicMock(return_value="tenant-app-id")
+        platform_secret_lookup = MagicMock(return_value="fake-private-key")
+        client = github_client_from_tenant_config(config, tenant_secret_lookup=tenant_secret_lookup, platform_secret_lookup=platform_secret_lookup)
+        self.assertIsInstance(client, GitHubAppClient)
+
+    def test_github_client_from_tenant_config_resolves_tenant_and_platform_refs(self) -> None:
+        tenant_secret_lookup = MagicMock(side_effect=lambda secret_ref: "tenant-app-id" if secret_ref.endswith("GITHUB_APP_ID") else "tenant-private-key")
+        platform_secret_lookup = MagicMock(return_value="platform-mismatch")
+        config = {
+            "mode": "github_app",
+            "app_id_ref": "tenant/route25/GITHUB_APP_ID",
+            "private_key_ref": "tenant/route25/GITHUB_APP_PRIVATE_KEY",
+            "installation_id": "101",
+        }
+        client = github_client_from_tenant_config(
+            config,
+            tenant_secret_lookup=tenant_secret_lookup,
+            platform_secret_lookup=platform_secret_lookup,
+        )
+        self.assertEqual(client._config.app_id, "tenant-app-id")
+        self.assertEqual(client._config.private_key_pem, "tenant-private-key")
+        self.assertEqual(tenant_secret_lookup.call_count, 2)
+        self.assertEqual(platform_secret_lookup.call_count, 0)
+
+    def test_github_client_from_tenant_config_uses_platform_resolver_for_unscoped_refs(self) -> None:
+        tenant_secret_lookup = MagicMock(return_value=None)
+        platform_secret_lookup = MagicMock(side_effect=lambda secret_ref: "platform-app-id" if "APP_ID" in secret_ref else "platform-private-key")
+        config = {
+            "mode": "github_app",
+            "app_id_ref": "GITHUB_APP_ID",
+            "private_key_ref": "GITHUB_APP_PRIVATE_KEY",
+            "installation_id": "101",
+        }
+        client = github_client_from_tenant_config(
+            config,
+            tenant_secret_lookup=tenant_secret_lookup,
+            platform_secret_lookup=platform_secret_lookup,
+        )
+        self.assertEqual(client._config.app_id, "platform-app-id")
+        self.assertEqual(client._config.private_key_pem, "platform-private-key")
+        self.assertEqual(tenant_secret_lookup.call_count, 0)
+        self.assertEqual(platform_secret_lookup.call_count, 2)
+
+    def test_github_client_from_tenant_config_returns_error_if_scoped_lookup_missing(self) -> None:
+        tenant_secret_lookup = MagicMock(return_value=None)
+        platform_secret_lookup = MagicMock(return_value="platform-private-key")
+        config = {
+            "mode": "github_app",
+            "app_id_ref": "tenant/route25/GITHUB_APP_ID",
+            "private_key_ref": "GITHUB_APP_PRIVATE_KEY",
+            "installation_id": "101",
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "Missing GitHub App ID secret for ref 'tenant/route25/GITHUB_APP_ID'",
+        ):
+            github_client_from_tenant_config(
+                config,
+                tenant_secret_lookup=tenant_secret_lookup,
+                platform_secret_lookup=platform_secret_lookup,
+            )
+
+    def test_github_client_from_tenant_config_returns_error_if_platform_lookup_missing(self) -> None:
+        tenant_secret_lookup = MagicMock(return_value="tenant-private-key")
+        platform_secret_lookup = MagicMock(return_value=None)
+        config = {
+            "mode": "github_app",
+            "app_id_ref": "GITHUB_APP_ID",
+            "private_key_ref": "GITHUB_APP_PRIVATE_KEY",
+            "installation_id": "101",
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "Missing GitHub App ID secret for ref 'GITHUB_APP_ID'",
+        ):
+            github_client_from_tenant_config(
+                config,
+                tenant_secret_lookup=tenant_secret_lookup,
+                platform_secret_lookup=platform_secret_lookup,
+            )
+        self.assertEqual(tenant_secret_lookup.call_count, 0)
+        self.assertEqual(platform_secret_lookup.call_count, 1)
 
     def test_github_client_from_tenant_config_rejects_invalid_mode_and_missing_installation(self) -> None:
         with self.assertRaisesRegex(ValueError, "supported"):
-            github_client_from_tenant_config({"mode": "token"})
+            github_client_from_tenant_config(
+                {"mode": "token"},
+                tenant_secret_lookup=lambda ref: None,
+                platform_secret_lookup=lambda ref: None,
+            )
 
         with self.assertRaisesRegex(ValueError, "required config fields"):
-            github_client_from_tenant_config({"mode": "github_app", "installation_id": ""})
+            github_client_from_tenant_config(
+                {"mode": "github_app", "installation_id": ""},
+                tenant_secret_lookup=lambda ref: None,
+                platform_secret_lookup=lambda ref: None,
+            )
 
     def test_request_json_http_error_and_empty_body_paths(self) -> None:
         config = GitHubAppConfig(app_id="1", installation_id="2", private_key_pem="pem")
