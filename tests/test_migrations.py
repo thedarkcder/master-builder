@@ -1,6 +1,7 @@
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine, inspect
 
@@ -8,6 +9,18 @@ from orchestrator.storage.migrations import run_migrations
 
 
 class MigrationTests(unittest.TestCase):
+    def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
+        fake_config = MagicMock()
+        fake_config.attributes = {}
+        with (
+            patch("orchestrator.storage.migrations.Config", return_value=fake_config),
+            patch("orchestrator.storage.migrations.command.upgrade") as upgrade_mock,
+        ):
+            run_migrations(database_url="sqlite:///tmp/test.db")
+
+        self.assertEqual(fake_config.attributes.get("configure_logger"), False)
+        upgrade_mock.assert_called_once_with(fake_config, "head")
+
     def test_migrations_create_expected_tables(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
