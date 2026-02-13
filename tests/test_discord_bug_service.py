@@ -21,6 +21,8 @@ def test_build_discord_bug_description_renders_attachment_links() -> None:
         related_issue_key="YANA-46",
         attachments=[{"filename": "trace.png", "url": "https://example.test/trace.png", "content_type": "image/png"}],
     )
-    assert "Reported via Discord" in description
+    assert "**Objective**" in description
+    assert "**How to test**" in description
+    assert "**NFR intent (MVP vs scale-ready)**" in description
     assert "Related issue: YANA-46" in description
     assert "[trace.png](https://example.test/trace.png)" in description

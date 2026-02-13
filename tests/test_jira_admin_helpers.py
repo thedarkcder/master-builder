@@ -9,6 +9,7 @@ from orchestrator.api.admin import (
     jira_oauth_helpers,
     jira_webhook_delete,
     jira_webhook_helpers,
+    jira_webhook_provision,
     jira_webhook_response_helpers,
 )
 from orchestrator.api.schemas import JiraWebhookActionResult
@@ -272,6 +273,94 @@ class JiraWebhookDeleteTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(ids, [1])
         self.assertIn("Failed to delete Jira webhooks", details)
+
+
+class JiraWebhookProvisionTests(unittest.TestCase):
+    def test_replace_existing_cleans_up_stale_webhooks_after_successful_registration(self) -> None:
+        session = MagicMock()
+        connection = SimpleNamespace(cloud_id="cloud-1")
+        session.get.return_value = connection
+        tenant = SimpleNamespace(
+            tenant_id="route25",
+            jira_config={"connection_id": "conn-1", "managed_webhook_ids": [101, 102]},
+            updated_at=None,
+        )
+
+        client = MagicMock()
+        client.register_webhook.return_value = [102, 200]
+
+        result = jira_webhook_provision.provision_jira_webhook(
+            session=session,
+            tenant=tenant,
+            settings=SimpleNamespace(),
+            replace_existing=True,
+            jira_webhook_events=["jira:issue_updated"],
+            delete_jira_webhooks_fn=MagicMock(),
+            parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
+            refresh_jira_connection_tokens_fn=MagicMock(return_value="token"),
+            jira_oauth_client_fn=MagicMock(return_value=client),
+            jira_webhook_callback_url_fn=MagicMock(return_value="https://api.example.com/jira/webhook/route25"),
+            jira_webhook_filter_jql_fn=MagicMock(return_value='project in ("MAB")'),
+            is_jira_webhook_limit_error_fn=MagicMock(return_value=False),
+            cleanup_unmanaged_jira_webhooks_for_connection_fn=MagicMock(return_value=(0, "noop")),
+            parse_jira_webhook_id_fn=jira_webhook_helpers.parse_jira_webhook_id,
+            remove_managed_webhook_id_from_tenants_fn=MagicMock(return_value=0),
+            is_jira_webhook_single_url_error_fn=MagicMock(return_value=False),
+            extract_jira_webhook_conflict_url_fn=MagicMock(return_value=None),
+            cleanup_conflicting_jira_webhook_url_fn=MagicMock(return_value=(0, "noop")),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.webhook_ids, [102, 200])
+        self.assertIn("Deleted 1 previous managed Jira webhook(s).", result.details)
+        self.assertEqual(tenant.jira_config["managed_webhook_ids"], [102, 200])
+        client.delete_webhooks.assert_called_once_with(
+            access_token="token",
+            cloud_id="cloud-1",
+            webhook_ids=[101],
+        )
+        session.commit.assert_called_once()
+
+    def test_replace_existing_keeps_new_registration_when_stale_cleanup_fails(self) -> None:
+        session = MagicMock()
+        connection = SimpleNamespace(cloud_id="cloud-1")
+        session.get.return_value = connection
+        tenant = SimpleNamespace(
+            tenant_id="route25",
+            jira_config={"connection_id": "conn-1", "managed_webhook_ids": [101]},
+            updated_at=None,
+        )
+
+        client = MagicMock()
+        client.register_webhook.return_value = [300]
+        client.delete_webhooks.side_effect = ValueError("cleanup failed")
+
+        result = jira_webhook_provision.provision_jira_webhook(
+            session=session,
+            tenant=tenant,
+            settings=SimpleNamespace(),
+            replace_existing=True,
+            jira_webhook_events=["jira:issue_updated"],
+            delete_jira_webhooks_fn=MagicMock(),
+            parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
+            refresh_jira_connection_tokens_fn=MagicMock(return_value="token"),
+            jira_oauth_client_fn=MagicMock(return_value=client),
+            jira_webhook_callback_url_fn=MagicMock(return_value="https://api.example.com/jira/webhook/route25"),
+            jira_webhook_filter_jql_fn=MagicMock(return_value='project in ("MAB")'),
+            is_jira_webhook_limit_error_fn=MagicMock(return_value=False),
+            cleanup_unmanaged_jira_webhooks_for_connection_fn=MagicMock(return_value=(0, "noop")),
+            parse_jira_webhook_id_fn=jira_webhook_helpers.parse_jira_webhook_id,
+            remove_managed_webhook_id_from_tenants_fn=MagicMock(return_value=0),
+            is_jira_webhook_single_url_error_fn=MagicMock(return_value=False),
+            extract_jira_webhook_conflict_url_fn=MagicMock(return_value=None),
+            cleanup_conflicting_jira_webhook_url_fn=MagicMock(return_value=(0, "noop")),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.webhook_ids, [300])
+        self.assertIn("Registered new webhook(s) but could not delete 1 previous managed webhook(s)", result.details)
+        self.assertEqual(tenant.jira_config["managed_webhook_ids"], [300])
+        session.commit.assert_called_once()
 
 
 if __name__ == "__main__":

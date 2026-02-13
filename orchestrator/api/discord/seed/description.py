@@ -7,6 +7,9 @@ def build_seed_issue_description(
     scope_in: list[str],
     scope_out: list[str],
     acceptance_criteria: list[str],
+    how_to_test: list[str],
+    nfr_intent: str,
+    dependencies_and_risks: list[str],
 ) -> dict:
     def heading(text: str) -> dict:
         return {
@@ -30,6 +33,9 @@ def build_seed_issue_description(
     scope_in_items = scope_in if scope_in else ["Not specified"]
     scope_out_items = scope_out if scope_out else ["Not specified"]
     acceptance_items = acceptance_criteria if acceptance_criteria else ["Criteria were not provided"]
+    how_to_test_items = how_to_test if how_to_test else ["How-to-test steps were not provided"]
+    normalized_nfr_intent = nfr_intent.strip() if nfr_intent.strip() else "Not specified (MVP or scale-ready decision required)"
+    dependency_items = dependencies_and_risks if dependencies_and_risks else ["No explicit dependencies or risks were provided"]
 
     content = [
         heading("Objective"),
@@ -40,6 +46,12 @@ def build_seed_issue_description(
         bullet_list(scope_out_items),
         heading("Acceptance Criteria"),
         bullet_list(acceptance_items),
+        heading("How to test"),
+        bullet_list(how_to_test_items),
+        heading("NFR intent (MVP vs scale-ready)"),
+        bullet_list([normalized_nfr_intent]),
+        heading("Dependencies / Risks"),
+        bullet_list(dependency_items),
         heading("Good To Do Checklist"),
         bullet_list(
             [
@@ -48,6 +60,7 @@ def build_seed_issue_description(
                 "[ ] Acceptance criteria are testable",
                 "[ ] How-to-test is defined",
                 "[ ] MVP vs scale-ready is decided",
+                "[ ] Dependencies and risks are identified",
             ]
         ),
         heading("Decision Gate Triggers"),
