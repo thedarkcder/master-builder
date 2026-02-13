@@ -21,7 +21,7 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.reviewer import ReviewAgentGate
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 
 logger = logging.getLogger(__name__)

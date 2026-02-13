@@ -4,7 +4,11 @@ import logging
 from typing import Callable
 
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.secret_manager import resolve_secret_ref
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
+    resolve_platform_secret_ref,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
@@ -226,12 +230,12 @@ def sync_discord_guild_commands(
     settings: Settings | None = None,
     session_factory=None,  # noqa: ANN001
     client_factory: Callable[..., DiscordApiClient] = DiscordApiClient,
-    secret_resolver: Callable[..., str | None] = resolve_secret_ref,
+    secret_resolver: Callable[..., str | None] = resolve_platform_secret_ref,
 ) -> bool:
     resolved_settings = settings or get_settings()
     resolved_session_factory = session_factory or create_session_factory()
 
-    bot_token_ref = resolved_settings.discord_bot_token_secret_ref.strip()
+    bot_token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not bot_token_ref:
         logger.info("discord_command_sync_skipped reason=missing_bot_token_ref")
         return False
@@ -251,16 +255,14 @@ def sync_discord_guild_commands(
 
         guild_id = resolved_settings.discord_guild_id.strip()
         if not guild_id:
-            guild_ref = resolved_settings.discord_guild_id_secret_ref.strip()
-            if guild_ref:
-                guild_id = (
-                    secret_resolver(
-                        session,
-                        secret_ref=guild_ref,
-                        encryption_key=resolved_settings.secrets_encryption_key,
-                    )
-                    or ""
-                ).strip()
+            guild_id = (
+                secret_resolver(
+                    session,
+                    secret_ref=PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
+                    encryption_key=resolved_settings.secrets_encryption_key,
+                )
+                or ""
+            ).strip()
         if not guild_id:
             logger.info("discord_command_sync_skipped reason=missing_guild_id")
             return False

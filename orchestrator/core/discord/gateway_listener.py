@@ -22,7 +22,10 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.config import Settings
 from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    resolve_platform_secret_ref,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -92,7 +95,7 @@ class DiscordGatewayListener:
         if websockets is None:
             logger.warning("discord_gateway_listener_disabled reason=missing_websockets_dependency")
             return
-        token_ref = self._settings.discord_bot_token_secret_ref.strip()
+        token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
         if not token_ref:
             logger.info("discord_gateway_listener_skipped reason=missing_bot_token_ref")
             return
@@ -112,7 +115,7 @@ class DiscordGatewayListener:
 
     def _resolve_bot_token(self, *, token_ref: str) -> str:
         with self._session_factory() as session:
-            value = resolve_scoped_secret_ref(
+            value = resolve_platform_secret_ref(
                 session,
                 secret_ref=token_ref,
                 encryption_key=self._settings.secrets_encryption_key,

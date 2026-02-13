@@ -17,10 +17,15 @@ class JiraOauthServiceModuleTests(unittest.TestCase):
         session = MagicMock()
         settings = SimpleNamespace(secrets_encryption_key="enc")
 
-        with patch("orchestrator.api.jira_oauth.service.resolve_scoped_secret_ref", return_value="value"):
+        with patch(
+            "orchestrator.api.jira_oauth.service.resolve_platform_secret_ref",
+            return_value="value",
+        ) as resolve_secret_mock:
             self.assertEqual(resolve_secret_ref(session, ref_name="REF", settings=settings), "value")
+        resolve_secret_mock.assert_called_once()
+        self.assertEqual(resolve_secret_mock.call_args.kwargs["secret_ref"], "REF")
 
-        with patch("orchestrator.api.jira_oauth.service.resolve_scoped_secret_ref", return_value=""):
+        with patch("orchestrator.api.jira_oauth.service.resolve_platform_secret_ref", return_value=""):
             with self.assertRaisesRegex(ValueError, "Missing secret value"):
                 resolve_secret_ref(session, ref_name="REF", settings=settings)
 

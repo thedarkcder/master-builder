@@ -137,5 +137,48 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(execute_mock.call_args.kwargs["defer_seed_issues"])
         session.close.assert_called_once()
 
+    async def test_deferred_runner_reraises_execution_errors(self) -> None:
+        session = MagicMock()
+        session_factory = MagicMock(return_value=session)
+        payload = SimpleNamespace(user_id="user-1", command="!status", channel_id="channel-1")
+        execute_mock = MagicMock(side_effect=RuntimeError("execution failed"))
+
+        with (
+            patch("orchestrator.api.routes.webhook_discord.create_session_factory", return_value=session_factory),
+            patch("orchestrator.api.routes.webhook_discord.execute_discord_ingress_command", execute_mock),
+            patch("orchestrator.api.routes.webhook_discord.emit_hard_error"),
+        ):
+            with self.assertRaises(RuntimeError):
+                await _run_discord_webhook_command(
+                    tenant_id="example",
+                    payload=payload,
+                    defer_seed_issues=False,
+                )
+
+        session.close.assert_called_once()
+
+    async def test_ingest_webhook_routes_task_with_done_callback(self) -> None:
+        tenant = SimpleNamespace(is_enabled=True, discord_config={})
+        add_done_callback_mock = MagicMock()
+        captured_task = MagicMock(name="discord-webhook-task")
+
+        def _capture_task(coro):
+            coro.close()
+            captured_task.add_done_callback = lambda callback: add_done_callback_mock(callback)
+            return captured_task
+
+        response = await self._call(
+            payload={"user_id": "user-1", "command": "!help", "channel_id": "channel-1"},
+            tenant=tenant,
+            asyncio=SimpleNamespace(
+                create_task=MagicMock(side_effect=_capture_task),
+            ),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers.get("content-type", "").startswith("application/json"))
+        self.assertTrue(add_done_callback_mock.called)
+        self.assertIn(b"accepted", response.body)
+
 if __name__ == "__main__":
     unittest.main()

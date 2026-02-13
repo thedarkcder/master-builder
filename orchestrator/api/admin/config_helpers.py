@@ -5,12 +5,13 @@ from pathlib import Path
 from fastapi import HTTPException, status
 
 from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
+from orchestrator.core.platform_secret_service import PLATFORM_SECRET_GITHUB_APP_ID_REF, PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF
 
 
 def with_managed_github_refs(*, raw_github_config: dict, settings) -> dict:  # noqa: ANN001
     github_config = dict(raw_github_config)
-    github_config["app_id_ref"] = settings.github_app_id_ref
-    github_config["private_key_ref"] = settings.github_private_key_ref
+    github_config["app_id_ref"] = PLATFORM_SECRET_GITHUB_APP_ID_REF
+    github_config["private_key_ref"] = PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF
     return github_config
 
 
