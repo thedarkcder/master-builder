@@ -196,8 +196,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         reset_db_engine_cache()
 
     def _seed_platform_secret(self, secret_ref: str, value: str) -> None:
+        if not secret_ref.startswith("platform/"):
+            secret_ref = f"platform/{secret_ref}"
+        encoded_secret_ref = secret_ref.replace("/", "%2F")
         response = self.client.put(
-            f"/api/admin/secrets/{secret_ref}",
+            f"/api/admin/secrets/{encoded_secret_ref}",
             json={"value": value},
             auth=("admin", "secret"),
         )

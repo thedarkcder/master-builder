@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import Settings
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    resolve_platform_secret_ref,
+)
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
@@ -60,15 +63,14 @@ def send_tenant_discord_message(
     if not channel_id:
         return DiscordSendResult(sent=False, reason="channel_not_configured")
 
-    token_ref = settings.discord_bot_token_secret_ref.strip()
+    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
         return DiscordSendResult(sent=False, reason="bot_token_ref_not_configured")
 
-    bot_token = resolve_scoped_secret_ref(
+    bot_token = resolve_platform_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
     )
     if not bot_token:
         return DiscordSendResult(sent=False, reason=f"bot_token_missing:{token_ref}", channel_id=channel_id)

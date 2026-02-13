@@ -20,6 +20,7 @@ from orchestrator.api.discord.ask.context import (
 )
 from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.discord.bug.attachments import (
+    AttachmentUploadFailure,
     download_discord_attachment as _download_discord_attachment_impl,
     resolve_discord_channel_name as _resolve_discord_channel_name_impl,
     upload_discord_attachments_to_jira as _upload_discord_attachments_to_jira_impl,
@@ -97,7 +98,11 @@ from orchestrator.core.communications.command_pipeline import (
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    resolve_platform_secret_ref,
+)
+from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
@@ -357,31 +362,13 @@ def _resolve_discord_channel_name(
         session=session,
         tenant=tenant,
         channel_id=channel_id,
-        discord_bot_token_secret_ref=settings.discord_bot_token_secret_ref,
+        discord_bot_token_secret_ref=PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
         secrets_encryption_key=settings.secrets_encryption_key,
     )
 
 
-def _download_discord_attachment(*, url: str) -> tuple[bytes, str | None]:
-    return _download_discord_attachment_impl(url=url)
-
-
-def _upload_discord_attachments_to_jira(
-    *,
-    client,
-    access_token: str,
-    cloud_id: str,
-    issue_key: str,
-    attachments: list[dict[str, str]],
-) -> tuple[int, list[str]]:
-    return _upload_discord_attachments_to_jira_impl(
-        client=client,
-        access_token=access_token,
-        cloud_id=cloud_id,
-        issue_key=issue_key,
-        attachments=attachments,
-        download_attachment=_download_discord_attachment,
-    )
+def _download_discord_attachment(*, url: str, bot_token: str | None = None) -> tuple[bytes, str | None]:
+    return _download_discord_attachment_impl(url=url, bot_token=bot_token)
 
 
 def _create_discord_bug_issue(
@@ -397,6 +384,35 @@ def _create_discord_bug_issue(
     selected_project_key: str | None = None,
 ) -> tuple[str, dict]:
     settings = get_settings()
+    bot_token = resolve_platform_secret_ref(
+        session,
+        secret_ref=PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+        encryption_key=settings.secrets_encryption_key,
+    )
+
+    def _download_attachment(*, url: str) -> tuple[bytes, str | None]:
+        return _download_discord_attachment(url=url, bot_token=bot_token)
+
+    def _upload_attachments(
+        *,
+        client,
+        access_token: str,
+        cloud_id: str,
+        issue_key: str,
+        attachments: list[dict[str, str]],
+        correlation_id: str | None = None,
+        **kwargs: object,
+    ) -> tuple[int, list[AttachmentUploadFailure]]:
+        return _upload_discord_attachments_to_jira_impl(
+            client=client,
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_key=issue_key,
+            attachments=attachments,
+            correlation_id=correlation_id,
+            download_attachment=_download_attachment,
+        )
+
     return _create_discord_bug_issue_impl(
         session=session,
         tenant=tenant,
@@ -410,7 +426,7 @@ def _create_discord_bug_issue(
         tenant_project_keys_fn=_tenant_project_keys,
         resolve_discord_channel_name_fn=_resolve_discord_channel_name,
         tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
-        upload_discord_attachments_to_jira_fn=_upload_discord_attachments_to_jira,
+        upload_discord_attachments_to_jira_fn=_upload_attachments,
         settings=settings,
     )
 

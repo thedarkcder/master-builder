@@ -184,7 +184,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
 
-        with patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"):
+        with patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"):
             client = MagicMock()
             with (
                 patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client),
@@ -201,7 +201,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
                 )
             client.post_message.assert_called_once_with(channel_id="thread-chan", content="hello", components=None)
 
-        with patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"):
+        with patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"):
             client = MagicMock()
             client.ensure_thread_for_message.side_effect = DiscordApiError("no thread")
             with (
@@ -219,24 +219,13 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
                 )
             self.assertGreaterEqual(client.post_message.call_count, 1)
 
-    def test_send_discord_thread_followup_requires_bot_token_ref_and_secret(self) -> None:
+    def test_send_discord_thread_followup_requires_bot_token_and_secret(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_thread_followup
 
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
-        missing_ref_settings = SimpleNamespace(discord_bot_token_secret_ref="  ", secrets_encryption_key="enc")
-        with self.assertRaisesRegex(RuntimeError, "not configured"):
-            _send_discord_thread_followup(
-                session=session,
-                settings=missing_ref_settings,
-                tenant=tenant,
-                channel_id="c1",
-                reply_to_message_id="m1",
-                content="hello",
-            )
-
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
-        with patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value=None):
+        with patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "is missing"):
                 _send_discord_thread_followup(
                     session=session,
@@ -262,7 +251,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
@@ -297,7 +286,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
@@ -335,7 +324,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         project = SimpleNamespace(discord_config={"ask_thread_channel_ids": ["old-thread"]}, updated_at=None)
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
@@ -372,7 +361,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
@@ -404,7 +393,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
         ):
             client = MagicMock()
@@ -427,19 +416,8 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
-        no_ref_settings = SimpleNamespace(discord_bot_token_secret_ref=" ", secrets_encryption_key="enc")
-        with self.assertRaisesRegex(RuntimeError, "not configured"):
-            _send_discord_ask_response_with_thread(
-                session=session,
-                settings=no_ref_settings,
-                tenant=tenant,
-                channel_id="c1",
-                user_id="u1",
-                content="content",
-            )
-
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
-        with patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value=None):
+        with patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "is missing"):
                 _send_discord_ask_response_with_thread(
                     session=session,
@@ -451,7 +429,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
                 )
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
         ):
@@ -476,7 +454,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch(
                 "orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant",
                 return_value={"thread-existing"},
@@ -505,7 +483,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=None),
             patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
@@ -538,7 +516,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
         ):
             client = MagicMock()
@@ -568,7 +546,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch(
                 "orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant",
                 return_value={"seed-thread"},
@@ -596,21 +574,8 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
-        no_ref_settings = SimpleNamespace(discord_bot_token_secret_ref=" ", secrets_encryption_key="enc")
-        with self.assertRaisesRegex(RuntimeError, "not configured"):
-            _send_discord_seed_followup_with_thread(
-                session=session,
-                settings=no_ref_settings,
-                tenant=tenant,
-                channel_id="c1",
-                user_id="u1",
-                content="seed content",
-                request_id="req-1",
-                questions=["q1"],
-            )
-
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
-        with patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value=None):
+        with patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "is missing"):
                 _send_discord_seed_followup_with_thread(
                     session=session,
@@ -624,7 +589,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
                 )
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=None),
@@ -660,7 +625,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
 
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
             patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
@@ -863,7 +828,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             patch("orchestrator.api.discord.interactions.followup.create_session_factory", return_value=lambda: nullcontext(session)),
             patch("orchestrator.api.discord.interactions.followup.get_settings", return_value=settings),
             patch("orchestrator.api.discord.interactions.followup.execute_discord_ingress_command", return_value=command_response),
-            patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup.resolve_project_for_discord_channel", return_value=project),
             patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as send_interaction_followup_mock,
         ):

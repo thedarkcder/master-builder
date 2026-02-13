@@ -1049,7 +1049,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(self) -> None:
         self.client.put(
-            "/api/admin/secrets/GITHUB_WEBHOOK_SECRET",
+            "/api/admin/secrets/platform%2FGITHUB_WEBHOOK_SECRET",
             json={"value": self.github_webhook_secret_value},
             auth=("admin", "secret"),
         )
@@ -1074,7 +1074,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_github_webhook_accepts_valid_signature_when_global_secret_configured(self) -> None:
         self.client.put(
-            "/api/admin/secrets/GITHUB_WEBHOOK_SECRET",
+            "/api/admin/secrets/platform%2FGITHUB_WEBHOOK_SECRET",
             json={"value": self.github_webhook_secret_value},
             auth=("admin", "secret"),
         )
@@ -1119,7 +1119,7 @@ class JiraWebhookTests(unittest.TestCase):
     def test_jira_webhook_uses_managed_secret_ref(self) -> None:
         managed_ref = "secret/jira-managed-token"
         self.client.put(
-            "/api/admin/secrets/secret%2Fjira-managed-token",
+            "/api/admin/secrets/platform%2Fsecret%2Fjira-managed-token",
             json={"value": "managed-jira-token"},
             auth=("admin", "secret"),
         )
@@ -1136,7 +1136,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_github_webhook_uses_managed_global_secret_ref(self) -> None:
         self.client.put(
-            "/api/admin/secrets/GITHUB_WEBHOOK_SECRET",
+            "/api/admin/secrets/platform%2FGITHUB_WEBHOOK_SECRET",
             json={"value": "managed-global-secret"},
             auth=("admin", "secret"),
         )
@@ -1598,7 +1598,7 @@ class JiraWebhookTests(unittest.TestCase):
             fake_client = MagicMock()
             fake_client.ensure_thread_for_message.side_effect = DiscordApiError("Cannot create nested thread")
             with (
-                patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="bot-token"),
+                patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="bot-token"),
                 patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=fake_client),
             ):
                 _send_discord_thread_followup(
@@ -1629,7 +1629,7 @@ class JiraWebhookTests(unittest.TestCase):
             tenant = session.get(Tenant, "tenant-webhook")
             self.assertIsNotNone(tenant)
             with (
-                patch("orchestrator.api.discord.interactions.followup.resolve_scoped_secret_ref", return_value="bot-token"),
+                patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="bot-token"),
                 patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=fake_client),
             ):
                 _send_discord_thread_followup(

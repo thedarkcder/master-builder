@@ -104,12 +104,15 @@ def resolve_secret_ref(
     encryption_key: str,
     scope: str = _SECRET_SCOPE_ALL,
     tenant_id: str | None = None,
+    allow_environment_fallback: bool = True,
 ) -> str | None:
     _apply_secret_scope_context(session=session, scope=scope, tenant_id=tenant_id)
     normalized_ref = normalize_secret_ref(secret_ref)
     row = session.get(ManagedSecret, normalized_ref)
     if row is not None:
         return decrypt_value(ciphertext=row.value_encrypted, encryption_key=encryption_key)
+    if not allow_environment_fallback:
+        return None
     return os.environ.get(normalized_ref)
 
 
@@ -133,8 +136,9 @@ def scoped_secret_ref_candidates(
         _append(f"project/{normalized_tenant_id}/{normalized_project_id}/{normalized_ref}")
     if normalized_tenant_id:
         _append(f"tenant/{normalized_tenant_id}/{normalized_ref}")
-    _append(f"platform/{normalized_ref}")
-    _append(normalized_ref)
+    elif normalized_tenant_id is None:
+        _append(f"platform/{normalized_ref}")
+        _append(normalized_ref)
     return candidates
 
 
@@ -146,19 +150,111 @@ def resolve_scoped_secret_ref(
     tenant_id: str | None = None,
     project_id: str | None = None,
 ) -> str | None:
-    for candidate in scoped_secret_ref_candidates(
-        secret_ref=secret_ref,
-        tenant_id=tenant_id,
-        project_id=project_id,
-    ):
+    normalized_ref = normalize_secret_ref(secret_ref)
+    normalized_tenant_id = tenant_id.strip() if tenant_id and tenant_id.strip() else None
+    normalized_project_id = project_id.strip() if project_id and project_id.strip() else None
+
+    candidates: list[str] = []
+    scopes: list[str] = []
+
+    def _append(candidate: str, scope: str) -> None:
+        if candidate not in candidates:
+            candidates.append(candidate)
+            scopes.append(scope)
+
+    if normalized_ref.startswith("project/"):
+        _append(normalized_ref, _SECRET_SCOPE_ALL)
+        parts = normalized_ref.split("/", 3)
+        if len(parts) == 4:
+            candidate_tenant_id, secret_suffix = parts[1], parts[3]
+            if candidate_tenant_id and secret_suffix:
+                _append(f"tenant/{candidate_tenant_id}/{secret_suffix}", _SECRET_SCOPE_TENANT)
+    elif normalized_ref.startswith("tenant/"):
+        _append(normalized_ref, _SECRET_SCOPE_TENANT)
+    elif normalized_ref.startswith("platform/"):
+        _append(normalized_ref, _SECRET_SCOPE_PLATFORM)
+    elif normalized_tenant_id and normalized_project_id:
+        _append(
+            f"project/{normalized_tenant_id}/{normalized_project_id}/{normalized_ref}",
+            _SECRET_SCOPE_ALL,
+        )
+        _append(f"tenant/{normalized_tenant_id}/{normalized_ref}", _SECRET_SCOPE_TENANT)
+    elif normalized_tenant_id:
+        _append(f"tenant/{normalized_tenant_id}/{normalized_ref}", _SECRET_SCOPE_TENANT)
+    else:
+        _append(normalized_ref, _SECRET_SCOPE_ALL)
+
+    for candidate, scope in zip(candidates, scopes, strict=False):
         value = resolve_secret_ref(
             session,
             secret_ref=candidate,
             encryption_key=encryption_key,
+            scope=scope,
+            tenant_id=normalized_tenant_id if scope == _SECRET_SCOPE_TENANT else None,
+            allow_environment_fallback=scope == _SECRET_SCOPE_ALL,
         )
         if value:
             return value
     return None
+
+
+def resolve_platform_secret_ref(
+    session: Session,
+    *,
+    secret_ref: str,
+    encryption_key: str,
+    allow_environment_fallback: bool = True,
+) -> str | None:
+    normalized_ref = normalize_secret_ref(secret_ref)
+    if not normalized_ref.startswith("platform/"):
+        raise ValueError("Platform secret refs must use platform/* prefix")
+    if normalized_ref == "platform/":
+        raise ValueError("Platform secret ref is required")
+
+    return resolve_secret_ref(
+        session,
+        secret_ref=normalized_ref,
+        encryption_key=encryption_key,
+        scope=_SECRET_SCOPE_PLATFORM,
+        allow_environment_fallback=allow_environment_fallback,
+    )
+
+
+def resolve_tenant_secret_ref(
+    session: Session,
+    *,
+    secret_ref: str,
+    encryption_key: str,
+    tenant_id: str,
+    allow_environment_fallback: bool = False,
+) -> str | None:
+    normalized_ref = normalize_secret_ref(secret_ref)
+    normalized_tenant_id = tenant_id.strip() if tenant_id and tenant_id.strip() else None
+    if normalized_tenant_id is None:
+        raise ValueError("tenant_id is required for tenant secret resolution")
+
+    if normalized_ref.startswith("platform/"):
+        raise ValueError("Tenant secret refs must not include platform/* prefix")
+    if normalized_ref.startswith("tenant/"):
+        return resolve_secret_ref(
+            session,
+            secret_ref=normalized_ref,
+            encryption_key=encryption_key,
+            scope=_SECRET_SCOPE_TENANT,
+            tenant_id=normalized_tenant_id,
+            allow_environment_fallback=allow_environment_fallback,
+        )
+    if normalized_ref.startswith("project/"):
+        raise ValueError("Tenant secret refs must not include project/* prefix")
+
+    return resolve_secret_ref(
+        session,
+        secret_ref=f"tenant/{normalized_tenant_id}/{normalized_ref}",
+        encryption_key=encryption_key,
+        scope=_SECRET_SCOPE_TENANT,
+        tenant_id=normalized_tenant_id,
+        allow_environment_fallback=allow_environment_fallback,
+    )
 
 
 def resolve_secret_ref_metadata(
