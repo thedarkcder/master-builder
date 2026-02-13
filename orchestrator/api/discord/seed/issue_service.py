@@ -85,6 +85,25 @@ def seed_issues_with_codex(
             if isinstance(acceptance_raw, list)
             else []
         )
+        how_to_test_raw = item.get("how_to_test")
+        if isinstance(how_to_test_raw, list):
+            how_to_test = [str(entry).strip() for entry in how_to_test_raw if str(entry).strip()]
+        else:
+            normalized_how_to_test = str(how_to_test_raw or "").strip()
+            how_to_test = [normalized_how_to_test] if normalized_how_to_test else []
+        nfr_intent = str(item.get("nfr_intent") or "").strip()
+        dependencies_raw = item.get("dependencies")
+        dependencies = (
+            [str(entry).strip() for entry in dependencies_raw if str(entry).strip()]
+            if isinstance(dependencies_raw, list)
+            else []
+        )
+        risks_raw = item.get("risks")
+        risks = (
+            [str(entry).strip() for entry in risks_raw if str(entry).strip()]
+            if isinstance(risks_raw, list)
+            else []
+        )
         requested_issue_key = normalize_seed_issue_key_fn(item.get("issue_key"))
         if not requested_issue_key and len(normalized_force_issue_keys) > len(issue_requested_keys):
             requested_issue_key = normalized_force_issue_keys[len(issue_requested_keys)]
@@ -101,6 +120,8 @@ def seed_issues_with_codex(
             scope_in=scope_in,
             scope_out=scope_out,
             acceptance=acceptance,
+            how_to_test=how_to_test,
+            nfr_intent=nfr_intent,
         )
         for question in draft_questions:
             if question not in question_set:
@@ -114,6 +135,9 @@ def seed_issues_with_codex(
                     scope_in=scope_in,
                     scope_out=scope_out,
                     acceptance_criteria=acceptance,
+                    how_to_test=how_to_test,
+                    nfr_intent=nfr_intent,
+                    dependencies_and_risks=[*dependencies, *risks],
                 ),
                 labels=labels,
                 issue_type=parse_seed_issue_type_fn(item.get("issue_type")),

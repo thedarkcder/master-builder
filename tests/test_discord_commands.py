@@ -1528,6 +1528,9 @@ class DiscordCommandApiTests(unittest.TestCase):
             scope_in=["API endpoint"],
             scope_out=["Mobile app changes"],
             acceptance_criteria=["Endpoint returns 200"],
+            how_to_test=["Run API integration tests"],
+            nfr_intent="MVP",
+            dependencies_and_risks=["Depends on staging API availability"],
         )
         self.assertEqual(description.get("type"), "doc")
         content = description.get("content", [])
@@ -1537,6 +1540,9 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(content[1]["type"], "bulletList")
         first_bullet = content[1]["content"][0]["content"][0]["content"][0]["text"]
         self.assertEqual(first_bullet, "Ship feature")
+        heading_texts = [node["content"][0]["text"] for node in content if node.get("type") == "heading"]
+        self.assertIn("How to test", heading_texts)
+        self.assertIn("NFR intent (MVP vs scale-ready)", heading_texts)
 
     def test_bug_creation_uploads_discord_attachments_to_jira_issue(self) -> None:
         now = datetime.now(timezone.utc)
@@ -1688,6 +1694,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         )
         self.assertIn("[screen.png](https://cdn.discordapp.com/x.png)", description)
         self.assertIn("Channel: triage-bugs (discord-channel-1)", description)
+        self.assertIn("**How to test**", description)
 
     def test_request_creates_pending_request(self) -> None:
         response = self.client.post(
