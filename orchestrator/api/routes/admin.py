@@ -319,6 +319,13 @@ def _ensure_project_repository_checkout(
             project=project,
             github_installation_token=installation_token,
         )
+    except ValueError:
+        logger.info(
+            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_invalid_private_key",
+            tenant.tenant_id,
+            project.project_id,
+        )
+        return
     except (GitHubApiError, ProjectRepoCheckoutError) as exc:
         logger.exception(
             "project_repository_checkout_failed tenant_id=%s project_id=%s",
