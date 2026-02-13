@@ -1464,7 +1464,13 @@ class AdminApiTests(unittest.TestCase):
                     {"webhook_id": "1001"},
                 )()
 
-        with patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeClient()):
+        with (
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeClient()),
+            patch(
+                "orchestrator.api.routes.admin._provision_jira_webhook",
+                return_value=SimpleNamespace(ok=True),
+            ) as provision_mock,
+        ):
             callback_response = self.client.get(
                 "/api/admin/jira/connect/callback",
                 params={"code": "abc123", "state": state_token},
@@ -1476,11 +1482,77 @@ class AdminApiTests(unittest.TestCase):
             "/tenants/tenant-a/edit?jira_oauth=success&jira_connection_id=",
             callback_response.headers.get("location", ""),
         )
+        self.assertIn("jira_webhook=ok", callback_response.headers.get("location", ""))
+        provision_mock.assert_called_once()
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
         self.assertTrue(tenant_response.json()["jira"]["connection_id"])
         self.assertIsInstance(tenant_response.json()["jira"]["managed_webhook_ids"], list)
+
+    def test_jira_connect_edit_callback_reports_webhook_provision_failure_in_redirect(self) -> None:
+        payload = self._tenant_payload()
+        payload["jira"]["connection_id"] = None
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        start_response = self.client.post(
+            "/api/admin/jira/connect/start?return_to=edit&tenant_id=tenant-a",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(start_response.status_code, 200)
+        authorize_url = start_response.json()["authorize_url"]
+        parsed = urlparse(authorize_url)
+        state_token = parse_qs(parsed.query).get("state", [None])[0]
+        self.assertIsNotNone(state_token)
+
+        class _FakeClient:
+            def exchange_code(self, *, code: str):  # noqa: ANN001
+                now = datetime.now(timezone.utc)
+                return type(
+                    "TokenSet",
+                    (),
+                    {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "expires_at": now + timedelta(hours=1),
+                        "scopes": ["read:jira-work", "write:jira-work"],
+                    },
+                )()
+
+            def list_accessible_resources(self, *, access_token: str):  # noqa: ANN001
+                return [
+                    type(
+                        "Resource",
+                        (),
+                        {
+                            "cloud_id": "cloud-1",
+                            "site_url": "https://example.atlassian.net",
+                            "name": "Example",
+                        },
+                    )()
+                ]
+
+        with (
+            patch("orchestrator.api.routes.admin._jira_oauth_client", return_value=_FakeClient()),
+            patch(
+                "orchestrator.api.routes.admin._provision_jira_webhook",
+                side_effect=RuntimeError("provision-failed"),
+            ) as provision_mock,
+        ):
+            callback_response = self.client.get(
+                "/api/admin/jira/connect/callback",
+                params={"code": "abc123", "state": state_token},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback_response.status_code, 302)
+        self.assertIn("jira_webhook=failed", callback_response.headers.get("location", ""))
+        provision_mock.assert_called_once()
 
     def test_provision_tenant_jira_webhooks_success(self) -> None:
         payload = self._tenant_payload()
