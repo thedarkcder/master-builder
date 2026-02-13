@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -7,11 +8,13 @@ from datetime import datetime, timezone
 from urllib.error import HTTPError
 from urllib.request import Request as UrlRequest, urlopen
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.ask.context import consume_pending_ask_action
+from orchestrator.api.discord.interactions.parser import _parse_discord_interaction_command
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
@@ -552,6 +555,83 @@ async def _run_discord_command_followup(
     command_params: dict[str, str] | None = None,
     attachments: list[dict[str, str]] | None = None,
 ) -> None:
+    await asyncio.to_thread(
+        _run_discord_command_followup_blocking,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        channel_id=channel_id,
+        command_text=command_text,
+        application_id=application_id,
+        interaction_token=interaction_token,
+        reply_to_message_id=reply_to_message_id,
+        command_params=command_params,
+        attachments=attachments,
+    )
+
+
+async def _run_discord_application_command_followup(
+    *,
+    payload: dict,
+    request_id: str,
+) -> None:
+    application_id = str(payload.get("application_id") or "").strip()
+    interaction_token = str(payload.get("token") or "").strip()
+    if not application_id or not interaction_token:
+        logger.error(
+            "discord_interaction_followup_missing_context request_id=%s",
+            request_id,
+        )
+        return
+
+    try:
+        user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        logger.exception(
+            "discord_interaction_parse_failed request_id=%s detail=%s error=%s",
+            request_id,
+            detail,
+            exc,
+        )
+        try:
+            _send_discord_interaction_followup(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                content=f"Command failed: {detail}",
+                ephemeral=True,
+            )
+        except Exception as followup_exc:  # pragma: no cover - defensive logging path
+            logger.exception(
+                "discord_interaction_parse_error_followup_failed request_id=%s error=%s",
+                request_id,
+                followup_exc,
+            )
+        return
+
+    await _run_discord_command_followup(
+        tenant_id=None,
+        user_id=user_id,
+        channel_id=channel_id,
+        command_text=command_text,
+        application_id=application_id,
+        interaction_token=interaction_token,
+        command_params=command_params,
+        attachments=attachments,
+    )
+
+
+def _run_discord_command_followup_blocking(
+    *,
+    tenant_id: str | None,
+    user_id: str,
+    channel_id: str,
+    command_text: str,
+    application_id: str,
+    interaction_token: str,
+    reply_to_message_id: str | None = None,
+    command_params: dict[str, str] | None = None,
+    attachments: list[dict[str, str]] | None = None,
+) -> None:
     resolved_tenant_id = str(tenant_id or "").strip()
     if not resolved_tenant_id:
         session_factory = create_session_factory()
@@ -585,20 +665,44 @@ async def _run_discord_command_followup(
         ),
         consume_pending_ask_action=consume_pending_ask_action,
     )
-    await service.run_discord_command_followup(
-        tenant_id=resolved_tenant_id,
-        user_id=user_id,
-        channel_id=channel_id,
-        command_text=command_text,
-        application_id=application_id,
-        interaction_token=interaction_token,
-        reply_to_message_id=reply_to_message_id,
-        command_params=command_params,
-        attachments=attachments,
+    asyncio.run(
+        service.run_discord_command_followup(
+            tenant_id=resolved_tenant_id,
+            user_id=user_id,
+            channel_id=channel_id,
+            command_text=command_text,
+            application_id=application_id,
+            interaction_token=interaction_token,
+            reply_to_message_id=reply_to_message_id,
+            command_params=command_params,
+            attachments=attachments,
+        )
     )
 
 
 async def _run_discord_ask_confirmation_followup(
+    *,
+    tenant_id: str | None,
+    user_id: str,
+    channel_id: str,
+    decision: str,
+    request_id: str,
+    application_id: str,
+    interaction_token: str,
+) -> None:
+    await asyncio.to_thread(
+        _run_discord_ask_confirmation_followup_blocking,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        channel_id=channel_id,
+        decision=decision,
+        request_id=request_id,
+        application_id=application_id,
+        interaction_token=interaction_token,
+    )
+
+
+def _run_discord_ask_confirmation_followup_blocking(
     *,
     tenant_id: str | None,
     user_id: str,
@@ -639,12 +743,14 @@ async def _run_discord_ask_confirmation_followup(
         ),
         consume_pending_ask_action=consume_pending_ask_action,
     )
-    await service.run_discord_ask_confirmation_followup(
-        tenant_id=resolved_tenant_id,
-        user_id=user_id,
-        channel_id=channel_id,
-        decision=decision,
-        request_id=request_id,
-        application_id=application_id,
-        interaction_token=interaction_token,
+    asyncio.run(
+        service.run_discord_ask_confirmation_followup(
+            tenant_id=resolved_tenant_id,
+            user_id=user_id,
+            channel_id=channel_id,
+            decision=decision,
+            request_id=request_id,
+            application_id=application_id,
+            interaction_token=interaction_token,
+        )
     )

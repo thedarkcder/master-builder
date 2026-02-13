@@ -70,4 +70,18 @@ class JiraOAuthClientConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
-    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work", "offline_access", "manage:jira-webhook")
+    scopes: tuple[str, ...] = (
+        "read:jira-work",
+        "write:jira-work",
+        "offline_access",
+        "manage:jira-webhook",
+        "read:board-scope:jira-software",
+        "read:board-scope.admin:jira-software",
+        "read:jira-software",
+        "read:project:jira",
+        "read:sprint:jira-software",
+        "read:issue-details:jira",
+        "read:jql:jira",
+        "read:attachment:jira",
+        "write:attachment:jira",
+    )

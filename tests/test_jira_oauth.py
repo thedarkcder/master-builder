@@ -24,6 +24,12 @@ class JiraOAuthTests(unittest.TestCase):
         parsed = urlparse(authorize_url)
         scopes = parse_qs(parsed.query)["scope"][0].split(" ")
         self.assertIn("offline_access", scopes)
+        self.assertIn("read:board-scope:jira-software", scopes)
+        self.assertIn("read:board-scope.admin:jira-software", scopes)
+        self.assertIn("read:jira-software", scopes)
+        self.assertIn("read:project:jira", scopes)
+        self.assertIn("read:attachment:jira", scopes)
+        self.assertIn("write:attachment:jira", scopes)
 
     def test_search_issues_uses_search_jql_endpoint(self) -> None:
         client = JiraOAuthClient(

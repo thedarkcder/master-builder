@@ -36,8 +36,8 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             "_discord_modal_text_value": MagicMock(return_value="next step"),
             "_run_discord_ask_confirmation_followup": AsyncMock(),
             "_run_discord_command_followup": AsyncMock(),
+            "_run_discord_application_command_followup": AsyncMock(),
             "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_capture_and_close)),
-            "_parse_discord_interaction_command": MagicMock(return_value=("u1", "c1", "!ask test", None, [])),
             "ASK_REPLY_OPEN_CUSTOM_ID": "ask.reply.open",
         }
         base.update(overrides)
@@ -199,24 +199,19 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(b"Use Reply on a Master Builder message", not_bot.body)
 
-        parse_error = await self._call(
-            {"type": 2, "data": {"name": "ask"}},
-            _parse_discord_interaction_command=MagicMock(side_effect=HTTPException(status_code=400, detail="bad command")),
-        )
-        self.assertIn(b"bad command", parse_error.body)
-
         missing_context = await self._call(
             {"type": 2, "application_id": "", "token": "", "data": {"name": "ask"}},
-            _parse_discord_interaction_command=MagicMock(return_value=("u1", "c1", "!ask test", None, [])),
         )
         self.assertIn(b"Missing Discord interaction context", missing_context.body)
 
+        run_application_followup = AsyncMock()
         ok = await self._call(
             {"type": 2, "application_id": "app", "token": "tok", "data": {"name": "ask"}},
-            _parse_discord_interaction_command=MagicMock(return_value=("u1", "c1", "!ask test", None, [])),
+            _run_discord_application_command_followup=run_application_followup,
         )
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.body, b"deferred")
+        run_application_followup.assert_called_once()
 
 
 if __name__ == "__main__":

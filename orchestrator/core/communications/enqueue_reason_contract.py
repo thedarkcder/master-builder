@@ -15,6 +15,10 @@ _ENQUEUE_REASON_GUIDANCE = {
     "project_not_mapped": "Issue key is not mapped to an active project.",
     "no_retryable_run": "No failed/blocked/cancelled run is available to retry for this issue.",
     "ready_for_agent_backlog": "Issue is ready-for-agent in backlog; move it to To Do to start execution.",
+    "issue_in_backlog": "Issue is currently in backlog for the configured board; move it onto the board before running.",
+    "issue_not_on_board": "Issue is not present on the configured board; place it on the board before running.",
+    "board_gate_check_failed": "Board-location gate check failed; verify Jira OAuth connection/scopes and board configuration.",
+    "board_gate_unconfigured": "Run board gating is enabled but no valid board id is configured.",
     "decision_gate_cooldown_active": "Decision Gate was recently required for this issue. Wait for cooldown, then rerun.",
 }
 

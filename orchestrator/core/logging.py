@@ -44,7 +44,17 @@ def configure_logging(level: str = "INFO", *, environment: str = "dev", platform
                 "handlers": ["stdout", "stderr"],
             },
             "loggers": {
-                "master_builder.request": {
+                "uvicorn": {
+                    "level": normalized_level,
+                    "handlers": ["stdout", "stderr"],
+                    "propagate": False,
+                },
+                "uvicorn.error": {
+                    "level": normalized_level,
+                    "handlers": ["stdout", "stderr"],
+                    "propagate": False,
+                },
+                "uvicorn.access": {
                     "level": normalized_level,
                     "handlers": ["stdout", "stderr"],
                     "propagate": False,

@@ -19,6 +19,7 @@ def create_discord_bug_issue(
     channel_id: str | None,
     related_issue_key: str | None,
     attachments: list[dict[str, str]],
+    selected_project_key: str | None,
     tenant_project_keys_fn,
     resolve_discord_channel_name_fn,
     tenant_jira_oauth_context_fn,
@@ -28,7 +29,19 @@ def create_discord_bug_issue(
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
     if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
-    project_key = project_keys[0]
+    scoped_project_key = str(selected_project_key or "").strip().upper()
+    if not scoped_project_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Bug creation requires a project-scoped Discord channel",
+        )
+    available_project_keys = {str(key).strip().upper() for key in project_keys if str(key).strip()}
+    if scoped_project_key not in available_project_keys:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Scoped project key {scoped_project_key} is not available for this tenant",
+        )
+    project_key = scoped_project_key
     channel_display_name = resolve_discord_channel_name_fn(
         session=session,
         tenant=tenant,
