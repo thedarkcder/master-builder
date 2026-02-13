@@ -418,6 +418,12 @@ def jira_connect_callback(
         session=session,
         settings=get_settings(),
         jira_oauth_client_fn=_jira_oauth_client,
+        auto_provision_jira_webhook_fn=lambda session, tenant, settings: _provision_jira_webhook(
+            session=session,
+            tenant=tenant,
+            settings=settings,
+            replace_existing=False,
+        ),
     )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
