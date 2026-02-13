@@ -110,6 +110,82 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 202)
         self.assertIn("review_misconfigured", response.body.decode())
 
+    async def test_review_uses_platform_for_unscoped_github_refs(self) -> None:
+        def _scoped_secret_lookup(
+            session,
+            secret_ref: str,
+            encryption_key: str,
+            tenant_id: str,
+            project_id: str | None = None,
+        ) -> str | None:
+            if secret_ref == "tenant/example/GITHUB_APP_ID":
+                return "tenant-app-id"
+            if secret_ref == "tenant/example/GITHUB_APP_PRIVATE_KEY":
+                return "tenant-private-key"
+            return None
+
+        def _platform_secret_lookup(
+            session,
+            *,
+            secret_ref: str,
+            encryption_key: str,
+            allow_environment_fallback: bool = True,
+        ) -> str | None:
+            if secret_ref == "GITHUB_APP_ID":
+                return "platform-app-id"
+            if secret_ref == "GITHUB_APP_PRIVATE_KEY":
+                return "platform-private-key"
+            return None
+
+        def _github_client_factory(
+            config: dict,
+            *,
+            tenant_secret_lookup=None,
+            platform_secret_lookup=None,
+            **_: object,
+        ) -> MagicMock:
+            self.assertIsNotNone(tenant_secret_lookup)
+            self.assertIsNotNone(platform_secret_lookup)
+            self.assertEqual(
+                tenant_secret_lookup("tenant/example/GITHUB_APP_ID"),
+                "tenant-app-id",
+            )
+            self.assertEqual(
+                tenant_secret_lookup("tenant/example/GITHUB_APP_PRIVATE_KEY"),
+                "tenant-private-key",
+            )
+            self.assertEqual(platform_secret_lookup("GITHUB_APP_ID"), "platform-app-id")
+            self.assertEqual(platform_secret_lookup("GITHUB_APP_PRIVATE_KEY"), "platform-private-key")
+            return SimpleNamespace(
+                evaluate_pr=lambda **_kwargs: SimpleNamespace(
+                    ready=True,
+                    state="ready",
+                    message="ready",
+                )
+            )
+
+        response = await self._call(
+            payload={"action": "synchronize"},
+            headers={"X-GitHub-Event": "pull_request"},
+            resolve_scoped_secret_ref=MagicMock(side_effect=_scoped_secret_lookup),
+            resolve_platform_secret_ref=MagicMock(side_effect=_platform_secret_lookup),
+            github_client_from_tenant_config=_github_client_factory,
+            ReviewAgentGate=MagicMock(
+                return_value=MagicMock(
+                    evaluate_pr=MagicMock(
+                        return_value=SimpleNamespace(
+                            ready=True,
+                            state="ready",
+                            message="ready",
+                        )
+                    )
+                )
+            ),
+        )
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"accepted":true', body)
+
     async def test_signal_generation_with_failures(self) -> None:
         gate = MagicMock()
         gate.evaluate_pr.side_effect = [

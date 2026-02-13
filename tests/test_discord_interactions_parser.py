@@ -47,7 +47,12 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         data = {
             "resolved": {
                 "attachments": {
-                    "a1": {"id": "a1", "url": "https://x/1", "filename": "1.png"},
+                    "a1": {
+                        "id": "a1",
+                        "url": "https://x/1",
+                        "proxy_url": "https://media.discordapp.net/x/1",
+                        "filename": "1.png",
+                    },
                     "a2": {"id": "a2", "url": "https://x/2", "filename": "2.png"},
                     "a3": {"id": "a3", "filename": "3.png"},
                 }
@@ -55,6 +60,7 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         }
         normalized = _discord_resolved_attachments(data=data, attachment_ids=["a1", "a2", "a3"])
         self.assertEqual([item["id"] for item in normalized], ["a1", "a2"])
+        self.assertEqual(normalized[0]["proxy_url"], "https://media.discordapp.net/x/1")
 
     def test_issue_autocomplete_filters_dedupes_and_limits(self) -> None:
         issues = [SimpleNamespace(key="MAB-1", summary="first"), SimpleNamespace(key="MAB-1", summary="dup")]

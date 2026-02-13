@@ -454,25 +454,35 @@ def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, proj
     app_id_ref = str(github_config.get("app_id_ref") or PLATFORM_SECRET_GITHUB_APP_ID_REF).strip()
     private_key_ref = str(github_config.get("private_key_ref") or PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF).strip()
 
-    def _resolve_project_secret_ref(secret_ref: str) -> str | None:
-        normalized_secret_ref = secret_ref.strip()
-        if not normalized_secret_ref:
-            return None
-        if normalized_secret_ref.startswith(("tenant/", "project/")):
-            return resolve_scoped_secret_ref(
-                session,
-                secret_ref=normalized_secret_ref,
-                encryption_key=settings.secrets_encryption_key,
-                tenant_id=tenant.tenant_id,
-            )
-        return resolve_platform_secret_ref(
+    tenant_id = tenant.tenant_id
+    app_id = (
+        resolve_scoped_secret_ref(
             session,
-            secret_ref=normalized_secret_ref,
+            secret_ref=app_id_ref,
+            encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant_id,
+        )
+        if app_id_ref.startswith(("tenant/", "project/"))
+        else resolve_platform_secret_ref(
+            session,
+            secret_ref=app_id_ref,
             encryption_key=settings.secrets_encryption_key,
         )
-
-    app_id = _resolve_project_secret_ref(secret_ref=app_id_ref)
-    private_key = _resolve_project_secret_ref(secret_ref=private_key_ref)
+    )
+    private_key = (
+        resolve_scoped_secret_ref(
+            session,
+            secret_ref=private_key_ref,
+            encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant_id,
+        )
+        if private_key_ref.startswith(("tenant/", "project/"))
+        else resolve_platform_secret_ref(
+            session,
+            secret_ref=private_key_ref,
+            encryption_key=settings.secrets_encryption_key,
+        )
+    )
     if not app_id or not private_key:
         logger.info(
             "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_secrets_unavailable",
@@ -483,7 +493,17 @@ def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, proj
     try:
         github_client = github_client_from_tenant_config(
             github_config,
-            secret_lookup=lambda secret_ref: app_id if secret_ref == app_id_ref else private_key,
+            tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+                tenant_id=tenant_id,
+            ),
+            platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+            ),
         )
     except ValueError:
         logger.info(
