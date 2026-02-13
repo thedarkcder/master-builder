@@ -48,21 +48,7 @@ def provision_jira_webhook(
             webhook_ids=[],
         )
 
-    if replace_existing:
-        delete_ok, delete_details, _ = delete_jira_webhooks_fn(
-            session=session,
-            tenant=tenant,
-            settings=settings,
-        )
-        if not delete_ok:
-            return JiraWebhookActionResult(
-                ok=False,
-                action="reset",
-                details=delete_details,
-                webhook_ids=parse_managed_webhook_ids_fn(jira_config),
-            )
-        session.refresh(tenant)
-        jira_config = dict(tenant.jira_config)
+    prior_managed_webhook_ids = parse_managed_webhook_ids_fn(jira_config)
 
     access_token = refresh_jira_connection_tokens_fn(
         session,
@@ -206,6 +192,23 @@ def provision_jira_webhook(
     jira_config["managed_webhook_ids"] = webhook_ids
     jira_config["webhook_last_provisioned_at"] = now_iso
     jira_config["webhook_last_error"] = None
+    if replace_existing:
+        stale_webhook_ids = [webhook_id for webhook_id in prior_managed_webhook_ids if webhook_id not in webhook_ids]
+        if stale_webhook_ids:
+            try:
+                client.delete_webhooks(
+                    access_token=access_token,
+                    cloud_id=connection.cloud_id,
+                    webhook_ids=stale_webhook_ids,
+                )
+                stale_cleanup_note = f"Deleted {len(stale_webhook_ids)} previous managed Jira webhook(s)."
+                cleanup_note = f"{cleanup_note} {stale_cleanup_note}".strip() if cleanup_note else stale_cleanup_note
+            except (ValueError, JiraOAuthError) as exc:
+                stale_cleanup_note = (
+                    f"Registered new webhook(s) but could not delete {len(stale_webhook_ids)} previous managed "
+                    f"webhook(s): {exc}"
+                )
+                cleanup_note = f"{cleanup_note} {stale_cleanup_note}".strip() if cleanup_note else stale_cleanup_note
     tenant.jira_config = jira_config
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
