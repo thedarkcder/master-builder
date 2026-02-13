@@ -1118,10 +1118,17 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.json()["reason"], "missing_pr_context")
 
     def test_discord_webhook_routes_with_discord_ingress_contract(self) -> None:
+        def _capture_and_close(coro):
+            coro.close()
+            return MagicMock(name="discord-webhook-task")
+
         with patch(
             "orchestrator.api.routes.webhook_discord.execute_discord_ingress_command",
             return_value=DiscordCommandResponse(ok=True, command="help", message="ok", data=None),
-        ) as command_mock:
+        ) as command_mock, patch(
+            "orchestrator.api.routes.webhook_discord.asyncio.create_task",
+            side_effect=_capture_and_close,
+        ) as create_task_mock:
             response = self.client.post(
                 "/discord/webhook/tenant-webhook",
                 json={"user_id": "discord-user-1", "command": "!help", "channel_id": "discord-channel-1"},
@@ -1129,8 +1136,9 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["accepted"])
-        command_mock.assert_called_once()
-        self.assertNotIn("ingress_source", command_mock.call_args.kwargs)
+        self.assertTrue(response.json()["deferred"])
+        create_task_mock.assert_called_once()
+        command_mock.assert_not_called()
 
     def test_discord_interaction_commands_are_deferred_and_processed_async(self) -> None:
         payload = {

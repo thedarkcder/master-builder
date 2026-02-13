@@ -424,7 +424,7 @@ def jira_connect_callback(
             session=session,
             tenant=tenant,
             settings=settings,
-            replace_existing=False,
+            replace_existing=True,
         ),
     )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)

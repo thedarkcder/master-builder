@@ -258,13 +258,24 @@ def _seed_text_is_missing(value: str) -> bool:
     return _seed_text_is_missing_impl(value)
 
 
-def _collect_seed_issue_questions(*, issue_summary: str, objective: str, scope_in: list[str], scope_out: list[str], acceptance: list[str]) -> list[str]:
+def _collect_seed_issue_questions(
+    *,
+    issue_summary: str,
+    objective: str,
+    scope_in: list[str],
+    scope_out: list[str],
+    acceptance: list[str],
+    how_to_test: list[str],
+    nfr_intent: str,
+) -> list[str]:
     return _collect_seed_issue_questions_impl(
         issue_summary=issue_summary,
         objective=objective,
         scope_in=scope_in,
         scope_out=scope_out,
         acceptance=acceptance,
+        how_to_test=how_to_test,
+        nfr_intent=nfr_intent,
     )
 
 
@@ -297,12 +308,18 @@ def _build_seed_issue_description(
     scope_in: list[str],
     scope_out: list[str],
     acceptance_criteria: list[str],
+    how_to_test: list[str],
+    nfr_intent: str,
+    dependencies_and_risks: list[str],
 ) -> dict:
     return _build_seed_issue_description_impl(
         objective=objective,
         scope_in=scope_in,
         scope_out=scope_out,
         acceptance_criteria=acceptance_criteria,
+        how_to_test=how_to_test,
+        nfr_intent=nfr_intent,
+        dependencies_and_risks=dependencies_and_risks,
     )
 
 

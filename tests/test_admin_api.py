@@ -1484,6 +1484,7 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertIn("jira_webhook=ok", callback_response.headers.get("location", ""))
         provision_mock.assert_called_once()
+        self.assertTrue(provision_mock.call_args.kwargs["replace_existing"])
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
@@ -1553,6 +1554,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn("jira_webhook=failed", callback_response.headers.get("location", ""))
         provision_mock.assert_called_once()
+        self.assertTrue(provision_mock.call_args.kwargs["replace_existing"])
 
     def test_provision_tenant_jira_webhooks_success(self) -> None:
         payload = self._tenant_payload()
