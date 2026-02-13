@@ -85,10 +85,9 @@ def build_discord_bug_description(
         lines.extend(["", "**Attachments**"])
         for attachment in attachments:
             filename = attachment.get("filename") or "attachment"
-            url = attachment.get("url") or ""
             content_type = attachment.get("content_type") or ""
             if content_type:
-                lines.append(f"- [{filename}]({url}) ({content_type})")
+                lines.append(f"- {filename} ({content_type})")
             else:
-                lines.append(f"- [{filename}]({url})")
+                lines.append(f"- {filename}")
     return "\n".join(lines)
