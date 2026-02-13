@@ -35,7 +35,7 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
-from orchestrator.tools.jira_oauth import JiraIssuePreview
+from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError
 
 
 class JiraWebhookTests(unittest.TestCase):
@@ -170,6 +170,194 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["enqueued"])
+
+    def test_webhook_does_not_enqueue_when_issue_is_in_backlog_for_configured_board_on_create_sends_notification(self) -> None:
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project)
+                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .limit(1)
+            ).scalar_one()
+            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
+        payload["webhookEvent"] = "jira:issue_created"
+        with (
+            patch("orchestrator.api.webhooks.jira_ingress._fetch_issue_board_location", return_value=("backlog", None)),
+            patch("orchestrator.api.webhooks.jira_ingress.send_tenant_discord_message") as notify_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "issue_in_backlog")
+        self.assertEqual(body["board_id"], 1)
+        self.assertEqual(body["pre_run_check"]["outcome"], "decision_gate_required")
+        self.assertTrue(body["pre_run_check"]["decision_gate_triggered"])
+        notify_mock.assert_called_once()
+        sent_message = notify_mock.call_args.kwargs["message"]
+        self.assertIn("added to the backlog", sent_message)
+        self.assertIn("Decision Gate required", sent_message)
+
+    def test_webhook_does_not_notify_backlog_message_for_non_create_event(self) -> None:
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project)
+                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .limit(1)
+            ).scalar_one()
+            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-139", status_name="To Do", labels=["agent:ready"])
+        payload["webhookEvent"] = "jira:issue_updated"
+        with (
+            patch("orchestrator.api.webhooks.jira_ingress._fetch_issue_board_location", return_value=("backlog", None)),
+            patch("orchestrator.api.webhooks.jira_ingress.send_tenant_discord_message") as notify_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "issue_in_backlog")
+        self.assertEqual(body["board_id"], 1)
+        notify_mock.assert_not_called()
+
+    def test_webhook_backlog_pre_run_check_reports_ready_for_agent_without_enqueue(self) -> None:
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project)
+                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .limit(1)
+            ).scalar_one()
+            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-777", status_name="To Do", labels=["agent:ready"])
+        payload["issue"]["fields"]["summary"] = "Objective scope acceptance context how to test mvp risk"
+        payload["issue"]["fields"]["description"] = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Objective: validate webhook flow. Scope: webhook only. "
+                                "Acceptance criteria: no run from backlog. Context: orchestrator jira ingress. "
+                                "How to test: post webhook payload. NFR intent: MVP. Risks/dependencies: none."
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+        with (
+            patch("orchestrator.api.webhooks.jira_ingress._fetch_issue_board_location", return_value=("backlog", None)),
+            patch("orchestrator.api.webhooks.jira_ingress.send_tenant_discord_message") as notify_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "issue_in_backlog")
+        self.assertEqual(body["board_id"], 1)
+        self.assertEqual(body["pre_run_check"]["outcome"], "ready_for_agent")
+        self.assertTrue(body["pre_run_check"]["ready_label_present"])
+        self.assertFalse(body["pre_run_check"]["decision_gate_triggered"])
+        notify_mock.assert_called_once()
+        sent_message = notify_mock.call_args.kwargs["message"]
+        self.assertIn("added to the backlog", sent_message)
+        self.assertIn("ready for agent", sent_message.lower())
+
+    def test_webhook_does_not_enqueue_when_issue_is_not_on_configured_board(self) -> None:
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project)
+                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .limit(1)
+            ).scalar_one()
+            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
+        with patch("orchestrator.api.webhooks.jira_ingress._fetch_issue_board_location", return_value=("not_on_board", None)):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "issue_not_on_board")
+        self.assertEqual(body["board_id"], 1)
+
+    def test_webhook_enqueues_when_issue_is_on_configured_board(self) -> None:
+        with self.session_factory() as session:
+            project = session.execute(
+                select(Project)
+                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .limit(1)
+            ).scalar_one()
+            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
+        with patch("orchestrator.api.webhooks.jira_ingress._fetch_issue_board_location", return_value=("board", None)):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["enqueued"])
+
+    def test_fetch_issue_board_location_still_checks_board_when_backlog_lookup_fails(self) -> None:
+        from orchestrator.api.webhooks.jira_ingress import JiraWebhookContext, _fetch_issue_board_location
+
+        context = JiraWebhookContext(
+            request_id="req-1",
+            tenant_id="tenant-webhook",
+            tenant=SimpleNamespace(tenant_id="tenant-webhook", jira_config={}),
+            payload={},
+            webhook_event="issue_updated",
+            issue_key="TP-123",
+            issue_labels=[],
+            issue_status="To Do",
+            issue_status_category_key="indeterminate",
+            issue_summary="Summary",
+            issue_description="Description",
+            comment_command=None,
+            comment_command_argument=None,
+            comment_command_error=None,
+            delivery_id=None,
+            project=None,
+        )
+        oauth_context = SimpleNamespace(
+            connection=SimpleNamespace(cloud_id="cloud-1"),
+            access_token="token",
+        )
+        http_client = MagicMock()
+        http_client.get_json.side_effect = [
+            JiraOAuthError("backlog endpoint unavailable"),
+            {"issues": [{"key": "TP-123"}]},
+        ]
+
+        with (
+            patch("orchestrator.api.webhooks.jira_ingress.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_ingress.JiraOAuthHttpClient", return_value=http_client),
+        ):
+            location, detail = _fetch_issue_board_location(
+                context=context,
+                session=MagicMock(),
+                settings=SimpleNamespace(),
+                board_id=1,
+            )
+
+        self.assertEqual(location, "board")
+        self.assertIsNone(detail)
 
     def test_webhook_enqueues_issue_created_event_in_todo(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-130", status_name="To Do", labels=["agent:ready"])

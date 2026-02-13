@@ -26,9 +26,9 @@ from orchestrator.api.discord.interactions.parser import (
     _discord_issue_autocomplete_choices,
     _find_focused_discord_option,
     _find_tenant_for_discord_channel,
-    _parse_discord_interaction_command,
 )
 from orchestrator.api.discord.interactions.followup import (
+    _run_discord_application_command_followup,
     _run_discord_ask_confirmation_followup,
     _run_discord_command_followup,
 )
@@ -262,17 +262,6 @@ async def ingest_discord_interaction(
             placeholder="Ask a follow-up question or request the next action.",
         )
 
-    try:
-        user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload)
-    except HTTPException as exc:
-        logger.exception(
-            "discord_interaction_parse_failed request_id=%s detail=%s error=%s",
-            request_id,
-            exc.detail,
-            exc,
-        )
-        return _discord_interaction_response(content=str(exc.detail), ephemeral=True)
-
     application_id = str(payload.get("application_id") or "").strip()
     interaction_token = str(payload.get("token") or "").strip()
     if not application_id or not interaction_token:
@@ -282,15 +271,9 @@ async def ingest_discord_interaction(
         )
 
     asyncio.create_task(
-        _run_discord_command_followup(
-            tenant_id=None,
-            user_id=user_id,
-            channel_id=channel_id,
-            command_text=command_text,
-            application_id=application_id,
-            interaction_token=interaction_token,
-            command_params=command_params,
-            attachments=attachments,
+        _run_discord_application_command_followup(
+            payload=payload,
+            request_id=request_id,
         )
     )
     return _discord_interaction_deferred_response(ephemeral=True)

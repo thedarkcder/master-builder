@@ -394,6 +394,7 @@ def _create_discord_bug_issue(
     channel_id: str | None,
     related_issue_key: str | None,
     attachments: list[dict[str, str]],
+    selected_project_key: str | None = None,
 ) -> tuple[str, dict]:
     settings = get_settings()
     return _create_discord_bug_issue_impl(
@@ -405,6 +406,7 @@ def _create_discord_bug_issue(
         channel_id=channel_id,
         related_issue_key=related_issue_key,
         attachments=attachments,
+        selected_project_key=selected_project_key,
         tenant_project_keys_fn=_tenant_project_keys,
         resolve_discord_channel_name_fn=_resolve_discord_channel_name,
         tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,

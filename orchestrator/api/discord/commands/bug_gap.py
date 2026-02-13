@@ -18,7 +18,9 @@ def dispatch_bug_gap_command(
     payload: DiscordCommandRequest,
     command_name: str,
     arguments: list[str],
+    scoped_project_id: str | None,
     issue_key_pattern: Pattern[str],
+    scoped_project_keys: list[str],
     run_gap_analysis: Callable[..., Any],
     normalize_discord_attachments: Callable[[object], list[dict[str, str]]],
     create_discord_bug_issue: Callable[..., Any],
@@ -72,6 +74,11 @@ def dispatch_bug_gap_command(
             channel_id=payload.channel_id,
             related_issue_key=related_issue_key,
             attachments=attachments,
+            selected_project_key=(
+                scoped_project_keys[0]
+                if scoped_project_id and scoped_project_keys
+                else None
+            ),
         )
         return DiscordCommandResponse(
             ok=True,
