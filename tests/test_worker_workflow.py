@@ -20,6 +20,7 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, RunLock, Tenant
 from orchestrator.worker import process_next_queued_run
+from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
 
 class _SuccessRunner:
@@ -76,9 +77,14 @@ class WorkerWorkflowTests(unittest.TestCase):
         reset_agent_observability_for_tests()
         run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
+        self.checkout_patcher = patch(
+            "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
+        )
+        self.checkout_mock = self.checkout_patcher.start()
         self._create_tenant()
 
     def tearDown(self) -> None:
+        self.checkout_patcher.stop()
         self.temp_dir.cleanup()
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -369,3 +375,35 @@ class WorkerWorkflowTests(unittest.TestCase):
                 "https://jira.example.test/browse/TP-555",
                 stage_updates[0]["discord_message"],
             )
+
+    def test_process_next_queued_run_ensures_project_repository_checkout(self) -> None:
+        run_id = self._queue_run("TP-556")
+        runner = _SuccessRunner()
+
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, runner)
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "succeeded")
+
+        self.checkout_mock.assert_called()
+        checkout_kwargs = self.checkout_mock.call_args.kwargs
+        self.assertEqual(checkout_kwargs["tenant"].tenant_id, "tenant-worker")
+        self.assertEqual(checkout_kwargs["project"].project_id, "tenant-worker-default")
+
+    def test_process_next_queued_run_fails_when_project_checkout_fails(self) -> None:
+        run_id = self._queue_run("TP-557")
+        runner = _SuccessRunner()
+        self.checkout_mock.side_effect = ProjectRepoCheckoutError("clone failed")
+
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, runner)
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "failed")
+            self.assertEqual(
+                processed.last_error,
+                "Project repository checkout failed: clone failed",
+            )
+
+        self.assertIsNone(runner.last_request)

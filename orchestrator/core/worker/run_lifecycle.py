@@ -75,6 +75,15 @@ def fail_guardrail_violation(session: Session, *, run: Run, error: str) -> Run:
     )
 
 
+def fail_project_repository_checkout(session: Session, *, run: Run, error: str) -> Run:
+    return mark_run_terminal(
+        session,
+        run_id=run.run_id,
+        terminal_status=RUN_STATUS_FAILED,
+        last_error=f"Project repository checkout failed: {error}",
+    )
+
+
 def finalize_cancelled_run(
     session: Session,
     *,

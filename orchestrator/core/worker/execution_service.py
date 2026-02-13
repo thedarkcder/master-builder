@@ -17,6 +17,7 @@ from orchestrator.core.worker.run_lifecycle import (
     block_archived_project,
     fail_guardrail_violation,
     fail_missing_project_mapping,
+    fail_project_repository_checkout,
     finalize_cancelled_run,
     finalize_workflow_result,
     resolve_project_for_run,
@@ -32,6 +33,7 @@ from orchestrator.core.worker.workflow_request_service import (
     build_workflow_request_for_run as _build_workflow_request_for_run,
 )
 from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
+from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
 from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
@@ -95,6 +97,8 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         resolve_project_for_run_fn=resolve_project_for_run,
         fail_missing_project_mapping_fn=fail_missing_project_mapping,
         block_archived_project_fn=block_archived_project,
+        ensure_project_repository_checkout_fn=ensure_project_repository_checkout,
+        fail_project_repository_checkout_fn=fail_project_repository_checkout,
         start_run_fn=start_run,
         bind_run_project_fn=bind_run_project,
         workflow_request_for_run_fn=_workflow_request_for_run,
@@ -140,6 +144,8 @@ def process_next_queued_run_with_dependencies(
         resolve_project_for_run_fn=resolve_project_for_run,
         fail_missing_project_mapping_fn=fail_missing_project_mapping,
         block_archived_project_fn=block_archived_project,
+        ensure_project_repository_checkout_fn=ensure_project_repository_checkout,
+        fail_project_repository_checkout_fn=fail_project_repository_checkout,
         start_run_fn=start_run,
         bind_run_project_fn=bind_run_project,
         workflow_request_for_run_fn=_workflow_request_for_run,
