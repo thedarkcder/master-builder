@@ -21,6 +21,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         payload: DiscordCommandRequest,
         command_name: str,
         arguments: list[str],
+        scoped_project_id: str | None = None,
         scoped_project_keys: list[str] | None = None,
         run_gap_analysis: Mock | None = None,
         normalize_discord_attachments: Mock | None = None,
@@ -32,6 +33,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             payload=payload,
             command_name=command_name,
             arguments=arguments,
+            scoped_project_id=scoped_project_id,
             issue_key_pattern=self.issue_key_pattern,
             scoped_project_keys=scoped_project_keys or [],
             run_gap_analysis=run_gap_analysis or Mock(),
@@ -102,6 +104,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             ),
             command_name="bug",
             arguments=[],
+            scoped_project_id="project-1",
             scoped_project_keys=["TP"],
             normalize_discord_attachments=normalize_attachments,
             create_discord_bug_issue=create_bug,
@@ -126,6 +129,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug login -- details"),
             command_name="bug",
             arguments=["login", "--", "details"],
+            scoped_project_id="project-1",
             scoped_project_keys=["TP"],
             create_discord_bug_issue=create_bug,
         )
@@ -142,10 +146,23 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug scoped"),
             command_name="bug",
             arguments=["scoped"],
+            scoped_project_id="project-2",
             scoped_project_keys=["OTH", "TP"],
             create_discord_bug_issue=create_bug,
         )
         self.assertEqual(create_bug.call_args.kwargs["selected_project_key"], "OTH")
+
+    def test_bug_with_tenant_scope_fallback_does_not_select_project_key(self) -> None:
+        create_bug = Mock(return_value=("Bug logged: OTH-1", {"created_issue_keys": ["OTH-1"]}))
+        self._dispatch(
+            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug scoped"),
+            command_name="bug",
+            arguments=["scoped"],
+            scoped_project_id=None,
+            scoped_project_keys=["OTH", "TP"],
+            create_discord_bug_issue=create_bug,
+        )
+        self.assertIsNone(create_bug.call_args.kwargs["selected_project_key"])
 
     def test_bug_without_scoped_project_key_surfaces_scope_error(self) -> None:
         create_bug = Mock(side_effect=HTTPException(status_code=409, detail="Bug creation requires a project-scoped Discord channel"))

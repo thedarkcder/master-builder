@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from urllib.error import HTTPError
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
+
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -703,6 +705,55 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         asyncio.run(_run())
         self.assertTrue(service.run_discord_command_followup.called)
         self.assertTrue(service.run_discord_ask_confirmation_followup.called)
+
+    def test_application_command_followup_parses_and_dispatches(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _run_discord_application_command_followup
+
+        run_followup_mock = AsyncMock()
+        with (
+            patch(
+                "orchestrator.api.discord.interactions.followup._parse_discord_interaction_command",
+                return_value=("u1", "c1", "!ask status", {"issue_key": "MAB-135"}, []),
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.followup._run_discord_command_followup",
+                run_followup_mock,
+            ),
+        ):
+            asyncio.run(
+                _run_discord_application_command_followup(
+                    payload={"application_id": "app", "token": "tok", "data": {"name": "ask"}},
+                    request_id="req-1",
+                )
+            )
+
+        run_followup_mock.assert_awaited_once()
+        self.assertEqual(run_followup_mock.call_args.kwargs["application_id"], "app")
+        self.assertEqual(run_followup_mock.call_args.kwargs["interaction_token"], "tok")
+        self.assertEqual(run_followup_mock.call_args.kwargs["command_text"], "!ask status")
+
+    def test_application_command_followup_parse_error_sends_ephemeral_message(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _run_discord_application_command_followup
+
+        with (
+            patch(
+                "orchestrator.api.discord.interactions.followup._parse_discord_interaction_command",
+                side_effect=HTTPException(status_code=400, detail="bad command"),
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.followup._send_discord_interaction_followup",
+            ) as send_followup_mock,
+        ):
+            asyncio.run(
+                _run_discord_application_command_followup(
+                    payload={"application_id": "app", "token": "tok", "data": {"name": "ask"}},
+                    request_id="req-1",
+                )
+            )
+
+        send_followup_mock.assert_called_once()
+        self.assertEqual(send_followup_mock.call_args.kwargs["ephemeral"], True)
+        self.assertIn("bad command", send_followup_mock.call_args.kwargs["content"])
 
     def test_async_followup_wrappers_resolve_tenant_by_channel_when_missing(self) -> None:
         from orchestrator.api.discord.interactions.followup import (
