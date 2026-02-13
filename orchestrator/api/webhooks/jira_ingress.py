@@ -533,6 +533,7 @@ def _fetch_issue_board_location(
     board_url = f"{base_url}/board/{board_id}/issue?jql={issue_jql}&maxResults=1"
     http_client = JiraOAuthHttpClient()
 
+    backlog_error_detail: str | None = None
     try:
         backlog_payload = http_client.get_json(
             url=backlog_url,
@@ -540,7 +541,10 @@ def _fetch_issue_board_location(
         )
         if _issues_payload_contains_issue(payload=backlog_payload, issue_key=context.issue_key):
             return "backlog", None
+    except (JiraOAuthError, ValueError) as exc:
+        backlog_error_detail = f"backlog lookup failed: {exc}"
 
+    try:
         board_payload = http_client.get_json(
             url=board_url,
             access_token=oauth_context.access_token,
@@ -548,8 +552,13 @@ def _fetch_issue_board_location(
         if _issues_payload_contains_issue(payload=board_payload, issue_key=context.issue_key):
             return "board", None
     except (JiraOAuthError, ValueError) as exc:
-        return "error", str(exc)
+        board_error_detail = f"board lookup failed: {exc}"
+        if backlog_error_detail:
+            return "error", f"{backlog_error_detail}; {board_error_detail}"
+        return "error", board_error_detail
 
+    if backlog_error_detail:
+        return "not_on_board", backlog_error_detail
     return "not_on_board", None
 
 

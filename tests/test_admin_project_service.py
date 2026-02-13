@@ -4,6 +4,7 @@ from fastapi import HTTPException
 
 from orchestrator.api.admin.project_service import AdminProjectService
 from orchestrator.storage.models import Project
+from orchestrator.tools.jira_oauth import JiraOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
 
@@ -169,3 +170,94 @@ def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> No
     assert len(session.deleted) == 1
     deleted = session.deleted[0]
     assert isinstance(deleted, Project)
+
+
+def test_create_project_returns_502_when_jira_board_resolution_fails_with_oauth_error() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None))
+    service = AdminProjectService(
+        normalize_project_repo=lambda value: value.strip(),
+        normalize_project_key=lambda value: value.strip().upper(),
+        normalize_project_policy_overrides=lambda value: value or {},
+        normalize_string_map=lambda value: value or {},
+        normalize_project_discord_config=lambda value: value or {},
+        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
+        sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
+        ensure_project_repository_checkout=lambda **_kwargs: None,
+        resolve_project_run_board_id=lambda **_kwargs: (_ for _ in ()).throw(JiraOAuthError("oauth unavailable")),
+        project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
+        settings_factory=lambda: SimpleNamespace(),
+    )
+    payload = SimpleNamespace(
+        name="Sample",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="tp",
+        policy_overrides=None,
+        environment=None,
+        secret_refs=None,
+        discord=None,
+    )
+
+    try:
+        service.create_project(session=session, tenant_id="t1", payload=payload)
+        assert False, "expected HTTPException"
+    except HTTPException as exc:
+        assert exc.status_code == 502
+        assert "Unable to resolve Jira board for project TP: oauth unavailable" == str(exc.detail)
+
+
+def test_update_project_returns_502_when_jira_board_resolution_fails_with_oauth_error() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    session.set(Tenant, "t1", tenant)
+    existing_project = Project(
+        project_id="p1",
+        tenant_id="t1",
+        name="Existing",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="TP",
+        policy_overrides={},
+        environment={},
+        secret_refs={},
+        discord_config={},
+        is_archived=False,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
+    )
+    session.set(Project, "p1", existing_project)
+    service = AdminProjectService(
+        normalize_project_repo=lambda value: value.strip(),
+        normalize_project_key=lambda value: value.strip().upper(),
+        normalize_project_policy_overrides=lambda value: value or {},
+        normalize_string_map=lambda value: value or {},
+        normalize_project_discord_config=lambda value: value or {},
+        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
+        sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
+        ensure_project_repository_checkout=lambda **_kwargs: None,
+        resolve_project_run_board_id=lambda **_kwargs: (_ for _ in ()).throw(JiraOAuthError("token revoked")),
+        project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
+        settings_factory=lambda: SimpleNamespace(),
+    )
+    payload = SimpleNamespace(
+        name="Updated",
+        github_repository="https://github.com/example/repo-2",
+        jira_project_key="tp",
+        policy_overrides=None,
+        environment=None,
+        secret_refs=None,
+        discord=None,
+        is_archived=False,
+    )
+
+    try:
+        service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+        assert False, "expected HTTPException"
+    except HTTPException as exc:
+        assert exc.status_code == 502
+        assert "Unable to resolve Jira board for project TP: token revoked" == str(exc.detail)
