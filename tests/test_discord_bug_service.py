@@ -5,11 +5,20 @@ def test_normalize_discord_attachments_limits_and_filters() -> None:
     attachments = normalize_discord_attachments(
         [
             {"filename": "a.png", "url": "https://example.test/a.png", "content_type": "image/png"},
+            {
+                "filename": "b.png",
+                "url": "https://cdn.discordapp.com/b.png",
+                "proxy_url": "https://media.discordapp.net/b.png",
+            },
             {"filename": "missing-url"},
         ]
     )
-    assert len(attachments) == 1
+    assert len(attachments) == 2
     assert attachments[0]["filename"] == "a.png"
+    assert "proxy_url" not in attachments[0]
+    assert attachments[1]["filename"] == "b.png"
+    assert attachments[1]["url"] == "https://cdn.discordapp.com/b.png"
+    assert attachments[1]["proxy_url"] == "https://media.discordapp.net/b.png"
 
 
 def test_build_discord_bug_description_renders_attachment_names_without_links() -> None:
