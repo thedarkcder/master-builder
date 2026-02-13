@@ -18,6 +18,8 @@ def process_next_queued_run(
     resolve_project_for_run_fn,
     fail_missing_project_mapping_fn,
     block_archived_project_fn,
+    ensure_project_repository_checkout_fn,
+    fail_project_repository_checkout_fn,
     start_run_fn,
     bind_run_project_fn,
     workflow_request_for_run_fn,
@@ -91,6 +93,10 @@ def process_next_queued_run(
         return fail_missing_project_mapping_fn(session, run=run)
     if project.is_archived:
         return block_archived_project_fn(session, run=run, project=project)
+    try:
+        ensure_project_repository_checkout_fn(session=session, tenant=tenant, project=project)
+    except Exception as exc:  # noqa: BLE001
+        return fail_project_repository_checkout_fn(session, run=run, error=str(exc))
 
     notifier = RunStageNotifier(
         session=session,
