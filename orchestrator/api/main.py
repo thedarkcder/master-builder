@@ -33,7 +33,6 @@ from orchestrator.core.sentry import initialize_sentry
 from orchestrator.storage.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
-request_logger = logging.getLogger("master_builder.request")
 
 
 def create_app() -> FastAPI:
@@ -95,7 +94,7 @@ def create_app() -> FastAPI:
                 f"{client_ip} {request.method} {request.url.path} "
                 f"Status: {status_code} Time: {duration_ms}ms"
             )
-            request_logger.info(
+            logger.info(
                 message,
                 extra={
                     "event_type": "http_request",

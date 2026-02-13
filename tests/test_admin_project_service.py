@@ -58,6 +58,7 @@ def _service() -> AdminProjectService:
         resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
         sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
         ensure_project_repository_checkout=lambda **_kwargs: None,
+        resolve_project_run_board_id=lambda **_kwargs: None,
         project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
         settings_factory=lambda: SimpleNamespace(),
     )
@@ -104,6 +105,7 @@ def test_create_project_clones_repository_after_commit() -> None:
         ensure_project_repository_checkout=lambda **kwargs: checkout_calls.append(
             (kwargs["tenant"].tenant_id, kwargs["project"].github_repository, session.commits)
         ),
+        resolve_project_run_board_id=lambda **_kwargs: 11,
         project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
         settings_factory=lambda: SimpleNamespace(),
     )
@@ -121,6 +123,9 @@ def test_create_project_clones_repository_after_commit() -> None:
 
     assert result["name"] == "Sample"
     assert checkout_calls == [("t1", "https://github.com/example/repo", 1)]
+    created_project = session.added[0]
+    assert isinstance(created_project, Project)
+    assert created_project.policy_overrides.get("run_board_id") == 11
 
 
 def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> None:
@@ -140,6 +145,7 @@ def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> No
         ensure_project_repository_checkout=lambda **_kwargs: (_ for _ in ()).throw(
             ProjectRepoCheckoutError("clone failed")
         ),
+        resolve_project_run_board_id=lambda **_kwargs: 22,
         project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
         settings_factory=lambda: SimpleNamespace(),
     )

@@ -61,6 +61,7 @@ from orchestrator.api.admin.route_helpers import (
     allocate_tenant_id as _allocate_tenant_id,
     cleanup_conflicting_jira_webhook_url as _cleanup_conflicting_jira_webhook_url,
     cleanup_unmanaged_jira_webhooks_for_connection as _cleanup_unmanaged_jira_webhooks_for_connection,
+    discover_project_run_board_id as _discover_project_run_board_id_impl,
     ensure_default_project_for_tenant as _ensure_default_project_for_tenant,
     jira_oauth_client as _jira_oauth_client_impl,
     jira_webhook_action_status_code as _jira_webhook_action_status_code,
@@ -249,6 +250,7 @@ def _admin_project_service() -> AdminProjectService:
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=lambda **kwargs: _discover_project_run_board_id_impl(**kwargs),
         project_to_schema=_project_to_schema,
         settings_factory=get_settings,
     )

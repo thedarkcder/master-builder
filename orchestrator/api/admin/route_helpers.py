@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote_plus
 
 from sqlalchemy.orm import Session
 
@@ -74,10 +75,26 @@ from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.jira_oauth import JiraOAuthClient
+from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
 from orchestrator.tools.project_repo_checkout import ensure_project_checkout
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
 logger = logging.getLogger(__name__)
+_MAX_BOARD_DISCOVERY_SCAN = 200
+
+
+def _parse_board_id(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _is_kanban_board_type(value: object) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {"kanban", "simple"}
 
 
 def slugify_tenant_name(name: str) -> str:
@@ -305,9 +322,117 @@ def admin_project_service() -> AdminProjectService:
         resolve_project_discord_channel_binding=resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=ensure_project_repository_checkout,
+        resolve_project_run_board_id=discover_project_run_board_id,
         project_to_schema=_project_to_schema,
         settings_factory=get_settings,
     )
+
+
+def discover_project_run_board_id(
+    *,
+    session: Session,
+    tenant: Tenant,
+    jira_project_key: str,
+    settings,  # noqa: ANN001
+) -> int | None:
+    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    if not connection_id:
+        return None
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        logger.warning(
+            "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=connection_missing connection_id=%s",
+            tenant.tenant_id,
+            jira_project_key,
+            connection_id,
+        )
+        return None
+
+    access_token = refresh_jira_connection_tokens(
+        session,
+        connection=connection,
+        settings=settings,
+        tenant_id=tenant.tenant_id,
+    )
+    http_client = JiraOAuthHttpClient()
+    cloud_id = connection.cloud_id
+    project_key = str(jira_project_key or "").strip().upper()
+    if not project_key:
+        raise ValueError("Missing Jira project key")
+
+    project_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/{quote_plus(project_key)}"
+    try:
+        project_payload = http_client.get_json(url=project_url, access_token=access_token)
+    except (JiraOAuthError, ValueError) as exc:
+        logger.warning(
+            "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=project_metadata_error error=%s",
+            tenant.tenant_id,
+            jira_project_key,
+            exc,
+        )
+        return None
+    if not isinstance(project_payload, dict):
+        return None
+
+    target_project_id = str(project_payload.get("id") or "").strip()
+    if not target_project_id:
+        return None
+
+    list_url = (
+        f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/agile/1.0/board"
+        f"?projectKeyOrId={quote_plus(project_key)}&maxResults=1"
+    )
+    try:
+        list_payload = http_client.get_json(url=list_url, access_token=access_token)
+        if isinstance(list_payload, dict):
+            values = list_payload.get("values")
+            if isinstance(values, list):
+                fallback_board_id: int | None = None
+                for item in values:
+                    if not isinstance(item, dict):
+                        continue
+                    board_id = _parse_board_id(item.get("id"))
+                    if board_id is None:
+                        continue
+                    location = item.get("location")
+                    location_project_id = (
+                        str(location.get("projectId") or "").strip()
+                        if isinstance(location, dict)
+                        else ""
+                    )
+                    if location_project_id and location_project_id != target_project_id:
+                        continue
+                    if _is_kanban_board_type(item.get("type")):
+                        return board_id
+                    if fallback_board_id is None:
+                        fallback_board_id = board_id
+                if fallback_board_id is not None:
+                    return fallback_board_id
+    except (JiraOAuthError, ValueError):
+        pass
+
+    for board_id in range(1, _MAX_BOARD_DISCOVERY_SCAN + 1):
+        board_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/agile/1.0/board/{board_id}"
+        try:
+            board_payload = http_client.get_json(url=board_url, access_token=access_token)
+        except (JiraOAuthError, ValueError):
+            continue
+        if not isinstance(board_payload, dict):
+            continue
+        location = board_payload.get("location")
+        if not isinstance(location, dict):
+            continue
+        location_project_id = str(location.get("projectId") or "").strip()
+        if location_project_id == target_project_id:
+            return board_id
+
+    logger.warning(
+        "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=not_found scan_limit=%s",
+        tenant.tenant_id,
+        jira_project_key,
+        _MAX_BOARD_DISCOVERY_SCAN,
+    )
+    return None
 
 
 def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, project: Project) -> None:
