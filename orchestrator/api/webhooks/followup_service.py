@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.state import command_matches
+from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.core.communications.integration_contracts import InteractiveReplyTransport
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.observability import reset_log_context, set_log_context
@@ -57,6 +58,7 @@ class DiscordWebhookFollowupService:
     ) -> None:
         correlation_id = reply_to_message_id or uuid4().hex
         context_tokens = None
+        settings = None
         content = f"<@{user_id}> Command failed due to an internal error."
         components: list[dict] | None = None
         sent_to_thread = False
@@ -246,6 +248,58 @@ class DiscordWebhookFollowupService:
                         components=components,
                         reply_to_message_id=reply_to_message_id,
                         channel_id=channel_id,
+                    )
+                except DiscordInteractionWebhookExpiredError as exc:
+                    logger.exception(
+                        "discord_command_followup_interaction_expired tenant_id=%s user_id=%s channel_id=%s error=%s",
+                        tenant_id,
+                        user_id,
+                        channel_id,
+                        exc,
+                    )
+                    if settings is not None:
+                        try:
+                            with self._session_factory() as session:
+                                tenant = session.get(Tenant, tenant_id)
+                                if tenant is not None and tenant.is_enabled:
+                                    fallback_message_id = reply_to_message_id or f"interaction-{correlation_id}"
+                                    self._reply_transport.send_thread_reply(
+                                        session=session,
+                                        settings=settings,
+                                        tenant=tenant,
+                                        channel_id=channel_id,
+                                        reply_to_message_id=fallback_message_id,
+                                        content=content,
+                                        components=components,
+                                    )
+                                    sent_to_thread = True
+                        except Exception as fallback_exc:  # pragma: no cover - defensive logging path
+                            logger.exception(
+                                "discord_command_followup_interaction_expired_fallback_failed tenant_id=%s user_id=%s channel_id=%s error=%s",
+                                tenant_id,
+                                user_id,
+                                channel_id,
+                                fallback_exc,
+                            )
+                    if sent_to_thread:
+                        return
+                    error_ref = uuid4().hex[:8]
+                    logger.exception(
+                        "discord_command_followup_send_failed tenant_id=%s user_id=%s error_ref=%s error=%s",
+                        tenant_id,
+                        user_id,
+                        error_ref,
+                        exc,
+                    )
+                    emit_hard_error(
+                        event="discord_command_followup_send_failed",
+                        error_ref=error_ref,
+                        exc=exc,
+                        context={
+                            "tenant_id": tenant_id,
+                            "user_id": user_id,
+                            "channel_id": channel_id,
+                        },
                     )
                 except Exception as exc:  # pragma: no cover - defensive logging path
                     error_ref = uuid4().hex[:8]

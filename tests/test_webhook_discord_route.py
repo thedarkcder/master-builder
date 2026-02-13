@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
-from orchestrator.api.routes.webhook_discord import ingest_discord_webhook
+from orchestrator.api.routes.webhook_discord import _run_discord_webhook_command, ingest_discord_webhook
 
 
 class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -16,12 +16,17 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         session = MagicMock()
         session.get.return_value = tenant
 
+        def _capture_and_close(coro):  # noqa: ANN001
+            coro.close()
+            return MagicMock()
+
         base = {
             "get_settings": MagicMock(return_value=SimpleNamespace(secrets_encryption_key="k")),
             "_read_json_payload": AsyncMock(return_value=(payload, b"{}")),
             "_extract_webhook_token": MagicMock(return_value="token"),
             "resolve_scoped_secret_ref": MagicMock(return_value="token"),
             "execute_discord_ingress_command": MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True})),
+            "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_capture_and_close)),
         }
         base.update(overrides)
 
@@ -72,48 +77,65 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_success(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
-        execute_mock = MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True}))
+        create_task_mock = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
         response = await self._call(
             payload={"user_id": "  user1 ", "command": " !ask status ", "channel_id": " c1 "},
             tenant=tenant,
-            execute_discord_ingress_command=execute_mock,
+            asyncio=SimpleNamespace(create_task=create_task_mock),
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"accepted":true', response.body)
-        self.assertFalse(execute_mock.call_args.kwargs["defer_seed_issues"])
+        self.assertIn(b'"deferred":true', response.body)
+        create_task_mock.assert_called_once()
 
     async def test_seed_command_defers_with_repeated_whitespace(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
-        execute_mock = MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True}))
+        create_task_mock = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
         response = await self._call(
             payload={"user_id": "user1", "command": "!issues   seed   build stories", "channel_id": "c1"},
             tenant=tenant,
-            execute_discord_ingress_command=execute_mock,
+            asyncio=SimpleNamespace(create_task=create_task_mock),
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(execute_mock.call_args.kwargs["defer_seed_issues"])
+        create_task_mock.assert_called_once()
 
-    async def test_issue_seed_command_sets_defer_seed_flag(self) -> None:
-        tenant = SimpleNamespace(is_enabled=True, discord_config={})
-        execute_mock = MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True}))
-        response = await self._call(
-            payload={"user_id": "user1", "command": "!issues seed Draft stories", "channel_id": "c1"},
-            tenant=tenant,
-            execute_discord_ingress_command=execute_mock,
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(execute_mock.call_args.kwargs["defer_seed_issues"])
+    async def test_deferred_runner_sets_seed_flag_for_issue_seed_command(self) -> None:
+        session = MagicMock()
+        session_factory = MagicMock(return_value=session)
+        payload = SimpleNamespace(user_id="user-1", command="!issues seed Draft", channel_id="channel-1")
+        execute_mock = MagicMock()
 
-    async def test_non_seed_command_keeps_defer_seed_disabled(self) -> None:
-        tenant = SimpleNamespace(is_enabled=True, discord_config={})
-        execute_mock = MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True}))
-        response = await self._call(
-            payload={"user_id": "user1", "command": "!status", "channel_id": "c1"},
-            tenant=tenant,
-            execute_discord_ingress_command=execute_mock,
-        )
-        self.assertEqual(response.status_code, 200)
+        with (
+            patch("orchestrator.api.routes.webhook_discord.create_session_factory", return_value=session_factory),
+            patch("orchestrator.api.routes.webhook_discord.execute_discord_ingress_command", execute_mock),
+        ):
+            await _run_discord_webhook_command(
+                tenant_id="example",
+                payload=payload,
+                defer_seed_issues=True,
+            )
+
+        self.assertTrue(execute_mock.call_args.kwargs["defer_seed_issues"])
+        session.close.assert_called_once()
+
+    async def test_deferred_runner_clears_seed_flag_for_non_seed_command(self) -> None:
+        session = MagicMock()
+        session_factory = MagicMock(return_value=session)
+        payload = SimpleNamespace(user_id="user-1", command="!status", channel_id="channel-1")
+        execute_mock = MagicMock()
+
+        with (
+            patch("orchestrator.api.routes.webhook_discord.create_session_factory", return_value=session_factory),
+            patch("orchestrator.api.routes.webhook_discord.execute_discord_ingress_command", execute_mock),
+        ):
+            await _run_discord_webhook_command(
+                tenant_id="example",
+                payload=payload,
+                defer_seed_issues=False,
+            )
+
         self.assertFalse(execute_mock.call_args.kwargs["defer_seed_issues"])
+        session.close.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()
