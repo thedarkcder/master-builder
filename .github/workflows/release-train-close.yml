@@ -167,11 +167,91 @@ jobs:
             exit 0
           fi
 
+          git fetch --tags origin main
+
+          previous_release_tag="$(git tag --list 'v*.*.*' --sort=-v:refname | awk -v current="${RELEASE_VERSION}" '$0 != current { print; exit }')"
+          release_range="origin/main"
+          if [ -n "${previous_release_tag}" ]; then
+            release_range="${previous_release_tag}..origin/main"
+          fi
+
+          release_commit_count="$(git rev-list --count "${release_range}")"
+          if [ "${release_commit_count}" = "0" ]; then
+            echo "No commits found in release range (${release_range}); skipping GitHub release creation."
+            exit 0
+          fi
+
+          mapfile -t release_commit_subjects < <(git log --first-parent --pretty=format:'%s' "${release_range}" | sed '/^[[:space:]]*$/d')
+
+          release_notes_file="$(mktemp)"
+          {
+            echo "## What's Changed"
+            if [ "${#release_commit_subjects[@]}" -gt 0 ]; then
+              for subject in "${release_commit_subjects[@]}"; do
+                echo "- ${subject}"
+              done
+            else
+              echo "- No commit titles were found for this release range."
+            fi
+            echo
+            if [ -n "${previous_release_tag}" ]; then
+              echo "Full Changelog: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_release_tag}...${RELEASE_VERSION}"
+            else
+              echo "Full Changelog: https://github.com/${GITHUB_REPOSITORY}/commits/${RELEASE_VERSION}"
+            fi
+          } > "${release_notes_file}"
+
           gh release create "${RELEASE_VERSION}" \
             --target main \
-            --generate-notes \
+            --title "${RELEASE_VERSION}" \
+            --notes-file "${release_notes_file}" \
             --latest
 
+      - name: Ensure Jira release exists
+        shell: bash
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_BASE_URL}" ] || \
+             [ -z "${JIRA_EMAIL}" ] || \
+             [ -z "${JIRA_API_TOKEN}" ] || \
+             [ -z "${JIRA_PROJECT_KEY}" ]; then
+            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
+            exit 1
+          fi
+
+          if [ -z "${RELEASE_VERSION}" ]; then
+            echo "Missing release version."
+            exit 1
+          fi
+
+          args=(
+            scripts/release_train_sync.py
+            release
+            --jira-base-url "${JIRA_BASE_URL}"
+            --jira-email "${JIRA_EMAIL}"
+            --jira-api-token "${JIRA_API_TOKEN}"
+            --project-key "${JIRA_PROJECT_KEY}"
+            --release-version "${RELEASE_VERSION}"
+          )
+
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=(--jira-cloud-id "${JIRA_CLOUD_ID}")
+          fi
+
+          if [ "${DRY_RUN_INPUT:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+
+          python "${args[@]}"
       - name: Transition release-train Jira issues to Done
         if: steps.issue-keys.outputs.issue_count != '0'
         shell: bash

@@ -6,6 +6,7 @@ import base64
 import json
 import subprocess
 import sys
+from datetime import date
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -58,7 +59,7 @@ class JiraClient:
         path: str,
         payload: dict[str, Any] | None = None,
         query: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[Any]:
         query_string = ""
         if query:
             query_string = "?" + urllib.parse.urlencode(query)
@@ -132,13 +133,73 @@ class JiraClient:
         payload = {"transition": {"id": transition_id}}
         self._request_json(method="POST", path=f"/rest/api/3/issue/{issue_key}/transitions", payload=payload)
 
+    def project_id(self, *, project_key: str) -> str:
+        data = self._request_json(method="GET", path=f"/rest/api/3/project/{project_key}")
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Unexpected Jira project response for {project_key}")
+        project_id = str(data.get("id", "")).strip()
+        if not project_id:
+            raise RuntimeError(f"Unable to resolve Jira project id for {project_key}")
+        return project_id
+
+    def find_version(self, *, project_id: str, version_name: str) -> dict[str, Any] | None:
+        start_at = 0
+        while True:
+            data = self._request_json(
+                method="GET",
+                path=f"/rest/api/3/project/{project_id}/version",
+                query={"startAt": str(start_at), "maxResults": "50"},
+            )
+            if isinstance(data, list):
+                versions = [item for item in data if isinstance(item, dict)]
+                for version in versions:
+                    if str(version.get("name", "")).strip() == version_name:
+                        return version
+                return None
+
+            if not isinstance(data, dict):
+                raise RuntimeError(f"Unexpected Jira version response for project id {project_id}")
+
+            versions = data.get("values", [])
+            if not isinstance(versions, list):
+                raise RuntimeError(f"Unexpected Jira version list payload for project id {project_id}")
+
+            for raw_version in versions:
+                if not isinstance(raw_version, dict):
+                    continue
+                if str(raw_version.get("name", "")).strip() == version_name:
+                    return raw_version
+
+            is_last = bool(data.get("isLast", True))
+            if is_last:
+                break
+            page_size = int(data.get("maxResults", len(versions)) or len(versions) or 50)
+            start_at += page_size
+        return None
+
+    def create_version(self, *, project_id: str, version_name: str, released: bool) -> None:
+        payload = {
+            "name": version_name,
+            "projectId": int(project_id),
+            "released": released,
+        }
+        if released:
+            payload["releaseDate"] = date.today().isoformat()
+        self._request_json(method="POST", path="/rest/api/3/version", payload=payload)
+
+    def update_version_release(self, *, version_id: str, released: bool) -> None:
+        payload = {"released": released}
+        if released:
+            payload["releaseDate"] = date.today().isoformat()
+        self._request_json(method="PUT", path=f"/rest/api/3/version/{version_id}", payload=payload)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Assign and close Jira release-train issues.")
     parser.add_argument(
         "mode",
-        choices=["assign", "close", "keys"],
-        help="assign: label Ready to Release issues; close: transition release issues to Done; keys: print issue keys for release label.",
+        choices=["assign", "close", "keys", "release"],
+        help="assign: label Ready to Release issues; close: transition release issues to Done; keys: print issue keys for release label; release: ensure Jira release version exists and is released.",
     )
     parser.add_argument("--jira-base-url", required=True)
     parser.add_argument("--jira-cloud-id", default="")
@@ -261,6 +322,36 @@ def close_released_issues(
     return 0
 
 
+def ensure_jira_release_version(
+    *,
+    client: JiraClient,
+    project_key: str,
+    release_version: str,
+    dry_run: bool,
+) -> int:
+    project_id = client.project_id(project_key=project_key)
+    existing = client.find_version(project_id=project_id, version_name=release_version)
+    if existing is None:
+        print(f"[release] create project={project_key} version={release_version} released=true")
+        if not dry_run:
+            client.create_version(project_id=project_id, version_name=release_version, released=True)
+        return 0
+
+    version_id = str(existing.get("id", "")).strip()
+    is_released = bool(existing.get("released"))
+    if is_released:
+        print(f"[release] exists project={project_key} version={release_version} released=true")
+        return 0
+
+    if not version_id:
+        raise RuntimeError(f"Jira version '{release_version}' exists but id is missing")
+
+    print(f"[release] update project={project_key} version={release_version} set released=true")
+    if not dry_run:
+        client.update_version_release(version_id=version_id, released=True)
+    return 0
+
+
 def print_release_issue_keys(
     *,
     client: JiraClient,
@@ -303,6 +394,13 @@ def main() -> int:
             client=client,
             project_key=args.project_key,
             release_version=release_version,
+        )
+    if args.mode == "release":
+        return ensure_jira_release_version(
+            client=client,
+            project_key=args.project_key,
+            release_version=release_version,
+            dry_run=args.dry_run,
         )
     return close_released_issues(
         client=client,

@@ -37,6 +37,7 @@ class PullRequestDetails:
     number: int
     html_url: str
     head_sha: str
+    body: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,17 @@ class WorkflowCheckSuite:
 class PullRequestFileChange:
     filename: str
     patch: str | None
+
+
+@dataclass(frozen=True)
+class PullRequestSummary:
+    number: int
+    title: str
+    state: str
+    html_url: str
+    head_ref: str
+    base_ref: str
+    updated_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,11 +95,11 @@ def github_client_from_tenant_config(
     if mode != "github_app":
         raise ValueError("Only github_app mode is supported")
 
-    app_id_ref = str(tenant_github_config.get("app_id_ref") or "")
-    private_key_ref = str(tenant_github_config.get("private_key_ref") or "")
+    app_id_ref = str(tenant_github_config.get("app_id_ref") or "GITHUB_APP_ID")
+    private_key_ref = str(tenant_github_config.get("private_key_ref") or "GITHUB_APP_PRIVATE_KEY")
     installation_id = str(tenant_github_config.get("installation_id") or "")
 
-    if not app_id_ref or not private_key_ref or not installation_id:
+    if not installation_id:
         raise ValueError("Missing github_app required config fields")
 
     resolver = secret_lookup or os.environ.get
@@ -256,6 +268,8 @@ class GitHubAppClient:
         html_url = response.get("html_url")
         head = response.get("head")
         head_sha = head.get("sha") if isinstance(head, dict) else None
+        raw_body = response.get("body")
+        body = raw_body.strip() if isinstance(raw_body, str) and raw_body.strip() else None
 
         if not isinstance(number, int):
             raise GitHubApiError("GitHub PR details response did not include numeric PR number")
@@ -264,7 +278,7 @@ class GitHubAppClient:
         if not isinstance(head_sha, str) or not head_sha:
             raise GitHubApiError("GitHub PR details response did not include head SHA")
 
-        return PullRequestDetails(number=number, html_url=html_url, head_sha=head_sha)
+        return PullRequestDetails(number=number, html_url=html_url, head_sha=head_sha, body=body)
 
     def list_check_suites(self, *, repo_full_name: str, ref: str) -> list[WorkflowCheckSuite]:
         installation_token = self.get_installation_token()
@@ -331,6 +345,55 @@ class GitHubAppClient:
                 break
             page += 1
 
+        return parsed
+
+    def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
+        installation_token = self.get_installation_token()
+        safe_limit = min(max(1, int(limit)), 100)
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/pulls?state=open&sort=updated&direction=desc&per_page={safe_limit}",
+            bearer_token=installation_token,
+        )
+        if not isinstance(response, list):
+            raise GitHubApiError("GitHub pull request list response was not a list")
+
+        parsed: list[PullRequestSummary] = []
+        for item in response:
+            if not isinstance(item, dict):
+                continue
+            number = item.get("number")
+            title = item.get("title")
+            state = item.get("state")
+            html_url = item.get("html_url")
+            updated_at = item.get("updated_at")
+            head = item.get("head")
+            base = item.get("base")
+            head_ref = head.get("ref") if isinstance(head, dict) else None
+            base_ref = base.get("ref") if isinstance(base, dict) else None
+            if not isinstance(number, int):
+                continue
+            if not isinstance(title, str) or not title.strip():
+                continue
+            if not isinstance(state, str) or not state.strip():
+                continue
+            if not isinstance(html_url, str) or not html_url.strip():
+                continue
+            if not isinstance(head_ref, str) or not head_ref.strip():
+                continue
+            if not isinstance(base_ref, str) or not base_ref.strip():
+                continue
+            parsed.append(
+                PullRequestSummary(
+                    number=number,
+                    title=title.strip(),
+                    state=state.strip(),
+                    html_url=html_url.strip(),
+                    head_ref=head_ref.strip(),
+                    base_ref=base_ref.strip(),
+                    updated_at=updated_at.strip() if isinstance(updated_at, str) and updated_at.strip() else None,
+                )
+            )
         return parsed
 
     def list_installation_repositories(self) -> list[InstallationRepository]:

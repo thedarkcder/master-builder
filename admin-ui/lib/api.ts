@@ -32,6 +32,7 @@ export type PolicyConfig = {
 };
 
 export type DiscordConfig = {
+  guild_id?: string | null;
   channel_id?: string | null;
   notify_events: string[];
   allowed_user_ids?: string[];
@@ -83,6 +84,64 @@ export type JiraProjectRecord = {
   name: string;
 };
 
+export type ProjectPolicyOverrides = Partial<
+  Pick<
+    PolicyConfig,
+    | "allow_jira_transitions"
+    | "allow_pr_creation"
+    | "allow_label_mutations"
+    | "max_runtime_minutes"
+    | "max_dev_test_review_loops"
+    | "max_concurrent_runs"
+    | "allowed_commands"
+    | "require_agents_md"
+  >
+>;
+
+export type ProjectDiscordConfig = {
+  channel_id?: string | null;
+  notify_events?: string[];
+  ask_thread_channel_ids?: string[];
+  seed_followup_thread_channel_ids?: string[];
+};
+
+export type ProjectRecord = {
+  project_id: string;
+  tenant_id: string;
+  name: string;
+  github_repository: string;
+  jira_project_key: string;
+  policy_overrides: ProjectPolicyOverrides;
+  environment: Record<string, string>;
+  secret_refs: Record<string, string>;
+  discord: ProjectDiscordConfig | null;
+  effective_policy: PolicyConfig;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectCreatePayload = {
+  name: string;
+  github_repository: string;
+  jira_project_key: string;
+  policy_overrides?: ProjectPolicyOverrides;
+  environment?: Record<string, string>;
+  secret_refs?: Record<string, string>;
+  discord?: ProjectDiscordConfig | null;
+};
+
+export type ProjectUpdatePayload = {
+  name: string;
+  github_repository: string;
+  jira_project_key: string;
+  policy_overrides?: ProjectPolicyOverrides;
+  environment?: Record<string, string>;
+  secret_refs?: Record<string, string>;
+  discord?: ProjectDiscordConfig | null;
+  is_archived: boolean;
+};
+
 export type JiraWebhookActionResult = {
   ok: boolean;
   action: string;
@@ -120,6 +179,7 @@ export type ReadyGatePreviewRecord = {
 export type RunRecord = {
   run_id: string;
   tenant_id: string;
+  project_id: string | null;
   issue_key: string;
   repo_url: string | null;
   branch: string | null;
@@ -145,15 +205,18 @@ export type ManagedSecretResolveResult = {
 };
 
 export type DiscordAllowlistRequestRecord = {
+  project_id: string | null;
   user_id: string;
   requested_at: string;
   channel_id: string | null;
   reason: string | null;
+  permissions?: string[];
 };
 
 export type DiscordAllowlistApprovalResult = {
   ok: boolean;
   details: string;
+  project_id: string | null;
   user_id: string;
   notified: boolean;
 };
@@ -285,6 +348,18 @@ export function updateTenant(
 export async function deleteTenant(credentials: Credentials, tenantId: string): Promise<void> {
   await request<void>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`, {
     method: "DELETE"
+  });
+}
+
+export function archiveTenant(credentials: Credentials, tenantId: string): Promise<TenantRecord> {
+  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/archive`, {
+    method: "POST"
+  });
+}
+
+export function unarchiveTenant(credentials: Credentials, tenantId: string): Promise<TenantRecord> {
+  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/unarchive`, {
+    method: "POST"
   });
 }
 
@@ -424,13 +499,54 @@ export function listGitHubRepositories(
   );
 }
 
+export function listProjects(credentials: Credentials, tenantId: string): Promise<ProjectRecord[]> {
+  return request<ProjectRecord[]>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects`);
+}
+
+export function createProject(
+  credentials: Credentials,
+  tenantId: string,
+  payload: ProjectCreatePayload
+): Promise<ProjectRecord> {
+  return request<ProjectRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateProject(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectUpdatePayload
+): Promise<ProjectRecord> {
+  return request<ProjectRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function getProject(credentials: Credentials, tenantId: string, projectId: string): Promise<ProjectRecord> {
+  return request<ProjectRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`
+  );
+}
+
 export function listRuns(
   credentials: Credentials,
-  params: { tenantId?: string; status?: string }
+  params: { tenantId?: string; projectId?: string; status?: string }
 ): Promise<RunRecord[]> {
   const query = new URLSearchParams();
   if (params.tenantId) {
     query.set("tenant_id", params.tenantId);
+  }
+  if (params.projectId) {
+    query.set("project_id", params.projectId);
   }
   if (params.status) {
     query.set("status", params.status);
@@ -447,24 +563,30 @@ export function listManagedSecrets(credentials: Credentials): Promise<ManagedSec
   return request<ManagedSecretRecord[]>(credentials, "/api/admin/secrets");
 }
 
+export function listTenantManagedSecrets(credentials: Credentials, tenantId: string): Promise<ManagedSecretRecord[]> {
+  return request<ManagedSecretRecord[]>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/secrets`);
+}
+
 export function listDiscordAllowlistRequests(
   credentials: Credentials,
-  tenantId: string
+  tenantId: string,
+  projectId: string
 ): Promise<DiscordAllowlistRequestRecord[]> {
   return request<DiscordAllowlistRequestRecord[]>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/allowlist-requests`
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/discord/allowlist-requests`
   );
 }
 
 export function approveDiscordAllowlistRequest(
   credentials: Credentials,
   tenantId: string,
+  projectId: string,
   userId: string
 ): Promise<DiscordAllowlistApprovalResult> {
   return request<DiscordAllowlistApprovalResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/allowlist-requests/${encodeURIComponent(userId)}/approve`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/discord/allowlist-requests/${encodeURIComponent(userId)}/approve`,
     {
       method: "POST"
     }
@@ -495,5 +617,46 @@ export function resolveManagedSecret(
   return request<ManagedSecretResolveResult>(credentials, "/api/admin/secrets/resolve", {
     method: "POST",
     body: JSON.stringify({ secret_ref: secretRef })
+  });
+}
+
+export function upsertTenantManagedSecret(
+  credentials: Credentials,
+  tenantId: string,
+  secretKey: string,
+  value: string
+): Promise<ManagedSecretRecord> {
+  return request<ManagedSecretRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/secrets/${encodeURIComponent(secretKey)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ value })
+    }
+  );
+}
+
+export async function deleteTenantManagedSecret(
+  credentials: Credentials,
+  tenantId: string,
+  secretKey: string
+): Promise<void> {
+  await request<void>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/secrets/${encodeURIComponent(secretKey)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
+export function resolveTenantManagedSecret(
+  credentials: Credentials,
+  tenantId: string,
+  secretKey: string
+): Promise<ManagedSecretResolveResult> {
+  return request<ManagedSecretResolveResult>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/secrets/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ secret_ref: secretKey })
   });
 }

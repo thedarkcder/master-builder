@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -12,15 +13,14 @@ ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/pla
 
 ARG PIP_EXTRA_INDEX_URL=""
 ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708
+ARG CODEX_NPM_VERSION=latest
 ENV PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
-COPY orchestrator ./orchestrator
-COPY alembic.ini ./alembic.ini
-
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
@@ -43,10 +43,15 @@ RUN apt-get update && \
       "platform-tools" \
       "build-tools;34.0.0" \
       "platforms;android-34" >/dev/null && \
-    npm install -g @openai/codex@latest && \
+    npm install -g "@openai/codex@${CODEX_NPM_VERSION}" && \
     rm -rf /var/lib/apt/lists/* /tmp/android-cmdline-tools.zip
 
-RUN python -m pip install --upgrade pip && \
+COPY pyproject.toml README.md ./
+COPY orchestrator ./orchestrator
+COPY alembic.ini ./alembic.ini
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip && \
     test -n "$PIP_EXTRA_INDEX_URL" && \
     PIP_TRUSTED_HOST="$(echo "$PIP_EXTRA_INDEX_URL" | sed -E 's#^[a-zA-Z]+://([^/@]+@)?([^/:]+).*#\2#')" && \
     pip install --trusted-host "$PIP_TRUSTED_HOST" .[codex_assets]
