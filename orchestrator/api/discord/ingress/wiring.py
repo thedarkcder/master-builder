@@ -69,6 +69,7 @@ def build_discord_ingress_dependencies(
             command_name=ctx.command_name,
             arguments=list(ctx.arguments),
             issue_key_pattern=issue_key_pattern,
+            scoped_project_keys=list(ctx.scope.project_keys),
             run_gap_analysis=run_gap_analysis_fn,
             normalize_discord_attachments=normalize_discord_attachments_fn,
             create_discord_bug_issue=create_discord_bug_issue_fn,
