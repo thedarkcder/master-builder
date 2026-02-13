@@ -68,19 +68,14 @@ def _active_run_count_for_tenant(session: Session, tenant_id: str) -> int:
 
 
 def _first_active_run_for_tenant(session: Session, tenant_id: str) -> Run | None:
-    return (
-        session.execute(
+    return session.execute(
         select(Run)
         .where(
             Run.tenant_id == tenant_id,
             Run.status.in_(ACTIVE_RUN_STATUSES),
         )
         .order_by(Run.created_at.asc())
-        .limit(1)
-    )
-        .scalars()
-        .first()
-    )
+    ).scalar_one_or_none()
 
 
 def _coerce_positive_limit(value: int | None) -> int | None:
