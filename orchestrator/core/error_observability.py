@@ -8,6 +8,27 @@ from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.core.observability import current_log_context
 
 
+def _capture_exception_with_sentry(
+    *,
+    event: str,
+    error_ref: str,
+    exc: Exception,
+    context: dict[str, str] | None,
+) -> None:
+    try:
+        import sentry_sdk  # type: ignore
+    except Exception:
+        return
+
+    with sentry_sdk.push_scope() as scope:
+        scope.set_tag("event_type", event)
+        scope.set_tag("error_ref", error_ref)
+        if context:
+            for key, value in context.items():
+                scope.set_context(key, {"value": value})
+        sentry_sdk.capture_exception(exc)
+
+
 def emit_hard_error(
     *,
     event: str,
@@ -41,3 +62,9 @@ def emit_hard_error(
     print(redact_sensitive_text(json.dumps(payload, sort_keys=True)), flush=True)
     traceback_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     print(redact_sensitive_text(traceback_text), flush=True)
+    _capture_exception_with_sentry(
+        event=event,
+        error_ref=error_ref,
+        exc=exc,
+        context=context,
+    )
