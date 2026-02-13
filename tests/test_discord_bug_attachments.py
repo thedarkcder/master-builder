@@ -7,6 +7,7 @@ from urllib.error import HTTPError, URLError
 from unittest.mock import MagicMock, patch
 
 from orchestrator.api.discord.bug.attachments import (
+    AttachmentUploadFailure,
     download_discord_attachment,
     resolve_discord_channel_name,
     upload_discord_attachments_to_jira,
@@ -44,7 +45,7 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             )
         )
 
-        with patch("orchestrator.api.discord.bug.attachments.resolve_scoped_secret_ref", return_value=""):
+        with patch("orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref", return_value=""):
             self.assertIsNone(
                 resolve_discord_channel_name(
                     session=session,
@@ -56,7 +57,7 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             )
 
         with (
-            patch("orchestrator.api.discord.bug.attachments.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.bug.attachments.DiscordApiClient") as client_cls,
         ):
             client = client_cls.return_value
@@ -77,7 +78,7 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         tenant = SimpleNamespace(tenant_id="t1")
 
         with (
-            patch("orchestrator.api.discord.bug.attachments.resolve_scoped_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.bug.attachments.DiscordApiClient") as client_cls,
         ):
             client_cls.return_value.get_channel.side_effect = RuntimeError("boom")
@@ -115,6 +116,24 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         with patch("orchestrator.api.discord.bug.attachments.urlopen", return_value=_Response(b"", "image/png")):
             with self.assertRaisesRegex(JiraOAuthError, "empty"):
                 download_discord_attachment(url="https://discord.test/file")
+
+    def test_download_discord_attachment_uses_bot_auth_for_discord_urls(self) -> None:
+        seen_headers: dict[str, str] = {}
+
+        def _fake_urlopen(request, timeout: int = 30):  # noqa: ANN001
+            del timeout
+            seen_headers.update(dict(request.header_items()))
+            return _Response(b"data", "image/png")
+
+        with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=_fake_urlopen):
+            payload, content_type = download_discord_attachment(
+                url="https://cdn.discordapp.com/attachments/1/2/image.png",
+                bot_token="test-token",
+            )
+
+        self.assertEqual(payload, b"data")
+        self.assertEqual(content_type, "image/png")
+        self.assertEqual(seen_headers.get("Authorization"), "Bot test-token")
 
     def test_upload_discord_attachments_to_jira(self) -> None:
         client = MagicMock()
@@ -155,9 +174,47 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         kwargs = client.upload_issue_attachment.call_args.kwargs
         self.assertEqual(kwargs["filename"], "ok")
         self.assertEqual(kwargs["content_type"], "image/png")
-        self.assertTrue(any("missing URL" in warning for warning in warnings))
-        self.assertTrue(any("failed" in warning for warning in warnings))
-        self.assertTrue(any("bad-value" in warning for warning in warnings))
+        self.assertEqual(len(warnings), 3)
+        self.assertIsInstance(warnings[0], AttachmentUploadFailure)
+        self.assertEqual(warnings[0].filename, "missing-url")
+        self.assertEqual(warnings[0].source, "discord_fetch")
+        self.assertEqual(warnings[1].filename, "fail")
+        self.assertEqual(warnings[1].source, "discord_fetch")
+        self.assertEqual(warnings[2].filename, "fail-value")
+        self.assertEqual(warnings[2].source, "discord_fetch")
+        self.assertTrue(any(warning.detail == "failed" for warning in warnings))
+        self.assertTrue(any(warning.detail == "bad-value" for warning in warnings))
+
+    def test_upload_discord_attachments_to_jira_records_jira_upload_error_metadata(self) -> None:
+        client = MagicMock()
+
+        def _download(*, url: str) -> tuple[bytes, str | None]:
+            del url
+            return b"payload", "application/octet-stream"
+
+        def _upload_issue_attachment(**_: object) -> None:
+            raise JiraOAuthError("Jira attachment upload failed (403): permission denied")
+
+        client.upload_issue_attachment = _upload_issue_attachment  # type: ignore[attr-defined]
+
+        uploaded_count, warnings = upload_discord_attachments_to_jira(
+            client=client,
+            access_token="token",
+            cloud_id="cloud",
+            issue_key="MAB-1",
+            attachments=[{"filename": "fail-upload.png", "url": "https://discord.test/ok"}],
+            correlation_id="corr-1",
+            download_attachment=_download,
+        )
+
+        self.assertEqual(uploaded_count, 0)
+        self.assertEqual(len(warnings), 1)
+        failure = warnings[0]
+        self.assertIsInstance(failure, AttachmentUploadFailure)
+        self.assertEqual(failure.source, "jira_upload")
+        self.assertEqual(failure.status, 403)
+        self.assertEqual(failure.correlation_id, "corr-1")
+        self.assertIn("permission denied", failure.response_snippet or "")
 
 
 if __name__ == "__main__":

@@ -123,13 +123,18 @@ class JiraOAuthHelpersTests(unittest.TestCase):
     def test_resolve_secret_ref(self) -> None:
         session = MagicMock()
         settings = SimpleNamespace(secrets_encryption_key="k")
-        with patch("orchestrator.api.admin.jira_oauth_helpers.resolve_scoped_secret_ref", return_value="value"):
+        with patch(
+            "orchestrator.api.admin.jira_oauth_helpers.resolve_platform_secret_ref",
+            return_value="value",
+        ) as resolve_secret_mock:
             self.assertEqual(
                 jira_oauth_helpers.resolve_secret_ref(session, ref_name="ref", settings=settings, tenant_id="t"),
                 "value",
             )
+        resolve_secret_mock.assert_called_once()
+        self.assertEqual(resolve_secret_mock.call_args.kwargs["secret_ref"], "ref")
 
-        with patch("orchestrator.api.admin.jira_oauth_helpers.resolve_scoped_secret_ref", return_value=""):
+        with patch("orchestrator.api.admin.jira_oauth_helpers.resolve_platform_secret_ref", return_value=""):
             with self.assertRaises(ValueError):
                 jira_oauth_helpers.resolve_secret_ref(session, ref_name="ref", settings=settings)
 

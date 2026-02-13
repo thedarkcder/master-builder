@@ -63,7 +63,7 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client = Mock()
         fake_client.post_message.return_value = {"id": "msg-123"}
         with (
-            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.resolve_platform_secret_ref", return_value="bot-token"),
             patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
@@ -85,7 +85,7 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client = Mock()
         fake_client.post_message.return_value = {"id": "msg-123"}
         with (
-            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.resolve_platform_secret_ref", return_value="bot-token"),
             patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
@@ -106,7 +106,7 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client = Mock()
         fake_client.post_message.return_value = {"id": "msg-123"}
         with (
-            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.resolve_platform_secret_ref", return_value="bot-token"),
             patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
@@ -128,7 +128,7 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client.post_message.return_value = {"id": "msg-123"}
         fake_client.create_thread_from_message.return_value = "thread-456"
         with (
-            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.resolve_platform_secret_ref", return_value="bot-token"),
             patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
@@ -155,7 +155,7 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client.post_message.return_value = {"id": "msg-123"}
         fake_client.create_thread_from_message.return_value = "thread-456"
         with (
-            patch("orchestrator.core.discord.notifications.resolve_scoped_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.resolve_platform_secret_ref", return_value="bot-token"),
             patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(

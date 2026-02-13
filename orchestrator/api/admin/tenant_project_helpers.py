@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
+    resolve_platform_secret_ref,
+)
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordTextChannel
 
@@ -78,33 +82,25 @@ def resolve_project_discord_channel_binding(
         normalized["channel_id"] = existing_channel_id
         return normalized
 
-    token_ref = settings.discord_bot_token_secret_ref.strip()
-    if not token_ref:
-        raise ValueError("Discord bot token reference is not configured")
-    bot_token = resolve_scoped_secret_ref(
+    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
+    bot_token = resolve_platform_secret_ref(
         session,
         secret_ref=token_ref,
         encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id,
     )
     if not bot_token:
         raise ValueError(f"Discord bot token secret is missing: {token_ref}")
 
     guild_id = settings.discord_guild_id.strip()
     if not guild_id:
-        guild_ref = settings.discord_guild_id_secret_ref.strip()
-        if guild_ref:
-            guild_id = (
-                resolve_scoped_secret_ref(
-                    session,
-                    secret_ref=guild_ref,
-                    encryption_key=settings.secrets_encryption_key,
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                )
-                or ""
-            ).strip()
+        guild_id = (
+            resolve_platform_secret_ref(
+                session,
+                secret_ref=PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
+                encryption_key=settings.secrets_encryption_key,
+            )
+            or ""
+        ).strip()
     if not guild_id:
         raise ValueError("Discord guild ID is not configured")
 

@@ -30,7 +30,8 @@ from orchestrator.core.project_routing import (
     find_active_project_for_issue_key,
     find_active_project_for_repo_full_name,
 )
-from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -183,7 +184,7 @@ def resolve_global_github_webhook_secret(
     settings,
 ) -> str | None:  # noqa: ANN001
     del request_id
-    secret_value = resolve_scoped_secret_ref(
+    secret_value = resolve_platform_secret_ref(
         session,
         secret_ref=GLOBAL_GITHUB_WEBHOOK_SECRET_REF,
         encryption_key=settings.secrets_encryption_key,

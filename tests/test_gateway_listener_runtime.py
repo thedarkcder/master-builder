@@ -48,7 +48,6 @@ class _NoopTask:
 class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
     def _listener(self) -> tuple[DiscordGatewayListener, MagicMock]:
         settings = SimpleNamespace(
-            discord_bot_token_secret_ref="platform/DISCORD_BOT_TOKEN",
             secrets_encryption_key="enc",
         )
         session = MagicMock()
@@ -74,9 +73,8 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_run_loop_skips_without_websockets_or_token_ref(self) -> None:
         listener, _session = self._listener()
-        listener._settings.discord_bot_token_secret_ref = ""
-
-        asyncio.run(listener._run_loop())
+        with patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=None):
+            asyncio.run(listener._run_loop())
 
         listener, _session = self._listener()
         with patch("orchestrator.core.discord.gateway_listener.websockets", None):
@@ -125,10 +123,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_resolve_bot_token(self) -> None:
         listener, session = self._listener()
-        with patch("orchestrator.core.discord.gateway_listener.resolve_scoped_secret_ref", return_value=" token "):
-            self.assertEqual(listener._resolve_bot_token(token_ref="platform/DISCORD_BOT_TOKEN"), "token")
-        with patch("orchestrator.core.discord.gateway_listener.resolve_scoped_secret_ref", return_value=None):
-            self.assertEqual(listener._resolve_bot_token(token_ref="platform/DISCORD_BOT_TOKEN"), "")
+        with patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=" token "):
+            self.assertEqual(listener._resolve_bot_token(token_ref="DISCORD_BOT_TOKEN"), "token")
+        with patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=None):
+            self.assertEqual(listener._resolve_bot_token(token_ref="DISCORD_BOT_TOKEN"), "")
         self.assertIsNotNone(session)
 
     def test_run_single_connection_identify_and_resume_paths(self) -> None:

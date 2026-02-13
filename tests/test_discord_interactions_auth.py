@@ -26,22 +26,22 @@ class DiscordInteractionsAuthTests(unittest.TestCase):
         settings = SimpleNamespace(secrets_encryption_key="enc")
         session = MagicMock()
 
-        with patch("orchestrator.api.discord.interactions.auth.resolve_scoped_secret_ref", return_value=""):
+        with patch("orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref", return_value=""):
             with self.assertRaises(HTTPException) as exc_ctx:
                 _resolve_discord_interactions_public_key(session=session, settings=settings)
         self.assertEqual(exc_ctx.exception.status_code, 500)
 
-        with patch("orchestrator.api.discord.interactions.auth.resolve_scoped_secret_ref", return_value="not-hex"):
+        with patch("orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref", return_value="not-hex"):
             with self.assertRaises(HTTPException) as exc_ctx:
                 _resolve_discord_interactions_public_key(session=session, settings=settings)
         self.assertIn("hex-encoded", exc_ctx.exception.detail)
 
-        with patch("orchestrator.api.discord.interactions.auth.resolve_scoped_secret_ref", return_value="ab" * 31):
+        with patch("orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref", return_value="ab" * 31):
             with self.assertRaises(HTTPException) as exc_ctx:
                 _resolve_discord_interactions_public_key(session=session, settings=settings)
         self.assertIn("32 bytes", exc_ctx.exception.detail)
 
-        with patch("orchestrator.api.discord.interactions.auth.resolve_scoped_secret_ref", return_value="ab" * 32):
+        with patch("orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref", return_value="ab" * 32):
             key = _resolve_discord_interactions_public_key(session=session, settings=settings)
         self.assertEqual(len(key), 32)
 

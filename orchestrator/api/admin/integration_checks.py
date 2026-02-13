@@ -61,6 +61,7 @@ def test_github_connection(
     settings,
     with_managed_github_refs_fn,
     resolve_scoped_secret_ref_fn,
+    resolve_platform_secret_ref_fn,
     github_client_from_tenant_config_fn,
 ) -> IntegrationTestResult:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
@@ -85,11 +86,19 @@ def test_github_connection(
     try:
         github_client_from_tenant_config_fn(
             with_managed_github_refs_fn(github),
-            secret_lookup=lambda ref: resolve_scoped_secret_ref_fn(
-                session,
-                secret_ref=ref,
-                encryption_key=settings.secrets_encryption_key,
-                tenant_id=tenant_id,
+            secret_lookup=lambda ref: (
+                resolve_scoped_secret_ref_fn(
+                    session,
+                    secret_ref=ref,
+                    encryption_key=settings.secrets_encryption_key,
+                    tenant_id=tenant_id,
+                )
+                if str(ref).strip().startswith(("tenant/", "project/"))
+                else resolve_platform_secret_ref_fn(
+                    session,
+                    secret_ref=ref,
+                    encryption_key=settings.secrets_encryption_key,
+                )
             ),
         )
     except ValueError as exc:
