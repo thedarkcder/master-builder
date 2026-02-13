@@ -13,6 +13,10 @@ This file tracks current non-fatal/defensive catch-and-continue paths for follow
 - `orchestrator/api/routes/admin_secrets.py`
   - Secret resolution/upsert/list/delete now use platform and tenant secret services explicitly.
   - Removed endpoint-level `_normalize_platform_secret_ref` mapping.
+- `orchestrator/api/admin/route_helpers.py` (`discover_project_run_board_id`)
+  - Catches Jira lookup network failures (`URLError`) and continues with board autodiscovery fallback behavior instead of surfacing unhandled exceptions.
+- `orchestrator/api/routes/admin.py` (`_ensure_project_repository_checkout`)
+  - Treats malformed GitHub private key/runtime token generation failures as a skip-path for repository checkout, not a hard request failure.
 
 ## Remaining non-fatal fallbacks (active)
 
