@@ -11,6 +11,7 @@ from orchestrator.core.runs import (
     RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,
     RunStateTransitionError,
+    _first_active_run_for_tenant,
     _coerce_positive_limit,
     cancel_run,
     enqueue_run,
@@ -172,3 +173,18 @@ class CoreRunsEdgeTests(unittest.TestCase):
         self.assertIn("Cancelled by user", str(cancelled.last_error))
         self.assertIsNotNone(cancelled.started_at)
         self.assertIsNotNone(cancelled.finished_at)
+
+    def test_first_active_run_for_tenant_returns_first_row_without_uniqueness_assumption(self) -> None:
+        session = MagicMock()
+        first_run = SimpleNamespace(run_id="run-oldest")
+        scalars_result = MagicMock()
+        scalars_result.first.return_value = first_run
+        execute_result = MagicMock()
+        execute_result.scalars.return_value = scalars_result
+        session.execute.return_value = execute_result
+
+        selected = _first_active_run_for_tenant(session, tenant_id="tenant-a")
+
+        self.assertIs(selected, first_run)
+        execute_result.scalars.assert_called_once()
+        scalars_result.first.assert_called_once()
