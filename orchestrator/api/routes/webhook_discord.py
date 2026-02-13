@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from uuid import uuid4
 
@@ -17,12 +18,40 @@ from orchestrator.api.webhooks.payload_utils import (
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(tags=["discord-webhook"])
 logger = logging.getLogger(__name__)
 
 execute_discord_ingress_command = execute_tenant_discord_ingress_command
+
+
+async def _run_discord_webhook_command(
+    *,
+    tenant_id: str,
+    payload: DiscordCommandRequest,
+    defer_seed_issues: bool,
+) -> None:
+    session_factory = create_session_factory()
+    session = session_factory()
+    try:
+        execute_discord_ingress_command(
+            tenant_id=tenant_id,
+            payload=payload,
+            session=session,
+            defer_seed_issues=defer_seed_issues,
+            allow_plain_ask=True,
+        )
+    except Exception:
+        logger.exception(
+            "discord_webhook_deferred_command_failed tenant_id=%s user_id=%s command=%s",
+            tenant_id,
+            payload.user_id,
+            payload.command,
+        )
+    finally:
+        session.close()
 
 
 @router.post("/discord/webhook/{tenant_id}")
@@ -88,16 +117,18 @@ async def ingest_discord_webhook(
     if channel_id is not None and not isinstance(channel_id, str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid channel_id")
 
-    command_response = execute_discord_ingress_command(
-        tenant_id=tenant_id,
-        payload=DiscordCommandRequest(
-            user_id=user_id.strip(),
-            command=command.strip(),
-            channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
-        ),
-        session=session,
-        defer_seed_issues=command_matches(command, command_name="issues", subcommand="seed"),
-        allow_plain_ask=True,
+    normalized_command = command.strip()
+    command_payload = DiscordCommandRequest(
+        user_id=user_id.strip(),
+        command=normalized_command,
+        channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
+    )
+    asyncio.create_task(
+        _run_discord_webhook_command(
+            tenant_id=tenant_id,
+            payload=command_payload,
+            defer_seed_issues=command_matches(normalized_command, command_name="issues", subcommand="seed"),
+        )
     )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -105,6 +136,6 @@ async def ingest_discord_webhook(
             "request_id": request_id,
             "tenant_id": tenant_id,
             "accepted": True,
-            "result": command_response.model_dump(),
+            "deferred": True,
         },
     )

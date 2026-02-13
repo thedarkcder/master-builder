@@ -35,17 +35,54 @@ def build_discord_bug_description(
     attachments: list[dict[str, str]],
 ) -> str:
     lines = [
-        "Reported via Discord",
+        "**Objective**",
+        f"- Resolve bug: {summary.strip() or 'No summary provided'}",
+        "",
+        "**Scope In**",
+        "- Reproduce and fix the reported defect path.",
+        "- Add regression validation for the failing behavior.",
+        "",
+        "**Scope Out**",
+        "- Unrelated refactors.",
+        "- Feature work outside this bug fix.",
+        "",
+        "**Acceptance Criteria**",
+        "- Repro steps fail before fix and pass after fix.",
+        "- The reported user-visible error no longer occurs.",
+        "",
+        "**How to test**",
+        "- Run targeted tests for the affected path.",
+        "- Re-run the exact user flow that reported this bug.",
+        "",
+        "**NFR intent (MVP vs scale-ready)**",
+        "- MVP quick stabilization unless explicitly marked scale-ready.",
+        "",
+        "**Dependencies / Risks**",
+        "- Verify downstream integrations that consume this flow.",
+        "",
+        "**Good To Do checklist**",
+        "- [ ] Objective is clear",
+        "- [ ] Scope is explicit (in/out)",
+        "- [ ] Acceptance criteria are testable",
+        "- [ ] How-to-test is defined",
+        "- [ ] MVP vs scale-ready is decided",
+        "",
+        "**Decision Gate triggers**",
+        "- [ ] Requirements are ambiguous",
+        "- [ ] Design choice impacts reliability/cost/security",
+        "",
+        "**Notes / Links**",
+        "- Reported via Discord",
         f"- Reporter: {reporter_user_id}",
         f"- Channel: {channel_id or 'unknown'}",
         f"- Reported at: {datetime.now(timezone.utc).isoformat()}",
     ]
     if related_issue_key:
         lines.append(f"- Related issue: {related_issue_key}")
-    lines.extend(["", "Summary", summary.strip(), "", "Context"])
+    lines.extend(["", "**Context**"])
     lines.append(details.strip() or "No additional context provided.")
     if attachments:
-        lines.extend(["", "Attachments"])
+        lines.extend(["", "**Attachments**"])
         for attachment in attachments:
             filename = attachment.get("filename") or "attachment"
             url = attachment.get("url") or ""

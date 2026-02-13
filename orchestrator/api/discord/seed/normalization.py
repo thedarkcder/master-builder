@@ -67,6 +67,8 @@ def collect_seed_issue_questions(
     scope_in: list[str],
     scope_out: list[str],
     acceptance: list[str],
+    how_to_test: list[str],
+    nfr_intent: str,
 ) -> list[str]:
     questions: list[str] = []
     title = issue_summary.strip() or "this issue"
@@ -78,4 +80,8 @@ def collect_seed_issue_questions(
         questions.append(f"For '{title}', what is explicitly out of scope?")
     if not acceptance:
         questions.append(f"For '{title}', what acceptance criteria must be satisfied?")
+    if not how_to_test:
+        questions.append(f"For '{title}', what exact validation steps/commands should be used to test completion?")
+    if seed_text_is_missing(nfr_intent):
+        questions.append(f"For '{title}', should this be MVP quick delivery or scale-ready design?")
     return questions

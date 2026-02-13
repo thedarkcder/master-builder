@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.ask.context import consume_pending_ask_action
 from orchestrator.api.discord.interactions.parser import _parse_discord_interaction_command
+from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,
@@ -240,6 +241,11 @@ def _send_discord_interaction_followup(
             return
     except HTTPError as exc:
         error_body = exc.read().decode("utf-8")
+        normalized_body = error_body.casefold()
+        if exc.code == 404 and ("unknown webhook" in normalized_body or '"code": 10015' in normalized_body):
+            raise DiscordInteractionWebhookExpiredError(
+                f"Discord interaction follow-up webhook expired ({exc.code}): {error_body}"
+            ) from exc
         raise RuntimeError(f"Discord follow-up request failed ({exc.code}): {error_body}") from exc
 
 
