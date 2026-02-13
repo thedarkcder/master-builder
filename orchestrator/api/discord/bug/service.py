@@ -11,17 +11,22 @@ def normalize_discord_attachments(raw_attachments: object) -> list[dict[str, str
         if not isinstance(item, dict):
             continue
         url = str(item.get("url") or "").strip()
-        if not url:
+        proxy_url = str(item.get("proxy_url") or "").strip()
+        attachment_url = url or proxy_url
+        if not attachment_url:
             continue
         filename = str(item.get("filename") or "").strip() or "attachment"
         content_type = str(item.get("content_type") or "").strip()
-        normalized.append(
-            {
-                "url": url,
-                "filename": filename,
-                "content_type": content_type,
-            }
-        )
+        attachment: dict[str, str] = {
+            "url": url,
+            "filename": filename,
+            "content_type": content_type,
+        }
+        if proxy_url:
+            attachment["proxy_url"] = proxy_url
+        if not attachment["url"] and attachment.get("proxy_url"):
+            attachment["url"] = attachment["proxy_url"]
+        normalized.append(attachment)
     return normalized[:5]
 
 
