@@ -878,6 +878,88 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(context["reason"], "github_pull_requests_unavailable")
         self.assertIn("example/repo", context["degraded_repositories"])
 
+    def test_collect_github_ask_context_uses_platform_for_unscoped_refs(self) -> None:
+        fake_client = SimpleNamespace(
+            list_open_pull_requests=lambda **_kwargs: []
+        )
+
+        def _scoped_secret_lookup(
+            session,
+            secret_ref: str,
+            encryption_key: str,
+            tenant_id: str,
+            project_id: str | None = None,
+        ) -> str | None:
+            self.assertEqual(encryption_key, get_settings().secrets_encryption_key)
+            self.assertEqual(tenant_id, self.tenant_id)
+            if secret_ref == f"tenant/{self.tenant_id}/GITHUB_APP_ID":
+                return "tenant-app-id"
+            if secret_ref == f"tenant/{self.tenant_id}/GITHUB_APP_PRIVATE_KEY":
+                return "tenant-private-key"
+            return None
+
+        def _platform_secret_lookup(session, *, secret_ref: str, encryption_key: str, allow_environment_fallback: bool = True) -> str | None:
+            self.assertEqual(encryption_key, get_settings().secrets_encryption_key)
+            if secret_ref == "GITHUB_APP_ID":
+                return "platform-app-id"
+            if secret_ref == "GITHUB_APP_PRIVATE_KEY":
+                return "platform-private-key"
+            return None
+
+        def _github_client_factory(
+            config: dict,
+            *,
+            tenant_secret_lookup=None,
+            platform_secret_lookup=None,
+            **_: object,
+        ) -> SimpleNamespace:
+            self.assertIsNotNone(tenant_secret_lookup)
+            self.assertIsNotNone(platform_secret_lookup)
+            self.assertEqual(
+                tenant_secret_lookup(f"tenant/{self.tenant_id}/GITHUB_APP_ID"),
+                "tenant-app-id",
+            )
+            self.assertEqual(
+                tenant_secret_lookup(f"tenant/{self.tenant_id}/GITHUB_APP_PRIVATE_KEY"),
+                "tenant-private-key",
+            )
+            self.assertEqual(platform_secret_lookup("GITHUB_APP_ID"), "platform-app-id")
+            self.assertEqual(platform_secret_lookup("GITHUB_APP_PRIVATE_KEY"), "platform-private-key")
+            return fake_client
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            with (
+                patch("orchestrator.api.routes.discord.resolve_scoped_secret_ref", side_effect=_scoped_secret_lookup),
+                patch(
+                    "orchestrator.api.routes.discord.resolve_platform_secret_ref",
+                    side_effect=_platform_secret_lookup,
+                ),
+                patch("orchestrator.api.routes.discord.github_client_from_tenant_config", side_effect=_github_client_factory),
+                patch(
+                    "orchestrator.api.routes.discord.collect_local_repo_context",
+                    return_value=SimpleNamespace(
+                        available=True,
+                        reason=None,
+                        repo_dir="/tmp/repo",
+                        current_branch="staging",
+                        head_sha="abc123",
+                        branches=["staging", "jira/TP-1"],
+                        recent_commits=[],
+                    ),
+                ),
+            ):
+                context = _collect_github_ask_context(
+                    session=session,
+                    tenant=tenant,
+                    project_keys=["TP"],
+                )
+
+        self.assertTrue(context["available"])
+        self.assertEqual(len(context["repositories"]), 1)
+        self.assertEqual(context["repositories"][0]["repo_full_name"], "example/repo")
+
     def test_ask_history_scope_isolated_by_channel(self) -> None:
         create_project = self.client.post(
             f"/api/admin/tenants/{self.tenant_id}/projects",

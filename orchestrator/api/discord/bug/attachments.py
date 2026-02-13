@@ -18,6 +18,8 @@ from orchestrator.tools.jira_oauth import JiraOAuthError
 logger = logging.getLogger(__name__)
 _SNIPPET_LIMIT = 240
 _HTTP_STATUS_PATTERN = re.compile(r"(?:HTTP\s+|\()(?P<status>\d{3})(?:\)|:)")
+_DISCORD_ATTACHMENT_USER_AGENT = "DiscordBot (https://github.com/thedarkcder/master-builder, 1.0)"
+_CLOUDFLARE_1010_MARKER = "error code: 1010"
 
 
 @dataclass(frozen=True)
@@ -95,28 +97,85 @@ def _is_discord_attachment_url(url: str) -> bool:
         host = (urlparse(url).hostname or "").lower()
     except ValueError:
         return False
-    return host.endswith("discordapp.com") or host.endswith("discord.com")
+    return (
+        host.endswith("discordapp.com")
+        or host.endswith("discordapp.net")
+        or host.endswith("discord.com")
+    )
+
+
+def _is_cloudflare_1010(body: str | None) -> bool:
+    return _CLOUDFLARE_1010_MARKER in (str(body or "").lower())
+
+
+def _discord_attachment_url_candidates(url: str) -> list[str]:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return [url]
+
+    host = (parsed.hostname or "").lower()
+    if not _is_discord_attachment_url(url):
+        return [url]
+
+    candidates = [url]
+    if host == "cdn.discordapp.com":
+        candidates.append(url.replace("//cdn.discordapp.com/", "//media.discordapp.net/"))
+    elif host == "media.discordapp.net":
+        candidates.append(url.replace("//media.discordapp.net/", "//cdn.discordapp.com/"))
+    elif host == "discordapp.com":
+        candidates.append(url.replace("//discordapp.com/", "//cdn.discordapp.com/"))
+    return list(dict.fromkeys(candidates))
+
+
+def _download_discord_attachment(url: str, headers: dict[str, str]) -> tuple[bytes, str | None]:
+    request = Request(url=url, headers=headers, method="GET")
+    with urlopen(request, timeout=30) as response:
+        payload = response.read()
+        content_type = response.headers.get("Content-Type")
+    return payload, content_type
 
 
 def download_discord_attachment(*, url: str, bot_token: str | None = None) -> tuple[bytes, str | None]:
-    headers: dict[str, str] = {}
+    candidates = _discord_attachment_url_candidates(url)
     normalized_token = str(bot_token or "").strip()
-    if normalized_token and _is_discord_attachment_url(url):
+    headers: dict[str, str] = {
+        "Accept": "*/*",
+        "User-Agent": _DISCORD_ATTACHMENT_USER_AGENT,
+    }
+    if normalized_token:
         headers["Authorization"] = f"Bot {normalized_token}"
-    request = Request(url=url, headers=headers, method="GET")
-    try:
-        with urlopen(request, timeout=30) as response:
-            payload = response.read()
-            content_type = response.headers.get("Content-Type")
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise JiraOAuthError(f"HTTP {exc.code} downloading attachment: {body}") from exc
-    except URLError as exc:
-        raise JiraOAuthError(f"Failed to download attachment: {exc.reason}") from exc
 
-    if not payload:
-        raise JiraOAuthError("Downloaded attachment was empty")
-    return payload, content_type.strip() if isinstance(content_type, str) and content_type.strip() else None
+    for candidate in candidates:
+        try:
+            payload, content_type = _download_discord_attachment(candidate, headers)
+            if not payload:
+                raise JiraOAuthError("Downloaded attachment was empty")
+            return (
+                payload,
+                content_type.strip() if isinstance(content_type, str) and content_type.strip() else None,
+            )
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            if _is_cloudflare_1010(body) and candidate != candidates[-1]:
+                logger.warning(
+                    "discord_attachment_fetch_blocked candidate=%s status=%s source=discord_fetch detail=%s",
+                    candidate,
+                    exc.code,
+                    "error code: 1010",
+                )
+                continue
+            if _is_cloudflare_1010(body):
+                logger.error(
+                    "discord_attachment_fetch_blocked candidate=%s status=%s source=discord_fetch detail=%s",
+                    candidate,
+                    exc.code,
+                    "error code: 1010",
+                )
+            raise JiraOAuthError(f"HTTP {exc.code} downloading attachment: {body}") from exc
+        except URLError as exc:
+            raise JiraOAuthError(f"Failed to download attachment: {exc.reason}") from exc
+
 
 
 def _extract_status_and_snippet(
@@ -134,6 +193,15 @@ def _extract_status_and_snippet(
     if len(snippet) > _SNIPPET_LIMIT:
         snippet = f"{snippet[: _SNIPPET_LIMIT - 3]}..."
     return status, snippet or None
+
+
+def _normalize_attachment_url_list(*, attachment: dict[str, str]) -> list[str]:
+    urls: list[str] = []
+    for key in ("url", "proxy_url"):
+        url = str(attachment.get(key) or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+    return urls
 
 
 def upload_discord_attachments_to_jira(
@@ -154,8 +222,8 @@ def upload_discord_attachments_to_jira(
     upload_correlation_id = str(correlation_id or uuid4().hex)
     for attachment in attachments:
         filename = str(attachment.get("filename") or "").strip() or "attachment"
-        url = str(attachment.get("url") or "").strip()
-        if not url:
+        url_list = _normalize_attachment_url_list(attachment=attachment)
+        if not url_list:
             failures.append(
                 AttachmentUploadFailure(
                     filename=filename,
@@ -177,7 +245,31 @@ def upload_discord_attachments_to_jira(
             )
             continue
         try:
-            content, downloaded_content_type = download_attachment(url=url)
+            content = None
+            downloaded_content_type = None
+            last_error: Exception | None = None
+
+            for index, url in enumerate(url_list):
+                try:
+                    content, downloaded_content_type = download_attachment(url=url)
+                    break
+                except (JiraOAuthError, ValueError) as exc:
+                    last_error = exc
+                    if index + 1 < len(url_list):
+                        logger.warning(
+                            "discord_attachment_upload_failed issue_id_or_key=%s source=%s filename=%s status=%s detail=%s",
+                            issue_key,
+                            "discord_fetch",
+                            filename,
+                            None,
+                            "retrying_attachment_url",
+                        )
+                        continue
+                    raise
+            if content is None:
+                assert last_error is not None
+                raise last_error
+
             content_type = str(attachment.get("content_type") or "").strip() or downloaded_content_type
             try:
                 client.upload_issue_attachment(

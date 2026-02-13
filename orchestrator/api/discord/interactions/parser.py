@@ -116,15 +116,17 @@ def _discord_resolved_attachments(*, data: dict, attachment_ids: list[str]) -> l
         if not isinstance(item, dict):
             continue
         url = str(item.get("url") or "").strip()
-        if not url:
+        proxy_url = str(item.get("proxy_url") or "").strip()
+        if not url and not proxy_url:
             continue
         normalized.append(
             {
                 "id": str(item.get("id") or "").strip() or attachment_id,
-                "url": url,
+                "url": url or proxy_url,
                 "filename": str(item.get("filename") or "").strip(),
                 "content_type": str(item.get("content_type") or "").strip(),
                 "size": str(item.get("size") or "").strip(),
+                "proxy_url": proxy_url,
             }
         )
     return normalized[:5]

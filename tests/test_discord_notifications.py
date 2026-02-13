@@ -180,6 +180,38 @@ class DiscordNotificationTests(unittest.TestCase):
             components=[{"type": 1, "components": [{"type": 2, "custom_id": "ask.reply.open"}]}],
         )
 
+    def test_decision_gate_thread_persists_thread_context_mapping(self) -> None:
+        fake_client = Mock()
+        fake_client.post_message.return_value = {"id": "msg-123"}
+        fake_client.create_thread_from_message.return_value = "thread-456"
+        session = Mock()
+        project = _project(notify_events=["decision_gate_required"])
+        with (
+            patch("orchestrator.core.discord.notifications.resolve_platform_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
+        ):
+            result = send_tenant_discord_message(
+                session=session,
+                tenant=_tenant(notify_events=[]),
+                project=project,
+                message="decision gate required",
+                settings=Settings(
+                    discord_bot_token_secret_ref="DISCORD_BOT_TOKEN",
+                    secrets_encryption_key="test-key",
+                ),
+                event="decision_gate_required",
+                open_thread=True,
+                thread_name="TP-302-decision-gate",
+                thread_intro="Reply here",
+            )
+        self.assertTrue(result.sent)
+        self.assertIn("thread-456", (project.discord_config or {}).get("ask_thread_channel_ids", []))
+        self.assertEqual(
+            (project.discord_config or {}).get("decision_gate_thread_issue_by_channel_id", {}).get("thread-456"),
+            "TP-302",
+        )
+        session.commit.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

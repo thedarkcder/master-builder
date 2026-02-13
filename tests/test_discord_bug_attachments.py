@@ -119,10 +119,12 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
 
     def test_download_discord_attachment_uses_bot_auth_for_discord_urls(self) -> None:
         seen_headers: dict[str, str] = {}
+        seen_urls: list[str] = []
 
         def _fake_urlopen(request, timeout: int = 30):  # noqa: ANN001
             del timeout
             seen_headers.update(dict(request.header_items()))
+            seen_urls.append(request.full_url)
             return _Response(b"data", "image/png")
 
         with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=_fake_urlopen):
@@ -134,6 +136,63 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         self.assertEqual(payload, b"data")
         self.assertEqual(content_type, "image/png")
         self.assertEqual(seen_headers.get("Authorization"), "Bot test-token")
+        user_agent = seen_headers.get("User-Agent") or seen_headers.get("User-agent") or seen_headers.get("user-agent")
+        self.assertEqual(user_agent, "DiscordBot (https://github.com/thedarkcder/master-builder, 1.0)")
+        self.assertEqual(seen_urls[0], "https://cdn.discordapp.com/attachments/1/2/image.png")
+
+    def test_download_discord_attachment_retries_media_host_on_cloudflare_1010(self) -> None:
+        error = HTTPError(
+            url="https://cdn.discordapp.com/attachments/1/2/image.png",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=io.BytesIO(b"error code: 1010"),
+        )
+        calls: list[str] = []
+
+        def _fake_urlopen(request, timeout: int = 30):  # noqa: ANN001
+            calls.append(request.full_url)
+            if request.full_url.startswith("https://cdn.discordapp.com/"):
+                raise error
+            return _Response(b"data", "image/png")
+
+        with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=_fake_urlopen):
+            payload, content_type = download_discord_attachment(
+                url="https://cdn.discordapp.com/attachments/1/2/image.png",
+                bot_token="test-token",
+            )
+
+        self.assertEqual(payload, b"data")
+        self.assertEqual(content_type, "image/png")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("https://media.discordapp.net/attachments/1/2/image.png", calls[1])
+
+    def test_download_discord_attachment_retries_cdn_host_on_cloudflare_1010(self) -> None:
+        error = HTTPError(
+            url="https://media.discordapp.net/attachments/1/2/image.png?width=500&height=500",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=io.BytesIO(b"error code: 1010"),
+        )
+        calls: list[str] = []
+
+        def _fake_urlopen(request, timeout: int = 30):  # noqa: ANN001
+            calls.append(request.full_url)
+            if request.full_url.startswith("https://media.discordapp.net/"):
+                raise error
+            return _Response(b"data", "image/png")
+
+        with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=_fake_urlopen):
+            payload, content_type = download_discord_attachment(
+                url="https://media.discordapp.net/attachments/1/2/image.png?width=500&height=500",
+                bot_token="test-token",
+            )
+
+        self.assertEqual(payload, b"data")
+        self.assertEqual(content_type, "image/png")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("https://cdn.discordapp.com/attachments/1/2/image.png?width=500&height=500", calls[1])
 
     def test_upload_discord_attachments_to_jira(self) -> None:
         client = MagicMock()
@@ -215,6 +274,39 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         self.assertEqual(failure.status, 403)
         self.assertEqual(failure.correlation_id, "corr-1")
         self.assertIn("permission denied", failure.response_snippet or "")
+
+    def test_upload_discord_attachments_to_jira_retries_proxy_url(self) -> None:
+        client = MagicMock()
+        calls: list[str] = []
+
+        def _download(*, url: str) -> tuple[bytes, str | None]:
+            calls.append(url)
+            if "cdn.discordapp.com" in url:
+                raise JiraOAuthError("HTTP 403 downloading attachment: error code: 1010")
+            return b"payload", "image/png"
+
+        attachments = [
+            {
+                "url": "https://cdn.discordapp.com/attachments/test.png",
+                "proxy_url": "https://media.discordapp.net/attachments/test.png",
+                "filename": "test.png",
+            }
+        ]
+
+        uploaded_count, warnings = upload_discord_attachments_to_jira(
+            client=client,
+            access_token="token",
+            cloud_id="cloud",
+            issue_key="MAB-1",
+            attachments=attachments,
+            download_attachment=_download,
+        )
+
+        self.assertEqual(uploaded_count, 1)
+        self.assertEqual(warnings, [])
+        self.assertEqual(calls[0], "https://cdn.discordapp.com/attachments/test.png")
+        self.assertEqual(calls[1], "https://media.discordapp.net/attachments/test.png")
+        self.assertEqual(client.upload_issue_attachment.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.reviewer import ReviewAgentGate
+from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 
@@ -207,19 +208,21 @@ async def ingest_github_webhook_event(
             },
         )
 
-    def secret_lookup(secret_ref: str) -> str | None:
-        return resolve_scoped_secret_ref(
-            session,
-            secret_ref=secret_ref,
-            encryption_key=settings.secrets_encryption_key,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-        )
-
     try:
         github_client = github_client_from_tenant_config(
             tenant.github_config,
-            secret_lookup=secret_lookup,
+            tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+            ),
+            platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+            ),
         )
         reviewer_gate = ReviewAgentGate(github_client)
     except ValueError as exc:
