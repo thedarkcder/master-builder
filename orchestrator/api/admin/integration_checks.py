@@ -86,19 +86,16 @@ def test_github_connection(
     try:
         github_client_from_tenant_config_fn(
             with_managed_github_refs_fn(github),
-            secret_lookup=lambda ref: (
-                resolve_scoped_secret_ref_fn(
-                    session,
-                    secret_ref=ref,
-                    encryption_key=settings.secrets_encryption_key,
-                    tenant_id=tenant_id,
-                )
-                if str(ref).strip().startswith(("tenant/", "project/"))
-                else resolve_platform_secret_ref_fn(
-                    session,
-                    secret_ref=ref,
-                    encryption_key=settings.secrets_encryption_key,
-                )
+            tenant_secret_lookup=lambda ref: resolve_scoped_secret_ref_fn(
+                session,
+                secret_ref=ref,
+                encryption_key=settings.secrets_encryption_key,
+                tenant_id=tenant_id,
+            ),
+            platform_secret_lookup=lambda ref: resolve_platform_secret_ref_fn(
+                session,
+                secret_ref=ref,
+                encryption_key=settings.secrets_encryption_key,
             ),
         )
     except ValueError as exc:

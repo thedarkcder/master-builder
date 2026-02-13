@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -14,6 +16,7 @@ from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 logger = logging.getLogger(__name__)
+ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,29 @@ def send_tenant_discord_message(
                 message_id=posted_message_id,
                 name=safe_thread_name,
             )
+            if project is not None and session is not None:
+                # Persist thread/channel mapping so follow-up interactions resolve tenant/project reliably.
+                project_discord_config = dict(project.discord_config or {})
+                raw_thread_ids = project_discord_config.get("ask_thread_channel_ids")
+                thread_ids = (
+                    [str(value).strip() for value in raw_thread_ids if str(value).strip()]
+                    if isinstance(raw_thread_ids, list)
+                    else []
+                )
+                if thread_channel_id not in thread_ids:
+                    thread_ids.append(thread_channel_id)
+                project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
+                if event == "decision_gate_required":
+                    matched_issue_key = ISSUE_KEY_PATTERN.search(safe_thread_name)
+                    if matched_issue_key is not None:
+                        raw_map = project_discord_config.get("decision_gate_thread_issue_by_channel_id")
+                        issue_map = dict(raw_map) if isinstance(raw_map, dict) else {}
+                        issue_map[thread_channel_id] = matched_issue_key.group(0).upper()
+                        project_discord_config["decision_gate_thread_issue_by_channel_id"] = dict(list(issue_map.items())[-500:])
+                project.discord_config = project_discord_config
+                project.updated_at = datetime.now(timezone.utc)
+                tenant.updated_at = datetime.now(timezone.utc)
+                session.commit()
             intro = (thread_intro or "").strip()
             if intro:
                 client.post_message(

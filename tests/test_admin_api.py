@@ -1055,9 +1055,15 @@ class AdminApiTests(unittest.TestCase):
 
         captured: dict[str, str | None] = {}
 
-        def _fake_factory(config: dict, *, secret_lookup):  # noqa: ANN001
-            captured["app_id"] = secret_lookup(config["app_id_ref"])
-            captured["private_key"] = secret_lookup(config["private_key_ref"])
+        def _fake_factory(
+            config: dict,
+            *,
+            tenant_secret_lookup,
+            platform_secret_lookup,
+            **_: object,
+        ):  # noqa: ANN001
+            captured["app_id"] = platform_secret_lookup(config["app_id_ref"])
+            captured["private_key"] = platform_secret_lookup(config["private_key_ref"])
             return object()
 
         with patch("orchestrator.api.routes.admin.github_client_from_tenant_config", side_effect=_fake_factory):
@@ -1295,6 +1301,29 @@ class AdminApiTests(unittest.TestCase):
             "/tenants/new?tenant_id=tenant-a&github_install=success",
             callback_response.headers.get("location", ""),
         )
+
+    def test_start_install_fails_when_platform_slug_missing(self) -> None:
+        payload = self._tenant_payload()
+        payload["github"]["installation_id"] = None
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        delete_response = self.client.delete(
+            "/api/admin/secrets/platform%2FGITHUB_APP_SLUG",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(delete_response.status_code, 204)
+
+        start_response = self.client.post(
+            "/api/admin/tenants/tenant-a/github/install/start",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(start_response.status_code, 400)
+        self.assertEqual(start_response.json()["detail"], "GitHub app slug is not configured")
 
     def test_list_github_repositories_for_tenant(self) -> None:
         payload = self._tenant_payload()

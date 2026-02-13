@@ -4,8 +4,10 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import HTTPException, status
+from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import GitHubInstallStart, GitHubRepositoryRead
+from orchestrator.core.platform_secret_service import PLATFORM_SECRET_GITHUB_APP_SLUG_REF
 from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.github_app import GitHubApiError
@@ -15,8 +17,10 @@ def start_github_install(
     *,
     tenant: Tenant | None,
     tenant_id: str,
+    session: Session,
     return_to: str,
     settings,
+    resolve_platform_secret_ref_fn,
 ) -> GitHubInstallStart:  # noqa: ANN001
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
@@ -28,7 +32,17 @@ def start_github_install(
             detail="Only github_app mode is supported",
         )
 
-    app_slug = settings.github_app_slug.strip()
+    app_slug = resolve_platform_secret_ref_fn(
+        session,
+        secret_ref=PLATFORM_SECRET_GITHUB_APP_SLUG_REF,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if app_slug is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitHub app slug is not configured",
+        )
+    app_slug = app_slug.strip()
     if not app_slug:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -115,19 +129,16 @@ def list_tenant_github_repositories(
     try:
         client = github_client_from_tenant_config_fn(
             with_managed_github_refs_fn(github),
-            secret_lookup=lambda ref: (
-                resolve_scoped_secret_ref_fn(
-                    session,
-                    secret_ref=ref,
-                    encryption_key=settings.secrets_encryption_key,
-                    tenant_id=tenant_id,
-                )
-                if str(ref).strip().startswith(("tenant/", "project/"))
-                else resolve_platform_secret_ref_fn(
-                    session,
-                    secret_ref=ref,
-                    encryption_key=settings.secrets_encryption_key,
-                )
+            tenant_secret_lookup=lambda ref: resolve_scoped_secret_ref_fn(
+                session,
+                secret_ref=ref,
+                encryption_key=settings.secrets_encryption_key,
+                tenant_id=tenant_id,
+            ),
+            platform_secret_lookup=lambda ref: resolve_platform_secret_ref_fn(
+                session,
+                secret_ref=ref,
+                encryption_key=settings.secrets_encryption_key,
             ),
         )
         repositories = client.list_installation_repositories()

@@ -276,6 +276,32 @@ class JiraOAuthIssueService:
             raise JiraOAuthError("Jira comment create response was not an object")
         return payload
 
+    def update_issue_summary(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+    ) -> None:
+        normalized_issue = issue_id_or_key.strip()
+        normalized_summary = summary.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue update")
+        if not normalized_summary:
+            raise JiraOAuthError("Missing issue summary for issue update")
+
+        self._request_json(
+            method="PUT",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
+            access_token=access_token,
+            payload={
+                "fields": {
+                    "summary": normalized_summary,
+                }
+            },
+        )
+
     def _list_project_issue_types_for_create(
         self,
         *,

@@ -36,6 +36,8 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             "_discord_modal_text_value": MagicMock(return_value="next step"),
             "_run_discord_ask_confirmation_followup": AsyncMock(),
             "_run_discord_command_followup": AsyncMock(),
+            "_run_discord_decision_gate_reply_followup": AsyncMock(),
+            "_decision_gate_issue_for_thread": MagicMock(return_value=None),
             "_run_discord_application_command_followup": AsyncMock(),
             "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_capture_and_close)),
             "ASK_REPLY_OPEN_CUSTOM_ID": "ask.reply.open",
@@ -177,6 +179,25 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             {"type": 5, "channel_id": "c1", "application_id": "app", "token": "tok", "data": {"custom_id": "ask.reply.m1"}},
         )
         self.assertIn(b"Missing interaction user_id", missing_user.body)
+
+    async def test_modal_submit_routes_decision_gate_thread_replies_to_gate_handler(self) -> None:
+        run_decision_gate_followup = AsyncMock()
+        run_ask_followup = AsyncMock()
+        await self._call(
+            {
+                "type": 5,
+                "channel_id": "c1",
+                "application_id": "app",
+                "token": "tok",
+                "data": {"custom_id": "ask.reply.m1"},
+                "user": {"id": "u-direct"},
+            },
+            _decision_gate_issue_for_thread=MagicMock(return_value=("tenant-1", "MAB-158")),
+            _run_discord_decision_gate_reply_followup=run_decision_gate_followup,
+            _run_discord_command_followup=run_ask_followup,
+        )
+        run_decision_gate_followup.assert_called_once()
+        run_ask_followup.assert_not_called()
 
     async def test_application_command_reply_and_command_paths(self) -> None:
         wrong_type = await self._call({"type": 2, "data": {"name": "reply", "type": 1}})
