@@ -1601,6 +1601,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 channel_id="discord-channel-1",
                 related_issue_key=None,
                 attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+                selected_project_key="TP",
             )
 
         self.assertIn("Attached 1/1 file(s)", message)
@@ -1673,9 +1674,92 @@ class DiscordCommandApiTests(unittest.TestCase):
                 channel_id="discord-channel-1",
                 related_issue_key=None,
                 attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+                selected_project_key="TP",
             )
         description = str(fake_client.created_issues[0].description)
         self.assertIn("Channel: discord-channel-1", description)
+
+    def test_bug_creation_uses_selected_scoped_project_key(self) -> None:
+        now = datetime.now(timezone.utc)
+        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            jira_config = dict(tenant.jira_config)
+            jira_config["connection_id"] = "conn-3"
+            tenant.jira_config = jira_config
+            session.add(
+                JiraOAuthConnection(
+                    connection_id="conn-3",
+                    account_id="acct-1",
+                    account_email="dev@example.com",
+                    cloud_id="cloud-1",
+                    site_url="https://master-builder.atlassian.net",
+                    scopes=["read:jira-work", "write:jira-work"],
+                    access_token_encrypted="enc",
+                    refresh_token_encrypted="enc",
+                    access_token_expires_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.project_key: str | None = None
+
+            def create_issues_bulk(self, **kwargs: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+                self.project_key = str(kwargs.get("project_key"))
+                return JiraIssueBulkCreateResult(
+                    created=[JiraIssueCreateResult(key="OTH-902", issue_id="902")],
+                    errors=[],
+                )
+
+            def upload_issue_attachment(self, **kwargs: object) -> list[dict]:  # noqa: ANN003
+                return []
+
+        fake_client = _FakeClient()
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.routes.discord._refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.api.routes.discord._jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.routes.discord._resolve_discord_channel_name", return_value="other"),
+        ):
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            _create_discord_bug_issue(
+                session=session,
+                tenant=tenant,
+                summary="Scoped bug",
+                details="Details",
+                reporter_user_id="u-viewer",
+                channel_id="discord-other-1",
+                related_issue_key=None,
+                attachments=[],
+                selected_project_key="OTH",
+            )
+
+        self.assertEqual(fake_client.project_key, "OTH")
+
+    def test_bug_creation_requires_scoped_project_key(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            with self.assertRaises(HTTPException) as exc:
+                _create_discord_bug_issue(
+                    session=session,
+                    tenant=tenant,
+                    summary="Missing scope",
+                    details="Details",
+                    reporter_user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    related_issue_key=None,
+                    attachments=[],
+                    selected_project_key=None,
+                )
+        self.assertEqual(exc.exception.status_code, 409)
+        self.assertIn("project-scoped", str(exc.exception.detail))
 
     def test_build_discord_bug_description_uses_hyperlinks_for_attachments(self) -> None:
         description = _build_discord_bug_description(

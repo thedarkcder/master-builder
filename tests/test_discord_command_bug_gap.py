@@ -21,6 +21,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         payload: DiscordCommandRequest,
         command_name: str,
         arguments: list[str],
+        scoped_project_keys: list[str] | None = None,
         run_gap_analysis: Mock | None = None,
         normalize_discord_attachments: Mock | None = None,
         create_discord_bug_issue: Mock | None = None,
@@ -32,6 +33,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             command_name=command_name,
             arguments=arguments,
             issue_key_pattern=self.issue_key_pattern,
+            scoped_project_keys=scoped_project_keys or [],
             run_gap_analysis=run_gap_analysis or Mock(),
             normalize_discord_attachments=normalize_discord_attachments or Mock(return_value=[]),
             create_discord_bug_issue=create_discord_bug_issue or Mock(return_value=("ok", {"created_issue_keys": []})),
@@ -100,6 +102,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             ),
             command_name="bug",
             arguments=[],
+            scoped_project_keys=["TP"],
             normalize_discord_attachments=normalize_attachments,
             create_discord_bug_issue=create_bug,
         )
@@ -113,6 +116,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         self.assertEqual(kwargs["details"], "Spinner never ends")
         self.assertEqual(kwargs["related_issue_key"], "TP-7")
         self.assertEqual(kwargs["attachments"][0]["filename"], "screenshot.png")
+        self.assertEqual(kwargs["selected_project_key"], "TP")
 
     def test_bug_parses_summary_and_details_from_arguments(self) -> None:
         create_bug = Mock(
@@ -122,6 +126,7 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug login -- details"),
             command_name="bug",
             arguments=["login", "--", "details"],
+            scoped_project_keys=["TP"],
             create_discord_bug_issue=create_bug,
         )
 
@@ -130,6 +135,29 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         kwargs = create_bug.call_args.kwargs
         self.assertEqual(kwargs["summary"], "login")
         self.assertEqual(kwargs["details"], "details")
+
+    def test_bug_uses_first_scoped_project_key_when_available(self) -> None:
+        create_bug = Mock(return_value=("Bug logged: OTH-1", {"created_issue_keys": ["OTH-1"]}))
+        self._dispatch(
+            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug scoped"),
+            command_name="bug",
+            arguments=["scoped"],
+            scoped_project_keys=["OTH", "TP"],
+            create_discord_bug_issue=create_bug,
+        )
+        self.assertEqual(create_bug.call_args.kwargs["selected_project_key"], "OTH")
+
+    def test_bug_without_scoped_project_key_surfaces_scope_error(self) -> None:
+        create_bug = Mock(side_effect=HTTPException(status_code=409, detail="Bug creation requires a project-scoped Discord channel"))
+        with self.assertRaises(HTTPException) as exc:
+            self._dispatch(
+                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug scoped"),
+                command_name="bug",
+                arguments=["scoped"],
+                scoped_project_keys=[],
+                create_discord_bug_issue=create_bug,
+            )
+        self.assertEqual(exc.exception.status_code, 409)
 
 
 if __name__ == "__main__":
