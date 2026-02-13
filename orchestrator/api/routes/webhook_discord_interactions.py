@@ -28,7 +28,9 @@ from orchestrator.api.discord.interactions.parser import (
     _find_tenant_for_discord_channel,
 )
 from orchestrator.api.discord.interactions.followup import (
+    _decision_gate_issue_for_thread,
     _run_discord_application_command_followup,
+    _run_discord_decision_gate_reply_followup,
     _run_discord_ask_confirmation_followup,
     _run_discord_command_followup,
 )
@@ -208,17 +210,33 @@ async def ingest_discord_interaction(
         if user_id is None:
             return _discord_interaction_response(content="Missing interaction user_id", ephemeral=True)
 
-        asyncio.create_task(
-            _run_discord_command_followup(
-                tenant_id=None,
-                user_id=user_id,
-                channel_id=channel_id.strip(),
-                command_text=f"!ask {question}",
-                application_id=application_id,
-                interaction_token=interaction_token,
-                reply_to_message_id=reply_to_message_id,
+        decision_gate_context = _decision_gate_issue_for_thread(session=session, channel_id=channel_id.strip())
+        if decision_gate_context is not None:
+            _, decision_gate_issue_key = decision_gate_context
+            asyncio.create_task(
+                _run_discord_decision_gate_reply_followup(
+                    tenant_id=None,
+                    user_id=user_id,
+                    channel_id=channel_id.strip(),
+                    issue_key=decision_gate_issue_key,
+                    reply_text=question,
+                    application_id=application_id,
+                    interaction_token=interaction_token,
+                    reply_to_message_id=reply_to_message_id,
+                )
             )
-        )
+        else:
+            asyncio.create_task(
+                _run_discord_command_followup(
+                    tenant_id=None,
+                    user_id=user_id,
+                    channel_id=channel_id.strip(),
+                    command_text=f"!ask {question}",
+                    application_id=application_id,
+                    interaction_token=interaction_token,
+                    reply_to_message_id=reply_to_message_id,
+                )
+            )
         return _discord_interaction_deferred_response(ephemeral=True)
 
     if interaction_type != 2:  # APPLICATION_COMMAND

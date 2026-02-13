@@ -235,6 +235,8 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             service.update_issue_fields(access_token="tok", cloud_id="c", issue_id_or_key=" ", summary="x", description="d", labels=[])
         with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
             service.update_issue_fields(access_token="tok", cloud_id="c", issue_id_or_key="MAB-1", summary=" ", description="d", labels=[])
+        with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
+            service.update_issue_summary(access_token="tok", cloud_id="c", issue_id_or_key="MAB-1", summary=" ")
         with self.assertRaisesRegex(JiraOAuthError, "Missing issue id/key"):
             service.add_issue_comment(access_token="tok", cloud_id="c", issue_id_or_key=" ", comment="hi")
 
@@ -286,7 +288,17 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             description={"type": "doc", "content": []},
             labels=["a", ""],
         )
+        service.update_issue_summary(
+            access_token="tok",
+            cloud_id="cloud",
+            issue_id_or_key="MAB-2",
+            summary="Summary-only update",
+        )
         self.assertTrue(any(call["method"] == "PUT" for call in captured))
+        self.assertIn(
+            {"fields": {"summary": "Summary-only update"}},
+            [call.get("payload") for call in captured if call.get("method") == "PUT"],
+        )
 
     def test_issue_service_validation_errors_and_issue_type_discovery_fallbacks(self) -> None:
         service = JiraOAuthIssueService(get_json=lambda **_kwargs: {}, request_json=lambda **_kwargs: {})
