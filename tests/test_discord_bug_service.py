@@ -12,7 +12,7 @@ def test_normalize_discord_attachments_limits_and_filters() -> None:
     assert attachments[0]["filename"] == "a.png"
 
 
-def test_build_discord_bug_description_renders_attachment_links() -> None:
+def test_build_discord_bug_description_renders_attachment_names_without_links() -> None:
     description = build_discord_bug_description(
         summary="Webhook failed",
         details="Got a 502 from Jira webhook registration.",
@@ -25,4 +25,5 @@ def test_build_discord_bug_description_renders_attachment_links() -> None:
     assert "**How to test**" in description
     assert "**NFR intent (MVP vs scale-ready)**" in description
     assert "Related issue: YANA-46" in description
-    assert "[trace.png](https://example.test/trace.png)" in description
+    assert "trace.png (image/png)" in description
+    assert "https://example.test/trace.png" not in description

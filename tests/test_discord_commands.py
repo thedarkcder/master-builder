@@ -1617,7 +1617,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(len(fake_client.created_issues), 1)
         created_description = str(fake_client.created_issues[0].description)
         self.assertIn("Channel: triage-bugs (discord-channel-1)", created_description)
-        self.assertIn("[screen.png](https://cdn.discordapp.com/x.png)", created_description)
+        self.assertIn("screen.png", created_description)
+        self.assertNotIn("https://cdn.discordapp.com/x.png", created_description)
 
     def test_bug_creation_falls_back_to_channel_id_when_name_lookup_unavailable(self) -> None:
         now = datetime.now(timezone.utc)
@@ -1767,7 +1768,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(exc.exception.status_code, 409)
         self.assertIn("project-scoped", str(exc.exception.detail))
 
-    def test_build_discord_bug_description_uses_hyperlinks_for_attachments(self) -> None:
+    def test_build_discord_bug_description_lists_attachments_without_hyperlinks(self) -> None:
         description = _build_discord_bug_description(
             summary="Login fails",
             details="Details",
@@ -1776,7 +1777,8 @@ class DiscordCommandApiTests(unittest.TestCase):
             related_issue_key="TP-77",
             attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
         )
-        self.assertIn("[screen.png](https://cdn.discordapp.com/x.png)", description)
+        self.assertIn("screen.png", description)
+        self.assertNotIn("https://cdn.discordapp.com/x.png", description)
         self.assertIn("Channel: triage-bugs (discord-channel-1)", description)
         self.assertIn("**How to test**", description)
 
