@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.error import URLError
 from urllib.parse import quote_plus
 
 from sqlalchemy.orm import Session
@@ -368,7 +369,7 @@ def discover_project_run_board_id(
     project_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/{quote_plus(project_key)}"
     try:
         project_payload = http_client.get_json(url=project_url, access_token=access_token)
-    except (JiraOAuthError, ValueError) as exc:
+    except (JiraOAuthError, URLError, ValueError) as exc:
         logger.warning(
             "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=project_metadata_error error=%s",
             tenant.tenant_id,
@@ -413,7 +414,7 @@ def discover_project_run_board_id(
                         fallback_board_id = board_id
                 if fallback_board_id is not None:
                     return fallback_board_id
-    except (JiraOAuthError, ValueError) as exc:
+    except (JiraOAuthError, URLError, ValueError) as exc:
         logger.warning(
             "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=board_list_lookup_failed error=%s",
             tenant.tenant_id,
@@ -425,7 +426,7 @@ def discover_project_run_board_id(
         board_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/agile/1.0/board/{board_id}"
         try:
             board_payload = http_client.get_json(url=board_url, access_token=access_token)
-        except (JiraOAuthError, ValueError):
+        except (JiraOAuthError, URLError, ValueError):
             continue
         if not isinstance(board_payload, dict):
             continue
