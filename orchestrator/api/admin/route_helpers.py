@@ -449,8 +449,6 @@ def discover_project_run_board_id(
 def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, project: Project) -> None:
     settings = get_settings()
     github_config = tenant.github_config or {}
-    if str(github_config.get("mode") or "").strip() != "github_app":
-        return
     app_id_ref = str(github_config.get("app_id_ref") or PLATFORM_SECRET_GITHUB_APP_ID_REF).strip()
     private_key_ref = str(github_config.get("private_key_ref") or PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF).strip()
 
@@ -484,12 +482,9 @@ def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, proj
         )
     )
     if not app_id or not private_key:
-        logger.info(
-            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_secrets_unavailable",
-            tenant.tenant_id,
-            project.project_id,
+        raise ProjectRepoCheckoutError(
+            "GitHub App secrets are unavailable for repository checkout"
         )
-        return
     try:
         github_client = github_client_from_tenant_config(
             github_config,
@@ -505,13 +500,8 @@ def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, proj
                 encryption_key=settings.secrets_encryption_key,
             ),
         )
-    except ValueError:
-        logger.info(
-            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_configuration_incomplete",
-            tenant.tenant_id,
-            project.project_id,
-        )
-        return
+    except ValueError as exc:
+        raise ProjectRepoCheckoutError(str(exc)) from exc
 
     try:
         installation_token = github_client.get_installation_token()

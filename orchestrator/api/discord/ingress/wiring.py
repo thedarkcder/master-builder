@@ -32,6 +32,7 @@ def build_discord_ingress_dependencies(
     clear_seed_followup_context_fn,
     resolve_project_for_issue_fn,
     fetch_issue_preview_fn,
+    fetch_issue_detail_fn,
     ensure_issue_is_executable_fn,
 ):  # noqa: ANN001
     handlers = DiscordIngressHandlers(
@@ -99,6 +100,7 @@ def build_discord_ingress_dependencies(
             retryable_statuses=retryable_statuses,
             resolve_project_for_issue=resolve_project_for_issue_fn,
             fetch_issue_preview=fetch_issue_preview_fn,
+            fetch_issue_detail=fetch_issue_detail_fn,
             ensure_issue_is_executable=ensure_issue_is_executable_fn,
         ),
     )

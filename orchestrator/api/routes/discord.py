@@ -13,6 +13,7 @@ from orchestrator.api.discord.ingress.service import (
 )
 from orchestrator.api.discord.ingress.wiring import build_discord_ingress_dependencies
 from orchestrator.api.discord.ask.context import (
+    fetch_jira_issue_detail_for_tenant,
     fetch_jira_issue_preview_for_tenant,
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
@@ -142,6 +143,14 @@ def _tenant_jira_oauth_context(*, session: Session, tenant: Tenant, settings):  
 
 def _fetch_jira_issue_preview(*, session: Session, tenant: Tenant, issue_key: str) -> JiraIssuePreview:
     return fetch_jira_issue_preview_for_tenant(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+    )
+
+
+def _fetch_jira_issue_detail(*, session: Session, tenant: Tenant, issue_key: str):  # noqa: ANN001
+    return fetch_jira_issue_detail_for_tenant(
         session=session,
         tenant=tenant,
         issue_key=issue_key,
@@ -845,6 +854,7 @@ def execute_tenant_command_ingress(
         clear_seed_followup_context_fn=_clear_seed_followup_context,
         resolve_project_for_issue_fn=_resolve_project_for_issue,
         fetch_issue_preview_fn=_fetch_jira_issue_preview,
+        fetch_issue_detail_fn=_fetch_jira_issue_detail,
         ensure_issue_is_executable_fn=_ensure_issue_is_executable,
     )
     return _execute_tenant_command_ingress(

@@ -26,6 +26,7 @@ from orchestrator.api.discord.shared.reply_transport import DiscordReplyTranspor
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import evaluate_decision_gate
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
@@ -236,6 +237,45 @@ def _decision_gate_remaining_questions_message(*, user_id: str, issue_key: str, 
         lines.append("Please reply with:")
         lines.extend(f"- {question}" for question in questions[:5])
     return "\n".join(lines)
+
+
+def _plan_decision_gate_jira_update(
+    *,
+    session: Session,
+    settings,  # noqa: ANN001
+    issue_key: str,
+    current_summary: str,
+    current_description: str,
+    reply_text: str,
+) -> tuple[str, str]:
+    runtime = build_codex_runtime(session=session, settings=settings)
+    payload = runtime.run_json(
+        system_prompt=(
+            "You normalize Decision Gate clarifications into Jira issue context. "
+            "Return strict JSON only with keys: summary, description. "
+            "description must include explicit sections named exactly: "
+            "Objective, Scope, Acceptance Criteria, How to test, NFR intent."
+        ),
+        user_prompt=(
+            "Stage: decision-gate-reply-normalization\n"
+            f"Issue key: {issue_key}\n"
+            f"Current summary: {current_summary}\n"
+            f"Current description:\n{current_description}\n\n"
+            f"User reply text:\n{reply_text}\n\n"
+            "Constraints:\n"
+            "- Preserve known context from current summary/description.\n"
+            "- Integrate reply details into missing GTD sections.\n"
+            "- Keep summary concise (<=255 chars).\n"
+            "- Keep description implementation-ready and deterministic.\n"
+        ),
+    )
+    summary = str(payload.get("summary") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    if not summary:
+        raise CodexRuntimeError("Codex did not return a summary for Decision Gate update")
+    if not description:
+        raise CodexRuntimeError("Codex did not return a description for Decision Gate update")
+    return summary[:255], description
 
 
 def _build_command_followup_message(
@@ -767,13 +807,27 @@ def _run_discord_decision_gate_reply_followup_blocking(
 
         try:
             oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
-            oauth.client.update_issue_summary(
+            issue_detail = oauth.client.get_issue_detail(
                 access_token=oauth.access_token,
                 cloud_id=oauth.connection.cloud_id,
                 issue_id_or_key=normalized_issue_key,
-                summary=normalized_reply[:255],
             )
-        except (HTTPException, JiraOAuthError, RuntimeError, ValueError) as exc:
+            updated_summary, updated_description = _plan_decision_gate_jira_update(
+                session=session,
+                settings=settings,
+                issue_key=normalized_issue_key,
+                current_summary=issue_detail.summary,
+                current_description=issue_detail.description,
+                reply_text=normalized_reply,
+            )
+            oauth.client.update_issue_summary_and_description(
+                access_token=oauth.access_token,
+                cloud_id=oauth.connection.cloud_id,
+                issue_id_or_key=normalized_issue_key,
+                summary=updated_summary,
+                description=updated_description,
+            )
+        except (HTTPException, CodexRuntimeError, JiraOAuthError, RuntimeError, ValueError) as exc:
             _send_discord_thread_followup(
                 session=session,
                 settings=settings,
@@ -785,8 +839,8 @@ def _run_discord_decision_gate_reply_followup_blocking(
             return
 
         decision_gate = evaluate_decision_gate(
-            issue_summary=normalized_reply,
-            issue_description=latest_run.issue_description,
+            issue_summary=updated_summary,
+            issue_description=updated_description,
         )
         if decision_gate.triggered:
             _send_discord_thread_followup(
