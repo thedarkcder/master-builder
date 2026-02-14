@@ -78,6 +78,25 @@ class DecisionGateTests(unittest.TestCase):
         self.assertTrue(result.triggered)
         self.assertIn("Ambiguity markers found: unknown", result.reason)
 
+    def test_decision_gate_does_not_flag_unknown_when_guardrail_behavior_is_explicit(self) -> None:
+        description = """
+        Objective: Deliver MVP onboarding guardrails.
+        Scope: splash to onboarding and demo gating.
+        Acceptance Criteria: blocked paths enforce paywall state.
+        How to test: verify launch, onboarding, attempts, and paywall behavior.
+        NFR intent: MVP-first.
+        Mandatory reliability/security constraints:
+        Fail-closed logic (unknown subscription/attempt state = locked).
+        Stub subscription flag: inactive or unknown = demo-only with Paywall enforcement.
+        """
+        result = evaluate_decision_gate(
+            issue_summary="GP-80",
+            issue_description=description,
+        )
+
+        self.assertFalse(result.triggered)
+        self.assertEqual(result.reason, "Decision Gate not required")
+
     def test_decision_gate_rules_file_required(self) -> None:
         with self.assertRaises(FileNotFoundError):
             evaluate_decision_gate(
