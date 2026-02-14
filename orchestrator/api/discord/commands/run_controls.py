@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from difflib import SequenceMatcher
+import logging
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -20,12 +21,65 @@ from orchestrator.storage.models import Run, Tenant
 
 DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
 DECISION_GATE_BLOCK_END = "<!-- decision-gate-clarifications:end -->"
+logger = logging.getLogger(__name__)
 
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
     if isinstance(oauth_context, dict):
         return oauth_context.get(field)
     return getattr(oauth_context, field, None)
+
+
+def _resolve_ready_label_for_tenant(tenant: Tenant) -> str | None:
+    raw_label = (tenant.jira_config or {}).get("ready_label")
+    if not isinstance(raw_label, str):
+        return None
+    label = raw_label.strip()
+    return label or None
+
+
+def _maybe_add_ready_label(
+    *,
+    session: Session,
+    tenant: Tenant,
+    project,  # noqa: ANN001
+    issue_key: str,
+    settings_factory: Callable[[], Any],
+    tenant_jira_oauth_context: Callable[..., Any],
+) -> None:
+    ready_label = _resolve_ready_label_for_tenant(tenant)
+    if not ready_label:
+        return
+    effective_policy = resolve_effective_policy(
+        tenant_policy=tenant.policy_config,
+        project_overrides=getattr(project, "policy_overrides", None) or {},
+    )
+    if not bool(effective_policy.get("allow_label_mutations", True)):
+        return
+    try:
+        settings = settings_factory()
+        oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+        oauth_client = _oauth_context_value(oauth, "client")
+        oauth_connection = _oauth_context_value(oauth, "connection")
+        oauth_access_token = _oauth_context_value(oauth, "access_token")
+        cloud_id = getattr(oauth_connection, "cloud_id", None)
+        if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
+            return
+        add_labels = getattr(oauth_client, "add_issue_labels", None)
+        if callable(add_labels):
+            add_labels(
+                access_token=oauth_access_token,
+                cloud_id=str(cloud_id),
+                issue_id_or_key=issue_key,
+                labels=[ready_label],
+            )
+    except Exception as exc:  # pragma: no cover - best-effort label sync
+        logger.warning(
+            "discord_run_control_ready_label_sync_failed tenant_id=%s issue_key=%s error=%s",
+            tenant.tenant_id,
+            issue_key,
+            exc,
+        )
 
 
 def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, questions: list[str]) -> str:
@@ -199,6 +253,14 @@ def dispatch_run_control_command(
                     enqueue_run_obj=enqueue_result.run,
                 ),
             )
+        _maybe_add_ready_label(
+            session=session,
+            tenant=tenant,
+            project=project,
+            issue_key=issue_key,
+            settings_factory=settings_factory,
+            tenant_jira_oauth_context=tenant_jira_oauth_context,
+        )
         return DiscordCommandResponse(
             ok=True,
             command=command_name,
@@ -297,6 +359,14 @@ def dispatch_run_control_command(
                     enqueue_run_obj=enqueue_result.run,
                 ),
             )
+        _maybe_add_ready_label(
+            session=session,
+            tenant=tenant,
+            project=project,
+            issue_key=run.issue_key,
+            settings_factory=settings_factory,
+            tenant_jira_oauth_context=tenant_jira_oauth_context,
+        )
         return DiscordCommandResponse(
             ok=True,
             command=command_name,

@@ -224,6 +224,21 @@ class JiraOAuthClient:
             description=description,
         )
 
+    def add_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        self._issue_service.add_issue_labels(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            labels=labels,
+        )
+
     def register_webhook(
         self,
         *,
