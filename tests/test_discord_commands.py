@@ -215,6 +215,14 @@ class DiscordCommandApiTests(unittest.TestCase):
         with patch(
             "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+        ), patch(
+            "orchestrator.api.routes.discord._fetch_jira_issue_detail",
+            return_value=JiraIssueDetail(
+                key="TP-20",
+                summary="Do thing",
+                status="To Do",
+                description="Objective: run command should carry Jira detail context.",
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -223,6 +231,11 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-20")
+        run_id = response.json()["data"]["run_id"]
+        with self.session_factory() as session:
+            run = session.get(Run, run_id)
+            assert run is not None
+            self.assertEqual(run.issue_description, "Objective: run command should carry Jira detail context.")
 
     def test_run_conflict_includes_active_run_details(self) -> None:
         self._queue_run(run_id="run-active-1", issue_key="TP-20", status="running")
