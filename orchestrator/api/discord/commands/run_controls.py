@@ -29,6 +29,7 @@ def dispatch_run_control_command(
     retryable_statuses: set[str],
     resolve_project_for_issue: Callable[..., Any],
     fetch_issue_preview: Callable[..., Any],
+    fetch_issue_detail: Callable[..., Any],
     ensure_issue_is_executable: Callable[..., Any],
 ) -> DiscordCommandResponse | None:
     if command_name == "run":
@@ -127,6 +128,14 @@ def dispatch_run_control_command(
             )
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=run.issue_key)
         ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
+        issue_description = run.issue_description
+        try:
+            issue_detail = fetch_issue_detail(session=session, tenant=tenant, issue_key=run.issue_key)
+            refreshed_description = str(getattr(issue_detail, "description", "") or "").strip()
+            if refreshed_description:
+                issue_description = refreshed_description
+        except HTTPException:
+            issue_description = run.issue_description
         project = resolve_project_for_issue(
             session=session,
             tenant=tenant,
@@ -143,7 +152,7 @@ def dispatch_run_control_command(
             project_id=project.project_id,
             issue_key=run.issue_key,
             issue_summary=issue_preview.summary,
-            issue_description=run.issue_description,
+            issue_description=issue_description,
             repo_url=project.github_repository,
             delivery_id=None,
             max_concurrent_runs=resolve_effective_policy(

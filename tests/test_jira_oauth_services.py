@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import unittest
 from io import BytesIO
 from urllib.error import HTTPError
@@ -237,6 +236,14 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             service.update_issue_fields(access_token="tok", cloud_id="c", issue_id_or_key="MAB-1", summary=" ", description="d", labels=[])
         with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
             service.update_issue_summary(access_token="tok", cloud_id="c", issue_id_or_key="MAB-1", summary=" ")
+        with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
+            service.update_issue_summary_and_description(
+                access_token="tok",
+                cloud_id="c",
+                issue_id_or_key="MAB-1",
+                summary=" ",
+                description="d",
+            )
         with self.assertRaisesRegex(JiraOAuthError, "Missing issue id/key"):
             service.add_issue_comment(access_token="tok", cloud_id="c", issue_id_or_key=" ", comment="hi")
 

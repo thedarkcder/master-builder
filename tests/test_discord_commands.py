@@ -27,7 +27,13 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError
-from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.jira_oauth import (
+    JiraIssueBulkCreateResult,
+    JiraIssueCreateResult,
+    JiraIssueDetail,
+    JiraIssuePreview,
+    JiraOAuthError,
+)
 
 
 class DiscordCommandApiTests(unittest.TestCase):
@@ -238,6 +244,14 @@ class DiscordCommandApiTests(unittest.TestCase):
         with patch(
             "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
+        ), patch(
+            "orchestrator.api.routes.discord._fetch_jira_issue_detail",
+            return_value=JiraIssueDetail(
+                key="TP-30",
+                summary="Retry thing",
+                status="To Do",
+                description="Objective: refreshed from Jira for retry.",
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -246,6 +260,11 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-30")
+        retry_run_id = response.json()["data"]["run_id"]
+        with self.session_factory() as session:
+            retry_run = session.get(Run, retry_run_id)
+            assert retry_run is not None
+            self.assertEqual(retry_run.issue_description, "Objective: refreshed from Jira for retry.")
 
     def test_retry_conflict_includes_active_run_details(self) -> None:
         self._queue_run(run_id="run-failed-1", issue_key="TP-30", status="failed")

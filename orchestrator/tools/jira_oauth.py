@@ -207,6 +207,23 @@ class JiraOAuthClient:
             summary=summary,
         )
 
+    def update_issue_summary_and_description(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+        description: str | dict,
+    ) -> None:
+        self._issue_service.update_issue_summary_and_description(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            summary=summary,
+            description=description,
+        )
+
     def register_webhook(
         self,
         *,
