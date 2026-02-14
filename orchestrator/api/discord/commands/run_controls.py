@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (
     format_enqueue_conflict_detail,
@@ -15,6 +16,54 @@ from orchestrator.core.communications.enqueue_reason_contract import (
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import cancel_run, enqueue_run
 from orchestrator.storage.models import Run, Tenant
+
+
+def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, questions: list[str]) -> str:
+    lines = [
+        f"Decision Gate still needs clarification for `{issue_key}`.",
+        f"Reason: {reason}",
+    ]
+    if questions:
+        lines.append("Please reply with:")
+        lines.extend(f"- {question}" for question in questions[:5])
+    return "\n".join(lines)
+
+
+def _plan_decision_gate_jira_update(
+    *,
+    runtime,  # noqa: ANN001
+    issue_key: str,
+    current_summary: str,
+    current_description: str,
+    reply_text: str,
+) -> tuple[str, str]:
+    payload = runtime.run_json(
+        system_prompt=(
+            "You normalize Decision Gate clarifications into Jira issue context. "
+            "Return strict JSON only with keys: summary, description. "
+            "description must include explicit sections named exactly: "
+            "Objective, Scope, Acceptance Criteria, How to test, NFR intent."
+        ),
+        user_prompt=(
+            "Stage: decision-gate-reply-normalization\n"
+            f"Issue key: {issue_key}\n"
+            f"Current summary: {current_summary}\n"
+            f"Current description:\n{current_description}\n\n"
+            f"User reply text:\n{reply_text}\n\n"
+            "Constraints:\n"
+            "- Preserve known context from current summary/description.\n"
+            "- Integrate reply details into missing GTD sections.\n"
+            "- Keep summary concise (<=255 chars).\n"
+            "- Keep description implementation-ready and deterministic.\n"
+        ),
+    )
+    summary = str(payload.get("summary") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    if not summary:
+        raise CodexRuntimeError("Codex did not return a summary for Decision Gate update")
+    if not description:
+        raise CodexRuntimeError("Codex did not return a description for Decision Gate update")
+    return summary[:255], description
 
 
 def dispatch_run_control_command(
@@ -30,6 +79,10 @@ def dispatch_run_control_command(
     resolve_project_for_issue: Callable[..., Any],
     fetch_issue_preview: Callable[..., Any],
     fetch_issue_detail: Callable[..., Any],
+    settings_factory: Callable[[], Any],
+    build_codex_runtime: Callable[..., Any],
+    tenant_jira_oauth_context: Callable[..., Any],
+    evaluate_decision_gate: Callable[..., Any],
     ensure_issue_is_executable: Callable[..., Any],
 ) -> DiscordCommandResponse | None:
     if command_name == "run":
@@ -174,6 +227,116 @@ def dispatch_run_control_command(
             command=command_name,
             message=f"Queued retry run {enqueue_result.run.run_id} for {run.issue_key}",
             data={"run_id": enqueue_result.run.run_id, "issue_key": run.issue_key},
+        )
+
+    if command_name == "reply":
+        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
+        issue_key = str(command_params.get("issue_key") or "").strip().upper()
+        reply_text = str(command_params.get("reply_text") or "").strip()
+        if not issue_key:
+            if arguments:
+                issue_key = arguments[0].strip().upper()
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Usage: !reply <ISSUE_KEY> <clarification text>",
+                )
+        if not reply_text:
+            if len(arguments) < 2:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Usage: !reply <ISSUE_KEY> <clarification text>",
+                )
+            reply_text = " ".join(arguments[1:]).strip()
+        if not issue_key or not reply_text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !reply <ISSUE_KEY> <clarification text>",
+            )
+        run = session.execute(
+            select(Run)
+            .where(
+                Run.tenant_id == tenant_id,
+                Run.issue_key == issue_key,
+                Run.status.in_(retryable_statuses),
+            )
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if run is None:
+            return DiscordCommandResponse(
+                ok=True,
+                command=command_name,
+                message=f"No retryable run was found for `{issue_key}`.",
+                data={"issue_key": issue_key},
+            )
+        settings = settings_factory()
+        try:
+            oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+            issue_detail = oauth.client.get_issue_detail(
+                access_token=oauth.access_token,
+                cloud_id=oauth.connection.cloud_id,
+                issue_id_or_key=issue_key,
+            )
+            runtime = build_codex_runtime(session=session, settings=settings)
+            updated_summary, updated_description = _plan_decision_gate_jira_update(
+                runtime=runtime,
+                issue_key=issue_key,
+                current_summary=issue_detail.summary,
+                current_description=issue_detail.description,
+                reply_text=reply_text,
+            )
+            oauth.client.update_issue_summary_and_description(
+                access_token=oauth.access_token,
+                cloud_id=oauth.connection.cloud_id,
+                issue_id_or_key=issue_key,
+                summary=updated_summary,
+                description=updated_description,
+            )
+        except (HTTPException, CodexRuntimeError, RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to update Jira context for `{issue_key}`: {exc}",
+            ) from exc
+
+        decision_gate = evaluate_decision_gate(
+            issue_summary=updated_summary,
+            issue_description=updated_description,
+        )
+        if decision_gate.triggered:
+            return DiscordCommandResponse(
+                ok=True,
+                command=command_name,
+                message=_decision_gate_remaining_questions_message(
+                    issue_key=issue_key,
+                    reason=str(decision_gate.reason or "").strip(),
+                    questions=[question.strip() for question in decision_gate.questions if str(question).strip()],
+                ),
+                data={
+                    "issue_key": issue_key,
+                    "recheck_required": True,
+                    "decision_gate_reason": decision_gate.reason,
+                    "questions": [question.strip() for question in decision_gate.questions if str(question).strip()],
+                },
+            )
+
+        return dispatch_run_control_command(
+            session=session,
+            tenant=tenant,
+            tenant_id=tenant_id,
+            payload=payload,
+            command_name="retry",
+            arguments=[issue_key],
+            scope=scope,
+            retryable_statuses=retryable_statuses,
+            resolve_project_for_issue=resolve_project_for_issue,
+            fetch_issue_preview=fetch_issue_preview,
+            fetch_issue_detail=fetch_issue_detail,
+            settings_factory=settings_factory,
+            build_codex_runtime=build_codex_runtime,
+            tenant_jira_oauth_context=tenant_jira_oauth_context,
+            evaluate_decision_gate=evaluate_decision_gate,
+            ensure_issue_is_executable=ensure_issue_is_executable,
         )
 
     return None

@@ -12,7 +12,6 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
-from orchestrator.api.discord.interactions.followup import _run_discord_decision_gate_reply_followup_blocking
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,
@@ -43,6 +42,22 @@ INTENT_GUILDS = 1 << 0
 INTENT_GUILD_MESSAGES = 1 << 9
 INTENT_MESSAGE_CONTENT = 1 << 15
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+
+
+def _ask_reply_components() -> list[dict]:
+    return [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 2,
+                    "label": "Reply",
+                    "custom_id": "ask.reply.open",
+                }
+            ],
+        }
+    ]
 
 def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
     projects = session.execute(
@@ -276,33 +291,19 @@ class DiscordGatewayListener:
                 channel_id=channel_id,
             )
             if decision_gate_issue_key and not content.startswith("!"):
-                try:
-                    _run_discord_decision_gate_reply_followup_blocking(
-                        tenant_id=tenant.tenant_id,
-                        user_id=user_id,
-                        channel_id=channel_id,
-                        issue_key=decision_gate_issue_key,
-                        reply_text=content,
-                        application_id="discord-gateway",
-                        interaction_token="discord-gateway",
-                        reply_to_message_id=str(payload.get("id") or "").strip() or None,
-                    )
-                except Exception as exc:
-                    logger.exception(
-                        "discord_gateway_decision_gate_reply_failed tenant_id=%s user_id=%s channel_id=%s issue_key=%s error=%s",
-                        tenant.tenant_id,
-                        user_id,
-                        channel_id,
-                        decision_gate_issue_key,
-                        exc,
-                    )
-                return
+                command_text = "!reply"
+                command_params = {
+                    "issue_key": decision_gate_issue_key,
+                    "reply_text": content,
+                }
+            else:
+                command_text = content
+                command_params = None
             seed_followup_thread_ids = _project_seed_followup_thread_ids(
                 session=session,
                 tenant_id=tenant.tenant_id,
             )
 
-            command_text = content
             if channel_id in seed_followup_thread_ids and not command_text.startswith("!"):
                 command_text = f"!issues followup {command_text}"
 
@@ -315,6 +316,7 @@ class DiscordGatewayListener:
                         user_id=user_id,
                         channel_id=channel_id,
                         command=command_text,
+                        command_params=command_params,
                         attachments=attachments,
                     ),
                     session=session,
@@ -339,6 +341,8 @@ class DiscordGatewayListener:
                     request_id = str(data.get("request_id") or "").strip()
                     if request_id:
                         components = build_ask_confirmation_components(request_id)
+                elif command_response.command == "reply" and bool(data.get("recheck_required")):
+                    components = _ask_reply_components()
             except HTTPException as exc:
                 logger.exception(
                     "discord_gateway_command_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",

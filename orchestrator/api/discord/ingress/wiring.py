@@ -33,6 +33,10 @@ def build_discord_ingress_dependencies(
     resolve_project_for_issue_fn,
     fetch_issue_preview_fn,
     fetch_issue_detail_fn,
+    settings_factory_fn,
+    build_codex_runtime_fn,
+    tenant_jira_oauth_context_fn,
+    evaluate_decision_gate_fn,
     ensure_issue_is_executable_fn,
 ):  # noqa: ANN001
     handlers = DiscordIngressHandlers(
@@ -101,6 +105,10 @@ def build_discord_ingress_dependencies(
             resolve_project_for_issue=resolve_project_for_issue_fn,
             fetch_issue_preview=fetch_issue_preview_fn,
             fetch_issue_detail=fetch_issue_detail_fn,
+            settings_factory=settings_factory_fn,
+            build_codex_runtime=build_codex_runtime_fn,
+            tenant_jira_oauth_context=tenant_jira_oauth_context_fn,
+            evaluate_decision_gate=evaluate_decision_gate_fn,
             ensure_issue_is_executable=ensure_issue_is_executable_fn,
         ),
     )
