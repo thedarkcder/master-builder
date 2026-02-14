@@ -116,6 +116,8 @@ class DiscordWebhookFollowupService:
                                     user_id=user_id,
                                     command_response=command_response,
                                 )
+                                if command_response.command == "reply" and bool(data.get("recheck_required")):
+                                    components = self._ask_reply_components()
                                 if command_response.command == "ask" and not reply_to_message_id:
                                     try:
                                         self._reply_transport.send_ask_with_thread(

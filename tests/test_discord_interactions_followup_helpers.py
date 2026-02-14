@@ -889,49 +889,8 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
     def test_decision_gate_reply_followup_rechecks_before_retry(self) -> None:
         from orchestrator.api.discord.interactions.followup import _run_discord_decision_gate_reply_followup_blocking
 
-        tenant = SimpleNamespace(tenant_id="tenant-1", is_enabled=True)
-        session = MagicMock()
-        session.get.return_value = tenant
-        latest_run = SimpleNamespace(issue_description="needs more GTD sections")
-        issue_detail = SimpleNamespace(
-            summary="Old summary",
-            description="Objective: old\nScope: old\nAcceptance Criteria: old\nHow to test: old\nNFR intent: old",
-        )
-        runtime = MagicMock()
-        runtime.run_json.return_value = {
-            "summary": "Updated summary",
-            "description": (
-                "Objective: clear.\n"
-                "Scope: splash to onboarding flow.\n"
-                "Acceptance Criteria: flows validated.\n"
-                "How to test: run listed checks.\n"
-                "NFR intent: MVP."
-            ),
-        }
-        oauth = SimpleNamespace(
-            access_token="tok",
-            connection=SimpleNamespace(cloud_id="cloud"),
-            client=SimpleNamespace(
-                get_issue_detail=MagicMock(return_value=issue_detail),
-                update_issue_summary_and_description=MagicMock(),
-            ),
-        )
         with (
-            patch("orchestrator.api.discord.interactions.followup.get_settings", return_value=SimpleNamespace()),
-            patch("orchestrator.api.discord.interactions.followup.create_session_factory", return_value=lambda: nullcontext(session)),
-            patch("orchestrator.api.discord.interactions.followup._latest_retryable_run_for_issue", return_value=latest_run),
-            patch("orchestrator.api.discord.interactions.followup.tenant_jira_oauth_context", return_value=oauth),
-            patch("orchestrator.api.discord.interactions.followup.build_codex_runtime", return_value=runtime),
-            patch(
-                "orchestrator.api.discord.interactions.followup.evaluate_decision_gate",
-                return_value=SimpleNamespace(
-                    triggered=True,
-                    reason="Missing GTD sections",
-                    questions=["Objective?", "How to test?"],
-                ),
-            ),
-            patch("orchestrator.api.discord.interactions.followup._send_discord_thread_followup") as send_thread_mock,
-            patch("orchestrator.api.discord.interactions.followup._run_discord_command_followup_blocking") as retry_mock,
+            patch("orchestrator.api.discord.interactions.followup._run_discord_command_followup_blocking") as followup_mock,
         ):
             _run_discord_decision_gate_reply_followup_blocking(
                 tenant_id="tenant-1",
@@ -944,10 +903,20 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
                 reply_to_message_id="m1",
             )
 
-        oauth.client.get_issue_detail.assert_called_once()
-        oauth.client.update_issue_summary_and_description.assert_called_once()
-        send_thread_mock.assert_called_once()
-        retry_mock.assert_not_called()
+        followup_mock.assert_called_once()
+        kwargs = followup_mock.call_args.kwargs
+        self.assertEqual(kwargs["tenant_id"], "tenant-1")
+        self.assertEqual(kwargs["user_id"], "u1")
+        self.assertEqual(kwargs["channel_id"], "thread-1")
+        self.assertEqual(kwargs["command_text"], "!reply")
+        self.assertEqual(kwargs["reply_to_message_id"], "m1")
+        self.assertEqual(
+            kwargs["command_params"],
+            {
+                "issue_key": "MAB-158",
+                "reply_text": "Objective: clear. How to test: pytest.",
+            },
+        )
 
 
 if __name__ == "__main__":

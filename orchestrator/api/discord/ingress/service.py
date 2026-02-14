@@ -58,6 +58,7 @@ def execute_tenant_command_ingress(
             "run": (handlers.run_control,),
             "cancel": (handlers.run_control,),
             "retry": (handlers.run_control,),
+            "reply": (handlers.run_control,),
         }
 
     runtime_deps = CommandExecutionDependencies(

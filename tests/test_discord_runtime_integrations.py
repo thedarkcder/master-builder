@@ -186,15 +186,17 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         post_kwargs = client_cls.return_value.post_message.call_args.kwargs
         self.assertEqual(post_kwargs["components"], [{"type": 1}])
 
-    def test_handle_message_create_decision_gate_thread_routes_to_decision_gate_reply_handler(self) -> None:
+    def test_handle_message_create_decision_gate_thread_routes_to_decision_gate_reply_command(self) -> None:
         listener, _session = self._listener()
         tenant = SimpleNamespace(tenant_id="route25")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="reply", message="ok", data={})
 
         with (
             patch("orchestrator.core.discord.gateway_listener._decision_gate_issue_for_thread", return_value="GP-80"),
-            patch("orchestrator.core.discord.gateway_listener._run_discord_decision_gate_reply_followup_blocking") as dg_reply_mock,
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command") as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
         ):
             listener._handle_message_create(
@@ -208,13 +210,11 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
                 bot_token="token",
             )
 
-        dg_reply_mock.assert_called_once()
-        dg_kwargs = dg_reply_mock.call_args.kwargs
-        self.assertEqual(dg_kwargs["tenant_id"], "route25")
-        self.assertEqual(dg_kwargs["issue_key"], "GP-80")
-        self.assertEqual(dg_kwargs["reply_to_message_id"], "m-1")
-        command_mock.assert_not_called()
-        client_cls.assert_not_called()
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "!reply")
+        self.assertEqual(payload.command_params["issue_key"], "GP-80")
+        self.assertEqual(payload.command_params["reply_text"], "Objective and acceptance details")
+        client_cls.return_value.post_message.assert_called_once()
 
     def test_handle_message_create_non_seed_command_keeps_original_and_limits_attachments(self) -> None:
         listener, _session = self._listener()

@@ -20,7 +20,7 @@ from orchestrator.core.discord.policy import (
 )
 from orchestrator.storage.models import Project, Tenant
 
-SENSITIVE_COMMANDS = {"run", "cancel", "retry", "promote", "issues"}
+SENSITIVE_COMMANDS = {"run", "cancel", "retry", "reply", "promote", "issues"}
 PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "gap", "request", "bug"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 REQUEST_PERMISSION_LABELS = {
