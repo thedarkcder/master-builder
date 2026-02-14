@@ -281,6 +281,143 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("run_already_active", response.json()["detail"])
         self.assertIn("run-active-2", response.json()["detail"])
 
+    def test_reply_updates_jira_from_dict_oauth_context_and_enqueues_retry(self) -> None:
+        self._queue_run(run_id="run-failed-reply-1", issue_key="TP-88", status="failed")
+        oauth_client = SimpleNamespace(
+            get_issue_detail=unittest.mock.MagicMock(
+                return_value=SimpleNamespace(
+                    summary="Old summary",
+                    description="Objective: old",
+                )
+            ),
+            update_issue_summary_and_description=unittest.mock.MagicMock(),
+        )
+        oauth_context = {
+            "connection": SimpleNamespace(cloud_id="cloud-1"),
+            "access_token": "tok-1",
+            "client": oauth_client,
+        }
+        runtime = unittest.mock.MagicMock()
+        runtime.run_json.return_value = {
+            "summary": "Updated summary",
+            "description": (
+                "Objective: clear.\n"
+                "Scope: onboarding to demo.\n"
+                "Acceptance Criteria: path validated.\n"
+                "How to test: run scenario list.\n"
+                "NFR intent: MVP."
+            ),
+        }
+
+        with (
+            patch(
+                "orchestrator.api.routes.discord._fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(key="TP-88", summary="Retry from reply", status="To Do"),
+            ),
+            patch(
+                "orchestrator.api.routes.discord._fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-88",
+                    summary="Retry from reply",
+                    status="To Do",
+                    description="Objective: refreshed for retry.",
+                ),
+            ),
+            patch("orchestrator.api.routes.discord._tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.routes.discord.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.routes.discord.evaluate_decision_gate",
+                return_value=SimpleNamespace(triggered=False, reason="", questions=[]),
+            ),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!reply TP-88 Objective and testing details",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["command"], "retry")
+        oauth_client.get_issue_detail.assert_called_once()
+        oauth_client.update_issue_summary_and_description.assert_called_once()
+
+    def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
+        self._queue_run(run_id="run-failed-reply-2", issue_key="TP-89", status="failed")
+
+        with patch("orchestrator.api.routes.discord._tenant_jira_oauth_context", return_value={"access_token": "tok-only"}):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!reply TP-89 objective details",
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Failed to update Jira context", response.json()["detail"])
+        self.assertNotIn("Internal server error. Ref:", response.json()["detail"])
+
+    def test_reply_when_decision_gate_still_triggered_returns_recheck_not_retry(self) -> None:
+        self._queue_run(run_id="run-failed-reply-3", issue_key="TP-90", status="failed")
+        oauth_client = SimpleNamespace(
+            get_issue_detail=unittest.mock.MagicMock(
+                return_value=SimpleNamespace(
+                    summary="Old summary",
+                    description="Objective: old",
+                )
+            ),
+            update_issue_summary_and_description=unittest.mock.MagicMock(),
+        )
+        oauth_context = {
+            "connection": SimpleNamespace(cloud_id="cloud-1"),
+            "access_token": "tok-1",
+            "client": oauth_client,
+        }
+        runtime = unittest.mock.MagicMock()
+        runtime.run_json.return_value = {
+            "summary": "Updated summary",
+            "description": (
+                "Objective: clear.\n"
+                "Scope: onboarding to demo.\n"
+                "Acceptance Criteria: path validated.\n"
+                "How to test: run scenario list.\n"
+                "NFR intent: MVP."
+            ),
+        }
+
+        with (
+            patch("orchestrator.api.routes.discord._tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.routes.discord.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.routes.discord.evaluate_decision_gate",
+                return_value=SimpleNamespace(
+                    triggered=True,
+                    reason="Missing GTD sections",
+                    questions=["Objective?", "How to test?"],
+                ),
+            ),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!reply TP-90 objective details",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["command"], "reply")
+        self.assertTrue(response.json()["data"]["recheck_required"])
+        self.assertEqual(response.json()["data"]["issue_key"], "TP-90")
+        oauth_client.update_issue_summary_and_description.assert_called_once()
+
     def test_link_rejects_issue_outside_mapped_project_scope(self) -> None:
         self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
         response = self.client.post(

@@ -18,6 +18,12 @@ from orchestrator.core.runs import cancel_run, enqueue_run
 from orchestrator.storage.models import Run, Tenant
 
 
+def _oauth_context_value(oauth_context: Any, field: str) -> Any:
+    if isinstance(oauth_context, dict):
+        return oauth_context.get(field)
+    return getattr(oauth_context, field, None)
+
+
 def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, questions: list[str]) -> str:
     lines = [
         f"Decision Gate still needs clarification for `{issue_key}`.",
@@ -273,9 +279,15 @@ def dispatch_run_control_command(
         settings = settings_factory()
         try:
             oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
-            issue_detail = oauth.client.get_issue_detail(
-                access_token=oauth.access_token,
-                cloud_id=oauth.connection.cloud_id,
+            oauth_client = _oauth_context_value(oauth, "client")
+            oauth_connection = _oauth_context_value(oauth, "connection")
+            oauth_access_token = _oauth_context_value(oauth, "access_token")
+            cloud_id = getattr(oauth_connection, "cloud_id", None)
+            if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
+                raise RuntimeError("Tenant Jira OAuth context is incomplete")
+            issue_detail = oauth_client.get_issue_detail(
+                access_token=oauth_access_token,
+                cloud_id=str(cloud_id),
                 issue_id_or_key=issue_key,
             )
             runtime = build_codex_runtime(session=session, settings=settings)
@@ -286,9 +298,9 @@ def dispatch_run_control_command(
                 current_description=issue_detail.description,
                 reply_text=reply_text,
             )
-            oauth.client.update_issue_summary_and_description(
-                access_token=oauth.access_token,
-                cloud_id=oauth.connection.cloud_id,
+            oauth_client.update_issue_summary_and_description(
+                access_token=oauth_access_token,
+                cloud_id=str(cloud_id),
                 issue_id_or_key=issue_key,
                 summary=updated_summary,
                 description=updated_description,
