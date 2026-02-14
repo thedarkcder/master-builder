@@ -330,6 +330,30 @@ class JiraOAuthIssueService:
             },
         )
 
+    def add_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        normalized_issue = issue_id_or_key.strip()
+        normalized_labels = [str(label).strip() for label in labels if str(label).strip()]
+        if not normalized_issue or not normalized_labels:
+            return
+
+        self._request_json(
+            method="PUT",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
+            access_token=access_token,
+            payload={
+                "update": {
+                    "labels": [{"add": label} for label in normalized_labels],
+                }
+            },
+        )
+
     def _list_project_issue_types_for_create(
         self,
         *,
