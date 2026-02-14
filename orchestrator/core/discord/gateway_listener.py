@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import re
@@ -13,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
+from orchestrator.api.discord.interactions.followup import _run_discord_decision_gate_reply_followup_blocking
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,
@@ -61,6 +61,25 @@ def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  
             if normalized:
                 thread_ids.add(normalized)
     return thread_ids
+
+
+def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str) -> str | None:  # noqa: ANN001
+    normalized_channel_id = str(channel_id or "").strip()
+    if not normalized_channel_id:
+        return None
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    for project in projects:
+        raw_map = (project.discord_config or {}).get("decision_gate_thread_issue_by_channel_id")
+        issue_map = raw_map if isinstance(raw_map, dict) else {}
+        issue_key = str(issue_map.get(normalized_channel_id) or "").strip().upper()
+        if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
+            return issue_key
+    return None
 
 
 class DiscordGatewayListener:
@@ -250,6 +269,33 @@ class DiscordGatewayListener:
         with self._session_factory() as session:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
             if tenant is None:
+                return
+            decision_gate_issue_key = _decision_gate_issue_for_thread(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                channel_id=channel_id,
+            )
+            if decision_gate_issue_key and not content.startswith("!"):
+                try:
+                    _run_discord_decision_gate_reply_followup_blocking(
+                        tenant_id=tenant.tenant_id,
+                        user_id=user_id,
+                        channel_id=channel_id,
+                        issue_key=decision_gate_issue_key,
+                        reply_text=content,
+                        application_id="discord-gateway",
+                        interaction_token="discord-gateway",
+                        reply_to_message_id=str(payload.get("id") or "").strip() or None,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "discord_gateway_decision_gate_reply_failed tenant_id=%s user_id=%s channel_id=%s issue_key=%s error=%s",
+                        tenant.tenant_id,
+                        user_id,
+                        channel_id,
+                        decision_gate_issue_key,
+                        exc,
+                    )
                 return
             seed_followup_thread_ids = _project_seed_followup_thread_ids(
                 session=session,
