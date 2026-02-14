@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from difflib import SequenceMatcher
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -16,6 +17,9 @@ from orchestrator.core.communications.enqueue_reason_contract import (
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import cancel_run, enqueue_run
 from orchestrator.storage.models import Run, Tenant
+
+DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
+DECISION_GATE_BLOCK_END = "<!-- decision-gate-clarifications:end -->"
 
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
@@ -35,6 +39,41 @@ def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, q
     return "\n".join(lines)
 
 
+def _choose_updated_summary(*, issue_key: str, current_summary: str, suggested_summary: str) -> str:
+    current = str(current_summary or "").strip()
+    suggested = str(suggested_summary or "").strip()[:255]
+    if not current:
+        return suggested or f"{issue_key} - Decision Gate clarified"
+    if not suggested or suggested.lower() == current.lower():
+        return current
+    similarity = SequenceMatcher(None, current.lower(), suggested.lower()).ratio()
+    if similarity >= 0.7 or current.lower() in suggested.lower() or suggested.lower() in current.lower():
+        return suggested
+    if "DG clarified" in current:
+        return current
+    return f"{current} | DG clarified"[:255]
+
+
+def _upsert_decision_gate_clarifications_block(*, current_description: str, block: str) -> str:
+    current = str(current_description or "").strip()
+    if not current:
+        return block
+    start_idx = current.find(DECISION_GATE_BLOCK_START)
+    end_idx = current.find(DECISION_GATE_BLOCK_END)
+    if start_idx >= 0 and end_idx > start_idx:
+        end_of_marker = end_idx + len(DECISION_GATE_BLOCK_END)
+        prefix = current[:start_idx].rstrip()
+        suffix = current[end_of_marker:].lstrip()
+        if prefix and suffix:
+            return f"{prefix}\n\n{block}\n\n{suffix}"
+        if prefix:
+            return f"{prefix}\n\n{block}"
+        if suffix:
+            return f"{block}\n\n{suffix}"
+        return block
+    return f"{current}\n\n{block}"
+
+
 def _plan_decision_gate_jira_update(
     *,
     runtime,  # noqa: ANN001
@@ -45,10 +84,11 @@ def _plan_decision_gate_jira_update(
 ) -> tuple[str, str]:
     payload = runtime.run_json(
         system_prompt=(
-            "You normalize Decision Gate clarifications into Jira issue context. "
-            "Return strict JSON only with keys: summary, description. "
-            "description must include explicit sections named exactly: "
-            "Objective, Scope, Acceptance Criteria, How to test, NFR intent."
+            "You extract Decision Gate clarification fields from a user reply. "
+            "Return strict JSON only with keys: "
+            "summary, objective, scope, acceptance_criteria, how_to_test, nfr_intent, "
+            "reliability_security_constraints, out_of_scope, rollout_constraints, decision_owner. "
+            "Do not rewrite the full ticket body."
         ),
         user_prompt=(
             "Stage: decision-gate-reply-normalization\n"
@@ -57,19 +97,48 @@ def _plan_decision_gate_jira_update(
             f"Current description:\n{current_description}\n\n"
             f"User reply text:\n{reply_text}\n\n"
             "Constraints:\n"
-            "- Preserve known context from current summary/description.\n"
-            "- Integrate reply details into missing GTD sections.\n"
-            "- Keep summary concise (<=255 chars).\n"
-            "- Keep description implementation-ready and deterministic.\n"
+            "- Preserve existing ticket format by outputting only extracted field values.\n"
+            "- Include field text only when supported by user reply.\n"
+            "- Keep summary concise (<=255 chars), close to current summary wording.\n"
         ),
     )
-    summary = str(payload.get("summary") or "").strip()
-    description = str(payload.get("description") or "").strip()
-    if not summary:
-        raise CodexRuntimeError("Codex did not return a summary for Decision Gate update")
-    if not description:
-        raise CodexRuntimeError("Codex did not return a description for Decision Gate update")
-    return summary[:255], description
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return JSON object for Decision Gate update")
+    updated_summary = _choose_updated_summary(
+        issue_key=issue_key,
+        current_summary=current_summary,
+        suggested_summary=str(payload.get("summary") or "").strip(),
+    )
+    objective = str(payload.get("objective") or "").strip() or "Provided in thread reply."
+    scope = str(payload.get("scope") or "").strip() or "Provided in thread reply."
+    acceptance_criteria = str(payload.get("acceptance_criteria") or "").strip() or "Provided in thread reply."
+    how_to_test = str(payload.get("how_to_test") or "").strip() or "Provided in thread reply."
+    nfr_intent = str(payload.get("nfr_intent") or "").strip() or "Provided in thread reply."
+    reliability_security = str(payload.get("reliability_security_constraints") or "").strip() or "Not specified."
+    out_of_scope = str(payload.get("out_of_scope") or "").strip() or "Not specified."
+    rollout_constraints = str(payload.get("rollout_constraints") or "").strip() or "Not specified."
+    decision_owner = str(payload.get("decision_owner") or "").strip() or "Not specified."
+    clarification_block = "\n".join(
+        [
+            DECISION_GATE_BLOCK_START,
+            "## Decision Gate Clarifications",
+            f"Objective: {objective}",
+            f"Scope: {scope}",
+            f"Acceptance Criteria: {acceptance_criteria}",
+            f"How to test: {how_to_test}",
+            f"NFR intent (MVP vs scale-ready): {nfr_intent}",
+            f"Mandatory reliability/security constraints: {reliability_security}",
+            f"Explicitly out of scope: {out_of_scope}",
+            f"Rollout/migration constraints: {rollout_constraints}",
+            f"Decision owner: {decision_owner}",
+            DECISION_GATE_BLOCK_END,
+        ]
+    )
+    updated_description = _upsert_decision_gate_clarifications_block(
+        current_description=current_description,
+        block=clarification_block,
+    )
+    return updated_summary, updated_description
 
 
 def dispatch_run_control_command(

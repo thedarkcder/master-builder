@@ -300,13 +300,15 @@ class DiscordCommandApiTests(unittest.TestCase):
         runtime = unittest.mock.MagicMock()
         runtime.run_json.return_value = {
             "summary": "Updated summary",
-            "description": (
-                "Objective: clear.\n"
-                "Scope: onboarding to demo.\n"
-                "Acceptance Criteria: path validated.\n"
-                "How to test: run scenario list.\n"
-                "NFR intent: MVP."
-            ),
+            "objective": "Clear onboarding objective.",
+            "scope": "Splash to onboarding to demo flow.",
+            "acceptance_criteria": "Flow and guards verified.",
+            "how_to_test": "Run listed scenario checks.",
+            "nfr_intent": "MVP-first, scale-aware.",
+            "reliability_security_constraints": "Fail-closed on unknown state.",
+            "out_of_scope": "Real StoreKit and Supabase integration.",
+            "rollout_constraints": "No migration required.",
+            "decision_owner": "Product Owner / Founder.",
         }
 
         with (
@@ -344,6 +346,11 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["command"], "retry")
         oauth_client.get_issue_detail.assert_called_once()
         oauth_client.update_issue_summary_and_description.assert_called_once()
+        update_kwargs = oauth_client.update_issue_summary_and_description.call_args.kwargs
+        self.assertEqual(update_kwargs["summary"], "Old summary | DG clarified")
+        self.assertIn("Objective: old", update_kwargs["description"])
+        self.assertIn("## Decision Gate Clarifications", update_kwargs["description"])
+        self.assertIn("How to test: Run listed scenario checks.", update_kwargs["description"])
 
     def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         self._queue_run(run_id="run-failed-reply-2", issue_key="TP-89", status="failed")
@@ -381,13 +388,11 @@ class DiscordCommandApiTests(unittest.TestCase):
         runtime = unittest.mock.MagicMock()
         runtime.run_json.return_value = {
             "summary": "Updated summary",
-            "description": (
-                "Objective: clear.\n"
-                "Scope: onboarding to demo.\n"
-                "Acceptance Criteria: path validated.\n"
-                "How to test: run scenario list.\n"
-                "NFR intent: MVP."
-            ),
+            "objective": "Clear onboarding objective.",
+            "scope": "Splash to onboarding to demo flow.",
+            "acceptance_criteria": "Flow and guards verified.",
+            "how_to_test": "Run listed scenario checks.",
+            "nfr_intent": "MVP-first, scale-aware.",
         }
 
         with (
