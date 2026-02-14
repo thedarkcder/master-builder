@@ -28,7 +28,7 @@ from orchestrator.api.webhooks.contracts import (
     resolve_active_project_for_issue,
     validate_webhook_auth,
 )
-from orchestrator.core.decision_gate import evaluate_decision_gate
+from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.runs import RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED, RUN_STATUS_FAILED, enqueue_run
@@ -142,27 +142,19 @@ def _resolve_ready_label_for_tenant(tenant: Tenant) -> str | None:
 
 def _build_backlog_pre_run_check(context: JiraWebhookContext) -> dict[str, object]:
     ready_label = _resolve_ready_label_for_tenant(context.tenant)
-    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels}
-    ready_label_present = bool(ready_label and ready_label.casefold() in normalized_labels)
-
-    decision_gate = evaluate_decision_gate(
+    pre_check = evaluate_pre_run_check(
         issue_summary=context.issue_summary,
         issue_description=context.issue_description,
+        issue_labels=context.issue_labels,
+        ready_label=ready_label,
     )
-    decision_gate_reason = _normalize_backlog_pre_run_check_text(decision_gate.reason)
-
-    if decision_gate.triggered:
-        outcome = "decision_gate_required"
-    elif ready_label_present:
-        outcome = "ready_for_agent"
-    else:
-        outcome = "missing_ready_label"
+    decision_gate_reason = _normalize_backlog_pre_run_check_text(pre_check.decision_gate_reason)
 
     return {
-        "outcome": outcome,
+        "outcome": pre_check.outcome,
         "ready_label": ready_label,
-        "ready_label_present": ready_label_present,
-        "decision_gate_triggered": decision_gate.triggered,
+        "ready_label_present": pre_check.ready_label_present,
+        "decision_gate_triggered": pre_check.decision_gate_triggered,
         "decision_gate_reason": decision_gate_reason,
     }
 

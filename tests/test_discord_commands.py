@@ -399,11 +399,13 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.routes.discord._tenant_jira_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.routes.discord.build_codex_runtime", return_value=runtime),
             patch(
-                "orchestrator.api.routes.discord.evaluate_decision_gate",
+                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
                 return_value=SimpleNamespace(
-                    triggered=True,
-                    reason="Missing GTD sections",
-                    questions=["Objective?", "How to test?"],
+                    decision_gate_triggered=True,
+                    decision_gate=SimpleNamespace(
+                        reason="Missing GTD sections",
+                        questions=["Objective?", "How to test?"],
+                    ),
                 ),
             ),
         ):

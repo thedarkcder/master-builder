@@ -14,6 +14,7 @@ from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (
     format_enqueue_conflict_detail,
 )
+from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import cancel_run, enqueue_run
 from orchestrator.storage.models import Run, Tenant
@@ -380,24 +381,34 @@ def dispatch_run_control_command(
                 detail=f"Failed to update Jira context for `{issue_key}`: {exc}",
             ) from exc
 
-        decision_gate = evaluate_decision_gate(
+        pre_check = evaluate_pre_run_check(
             issue_summary=updated_summary,
             issue_description=updated_description,
+            issue_labels=None,
+            ready_label=None,
         )
-        if decision_gate.triggered:
+        if pre_check.decision_gate_triggered:
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
                 message=_decision_gate_remaining_questions_message(
                     issue_key=issue_key,
-                    reason=str(decision_gate.reason or "").strip(),
-                    questions=[question.strip() for question in decision_gate.questions if str(question).strip()],
+                    reason=str(pre_check.decision_gate.reason or "").strip(),
+                    questions=[
+                        question.strip()
+                        for question in pre_check.decision_gate.questions
+                        if str(question).strip()
+                    ],
                 ),
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,
-                    "decision_gate_reason": decision_gate.reason,
-                    "questions": [question.strip() for question in decision_gate.questions if str(question).strip()],
+                    "decision_gate_reason": pre_check.decision_gate.reason,
+                    "questions": [
+                        question.strip()
+                        for question in pre_check.decision_gate.questions
+                        if str(question).strip()
+                    ],
                 },
             )
 
