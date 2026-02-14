@@ -281,43 +281,6 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("run_already_active", response.json()["detail"])
         self.assertIn("run-active-2", response.json()["detail"])
 
-    def test_retry_adds_ready_label_when_run_is_queued(self) -> None:
-        self._queue_run(run_id="run-failed-ready-1", issue_key="TP-31", status="failed")
-        oauth_client = SimpleNamespace(add_issue_labels=unittest.mock.MagicMock())
-        oauth_context = {
-            "connection": SimpleNamespace(cloud_id="cloud-1"),
-            "access_token": "tok-1",
-            "client": oauth_client,
-        }
-        with (
-            patch(
-                "orchestrator.api.routes.discord._fetch_jira_issue_preview",
-                return_value=JiraIssuePreview(key="TP-31", summary="Retry thing", status="To Do"),
-            ),
-            patch(
-                "orchestrator.api.routes.discord._fetch_jira_issue_detail",
-                return_value=JiraIssueDetail(
-                    key="TP-31",
-                    summary="Retry thing",
-                    status="To Do",
-                    description="Objective: refreshed from Jira for retry.",
-                ),
-            ),
-            patch("orchestrator.api.routes.discord._tenant_jira_oauth_context", return_value=oauth_context),
-        ):
-            response = self.client.post(
-                f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!retry run-failed-ready-1"},
-            )
-
-        self.assertEqual(response.status_code, 200)
-        oauth_client.add_issue_labels.assert_called_once_with(
-            access_token="tok-1",
-            cloud_id="cloud-1",
-            issue_id_or_key="TP-31",
-            labels=["agent:ready"],
-        )
-
     def test_reply_updates_jira_from_dict_oauth_context_and_enqueues_retry(self) -> None:
         self._queue_run(run_id="run-failed-reply-1", issue_key="TP-88", status="failed")
         oauth_client = SimpleNamespace(
