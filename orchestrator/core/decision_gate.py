@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 import importlib.resources
 from pathlib import Path
+import re
 
 RULES_FILE_PATH = Path(".codex/DECISION_GATE_TEMPLATE.md")
 CODEX_ASSETS_PACKAGE = "master_builder_codex_assets"
@@ -150,6 +151,33 @@ def _has_section(description: str, section: str) -> bool:
     return section.lower() in description.lower()
 
 
+_UNKNOWN_CLEAR_CONTEXT = re.compile(
+    r"unknown\s+(subscription|state|signal|value|status)\b.{0,120}\b(default|unsubscribed|locked|paywalled|deny|fail-closed)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _marker_present(*, marker: str, normalized: str) -> bool:
+    escaped = re.escape(marker)
+    if re.search(r"[A-Za-z0-9_]", marker):
+        pattern = re.compile(rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])", re.IGNORECASE)
+    else:
+        pattern = re.compile(escaped, re.IGNORECASE)
+    return pattern.search(normalized) is not None
+
+
+def _ambiguity_markers_found(*, normalized: str, markers: tuple[str, ...]) -> list[str]:
+    found: list[str] = []
+    for marker in markers:
+        if not _marker_present(marker=marker, normalized=normalized):
+            continue
+        # "unknown" in fail-closed policy statements is explicit behavior, not ambiguity.
+        if marker.strip().lower() == "unknown" and _UNKNOWN_CLEAR_CONTEXT.search(normalized):
+            continue
+        found.append(marker)
+    return found
+
+
 def evaluate_decision_gate(
     *,
     issue_summary: str | None,
@@ -169,7 +197,7 @@ def evaluate_decision_gate(
     if not any(marker.lower() in normalized for marker in rules.nfr_markers):
         missing_sections.append("NFR intent (MVP vs scale-ready)")
 
-    ambiguous_markers = [marker for marker in rules.ambiguity_markers if marker.lower() in normalized]
+    ambiguous_markers = _ambiguity_markers_found(normalized=normalized, markers=rules.ambiguity_markers)
 
     if not missing_sections and not ambiguous_markers:
         return DecisionGateResult(

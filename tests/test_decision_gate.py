@@ -44,6 +44,40 @@ class DecisionGateTests(unittest.TestCase):
         self.assertFalse(result.triggered)
         self.assertEqual(result.reason, "Decision Gate not required")
 
+    def test_decision_gate_does_not_flag_fail_closed_unknown_policy_as_ambiguity(self) -> None:
+        description = """
+        Objective: Deliver MVP onboarding guardrails.
+        Scope: splash to onboarding and demo gating.
+        Acceptance Criteria: blocked paths enforce paywall state.
+        How to test: verify launch, onboarding, attempts, and paywall behavior.
+        NFR intent: MVP-first.
+        Reliability/security constraints: Fail-closed policy where unknown subscription defaults to unsubscribed.
+        """
+        result = evaluate_decision_gate(
+            issue_summary="GP-80",
+            issue_description=description,
+        )
+
+        self.assertFalse(result.triggered)
+        self.assertEqual(result.reason, "Decision Gate not required")
+
+    def test_decision_gate_still_flags_plain_unknown_as_ambiguity(self) -> None:
+        description = """
+        Objective: Deliver MVP onboarding guardrails.
+        Scope: splash to onboarding and demo gating.
+        Acceptance Criteria: blocked paths enforce paywall state.
+        How to test: verify launch, onboarding, attempts, and paywall behavior.
+        NFR intent: MVP-first.
+        Decision owner: unknown.
+        """
+        result = evaluate_decision_gate(
+            issue_summary="GP-80",
+            issue_description=description,
+        )
+
+        self.assertTrue(result.triggered)
+        self.assertIn("Ambiguity markers found: unknown", result.reason)
+
     def test_decision_gate_rules_file_required(self) -> None:
         with self.assertRaises(FileNotFoundError):
             evaluate_decision_gate(
