@@ -151,12 +151,6 @@ def _has_section(description: str, section: str) -> bool:
     return section.lower() in description.lower()
 
 
-_UNKNOWN_CLEAR_CONTEXT = re.compile(
-    r"unknown\s+(subscription|state|signal|value|status)\b.{0,120}\b(default|unsubscribed|locked|paywalled|deny|fail-closed)",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
 def _marker_present(*, marker: str, normalized: str) -> bool:
     escaped = re.escape(marker)
     if re.search(r"[A-Za-z0-9_]", marker):
@@ -166,13 +160,56 @@ def _marker_present(*, marker: str, normalized: str) -> bool:
     return pattern.search(normalized) is not None
 
 
+def _unknown_context_windows(normalized: str) -> list[str]:
+    windows: list[str] = []
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if re.search(r"\bunknown\b", line, re.IGNORECASE):
+            windows.append(line)
+    return windows
+
+
+def _is_clear_unknown_context(window: str) -> bool:
+    subject_tokens = (
+        "subscription",
+        "attempt",
+        "state",
+        "signal",
+        "decision",
+    )
+    behavior_tokens = (
+        "fail-closed",
+        "locked",
+        "paywall",
+        "demo-only",
+        "demo only",
+        "unsubscribed",
+        "default",
+        "enforce",
+        "enforced",
+        "enforces",
+    )
+    has_subject = any(token in window for token in subject_tokens)
+    has_behavior = any(token in window for token in behavior_tokens)
+    return has_subject and has_behavior
+
+
+def _unknown_marker_is_ambiguous(*, normalized: str) -> bool:
+    windows = _unknown_context_windows(normalized)
+    if not windows:
+        return False
+    # If any "unknown" occurrence is not part of a fail-closed/guardrail context, treat as ambiguity.
+    return any(not _is_clear_unknown_context(window) for window in windows)
+
+
 def _ambiguity_markers_found(*, normalized: str, markers: tuple[str, ...]) -> list[str]:
     found: list[str] = []
     for marker in markers:
         if not _marker_present(marker=marker, normalized=normalized):
             continue
-        # "unknown" in fail-closed policy statements is explicit behavior, not ambiguity.
-        if marker.strip().lower() == "unknown" and _UNKNOWN_CLEAR_CONTEXT.search(normalized):
+        if marker.strip().lower() == "unknown" and not _unknown_marker_is_ambiguous(normalized=normalized):
             continue
         found.append(marker)
     return found
