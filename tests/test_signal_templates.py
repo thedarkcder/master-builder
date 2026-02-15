@@ -28,6 +28,7 @@ class SignalTemplateTests(unittest.TestCase):
             run_id="run-123",
             stage="pr_opened",
             jira_url="https://master-builder.atlassian.net/browse/MAB-17",
+            run_url="https://admin.example.test/runs/run-123",
             pr_url="https://github.com/example/repo/pull/5",
         )
         jira_message = format_stage_jira_update(
@@ -45,7 +46,9 @@ class SignalTemplateTests(unittest.TestCase):
         self.assertIn("run-123", discord_message)
         self.assertIn("pr_opened", discord_message)
         self.assertIn("[MAB-17](https://master-builder.atlassian.net/browse/MAB-17)", discord_message)
+        self.assertIn("[Open dashboard run](https://admin.example.test/runs/run-123)", discord_message)
         self.assertIn("[Open PR](https://github.com/example/repo/pull/5)", discord_message)
+        self.assertNotIn("Jira: [Open issue]", discord_message)
         self.assertIn("run_failed", jira_message)
         self.assertIn("test stage failed", jira_message)
         self.assertIn("Investigate CI logs", jira_message)

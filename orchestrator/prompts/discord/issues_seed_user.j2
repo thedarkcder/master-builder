@@ -1,0 +1,12 @@
+Stage: discord-issues-seed
+Allowed Jira project keys: {{ allowed_project_keys_json }}
+Markdown spec:
+{{ prompt_markdown }}
+
+Output contract:
+- issues must be implementation-ready and concrete.
+- project_key must be one of allowed_project_keys.
+- tags/labels should be short normalized tokens when present.
+- issue_type should be Task, Bug, or Story.
+- description content should be detailed enough for Objective, Scope In/Out, and Acceptance Criteria.
+- when reseeding existing work, set issue_key if explicitly known from source context.

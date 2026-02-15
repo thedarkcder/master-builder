@@ -53,14 +53,15 @@ def format_stage_discord_update(
     run_id: str,
     stage: str,
     jira_url: str | None = None,
+    run_url: str | None = None,
     pr_url: str | None = None,
     error: str | None = None,
     next_steps: Iterable[str] = (),
 ) -> str:
     lines = [f"Stage update: {stage}", f"Tenant: {tenant_id} | Run: {run_id}"]
     lines.append(f"Issue: {_format_issue_reference(issue_key, jira_url)}")
-    if jira_url:
-        lines.append(f"Jira: [Open issue]({jira_url})")
+    if run_url:
+        lines.append(f"Run: [Open dashboard run]({run_url})")
     if pr_url:
         lines.append(f"PR: [Open PR]({pr_url})")
     if error:

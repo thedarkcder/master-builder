@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
 
@@ -134,13 +135,23 @@ def process_next_queued_run(
         return fail_guardrail_violation_fn(session, run=run, error=str(exc))
 
     jira_issue_url = tenant_jira_issue_url_fn(session=session, tenant=tenant, issue_key=run.issue_key)
+    run_dashboard_url = admin_run_url(admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id)
     notifier.append(
         lock_acquired_update_fn(
             tenant_id=run.tenant_id,
             issue_key=run.issue_key,
             run_id=run.run_id,
             jira_url=jira_issue_url,
+            run_url=run_dashboard_url,
         )
+    )
+    emit_agent_event_fn(
+        event_type="LOCK_ACQUIRED",
+        tenant_id=run.tenant_id,
+        project_id=project.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
     )
 
     workflow_result = runner.run(workflow_request)
@@ -154,7 +165,16 @@ def process_next_queued_run(
                 issue_key=run.issue_key,
                 run_id=run.run_id,
                 jira_url=jira_issue_url,
+                run_url=run_dashboard_url,
             )
+        )
+        emit_agent_event_fn(
+            event_type="PLAN_POSTED",
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
         )
     if workflow_result.pr_url:
         notifier.append(
@@ -163,8 +183,17 @@ def process_next_queued_run(
                 issue_key=run.issue_key,
                 run_id=run.run_id,
                 jira_url=jira_issue_url,
+                run_url=run_dashboard_url,
                 pr_url=workflow_result.pr_url,
             )
+        )
+        emit_agent_event_fn(
+            event_type="PR_OPENED",
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
         )
     if not workflow_result.succeeded:
         error_text = (
@@ -178,8 +207,17 @@ def process_next_queued_run(
                 issue_key=run.issue_key,
                 run_id=run.run_id,
                 jira_url=jira_issue_url,
+                run_url=run_dashboard_url,
                 error=error_text,
             )
+        )
+        emit_agent_event_fn(
+            event_type="RUN_FAILED",
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
         )
         emit_agent_event_fn(
             event_type="TASK_FAILED",

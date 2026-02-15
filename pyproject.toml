@@ -60,3 +60,6 @@ output = "coverage.xml"
 
 [tool.setuptools.packages.find]
 include = ["orchestrator*"]
+
+[tool.setuptools.package-data]
+orchestrator = ["prompts/**/*.j2"]

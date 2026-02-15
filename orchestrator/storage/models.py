@@ -183,3 +183,34 @@ class AgentLifecycleEvent(Base):
     agent_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class RunLogEvent(Base):
+    __tablename__ = "run_log_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    stage: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    attempt: Mapped[int | None] = mapped_column(nullable=True)
+    stream: Mapped[str] = mapped_column(String(16), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

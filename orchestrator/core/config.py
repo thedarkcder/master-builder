@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
     codex_cli_command: str = "codex"
+    codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5-codex"
-    codex_timeout_seconds: int = 120
+    codex_timeout_seconds: int = 0
     codex_max_output_tokens: int = 1800
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
     worker_poll_interval_seconds: int = 5

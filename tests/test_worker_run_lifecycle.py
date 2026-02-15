@@ -204,6 +204,14 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 project_id="tenant-a-default",
             )
             session.add(run)
+            session.add(
+                RunLock(
+                    tenant_id="tenant-a",
+                    issue_key="TA-200",
+                    run_id="run-2",
+                    locked_at=now,
+                )
+            )
             session.commit()
             session.refresh(run)
 
@@ -250,3 +258,5 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(finalized.status, "failed")
             self.assertEqual(finalized.last_error, "failure details")
             self.assertEqual(finalized.plan["stage_updates"], [{"stage": "run_failed"}])
+            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-200"})
+            self.assertIsNone(lock)
