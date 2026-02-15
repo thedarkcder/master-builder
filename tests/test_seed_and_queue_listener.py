@@ -89,6 +89,8 @@ class SeedNormalizationTests(unittest.TestCase):
             nfr_intent="TBD",
         )
         self.assertEqual(len(questions), 6)
+        self.assertIn("What exact validation steps/commands should be used to test completion?", questions)
+        self.assertTrue(all("Improve reliability" not in question for question in questions))
 
 
 class QueueListenerTests(unittest.IsolatedAsyncioTestCase):

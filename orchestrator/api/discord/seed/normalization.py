@@ -71,17 +71,16 @@ def collect_seed_issue_questions(
     nfr_intent: str,
 ) -> list[str]:
     questions: list[str] = []
-    title = issue_summary.strip() or "this issue"
     if seed_text_is_missing(objective):
-        questions.append(f"For '{title}', what is the objective in one sentence?")
+        questions.append("What is the objective for this issue in one sentence?")
     if not scope_in:
-        questions.append(f"For '{title}', what is explicitly in scope?")
+        questions.append("What is explicitly in scope for this issue?")
     if not scope_out:
-        questions.append(f"For '{title}', what is explicitly out of scope?")
+        questions.append("What is explicitly out of scope for this issue?")
     if not acceptance:
-        questions.append(f"For '{title}', what acceptance criteria must be satisfied?")
+        questions.append("What acceptance criteria must be satisfied for this issue?")
     if not how_to_test:
-        questions.append(f"For '{title}', what exact validation steps/commands should be used to test completion?")
+        questions.append("What exact validation steps/commands should be used to test completion?")
     if seed_text_is_missing(nfr_intent):
-        questions.append(f"For '{title}', should this be MVP quick delivery or scale-ready design?")
+        questions.append("Should this be MVP quick delivery or scale-ready design?")
     return questions
