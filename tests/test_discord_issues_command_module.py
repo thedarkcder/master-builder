@@ -64,9 +64,12 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_followup_requires_existing_context(self) -> None:
+        find_context = MagicMock(return_value=None)
         with self.assertRaises(HTTPException) as ctx:
-            self._call(arguments=["followup", "answer"], find_seed_followup_context=MagicMock(return_value=None))
+            self._call(arguments=["followup", "answer"], find_seed_followup_context=find_context)
         self.assertEqual(ctx.exception.status_code, 409)
+        call_kwargs = find_context.call_args.kwargs
+        self.assertEqual(call_kwargs["user_id"], "u-1")
 
     def test_followup_blocks_different_user(self) -> None:
         context = {"request_id": "req-1", "user_id": "someone-else", "channel_ids": ["c-1"]}

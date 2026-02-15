@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import json
+
+from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.config import get_settings
+from orchestrator.core.prompt_templates import render_prompt
 
 DEFAULT_WORKER_CAPABILITY = "linux"
 WORKER_CAPABILITY_LABEL_PREFIX = "worker:"
@@ -9,19 +15,6 @@ KNOWN_WORKER_CAPABILITIES = {
     "linux",
     "macos",
 }
-
-_MACOS_HINTS = (
-    "ios",
-    "iphone",
-    "ipad",
-    "swift",
-    "swiftui",
-    "xcode",
-    "xctest",
-    "storekit",
-    "testflight",
-    "cocoapods",
-)
 
 
 def normalize_worker_capability(value: object) -> str | None:
@@ -59,26 +52,53 @@ def parse_worker_capabilities(raw_value: object) -> set[str]:
     return normalized
 
 
+def _infer_required_worker_capability_with_codex(
+    *,
+    issue_summary: str,
+    issue_description: str,
+    issue_labels: list[str],
+) -> str:
+    settings = get_settings()
+    runtime = build_codex_runtime(session=None, settings=settings)
+    try:
+        payload = invoke_codex_json(
+            runtime=runtime,
+            context=CodexInvocationContext(
+                channel="system",
+                tenant_id="policy-evaluator",
+                project_id=None,
+                command="policy",
+                stage="worker_capability",
+                working_dir=".",
+            ),
+            system_prompt=render_prompt("policy/worker_capability_system.j2"),
+            user_prompt=render_prompt(
+                "policy/worker_capability_user.j2",
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+                issue_labels_json=json.dumps(issue_labels),
+            ),
+        )
+    except CodexRuntimeError as exc:
+        raise RuntimeError(f"Codex worker capability evaluation failed: {exc}") from exc
+
+    capability = normalize_worker_capability(payload.get("required_worker_capability"))
+    if capability is None:
+        raise RuntimeError("Codex worker capability evaluation returned invalid required_worker_capability")
+    return capability
+
+
 def infer_required_worker_capability(
     *,
     issue_summary: str | None,
     issue_description: str | None,
     issue_labels: list[str] | None,
 ) -> str:
-    for label in issue_labels or []:
-        normalized_label = str(label or "").strip().lower()
-        if not normalized_label.startswith(WORKER_CAPABILITY_LABEL_PREFIX):
-            continue
-        explicit = normalize_worker_capability(
-            normalized_label[len(WORKER_CAPABILITY_LABEL_PREFIX) :]
-        )
-        if explicit is not None:
-            return explicit
-
-    combined = f"{issue_summary or ''}\n{issue_description or ''}".lower()
-    if any(token in combined for token in _MACOS_HINTS):
-        return "macos"
-    return DEFAULT_WORKER_CAPABILITY
+    return _infer_required_worker_capability_with_codex(
+        issue_summary=(issue_summary or "").strip(),
+        issue_description=(issue_description or "").strip(),
+        issue_labels=[str(label).strip() for label in (issue_labels or []) if str(label).strip()],
+    )
 
 
 def required_worker_capability_for_run(run) -> str:  # noqa: ANN001

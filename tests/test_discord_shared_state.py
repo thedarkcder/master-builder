@@ -254,6 +254,61 @@ class DiscordSharedStateTests(unittest.TestCase):
         found = state_module.find_seed_followup_context(tenant=tenant, channel_id="c1")
         self.assertIsNone(found)
 
+    def test_find_seed_followup_context_falls_back_to_unique_user_project_match(self) -> None:
+        tenant = SimpleNamespace(
+            discord_config={
+                "seed_followups": [
+                    {
+                        "request_id": "r1",
+                        "user_id": "u1",
+                        "channel_ids": ["parent-c"],
+                        "project_key": "GP",
+                        "issue_keys": ["GP-1"],
+                        "prompt_markdown": "prompt",
+                    }
+                ]
+            }
+        )
+        found = state_module.find_seed_followup_context(
+            tenant=tenant,
+            channel_id="thread-c",
+            user_id="u1",
+            project_key="GP",
+        )
+        self.assertIsNotNone(found)
+        self.assertEqual(found["request_id"], "r1")
+
+    def test_find_seed_followup_context_fallback_requires_unique_match(self) -> None:
+        tenant = SimpleNamespace(
+            discord_config={
+                "seed_followups": [
+                    {
+                        "request_id": "r1",
+                        "user_id": "u1",
+                        "channel_ids": ["parent-c1"],
+                        "project_key": "GP",
+                        "issue_keys": ["GP-1"],
+                        "prompt_markdown": "prompt-1",
+                    },
+                    {
+                        "request_id": "r2",
+                        "user_id": "u1",
+                        "channel_ids": ["parent-c2"],
+                        "project_key": "GP",
+                        "issue_keys": ["GP-2"],
+                        "prompt_markdown": "prompt-2",
+                    },
+                ]
+            }
+        )
+        found = state_module.find_seed_followup_context(
+            tenant=tenant,
+            channel_id="thread-c",
+            user_id="u1",
+            project_key="GP",
+        )
+        self.assertIsNone(found)
+
     def test_remove_issue_key_from_seed_followups_prunes_entries(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(

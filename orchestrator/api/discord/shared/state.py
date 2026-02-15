@@ -321,20 +321,43 @@ def find_seed_followup_context(
     *,
     tenant: Tenant,
     channel_id: str,
+    user_id: str | None = None,
+    project_key: str | None = None,
 ) -> dict | None:
     normalized_channel_id = channel_id.strip()
     if not normalized_channel_id:
         return None
     entries = tenant_seed_followups(tenant)
     now = datetime.now(timezone.utc)
+    active_entries: list[dict] = []
     for entry in reversed(entries):
         if _is_seed_followup_stale(entry, now=now):
             continue
+        active_entries.append(entry)
         channel_ids = entry.get("channel_ids")
         if not isinstance(channel_ids, list):
             continue
         if normalized_channel_id in channel_ids:
             return entry
+
+    normalized_user_id = str(user_id or "").strip()
+    normalized_project_key = str(project_key or "").strip().upper()
+    if not normalized_user_id and not normalized_project_key:
+        return None
+
+    matching_entries: list[dict] = []
+    for entry in active_entries:
+        if normalized_user_id:
+            entry_user_id = str(entry.get("user_id") or "").strip()
+            if entry_user_id != normalized_user_id:
+                continue
+        if normalized_project_key:
+            entry_project_key = str(entry.get("project_key") or "").strip().upper()
+            if entry_project_key != normalized_project_key:
+                continue
+        matching_entries.append(entry)
+    if len(matching_entries) == 1:
+        return matching_entries[0]
     return None
 
 

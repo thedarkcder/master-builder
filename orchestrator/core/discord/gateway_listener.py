@@ -79,6 +79,28 @@ def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  
     return thread_ids
 
 
+def _project_seed_followup_thread_project_keys(*, session, tenant_id: str) -> dict[str, str]:  # noqa: ANN001
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    thread_project_keys: dict[str, str] = {}
+    for project in projects:
+        project_key = str(project.jira_project_key or "").strip().upper()
+        if not project_key:
+            continue
+        raw_seed_thread_ids = (project.discord_config or {}).get("seed_followup_thread_channel_ids")
+        if not isinstance(raw_seed_thread_ids, list):
+            continue
+        for value in raw_seed_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                thread_project_keys[normalized] = project_key
+    return thread_project_keys
+
+
 def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str) -> str | None:  # noqa: ANN001
     normalized_channel_id = str(channel_id or "").strip()
     if not normalized_channel_id:
@@ -304,11 +326,22 @@ class DiscordGatewayListener:
                 session=session,
                 tenant_id=tenant.tenant_id,
             )
+            seed_followup_thread_project_keys = _project_seed_followup_thread_project_keys(
+                session=session,
+                tenant_id=tenant.tenant_id,
+            )
 
             seed_followup_context = find_seed_followup_context(
                 tenant=tenant,
                 channel_id=channel_id,
             )
+            if seed_followup_context is None and channel_id in seed_followup_thread_ids:
+                seed_followup_context = find_seed_followup_context(
+                    tenant=tenant,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    project_key=seed_followup_thread_project_keys.get(channel_id),
+                )
             if (
                 channel_id in seed_followup_thread_ids
                 and seed_followup_context is not None
