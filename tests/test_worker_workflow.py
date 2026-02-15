@@ -70,8 +70,10 @@ class WorkerWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.database_url = f"sqlite:///{self.temp_dir.name}/worker_test.db"
+        self.repo_checkout_base_dir = f"{self.temp_dir.name}/project-repos"
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
+        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
@@ -82,10 +84,12 @@ class WorkerWorkflowTests(unittest.TestCase):
         )
         self.checkout_mock = self.checkout_patcher.start()
         self._create_tenant()
+        self._seed_checked_out_repo()
 
     def tearDown(self) -> None:
         self.checkout_patcher.stop()
         self.temp_dir.cleanup()
+        os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
@@ -185,6 +189,12 @@ class WorkerWorkflowTests(unittest.TestCase):
             session.commit()
         return run_id
 
+    def _seed_checked_out_repo(self) -> None:
+        repo_git_dir = (
+            f"{self.repo_checkout_base_dir}/tenant-worker/tenant-worker-default/repo/.git"
+        )
+        os.makedirs(repo_git_dir, exist_ok=True)
+
     def test_process_next_queued_run_marks_success_and_persists_plan(self) -> None:
         run_id = self._queue_run("TP-300")
         runner = _SuccessRunner()
@@ -208,8 +218,11 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIn("TP-300", stage_updates[0]["discord_message"])
             self.assertIn("run-TP-300", stage_updates[0]["discord_message"])
             self.assertIsNotNone(runner.last_request)
-            self.assertIn("Good To Do", runner.last_request.issue_description)
-            self.assertIn("Decision Gate", runner.last_request.issue_description)
+            self.assertTrue(
+                str(runner.last_request.execution_repo_dir).endswith(
+                    "/tenant-worker/tenant-worker-default/repo"
+                )
+            )
 
         events, _ = agent_observability_tracker.snapshot()
         event_types = [event.event_type for event in events]

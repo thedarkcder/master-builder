@@ -224,6 +224,87 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertEqual(result.diagnostics.stage, "review")
         self.assertEqual(result.diagnostics.message, "Workflow succeeded but no PR URL was produced")
 
+    def test_blocked_dev_result_fails_immediately_without_test_stage(self) -> None:
+        agents = _FakeAgents()
+
+        def _blocked_dev(
+            request: WorkflowRequest,
+            plan: PmPlan,
+            attempt: int,
+            feedback: str | None,
+        ) -> DevResult:
+            agents.calls.append(f"dev:{attempt}:{feedback or '-'}")
+            return DevResult(
+                change_summary=["Blocked: repository checkout is empty; no sources available to modify."],
+                pr_url=None,
+            )
+
+        agents.dev = _blocked_dev  # type: ignore[method-assign]
+        result = WorkflowRunner(agents).run(self._request(loops=2))
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "dev")
+        self.assertIn("Dev stage blocked", result.diagnostics.message)
+        self.assertEqual(agents.calls, ["pm", "dev:1:-"])
+
+    def test_blocked_pm_result_fails_immediately(self) -> None:
+        agents = _FakeAgents()
+
+        def _blocked_pm(_request: WorkflowRequest) -> PmPlan:
+            agents.calls.append("pm")
+            return PmPlan(
+                plan_steps=["Blocked: unresolved runtime dependency"],
+                acceptance_criteria=["ac1"],
+                risks=[],
+            )
+
+        agents.pm = _blocked_pm  # type: ignore[method-assign]
+        result = WorkflowRunner(agents).run(self._request(loops=2))
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "pm")
+        self.assertIn("PM stage blocked", result.diagnostics.message)
+        self.assertEqual(agents.calls, ["pm"])
+
+    def test_blocked_test_result_fails_immediately_without_retry(self) -> None:
+        agents = _FakeAgents()
+        agents.test_results_by_attempt[1] = TestResult(
+            passed=False,
+            guidance=["Blocked: cannot run required test suite"],
+            feedback=None,
+        )
+        result = WorkflowRunner(agents).run(self._request(loops=2))
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "test")
+        self.assertIn("Test stage blocked", result.diagnostics.message)
+        self.assertEqual(
+            agents.calls,
+            ["pm", "dev:1:-", "test:1"],
+        )
+
+    def test_blocked_review_result_fails_immediately_without_retry(self) -> None:
+        agents = _FakeAgents()
+        agents.review_results_by_attempt[1] = ReviewResult(
+            approved=False,
+            summary=["Blocked: policy conflict requires decision gate"],
+            feedback=None,
+            pr_url=None,
+        )
+        result = WorkflowRunner(agents).run(self._request(loops=2))
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "review")
+        self.assertIn("Review stage blocked", result.diagnostics.message)
+        self.assertEqual(
+            agents.calls,
+            ["pm", "dev:1:-", "test:1", "review:1"],
+        )
+
     def test_runtime_limit_returns_failure_diagnostics(self) -> None:
         agents = _FakeAgents()
         time_values = iter([0.0, 0.0, 61.0, 61.0, 61.0])

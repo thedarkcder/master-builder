@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -83,11 +83,18 @@ from orchestrator.api.admin.github_helpers import (
 )
 from orchestrator.api.admin.runs_query import build_runs_query as _build_runs_query_impl
 from orchestrator.api.admin.runs_service import (
+    cancel_run_admin as _cancel_run_admin_impl,
     get_run as _get_run_impl,
+    list_run_log_events as _list_run_log_events_impl,
+    list_run_events as _list_run_events_impl,
     list_runs as _list_runs_impl,
+    rerun_run as _rerun_run_impl,
 )
 from orchestrator.api.admin.agent_activity_service import (
     list_agent_activity as _list_agent_activity_impl,
+)
+from orchestrator.api.admin.run_event_stream_service import (
+    stream_run_events_ndjson as _stream_run_events_ndjson_impl,
 )
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as _project_execution_metrics_impl,
@@ -161,6 +168,8 @@ from orchestrator.api.schemas import (
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
     RunRead,
+    RunEventRead,
+    RunLogEventRead,
     AgentActivityRead,
     ProjectExecutionMetricsRead,
     AlertEvaluationRead,
@@ -172,6 +181,7 @@ from orchestrator.api.schemas import (
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import validate_enforcement_assets
 from orchestrator.core.project_policy import normalize_project_policy_overrides
+from orchestrator.core.worker.run_lifecycle import resolve_project_for_run as _resolve_project_for_run
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_GITHUB_APP_ID_REF,
     PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF,
@@ -188,6 +198,11 @@ from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
+
+try:
+    import psycopg
+except ImportError:  # pragma: no cover - dependency is required at runtime
+    psycopg = None
 
 JIRA_WEBHOOK_EVENTS = [
     "jira:issue_created",
@@ -945,6 +960,86 @@ def get_run(
         run_id=run_id,
         run_model=Run,
         run_to_schema_fn=_run_to_schema,
+    )
+
+
+@router.post("/runs/{run_id}/rerun", response_model=RunRead, status_code=status.HTTP_201_CREATED)
+def rerun_failed_run(
+    run_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> RunRead:
+    return _rerun_run_impl(
+        session=session,
+        run_id=run_id,
+        run_model=Run,
+        tenant_model=Tenant,
+        resolve_project_for_run_fn=_resolve_project_for_run,
+        run_to_schema_fn=_run_to_schema,
+    )
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunRead)
+def cancel_run(
+    run_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> RunRead:
+    return _cancel_run_admin_impl(
+        session=session,
+        run_id=run_id,
+        run_to_schema_fn=_run_to_schema,
+        cancelled_by="admin",
+    )
+
+
+@router.get("/runs/{run_id}/events", response_model=list[RunEventRead])
+def list_run_events(
+    run_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[RunEventRead]:
+    return _list_run_events_impl(
+        session=session,
+        run_id=run_id,
+        run_model=Run,
+        run_event_schema_cls=RunEventRead,
+        limit=limit,
+    )
+
+
+@router.get("/runs/{run_id}/logs", response_model=list[RunLogEventRead])
+def list_run_logs(
+    run_id: str,
+    limit: int = Query(default=500, ge=1, le=2000),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[RunLogEventRead]:
+    return _list_run_log_events_impl(
+        session=session,
+        run_id=run_id,
+        run_model=Run,
+        run_log_schema_cls=RunLogEventRead,
+        limit=limit,
+    )
+
+
+@router.get("/runs/{run_id}/events/stream")
+def stream_run_events(
+    run_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    return StreamingResponse(
+        _stream_run_events_ndjson_impl(
+            session=session,
+            run_id=run_id,
+            run_model=Run,
+            settings=get_settings(),
+            psycopg_module=psycopg,
+        ),
+        media_type="application/x-ndjson",
     )
 
 

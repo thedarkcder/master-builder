@@ -261,6 +261,27 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class RunEventRead(BaseModel):
+    event_type: str
+    run_id: str
+    issue_key: str | None = None
+    project_id: str | None = None
+    agent_id: str
+    recorded_at: datetime
+
+
+class RunLogEventRead(BaseModel):
+    run_id: str
+    issue_key: str | None = None
+    project_id: str | None = None
+    agent_id: str
+    stage: str
+    attempt: int | None = None
+    stream: str
+    message: str
+    recorded_at: datetime
+
+
 class AgentEventRead(BaseModel):
     event_type: str
     run_id: str

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
@@ -43,6 +44,7 @@ def apply_decision_gate(
         issue_key=run.issue_key,
         run_id=run.run_id,
         jira_url=jira_url,
+        run_url=admin_run_url(admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id),
         reason=decision_gate.reason,
         questions=decision_gate.questions,
     )

@@ -22,6 +22,8 @@ class WorkflowRequest:
     max_dev_test_review_loops: int
     max_runtime_minutes: int = 30
     suggested_test_commands: list[str] = field(default_factory=list)
+    execution_repo_dir: str | None = None
+    project_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +192,19 @@ class WorkflowRunner:
                 history=history,
                 request=request,
             )
+        pm_blocker = _extract_list_blocker(
+            [*plan.plan_steps, *plan.acceptance_criteria, *plan.risks]
+        )
+        if pm_blocker is not None:
+            history.append({"stage": "pm", "attempt": "0", "event": pm_blocker})
+            return self._failure(
+                plan=plan,
+                stage="pm",
+                message=f"PM stage blocked: {pm_blocker}",
+                attempts=0,
+                history=history,
+                request=request,
+            )
 
         runtime_failure = self._runtime_failure(
             request=request,
@@ -228,6 +243,17 @@ class WorkflowRunner:
                     history=history,
                     request=request,
                 )
+            dev_blocker = _extract_dev_blocker(dev_result)
+            if dev_blocker is not None:
+                history.append({"stage": "dev", "attempt": str(attempt), "event": dev_blocker})
+                return self._failure(
+                    plan=plan,
+                    stage="dev",
+                    message=f"Dev stage blocked: {dev_blocker}",
+                    attempts=attempt,
+                    history=history,
+                    request=request,
+                )
 
             runtime_failure = self._runtime_failure(
                 request=request,
@@ -249,6 +275,17 @@ class WorkflowRunner:
                     plan=plan,
                     stage="test",
                     message=f"Test stage failed: {exc}",
+                    attempts=attempt,
+                    history=history,
+                    request=request,
+                )
+            test_blocker = _extract_first_blocker([test_result.feedback, *test_result.guidance])
+            if test_blocker is not None:
+                history.append({"stage": "test", "attempt": str(attempt), "event": test_blocker})
+                return self._failure(
+                    plan=plan,
+                    stage="test",
+                    message=f"Test stage blocked: {test_blocker}",
                     attempts=attempt,
                     history=history,
                     request=request,
@@ -294,6 +331,17 @@ class WorkflowRunner:
                     plan=plan,
                     stage="review",
                     message=f"Review stage failed: {exc}",
+                    attempts=attempt,
+                    history=history,
+                    request=request,
+                )
+            review_blocker = _extract_first_blocker([review_result.feedback, *review_result.summary])
+            if review_blocker is not None:
+                history.append({"stage": "review", "attempt": str(attempt), "event": review_blocker})
+                return self._failure(
+                    plan=plan,
+                    stage="review",
+                    message=f"Review stage blocked: {review_blocker}",
                     attempts=attempt,
                     history=history,
                     request=request,
@@ -452,3 +500,19 @@ class WorkflowRunner:
             monotonic_fn=self._monotonic,
             failure_factory=self._failure,
         )
+
+
+def _extract_dev_blocker(dev_result: DevResult) -> str | None:
+    return _extract_list_blocker(dev_result.change_summary)
+
+
+def _extract_list_blocker(entries: list[str]) -> str | None:
+    return _extract_first_blocker(entries)
+
+
+def _extract_first_blocker(entries: list[str | None]) -> str | None:
+    for entry in entries:
+        text = str(entry or "").strip()
+        if text.lower().startswith("blocked:"):
+            return text
+    return None

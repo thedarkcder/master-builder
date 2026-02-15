@@ -9,6 +9,7 @@ from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import AgentLifecycleEvent
+from orchestrator.storage.run_event_stream import notify_run_event
 
 ALLOWED_AGENT_EVENTS = {
     "ISSUE_ASSIGNED",
@@ -20,6 +21,10 @@ ALLOWED_AGENT_EVENTS = {
     "BUILD_STARTED",
     "BUILD_FAILED",
     "TEST_FAILED",
+    "LOCK_ACQUIRED",
+    "PLAN_POSTED",
+    "PR_OPENED",
+    "RUN_FAILED",
 }
 MAX_IN_MEMORY_EVENT_HISTORY = 1000
 MAX_PERSISTED_EVENTS_PER_TENANT = 5000
@@ -112,6 +117,17 @@ def record_agent_lifecycle_event(
     if not normalized_run:
         return
     normalized_agent = str(agent_id or "").strip() or "unknown-agent"
+    normalized_event_type = _normalize_event_type(event_type)
+
+    agent_observability_tracker.record_event(
+        event_type=normalized_event_type,
+        tenant_id=normalized_tenant,
+        project_id=normalized_project,
+        run_id=normalized_run,
+        issue_key=str(issue_key or "").strip() or None,
+        agent_id=normalized_agent,
+        recorded_at=timestamp,
+    )
 
     session.add(
         AgentLifecycleEvent(
@@ -121,11 +137,21 @@ def record_agent_lifecycle_event(
             run_id=normalized_run,
             issue_key=str(issue_key or "").strip() or None,
             agent_id=normalized_agent,
-            event_type=_normalize_event_type(event_type),
+            event_type=normalized_event_type,
             recorded_at=timestamp,
         )
     )
     session.flush()
+    notify_run_event(
+        session,
+        tenant_id=normalized_tenant,
+        run_id=normalized_run,
+        event_type=normalized_event_type,
+        issue_key=str(issue_key or "").strip() or None,
+        project_id=normalized_project,
+        agent_id=normalized_agent,
+        recorded_at=timestamp.isoformat(),
+    )
 
     cutoff_ids = session.execute(
         select(AgentLifecycleEvent.event_id)

@@ -2,17 +2,28 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.workflow.runner import WorkflowResult
-from orchestrator.storage.models import Project, Run
+from orchestrator.storage.models import Project, Run, RunLock
 
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
+
+
+def _release_run_lock(session: Session, *, run: Run) -> None:
+    session.execute(
+        delete(RunLock).where(
+            RunLock.tenant_id == run.tenant_id,
+            RunLock.issue_key == run.issue_key,
+            RunLock.run_id == run.run_id,
+        )
+    )
 
 
 def start_run(session: Session, *, run: Run) -> Run:
@@ -100,6 +111,7 @@ def finalize_cancelled_run(
     }
     if run.finished_at is None:
         run.finished_at = datetime.now(timezone.utc)
+    _release_run_lock(session, run=run)
     session.commit()
     session.refresh(run)
     return run
@@ -127,6 +139,7 @@ def finalize_workflow_result(
         else:
             run.last_error = "Workflow failed without diagnostics"
 
+    _release_run_lock(session, run=run)
     session.commit()
     session.refresh(run)
     return run
