@@ -301,9 +301,19 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             issue_id_or_key="MAB-2",
             summary="Summary-only update",
         )
+        service.add_issue_labels(
+            access_token="tok",
+            cloud_id="cloud",
+            issue_id_or_key="MAB-2",
+            labels=["worker:linux"],
+        )
         self.assertTrue(any(call["method"] == "PUT" for call in captured))
         self.assertIn(
             {"fields": {"summary": "Summary-only update"}},
+            [call.get("payload") for call in captured if call.get("method") == "PUT"],
+        )
+        self.assertIn(
+            {"update": {"labels": [{"add": "worker:linux"}]}},
             [call.get("payload") for call in captured if call.get("method") == "PUT"],
         )
 

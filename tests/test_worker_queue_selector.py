@@ -283,3 +283,78 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertIsNone(result.terminal_run)
             self.assertIsNotNone(result.run)
             self.assertEqual(result.run.run_id, "run-b-queued")
+
+    def test_select_next_queued_run_skips_incompatible_worker_capabilities(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-capabilities",
+                    name="Tenant Capabilities",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/mobile"},
+                    policy_config={"max_concurrent_runs": 2},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-macos",
+                    tenant_id="tenant-capabilities",
+                    issue_key="IOS-1",
+                    issue_summary="Build iOS app with SwiftUI",
+                    issue_description="Implement iOS app shell",
+                    repo_url="https://github.com/example/mobile",
+                    branch=None,
+                    pr_url=None,
+                    status="queued",
+                    last_error=None,
+                    plan={"required_worker_capability": "macos"},
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-linux",
+                    tenant_id="tenant-capabilities",
+                    issue_key="LINUX-1",
+                    issue_summary="Build backend service",
+                    issue_description="Implement API endpoint",
+                    repo_url="https://github.com/example/backend",
+                    branch=None,
+                    pr_url=None,
+                    status="queued",
+                    last_error=None,
+                    plan={"required_worker_capability": "linux"},
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                )
+            )
+            session.commit()
+
+            linux_result = select_next_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_capabilities={"linux"},
+            )
+            self.assertIsNotNone(linux_result.run)
+            self.assertEqual(linux_result.run.run_id, "run-linux")
+
+            macos_result = select_next_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_capabilities={"macos"},
+            )
+            self.assertIsNotNone(macos_result.run)
+            self.assertEqual(macos_result.run.run_id, "run-macos")

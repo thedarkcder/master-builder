@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.worker_capabilities import parse_worker_capabilities
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
 
 
@@ -46,6 +47,7 @@ def process_next_queued_run(
         queued_status=run_status_queued,
         running_status=run_status_running,
         failed_status=run_status_failed,
+        worker_capabilities=parse_worker_capabilities(getattr(settings, "worker_capabilities", "")),
     )
     if selection.terminal_run is not None:
         return selection.terminal_run
