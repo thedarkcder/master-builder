@@ -1,6 +1,7 @@
 import unittest
 
 from orchestrator.core.codex_agents import CodexWorkflowAgents, answer_board_question_with_codex
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.workflow.runner import WorkflowRequest
 
@@ -75,6 +76,14 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             project_keys=["MAB"],
             issues=[{"key": "MAB-1", "summary": "A", "status": "Blocked"}],
             status_counts={"Blocked": 1},
+            invocation_context=CodexInvocationContext(
+                channel="discord",
+                tenant_id="tenant-1",
+                project_id=None,
+                command="ask",
+                stage="answer",
+                working_dir="/tmp",
+            ),
         )
 
         self.assertIn("MAB-1", message)

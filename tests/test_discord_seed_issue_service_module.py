@@ -9,7 +9,7 @@ from orchestrator.api.discord.seed.issue_service import seed_issues_with_codex
 
 
 def test_seed_issues_scopes_allowed_project_keys() -> None:
-    tenant = SimpleNamespace()
+    tenant = SimpleNamespace(tenant_id="tenant-a")
     with __import__("pytest").raises(HTTPException) as exc_ctx:
         seed_issues_with_codex(
             session=MagicMock(),

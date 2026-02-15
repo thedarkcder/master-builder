@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
+from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.workflow.runner import (
@@ -46,7 +47,19 @@ class CodexWorkflowAgents:
         return _emit
 
     def pm(self, request: WorkflowRequest) -> PmPlan:
-        payload = self._runtime.run_json(
+        payload = invoke_codex_json(
+            runtime=self._runtime,
+            context=CodexInvocationContext(
+                channel="worker",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                command="workflow",
+                stage="pm",
+                working_dir=request.execution_repo_dir or ".",
+                issue_key=request.issue_key,
+                run_id=request.run_id,
+                attempt=0,
+            ),
             system_prompt=render_prompt("workflow/pm_system.j2"),
             user_prompt=render_prompt(
                 "workflow/pm_user.j2",
@@ -56,8 +69,7 @@ class CodexWorkflowAgents:
                 issue_summary=request.issue_summary,
                 issue_description=request.issue_description,
             ),
-            working_dir=request.execution_repo_dir,
-            on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=0),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=0),
         )
         return PmPlan(
             plan_steps=_string_list(payload.get("plan_steps"), fallback=["Analyze scope", "Implement", "Validate"]),
@@ -75,7 +87,19 @@ class CodexWorkflowAgents:
         attempt: int,
         feedback: str | None,
     ) -> DevResult:
-        payload = self._runtime.run_json(
+        payload = invoke_codex_json(
+            runtime=self._runtime,
+            context=CodexInvocationContext(
+                channel="worker",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                command="workflow",
+                stage="dev",
+                working_dir=request.execution_repo_dir or ".",
+                issue_key=request.issue_key,
+                run_id=request.run_id,
+                attempt=attempt,
+            ),
             system_prompt=render_prompt("workflow/dev_system.j2"),
             user_prompt=render_prompt(
                 "workflow/dev_user.j2",
@@ -88,8 +112,7 @@ class CodexWorkflowAgents:
                 plan_json=json.dumps(plan.plan_steps),
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
             ),
-            working_dir=request.execution_repo_dir,
-            on_log_line=self._stage_log_sink(request=request, stage="dev", attempt=attempt),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="dev", attempt=attempt),
         )
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
@@ -105,7 +128,19 @@ class CodexWorkflowAgents:
         dev_result: DevResult,
         attempt: int,
     ) -> TestResult:
-        payload = self._runtime.run_json(
+        payload = invoke_codex_json(
+            runtime=self._runtime,
+            context=CodexInvocationContext(
+                channel="worker",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                command="workflow",
+                stage="test",
+                working_dir=request.execution_repo_dir or ".",
+                issue_key=request.issue_key,
+                run_id=request.run_id,
+                attempt=attempt,
+            ),
             system_prompt=render_prompt("workflow/test_system.j2"),
             user_prompt=render_prompt(
                 "workflow/test_user.j2",
@@ -118,8 +153,7 @@ class CodexWorkflowAgents:
                 pr_url=dev_result.pr_url or "none",
                 suggested_test_commands_json=json.dumps(request.suggested_test_commands),
             ),
-            working_dir=request.execution_repo_dir,
-            on_log_line=self._stage_log_sink(request=request, stage="test", attempt=attempt),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="test", attempt=attempt),
         )
 
         passed = bool(payload.get("passed"))
@@ -139,7 +173,19 @@ class CodexWorkflowAgents:
         test_result: TestResult,
         attempt: int,
     ) -> ReviewResult:
-        payload = self._runtime.run_json(
+        payload = invoke_codex_json(
+            runtime=self._runtime,
+            context=CodexInvocationContext(
+                channel="worker",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                command="workflow",
+                stage="review",
+                working_dir=request.execution_repo_dir or ".",
+                issue_key=request.issue_key,
+                run_id=request.run_id,
+                attempt=attempt,
+            ),
             system_prompt=render_prompt("workflow/review_system.j2"),
             user_prompt=render_prompt(
                 "workflow/review_user.j2",
@@ -156,8 +202,7 @@ class CodexWorkflowAgents:
                 test_feedback=test_result.feedback or "none",
                 pr_url=dev_result.pr_url or "none",
             ),
-            working_dir=request.execution_repo_dir,
-            on_log_line=self._stage_log_sink(request=request, stage="review", attempt=attempt),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="review", attempt=attempt),
         )
 
         approved = bool(payload.get("approved"))
@@ -190,13 +235,15 @@ def answer_board_question_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
+    invocation_context: CodexInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
-    working_dir: str | None = None,
 ) -> str:
     normalized_history = history or []
     normalized_github_context = github_context or {}
-    payload = runtime.run_json(
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
         system_prompt=render_prompt("discord/ask_answer_system.j2"),
         user_prompt=render_prompt(
             "discord/ask_answer_user.j2",
@@ -207,7 +254,6 @@ def answer_board_question_with_codex(
             history_json=json.dumps(normalized_history[:6]),
             issues_json=json.dumps(issues[:40]),
         ),
-        working_dir=working_dir,
     )
     message = str(payload.get("message") or "").strip()
     if not message:
@@ -222,13 +268,15 @@ def plan_discord_ask_intent_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
+    invocation_context: CodexInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
-    working_dir: str | None = None,
 ) -> dict:
     normalized_history = history or []
     normalized_github_context = github_context or {}
-    payload = runtime.run_json(
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
         system_prompt=render_prompt("discord/ask_intent_system.j2"),
         user_prompt=render_prompt(
             "discord/ask_intent_user.j2",
@@ -239,7 +287,6 @@ def plan_discord_ask_intent_with_codex(
             history_json=json.dumps(normalized_history[:6]),
             issues_json=json.dumps(issues[:40]),
         ),
-        working_dir=working_dir,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return an ask-intent JSON object")
@@ -251,16 +298,17 @@ def plan_seed_issues_with_codex(
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
-    working_dir: str | None = None,
+    invocation_context: CodexInvocationContext,
 ) -> dict:
-    payload = runtime.run_json(
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
         system_prompt=render_prompt("discord/issues_seed_system.j2"),
         user_prompt=render_prompt(
             "discord/issues_seed_user.j2",
             allowed_project_keys_json=json.dumps(allowed_project_keys),
             prompt_markdown=prompt_markdown,
         ),
-        working_dir=working_dir,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return an issue-seeding JSON object")
