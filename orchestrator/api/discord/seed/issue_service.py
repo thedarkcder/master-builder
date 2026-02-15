@@ -14,6 +14,7 @@ def seed_issues_with_codex(
     prompt_markdown: str,
     force_issue_keys: list[str] | None,
     allow_create: bool,
+    scoped_project_keys: list[str] | None,
     tenant_project_keys_fn,
     get_settings_fn,
     build_codex_runtime_fn,
@@ -30,6 +31,14 @@ def seed_issues_with_codex(
     select_seed_match_fn,
 ):  # noqa: ANN001
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
+    normalized_scoped_project_keys = [
+        str(value).strip().upper()
+        for value in (scoped_project_keys or [])
+        if str(value).strip()
+    ]
+    if normalized_scoped_project_keys:
+        allowed = set(normalized_scoped_project_keys)
+        project_keys = [value for value in project_keys if str(value).strip().upper() in allowed]
     if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
 

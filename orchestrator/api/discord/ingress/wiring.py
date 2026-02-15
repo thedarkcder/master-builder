@@ -86,6 +86,7 @@ def build_discord_ingress_dependencies(
             payload=ctx.payload,
             command_name=ctx.command_name,
             arguments=list(ctx.arguments),
+            scoped_project_keys=list(ctx.scope.project_keys),
             normalized_user_id=ctx.normalized_user_id,
             defer_seed_issues=bool(ctx.flags.get("defer_seed_issues")),
             seed_issues_with_codex=seed_issues_with_codex_fn,
