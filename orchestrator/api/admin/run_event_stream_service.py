@@ -54,7 +54,11 @@ def stream_run_events_ndjson(
         yield (
             json.dumps(
                 {
-                    "event_kind": "run_log",
+                    "event_kind": "codex_log",
+                    "invocation_id": row.invocation_id,
+                    "channel": row.channel,
+                    "command": row.command,
+                    "working_dir": row.working_dir,
                     "run_id": row.run_id,
                     "issue_key": row.issue_key,
                     "project_id": row.project_id,

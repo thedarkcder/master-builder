@@ -1075,6 +1075,10 @@ class AdminApiTests(unittest.TestCase):
                 run_id="run-log-1",
                 issue_key="TP-503",
                 agent_id="worker-logs",
+                invocation_id="inv-run-log-1",
+                channel="worker",
+                command="workflow.dev",
+                working_dir="/tmp/repo",
                 stage="dev",
                 attempt=1,
                 stream="stdout",
@@ -1138,6 +1142,10 @@ class AdminApiTests(unittest.TestCase):
                 run_id="run-events-stream",
                 issue_key="TP-502",
                 agent_id="worker-stream",
+                invocation_id="inv-run-events-stream",
+                channel="worker",
+                command="workflow.dev",
+                working_dir="/tmp/repo",
                 stage="dev",
                 attempt=1,
                 stream="stdout",
@@ -1151,7 +1159,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.headers.get("content-type"), "application/x-ndjson")
         self.assertIn("\"run_id\":\"run-events-stream\"", response.text)
         self.assertIn("\"event_type\":\"TASK_STARTED\"", response.text)
-        self.assertIn("\"event_kind\":\"run_log\"", response.text)
+        self.assertIn("\"event_kind\":\"codex_log\"", response.text)
         self.assertIn("\"message\":\"live line\"", response.text)
 
     def test_stream_run_events_missing_run_returns_not_found(self) -> None:
@@ -1477,7 +1485,6 @@ class AdminApiTests(unittest.TestCase):
         payload["repos"]["allowlist"] = []
         payload["repos"]["mapping_rules_by_project_key"] = {}
         payload["repos"]["mapping_rules_by_component"] = {}
-        payload["repos"]["fallback_repo"] = None
 
         response = self.client.post(
             "/api/admin/tenants",
@@ -1486,7 +1493,6 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["repos"]["allowlist"], [])
-        self.assertIsNone(response.json()["repos"]["fallback_repo"])
 
     def test_create_tenant_blocks_when_codex_assets_invalid(self) -> None:
         payload = self._tenant_payload()

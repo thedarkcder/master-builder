@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import importlib.resources
 import json
-import logging
 from pathlib import Path
 from typing import Iterable
 
-CODEX_ASSETS_PACKAGE = "master_builder_codex_assets"
 REQUIRED_GUIDANCE_FILES = (
     ".codex/POLICY.md",
     ".codex/ENGINEERING_STANDARDS.md",
@@ -19,24 +16,8 @@ OPTIONAL_GUIDANCE_FILES = ("AGENTS.md",)
 SKILL_RELATIVE_GLOB = ".codex/skills/**/SKILL.md"
 USER_SKILL_RELATIVE_GLOB = ".codex/skills/**/SKILL.md"
 
-logger = logging.getLogger(__name__)
-
-
 class EnforcementAssetsError(ValueError):
     """Raised when required enforcement assets are unavailable or invalid."""
-
-
-def _read_packaged_asset_text(asset_name: str) -> str | None:
-    try:
-        asset = importlib.resources.files(CODEX_ASSETS_PACKAGE).joinpath(asset_name)
-    except (ModuleNotFoundError, FileNotFoundError):
-        return None
-    if not asset.is_file():
-        return None
-    content = asset.read_text(encoding="utf-8").strip()
-    if not content:
-        raise EnforcementAssetsError(f"Packaged enforcement asset is empty: {asset_name}")
-    return content
 
 
 def _load_required_text(*, repo_root: Path, relative_path: str) -> str:
@@ -46,19 +27,8 @@ def _load_required_text(*, repo_root: Path, relative_path: str) -> str:
         if not content:
             raise EnforcementAssetsError(f"Required enforcement file is empty: {relative_path}")
         return content
-
-    asset_name = Path(relative_path).name
-    packaged_content = _read_packaged_asset_text(asset_name)
-    if packaged_content is not None:
-        logger.info(
-            "enforcement_context_loaded_packaged_asset relative_path=%s asset=%s",
-            relative_path,
-            asset_name,
-        )
-        return packaged_content
     raise EnforcementAssetsError(
-        f"Missing required enforcement file: {relative_path} "
-        f"(not found locally or in packaged codex assets package '{CODEX_ASSETS_PACKAGE}')"
+        f"Missing required enforcement file: {relative_path} (not found in repository)"
     )
 
 
@@ -67,16 +37,6 @@ def _load_optional_text(*, repo_root: Path, relative_path: str) -> str | None:
     if local_path.exists():
         content = local_path.read_text(encoding="utf-8").strip()
         return content or None
-
-    asset_name = Path(relative_path).name
-    packaged_content = _read_packaged_asset_text(asset_name)
-    if packaged_content is not None:
-        logger.info(
-            "enforcement_context_loaded_optional_packaged_asset relative_path=%s asset=%s",
-            relative_path,
-            asset_name,
-        )
-        return packaged_content
     return None
 
 
@@ -113,44 +73,17 @@ def _load_skill_texts(*, repo_root: Path) -> list[tuple[str, str]]:
 def _load_policy_pack_payload(*, repo_root: Path) -> dict[str, dict]:
     payload: dict[str, dict] = {}
     local_policy_pack_paths = sorted((repo_root / ".codex").glob("policy_pack*.json"))
-    if local_policy_pack_paths:
-        for path in local_policy_pack_paths:
-            content = path.read_text(encoding="utf-8").strip()
-            if not content:
-                raise EnforcementAssetsError(f"Policy pack is empty: {path.name}")
-            try:
-                payload[path.name] = json.loads(content)
-            except json.JSONDecodeError as exc:
-                raise EnforcementAssetsError(f"Policy pack is invalid JSON: {path.name}") from exc
-        return payload
-
-    try:
-        packaged_dir = importlib.resources.files(CODEX_ASSETS_PACKAGE)
-        packaged_policy_pack_assets = sorted(
-            (
-                resource
-                for resource in packaged_dir.iterdir()
-                if resource.name.startswith("policy_pack") and resource.name.endswith(".json")
-            ),
-            key=lambda resource: resource.name,
-        )
-    except (ModuleNotFoundError, FileNotFoundError):
-        packaged_policy_pack_assets = []
-
-    for resource in packaged_policy_pack_assets:
-        content = resource.read_text(encoding="utf-8").strip()
+    for path in local_policy_pack_paths:
+        content = path.read_text(encoding="utf-8").strip()
         if not content:
-            raise EnforcementAssetsError(f"Packaged policy pack is empty: {resource.name}")
+            raise EnforcementAssetsError(f"Policy pack is empty: {path.name}")
         try:
-            payload[resource.name] = json.loads(content)
+            payload[path.name] = json.loads(content)
         except json.JSONDecodeError as exc:
-            raise EnforcementAssetsError(f"Packaged policy pack is invalid JSON: {resource.name}") from exc
+            raise EnforcementAssetsError(f"Policy pack is invalid JSON: {path.name}") from exc
 
     if not payload:
-        raise EnforcementAssetsError(
-            "Missing policy packs: expected .codex/policy_pack*.json locally or packaged codex "
-            f"assets package '{CODEX_ASSETS_PACKAGE}'"
-        )
+        raise EnforcementAssetsError("Missing policy packs: expected .codex/policy_pack*.json in repository")
     return payload
 
 

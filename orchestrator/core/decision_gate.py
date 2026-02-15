@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-import importlib.resources
 from pathlib import Path
 import re
 
 RULES_FILE_PATH = Path(".codex/DECISION_GATE_TEMPLATE.md")
-CODEX_ASSETS_PACKAGE = "master_builder_codex_assets"
-PACKAGED_RULES_FILENAME = "decision_gate.md"
 
 
 @dataclass(frozen=True)
@@ -92,33 +89,12 @@ def _required_message(messages: dict[str, str], *, key: str) -> str:
     return value
 
 
-def _load_packaged_rules_markdown() -> str:
-    try:
-        packaged_asset = importlib.resources.files(CODEX_ASSETS_PACKAGE).joinpath(
-            PACKAGED_RULES_FILENAME
-        )
-    except (ModuleNotFoundError, FileNotFoundError) as exc:
-        raise FileNotFoundError(
-            f"Decision Gate rules file not found: {RULES_FILE_PATH} "
-            f"(and packaged fallback '{CODEX_ASSETS_PACKAGE}/{PACKAGED_RULES_FILENAME}' is unavailable)"
-        ) from exc
-    if not packaged_asset.is_file():
-        raise FileNotFoundError(
-            f"Decision Gate packaged rules file not found: "
-            f"{CODEX_ASSETS_PACKAGE}/{PACKAGED_RULES_FILENAME}"
-        )
-    return packaged_asset.read_text(encoding="utf-8")
-
-
 @lru_cache(maxsize=8)
-def _load_decision_gate_rules_cached(path_text: str, allow_packaged_fallback: bool) -> DecisionGateRules:
+def _load_decision_gate_rules_cached(path_text: str) -> DecisionGateRules:
     path = Path(path_text)
-    if path.exists():
-        markdown = path.read_text(encoding="utf-8")
-    elif allow_packaged_fallback:
-        markdown = _load_packaged_rules_markdown()
-    else:
+    if not path.exists():
         raise FileNotFoundError(f"Decision Gate rules file not found: {path}")
+    markdown = path.read_text(encoding="utf-8")
 
     list_sections, messages = _parse_markdown_rule_file(markdown)
     return DecisionGateRules(
@@ -143,8 +119,7 @@ def reset_decision_gate_rules_cache() -> None:
 
 def load_decision_gate_rules(*, path: str | Path | None = None) -> DecisionGateRules:
     rules_path = Path(path) if path is not None else RULES_FILE_PATH
-    allow_packaged_fallback = path is None
-    return _load_decision_gate_rules_cached(str(rules_path), allow_packaged_fallback)
+    return _load_decision_gate_rules_cached(str(rules_path))
 
 
 def _has_section(description: str, section: str) -> bool:

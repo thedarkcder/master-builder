@@ -4,7 +4,6 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
 from orchestrator.core.enforcement_context import (
     EnforcementAssetsError,
@@ -40,24 +39,14 @@ class EnforcementContextTests(unittest.TestCase):
                 required_assets_version="9.9.9",
             )
 
-    def test_codex_assets_version_uses_packaged_manifest_when_local_manifest_missing(self) -> None:
+    def test_codex_assets_version_requires_local_manifest(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             repo_root = Path(tmp_dir)
-            with patch(
-                "orchestrator.core.enforcement_context._read_packaged_asset_text",
-                side_effect=lambda name: '{"assets_version":"0.2.0"}'
-                if name == "codex_assets_manifest.json"
-                else "content",
-            ):
-                version = codex_assets_version(repo_root=repo_root)
-        self.assertEqual(version, "0.2.0")
+            with self.assertRaisesRegex(EnforcementAssetsError, "Missing required enforcement file"):
+                codex_assets_version(repo_root=repo_root)
 
-    def test_validate_assets_raises_when_required_file_missing_and_packaged_unavailable(self) -> None:
+    def test_validate_assets_raises_when_required_file_missing(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             repo_root = Path(tmp_dir)
-            with patch(
-                "orchestrator.core.enforcement_context._read_packaged_asset_text",
-                return_value=None,
-            ):
-                with self.assertRaisesRegex(EnforcementAssetsError, "Missing required enforcement file"):
-                    validate_enforcement_assets(repo_root=repo_root)
+            with self.assertRaisesRegex(EnforcementAssetsError, "Missing required enforcement file"):
+                validate_enforcement_assets(repo_root=repo_root)

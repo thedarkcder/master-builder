@@ -43,7 +43,6 @@ def primary_jira_project_key(jira_config: dict) -> str | None:
 def primary_repo_url(repos_config: dict) -> str | None:
     candidates: list[object] = [
         repos_config.get("github_repository"),
-        repos_config.get("fallback_repo"),
     ]
 
     allowlist = repos_config.get("allowlist")

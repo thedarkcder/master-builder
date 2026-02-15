@@ -27,7 +27,6 @@ class JiraConfig(BaseModel):
 
 
 class GithubConfig(BaseModel):
-    mode: str = Field(default="github_app", min_length=1)
     webhook_secret_ref: str | None = None
     installation_id: str | None = None
 
@@ -37,7 +36,6 @@ class ReposConfig(BaseModel):
     allowlist: list[str] = Field(default_factory=list)
     mapping_rules_by_project_key: dict[str, str] = Field(default_factory=dict)
     mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
-    fallback_repo: str | None = None
 
 
 class PolicyConfig(BaseModel):
@@ -270,10 +268,14 @@ class RunEventRead(BaseModel):
 
 
 class RunLogEventRead(BaseModel):
-    run_id: str
+    run_id: str | None = None
     issue_key: str | None = None
     project_id: str | None = None
     agent_id: str
+    invocation_id: str | None = None
+    channel: str | None = None
+    command: str | None = None
+    working_dir: str | None = None
     stage: str
     attempt: int | None = None
     stream: str

@@ -201,14 +201,18 @@ class RunLogEvent(Base):
         nullable=True,
         index=True,
     )
-    run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("runs.run_id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     agent_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    invocation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    channel: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    command: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    working_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     stage: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     attempt: Mapped[int | None] = mapped_column(nullable=True)
     stream: Mapped[str] = mapped_column(String(16), nullable=False)
