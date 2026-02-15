@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -1031,6 +1031,9 @@ def stream_run_events(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return StreamingResponse(
         _stream_run_events_ndjson_impl(
             session=session,

@@ -66,6 +66,9 @@ class _FakeJiraClient:
 
 
 class _FakeGitHubClient:
+    def get_installation_token(self) -> str:
+        return "ghs_test_installation_token"
+
     def list_installation_repositories(self) -> list[SimpleNamespace]:
         return [
             SimpleNamespace(
@@ -122,6 +125,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             patch(
                 "orchestrator.api.routes.admin.github_client_from_tenant_config",
                 side_effect=lambda *_, **__: _FakeGitHubClient(),
+            )
+        )
+        self.patch_stack.enter_context(
+            patch(
+                "orchestrator.api.routes.admin.ensure_project_checkout",
+                return_value=None,
             )
         )
         self.patch_stack.enter_context(
@@ -334,6 +343,57 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ),
             ("GET", "/api/admin/runs"): RouteScenario(path="/api/admin/runs", auth=admin),
             ("GET", "/api/admin/runs/{run_id}"): RouteScenario(path="/api/admin/runs/run-e2e", auth=admin),
+            ("GET", "/api/admin/runs/{run_id}/events"): RouteScenario(
+                path="/api/admin/runs/run-e2e/events",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/runs/{run_id}/logs"): RouteScenario(
+                path="/api/admin/runs/run-e2e/logs",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/runs/{run_id}/events/stream"): RouteScenario(
+                path="/api/admin/runs/run-missing/events/stream",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/runs/{run_id}/rerun"): RouteScenario(
+                path="/api/admin/runs/run-e2e/rerun",
+                auth=admin,
+                expected_statuses=(201, 409),
+            ),
+            ("POST", "/api/admin/runs/{run_id}/cancel"): RouteScenario(
+                path="/api/admin/runs/run-e2e/cancel",
+                auth=admin,
+                expected_statuses=(200, 409),
+            ),
+            ("GET", "/api/admin/agents/activity"): RouteScenario(
+                path="/api/admin/agents/activity?tenant_id=example&project_id=example-default",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/metrics"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/metrics",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/alerts/evaluate"): RouteScenario(
+                path="/api/admin/alerts/evaluate?tenant_id=example",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/health"): RouteScenario(
+                path="/api/admin/tenants/example/health",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/observability/platform"): RouteScenario(
+                path="/api/admin/observability/platform",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/observability/tenants/{tenant_id}"): RouteScenario(
+                path="/api/admin/observability/tenants/example",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/observability/tenants/{tenant_id}/projects/{project_id}"): RouteScenario(
+                path="/api/admin/observability/tenants/example/projects/example-default",
+                auth=admin,
+            ),
             ("GET", "/api/admin/secrets"): RouteScenario(path="/api/admin/secrets", auth=admin),
             ("POST", "/api/admin/secrets/resolve"): RouteScenario(
                 path="/api/admin/secrets/resolve",
@@ -553,6 +613,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ),
             ("POST", "/github/webhook"): RouteScenario(path="/github/webhook", json={"action": "opened"}),
             ("GET", "/health"): RouteScenario(path="/health"),
+            ("GET", "/metrics"): RouteScenario(path="/metrics"),
             ("POST", "/jira/webhook/{tenant_id}"): RouteScenario(path="/jira/webhook/example", json={"webhookEvent": "jira:issue_updated"}),
             ("GET", "/runs/{run_id}"): RouteScenario(path="/runs/run-e2e", auth=admin),
         }

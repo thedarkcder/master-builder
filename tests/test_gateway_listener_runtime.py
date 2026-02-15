@@ -73,8 +73,18 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_run_loop_skips_without_websockets_or_token_ref(self) -> None:
         listener, _session = self._listener()
-        with patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=None):
+        sleep_calls = {"count": 0}
+
+        async def _fake_sleep(_seconds: float) -> None:
+            sleep_calls["count"] += 1
+            listener._stop_event.set()
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=None),
+            patch("orchestrator.core.discord.gateway_listener.asyncio.sleep", side_effect=_fake_sleep),
+        ):
             asyncio.run(listener._run_loop())
+        self.assertEqual(sleep_calls["count"], 1)
 
         listener, _session = self._listener()
         with patch("orchestrator.core.discord.gateway_listener.websockets", None):

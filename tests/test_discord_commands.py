@@ -49,6 +49,11 @@ class DiscordCommandApiTests(unittest.TestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)
+        self._project_checkout_patcher = patch(
+            "orchestrator.api.routes.admin._ensure_project_repository_checkout",
+            return_value=None,
+        )
+        self._project_checkout_patcher.start()
         self.client = TestClient(create_app())
         self.session_factory = create_session_factory(database_url=self.database_url)
 
@@ -97,6 +102,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.tenant_id = create_response.json()["tenant_id"]
 
     def tearDown(self) -> None:
+        self._project_checkout_patcher.stop()
         self.temp_dir.cleanup()
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()

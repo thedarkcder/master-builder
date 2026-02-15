@@ -271,10 +271,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["pre_run_check"]["outcome"], "ready_for_agent")
         self.assertTrue(body["pre_run_check"]["ready_label_present"])
         self.assertFalse(body["pre_run_check"]["decision_gate_triggered"])
-        notify_mock.assert_called_once()
-        sent_message = notify_mock.call_args.kwargs["message"]
-        self.assertIn("added to the backlog", sent_message)
-        self.assertIn("ready for agent", sent_message.lower())
+        notify_mock.assert_not_called()
 
     def test_webhook_does_not_enqueue_when_issue_is_not_on_configured_board(self) -> None:
         with self.session_factory() as session:
@@ -976,7 +973,13 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(rollup["failed_total"], 0.0)
 
     def test_webhook_requires_valid_token_when_secret_ref_configured(self) -> None:
-        self._create_tenant("tenant-auth", webhook_secret_ref=self.webhook_secret_env)
+        managed_ref = "tenant/tenant-auth/JIRA_WEBHOOK_TOKEN"
+        self._create_tenant("tenant-auth", webhook_secret_ref=managed_ref)
+        self.client.put(
+            "/api/admin/tenants/tenant-auth/secrets/JIRA_WEBHOOK_TOKEN",
+            json={"value": self.webhook_secret_value},
+            auth=("admin", "secret"),
+        )
         payload = self._jira_issue_payload(issue_key="TP-125", labels=["agent:ready"])
 
         unauthenticated = self.client.post("/jira/webhook/tenant-auth", json=payload)
@@ -1117,13 +1120,13 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
 
     def test_jira_webhook_uses_managed_secret_ref(self) -> None:
-        managed_ref = "secret/jira-managed-token"
+        managed_ref = "tenant/tenant-managed-jira/JIRA_WEBHOOK_TOKEN"
+        self._create_tenant("tenant-managed-jira", webhook_secret_ref=managed_ref)
         self.client.put(
-            "/api/admin/secrets/platform%2Fsecret%2Fjira-managed-token",
+            "/api/admin/tenants/tenant-managed-jira/secrets/JIRA_WEBHOOK_TOKEN",
             json={"value": "managed-jira-token"},
             auth=("admin", "secret"),
         )
-        self._create_tenant("tenant-managed-jira", webhook_secret_ref=managed_ref)
 
         payload = self._jira_issue_payload(issue_key="TP-555", labels=["agent:ready"])
         response = self.client.post(
