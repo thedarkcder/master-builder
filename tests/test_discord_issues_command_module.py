@@ -21,6 +21,7 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
             "payload": self.payload,
             "command_name": "issues",
             "arguments": [],
+            "scoped_project_keys": [],
             "normalized_user_id": "u-1",
             "defer_seed_issues": False,
             "seed_issues_with_codex": MagicMock(return_value=("ok", {"requires_input": False})),
@@ -43,6 +44,16 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
     def test_seed_deferred_returns_deferred_payload(self) -> None:
         response = self._call(arguments=["seed", "spec"], defer_seed_issues=True)
         self.assertEqual(response.data["deferred"], True)
+
+    def test_seed_passes_scoped_project_keys(self) -> None:
+        seed_mock = MagicMock(return_value=("ok", {"requires_input": False}))
+        response = self._call(
+            arguments=["seed", "spec"],
+            scoped_project_keys=["GP"],
+            seed_issues_with_codex=seed_mock,
+        )
+        self.assertEqual(response.message, "ok")
+        self.assertEqual(seed_mock.call_args.kwargs["scoped_project_keys"], ["GP"])
 
     def test_followup_requires_channel_context(self) -> None:
         payload = DiscordCommandRequest(user_id="u-1", command="!issues")
@@ -82,4 +93,3 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
         )
         self.assertEqual(response.message, "updated")
         clear_context.assert_called_once()
-

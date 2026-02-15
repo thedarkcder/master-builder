@@ -17,6 +17,7 @@ def dispatch_issues_command(
     payload: DiscordCommandRequest,
     command_name: str,
     arguments: list[str],
+    scoped_project_keys: list[str],
     normalized_user_id: str,
     defer_seed_issues: bool,
     seed_issues_with_codex: Callable[..., Any],
@@ -51,6 +52,7 @@ def dispatch_issues_command(
             session=session,
             tenant=tenant,
             prompt_markdown=prompt_markdown,
+            scoped_project_keys=scoped_project_keys,
         )
         if (
             isinstance(payload.channel_id, str)
@@ -129,6 +131,9 @@ def dispatch_issues_command(
             prompt_markdown=followup_prompt,
             force_issue_keys=forced_issue_keys,
             allow_create=False,
+            scoped_project_keys=[str(context.get("project_key") or "").strip().upper()]
+            if str(context.get("project_key") or "").strip()
+            else scoped_project_keys,
         )
         if bool(data.get("requires_input")):
             request_id = store_seed_followup_context(

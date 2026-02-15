@@ -757,6 +757,7 @@ def _seed_issues_with_codex(
     prompt_markdown: str,
     force_issue_keys: list[str] | None = None,
     allow_create: bool = True,
+    scoped_project_keys: list[str] | None = None,
 ) -> tuple[str, dict]:
     return _seed_issues_with_codex_impl(
         session=session,
@@ -764,6 +765,7 @@ def _seed_issues_with_codex(
         prompt_markdown=prompt_markdown,
         force_issue_keys=force_issue_keys,
         allow_create=allow_create,
+        scoped_project_keys=scoped_project_keys,
         tenant_project_keys_fn=_tenant_project_keys,
         get_settings_fn=get_settings,
         build_codex_runtime_fn=build_codex_runtime,
