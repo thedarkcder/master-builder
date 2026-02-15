@@ -104,7 +104,7 @@ class CodexWorkflowAgents:
             user_prompt=render_prompt(
                 "workflow/dev_user.j2",
                 tenant_id=request.tenant_id,
-                project_id=request.project_id or "unknown",
+                project_id=request.project_id or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
                 attempt=attempt,
@@ -145,7 +145,7 @@ class CodexWorkflowAgents:
             user_prompt=render_prompt(
                 "workflow/test_user.j2",
                 tenant_id=request.tenant_id,
-                project_id=request.project_id or "unknown",
+                project_id=request.project_id or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
                 attempt=attempt,
@@ -190,7 +190,7 @@ class CodexWorkflowAgents:
             user_prompt=render_prompt(
                 "workflow/review_user.j2",
                 tenant_id=request.tenant_id,
-                project_id=request.project_id or "unknown",
+                project_id=request.project_id or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
                 attempt=attempt,

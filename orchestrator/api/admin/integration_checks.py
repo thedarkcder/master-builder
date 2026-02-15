@@ -69,14 +69,6 @@ def test_github_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     github = tenant.github_config
-    required = ["mode"]
-    missing = [field for field in required if not github.get(field)]
-    if missing:
-        return IntegrationTestResult(ok=False, details=f"Missing GitHub fields: {', '.join(missing)}")
-
-    if github.get("mode") != "github_app":
-        return IntegrationTestResult(ok=False, details="Only github_app mode is supported")
-
     if not github.get("installation_id"):
         return IntegrationTestResult(
             ok=False,

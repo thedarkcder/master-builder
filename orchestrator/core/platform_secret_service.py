@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -50,20 +49,15 @@ class PlatformSecretService:
         session: Session,
         secret_ref: str,
         encryption_key: str,
-        allow_environment_fallback: bool = True,
+        allow_environment_fallback: bool = False,
     ) -> str | None:
         platform_secret_ref = _platform_secret_ref(secret_ref)
-        resolved_value = _resolve_platform_secret_ref(
+        return _resolve_platform_secret_ref(
             session,
             secret_ref=platform_secret_ref,
             encryption_key=encryption_key,
             allow_environment_fallback=allow_environment_fallback,
         )
-        if resolved_value is not None:
-            return resolved_value
-        if allow_environment_fallback:
-            return os.environ.get(platform_secret_ref)
-        return None
 
     def list_secret_refs(self, *, session: Session) -> list:
         return list_managed_secret_refs(session, scope="platform")
@@ -98,7 +92,7 @@ def resolve_platform_secret_ref(
     *,
     secret_ref: str,
     encryption_key: str,
-    allow_environment_fallback: bool = True,
+    allow_environment_fallback: bool = False,
 ) -> str | None:
     return platform_secret_service.get(
         session=session,

@@ -303,17 +303,10 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(tenant_secret_lookup.call_count, 0)
         self.assertEqual(platform_secret_lookup.call_count, 1)
 
-    def test_github_client_from_tenant_config_rejects_invalid_mode_and_missing_installation(self) -> None:
-        with self.assertRaisesRegex(ValueError, "supported"):
-            github_client_from_tenant_config(
-                {"mode": "token"},
-                tenant_secret_lookup=lambda ref: None,
-                platform_secret_lookup=lambda ref: None,
-            )
-
+    def test_github_client_from_tenant_config_requires_installation(self) -> None:
         with self.assertRaisesRegex(ValueError, "required config fields"):
             github_client_from_tenant_config(
-                {"mode": "github_app", "installation_id": ""},
+                {"installation_id": ""},
                 tenant_secret_lookup=lambda ref: None,
                 platform_secret_lookup=lambda ref: None,
             )

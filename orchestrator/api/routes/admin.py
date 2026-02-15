@@ -96,6 +96,10 @@ from orchestrator.api.admin.agent_activity_service import (
 from orchestrator.api.admin.run_event_stream_service import (
     stream_run_events_ndjson as _stream_run_events_ndjson_impl,
 )
+from orchestrator.api.admin.codex_logs_service import (
+    list_codex_log_events as _list_codex_log_events_impl,
+    stream_codex_events_ndjson as _stream_codex_events_ndjson_impl,
+)
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as _project_execution_metrics_impl,
 )
@@ -1041,6 +1045,54 @@ def stream_run_events(
             run_model=Run,
             settings=get_settings(),
             psycopg_module=psycopg,
+        ),
+        media_type="application/x-ndjson",
+    )
+
+
+@router.get("/codex/logs", response_model=list[RunLogEventRead])
+def list_codex_logs(
+    tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    run_id: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
+    command: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[RunLogEventRead]:
+    return _list_codex_log_events_impl(
+        session=session,
+        run_log_schema_cls=RunLogEventRead,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        run_id=run_id,
+        channel=channel,
+        command=command,
+        limit=limit,
+    )
+
+
+@router.get("/codex/events/stream")
+def stream_codex_events(
+    tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    run_id: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
+    command: str | None = Query(default=None),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    return StreamingResponse(
+        _stream_codex_events_ndjson_impl(
+            session=session,
+            settings=get_settings(),
+            psycopg_module=psycopg,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+            channel=channel,
+            command=command,
         ),
         media_type="application/x-ndjson",
     )
