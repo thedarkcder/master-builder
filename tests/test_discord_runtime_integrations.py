@@ -125,6 +125,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", side_effect=HTTPException(status_code=409, detail="blocked")),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
         ):
@@ -139,6 +140,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         client_cls.reset_mock()
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", side_effect=RuntimeError("boom")),
             patch("orchestrator.core.discord.gateway_listener.emit_hard_error") as emit_mock,
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient", return_value=client_cls.return_value),
@@ -165,6 +167,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value={"thread-1"}),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={"thread-1": "GP"}),
             patch(
                 "orchestrator.core.discord.gateway_listener.find_seed_followup_context",
                 return_value={"request_id": "req-1"},
@@ -198,7 +201,8 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value={"thread-1"}),
-            patch("orchestrator.core.discord.gateway_listener.find_seed_followup_context", return_value=None),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={"thread-1": "GP"}),
+            patch("orchestrator.core.discord.gateway_listener.find_seed_followup_context", side_effect=[None, None]),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -216,6 +220,37 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         payload = command_mock.call_args.kwargs["payload"]
         self.assertEqual(payload.command, "follow up text")
+
+    def test_handle_message_create_seed_followup_thread_uses_user_project_fallback_context(self) -> None:
+        listener, _session = self._listener()
+        tenant = SimpleNamespace(tenant_id="example")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="ask", message="ok", data={})
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value={"thread-1"}),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={"thread-1": "GP"}),
+            patch(
+                "orchestrator.core.discord.gateway_listener.find_seed_followup_context",
+                side_effect=[None, {"request_id": "req-1", "project_key": "GP", "user_id": "u1"}],
+            ),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "thread-1",
+                    "content": "follow up text",
+                    "attachments": [],
+                },
+                bot_token="token",
+            )
+
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "!issues followup follow up text")
 
     def test_handle_message_create_decision_gate_thread_routes_to_decision_gate_reply_command(self) -> None:
         listener, _session = self._listener()
@@ -259,6 +294,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -287,6 +323,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),

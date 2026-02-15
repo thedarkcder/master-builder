@@ -270,11 +270,19 @@ class DiscordAskHistoryService:
                 limit=self._max_history_context,
             )
 
+        effective_scoped_issue_key = scoped_issue_key
+        if not effective_scoped_issue_key:
+            for entry in reversed(history_context):
+                candidate_issue_key = str(entry.get("issue_key") or "").strip().upper()
+                if candidate_issue_key:
+                    effective_scoped_issue_key = candidate_issue_key
+                    break
+
         normalized_issue_key, requested_status, issues, status_counts = collect_ask_context_fn(
             session=session,
             tenant=tenant,
             channel_id=channel_id,
             question=question,
-            scoped_issue_key=scoped_issue_key,
+            scoped_issue_key=effective_scoped_issue_key,
         )
         return normalized_issue_key, requested_status, issues, status_counts, history_context

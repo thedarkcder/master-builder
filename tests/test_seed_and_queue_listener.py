@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from orchestrator.api.discord.seed import matching, normalization
+from orchestrator.api.discord.seed import matching
 from orchestrator.core.worker import queue_listener
 
 
@@ -53,42 +53,6 @@ class SeedMatchingTests(unittest.TestCase):
             matched_issue_keys={"MAB-1", "MAB-2", "MAB-3"},
         )
         self.assertIsNone(none_match)
-
-
-class SeedNormalizationTests(unittest.TestCase):
-    def test_normalization_helpers(self) -> None:
-        self.assertEqual(normalization.normalize_seed_issue_labels(["Bug", "bug", "  "]), ["discord-seeded", "bug"])
-        self.assertEqual(normalization.normalize_seed_issue_labels(None), ["discord-seeded"])
-
-        self.assertEqual(normalization.normalize_seed_issue_tags(["UI", "ui", "backend"]), ["ui", "backend"])
-        self.assertEqual(normalization.normalize_seed_issue_tags(None), [])
-
-        self.assertEqual(normalization.parse_seed_issue_type("bug"), "Bug")
-        self.assertEqual(normalization.parse_seed_issue_type("story"), "Story")
-        self.assertEqual(normalization.parse_seed_issue_type("other"), "Task")
-
-        self.assertEqual(normalization.normalize_seed_issue_scope(["A", "", " B "]), ["A", "B"])
-        self.assertEqual(normalization.normalize_seed_issue_scope(None), [])
-
-    def test_issue_key_and_question_helpers(self) -> None:
-        pattern = __import__("re").compile(r"^[A-Z]+-\d+$")
-        self.assertEqual(normalization.normalize_seed_issue_key("mab-1", issue_key_pattern=pattern), "MAB-1")
-        self.assertIsNone(normalization.normalize_seed_issue_key("bad", issue_key_pattern=pattern))
-
-        self.assertTrue(normalization.seed_text_is_missing("TBD"))
-        self.assertTrue(normalization.seed_text_is_missing("to be determined later"))
-        self.assertFalse(normalization.seed_text_is_missing("implement oauth"))
-
-        questions = normalization.collect_seed_issue_questions(
-            issue_summary="Improve reliability",
-            objective="TBD",
-            scope_in=[],
-            scope_out=[],
-            acceptance=[],
-            how_to_test=[],
-            nfr_intent="TBD",
-        )
-        self.assertEqual(len(questions), 6)
 
 
 class QueueListenerTests(unittest.IsolatedAsyncioTestCase):

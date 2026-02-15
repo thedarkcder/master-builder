@@ -39,19 +39,8 @@ from orchestrator.api.discord.bug.gap_analysis import (
 from orchestrator.api.discord.ask.query_service import (
     collect_ask_context as _collect_ask_context_impl,
 )
-from orchestrator.api.discord.seed.normalization import (
-    collect_seed_issue_questions as _collect_seed_issue_questions_impl,
-    normalize_seed_issue_key as _normalize_seed_issue_key_impl,
-    normalize_seed_issue_labels as _normalize_seed_issue_labels_impl,
-    normalize_seed_issue_scope as _normalize_seed_issue_scope_impl,
-    normalize_seed_issue_tags as _normalize_seed_issue_tags_impl,
-    parse_seed_issue_type as _parse_seed_issue_type_impl,
-    seed_text_is_missing as _seed_text_is_missing_impl,
-)
 from orchestrator.api.discord.seed.matching import (
-    normalized_summary_key as _normalized_summary_key_impl,
     select_seed_match as _select_seed_match_impl,
-    summary_similarity as _summary_similarity_impl,
 )
 from orchestrator.api.discord.seed.description import (
     build_seed_issue_description as _build_seed_issue_description_impl,
@@ -251,59 +240,6 @@ def _resolve_project_for_issue(
         issue_key=issue_key,
         find_active_project_for_issue_key_fn=find_active_project_for_issue_key,
     )
-
-
-def _normalize_seed_issue_labels(raw_labels: object) -> list[str]:
-    return _normalize_seed_issue_labels_impl(raw_labels)
-
-
-def _normalize_seed_issue_tags(raw_tags: object) -> list[str]:
-    return _normalize_seed_issue_tags_impl(raw_tags)
-
-
-def _parse_seed_issue_type(raw_issue_type: object) -> str:
-    return _parse_seed_issue_type_impl(raw_issue_type)
-
-
-def _normalize_seed_issue_scope(raw_scope: object) -> list[str]:
-    return _normalize_seed_issue_scope_impl(raw_scope)
-
-
-def _normalize_seed_issue_key(raw_issue_key: object) -> str | None:
-    return _normalize_seed_issue_key_impl(raw_issue_key, issue_key_pattern=ISSUE_KEY_PATTERN)
-
-
-def _seed_text_is_missing(value: str) -> bool:
-    return _seed_text_is_missing_impl(value)
-
-
-def _collect_seed_issue_questions(
-    *,
-    issue_summary: str,
-    objective: str,
-    scope_in: list[str],
-    scope_out: list[str],
-    acceptance: list[str],
-    how_to_test: list[str],
-    nfr_intent: str,
-) -> list[str]:
-    return _collect_seed_issue_questions_impl(
-        issue_summary=issue_summary,
-        objective=objective,
-        scope_in=scope_in,
-        scope_out=scope_out,
-        acceptance=acceptance,
-        how_to_test=how_to_test,
-        nfr_intent=nfr_intent,
-    )
-
-
-def _normalized_summary_key(summary: str) -> str:
-    return _normalized_summary_key_impl(summary)
-
-
-def _summary_similarity(left: str, right: str) -> float:
-    return _summary_similarity_impl(left, right)
 
 
 def _select_seed_match(
@@ -777,7 +713,6 @@ def _seed_issues_with_codex(
         build_codex_runtime_fn=build_codex_runtime,
         plan_seed_issues_with_codex_fn=plan_seed_issues_with_codex,
         codex_runtime_error_type=CodexRuntimeError,
-        collect_seed_issue_questions_fn=_collect_seed_issue_questions,
         build_seed_issue_description_fn=_build_seed_issue_description,
         issue_key_pattern=ISSUE_KEY_PATTERN,
         tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,

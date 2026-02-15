@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
+import json
 
+from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.config import get_settings
+from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.tools.github_app import WorkflowCheckSuite
 
 
@@ -17,38 +21,73 @@ class PrReadinessResult:
     missing_review_sections: tuple[str, ...] = ()
 
 
-_REVIEW_SECTION_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
-    "good": (
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?good\s*:"),
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?what changed\s*:"),
-    ),
-    "risks": (
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?risks?\s*:"),
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?risk\s*/\s*impact\s*:"),
-    ),
-    "must-fix": (
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?must[- ]fix(?: findings)?\s*:"),
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?must[- ]fix\s*:"),
-    ),
-    "tests": (
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?tests?\s*:"),
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?how to test\s*:"),
-    ),
-    "questions": (re.compile(r"(?im)^\s{0,3}(?:#+\s*)?questions?\s*:") ,),
-    "follow-ups": (
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?follow[- ]ups?\s*:"),
-        re.compile(r"(?im)^\s{0,3}(?:#+\s*)?followups\s*:"),
-    ),
-}
+def _string_list(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
-def _missing_review_sections(review_summary_markdown: str) -> tuple[str, ...]:
-    missing: list[str] = []
-    for section_name, patterns in _REVIEW_SECTION_PATTERNS.items():
-        if any(pattern.search(review_summary_markdown) for pattern in patterns):
-            continue
-        missing.append(section_name)
-    return tuple(missing)
+def _workflow_checks_payload(workflow_checks: list[WorkflowCheckSuite]) -> list[dict[str, str | None]]:
+    return [
+        {
+            "name": check.name,
+            "status": check.status,
+            "conclusion": check.conclusion,
+        }
+        for check in workflow_checks
+    ]
+
+
+def _evaluate_pr_readiness_with_codex(
+    *,
+    review_summary_markdown: str | None,
+    required_workflows: tuple[str, ...],
+    workflow_checks: list[WorkflowCheckSuite],
+) -> PrReadinessResult:
+    settings = get_settings()
+    runtime = build_codex_runtime(session=None, settings=settings)
+    try:
+        payload = invoke_codex_json(
+            runtime=runtime,
+            context=CodexInvocationContext(
+                channel="system",
+                tenant_id="policy-evaluator",
+                project_id=None,
+                command="policy",
+                stage="pr_ready",
+                working_dir=".",
+            ),
+            system_prompt=render_prompt("policy/pr_ready_system.j2"),
+            user_prompt=render_prompt(
+                "policy/pr_ready_user.j2",
+                review_summary_markdown=(review_summary_markdown or ""),
+                required_workflows_json=json.dumps(required_workflows),
+                workflow_checks_json=json.dumps(_workflow_checks_payload(workflow_checks)),
+            ),
+        )
+    except CodexRuntimeError as exc:
+        raise RuntimeError(f"Codex PR readiness evaluation failed: {exc}") from exc
+
+    ready = bool(payload.get("ready"))
+    state = str(payload.get("state") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    missing_workflows = _string_list(payload.get("missing_workflows"))
+    pending_workflows = _string_list(payload.get("pending_workflows"))
+    failing_workflows = _string_list(payload.get("failing_workflows"))
+    missing_review_sections = _string_list(payload.get("missing_review_sections"))
+
+    if not state or not reason:
+        raise RuntimeError("Codex PR readiness evaluation returned incomplete payload")
+
+    return PrReadinessResult(
+        ready=ready,
+        state=state,
+        reason=reason,
+        missing_workflows=missing_workflows,
+        pending_workflows=pending_workflows,
+        failing_workflows=failing_workflows,
+        missing_review_sections=missing_review_sections,
+    )
 
 
 def evaluate_pr_readiness(
@@ -57,83 +96,8 @@ def evaluate_pr_readiness(
     required_workflows: tuple[str, ...],
     workflow_checks: list[WorkflowCheckSuite],
 ) -> PrReadinessResult:
-    normalized_review_summary = (review_summary_markdown or "").strip()
-    if not normalized_review_summary:
-        return PrReadinessResult(
-            ready=False,
-            state="missing_review_summary",
-            reason="Reviewer summary is missing",
-            missing_workflows=(),
-            pending_workflows=(),
-            failing_workflows=(),
-        )
-    missing_sections = _missing_review_sections(normalized_review_summary)
-    if missing_sections:
-        return PrReadinessResult(
-            ready=False,
-            state="missing_review_sections",
-            reason="Reviewer summary is missing required sections",
-            missing_workflows=(),
-            pending_workflows=(),
-            failing_workflows=(),
-            missing_review_sections=missing_sections,
-        )
-
-    checks_by_name = {item.name.lower(): item for item in workflow_checks}
-    missing: list[str] = []
-    pending: list[str] = []
-    failing: list[str] = []
-
-    for workflow_name in required_workflows:
-        check = checks_by_name.get(workflow_name.lower())
-        if check is None:
-            missing.append(workflow_name)
-            continue
-
-        if check.status != "completed":
-            pending.append(workflow_name)
-            continue
-
-        if check.conclusion not in {"success", "neutral", "skipped"}:
-            failing.append(workflow_name)
-
-    if missing:
-        return PrReadinessResult(
-            ready=False,
-            state="missing_checks",
-            reason="Required workflow checks are missing",
-            missing_workflows=tuple(missing),
-            pending_workflows=tuple(pending),
-            failing_workflows=tuple(failing),
-            missing_review_sections=(),
-        )
-    if failing:
-        return PrReadinessResult(
-            ready=False,
-            state="failing_checks",
-            reason="Required workflow checks are failing",
-            missing_workflows=(),
-            pending_workflows=tuple(pending),
-            failing_workflows=tuple(failing),
-            missing_review_sections=(),
-        )
-    if pending:
-        return PrReadinessResult(
-            ready=False,
-            state="pending_checks",
-            reason="Required workflow checks are still running",
-            missing_workflows=(),
-            pending_workflows=tuple(pending),
-            failing_workflows=(),
-            missing_review_sections=(),
-        )
-
-    return PrReadinessResult(
-        ready=True,
-        state="ready",
-        reason="PR is ready for review",
-        missing_workflows=(),
-        pending_workflows=(),
-        failing_workflows=(),
-        missing_review_sections=(),
+    return _evaluate_pr_readiness_with_codex(
+        review_summary_markdown=review_summary_markdown,
+        required_workflows=required_workflows,
+        workflow_checks=workflow_checks,
     )

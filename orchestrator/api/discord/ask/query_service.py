@@ -5,15 +5,6 @@ from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import Tenant
 
-STATUS_QUERY_MAP: dict[str, str] = {
-    "blocked": "Blocked",
-    "in progress": "In Progress",
-    "to do": "To Do",
-    "testing": "Testing",
-    "done": "Done",
-    "ready to release": "READY TO RELEASE",
-}
-
 
 def collect_ask_context(
     *,
@@ -42,21 +33,9 @@ def collect_ask_context(
     else:
         normalized_issue_key = None
 
-    lowered = question.strip().lower()
     requested_status = None
-    for needle, status_name in STATUS_QUERY_MAP.items():
-        if needle in lowered:
-            requested_status = status_name
-            break
 
-    if normalized_issue_key is None and requested_status:
-        jira_issues = search_issues_fn(
-            session=session,
-            tenant=tenant,
-            jql=f'{project_jql} AND status = "{requested_status}" ORDER BY updated DESC',
-            max_results=30,
-        )
-    elif normalized_issue_key is None:
+    if normalized_issue_key is None:
         jira_issues = search_issues_fn(
             session=session,
             tenant=tenant,

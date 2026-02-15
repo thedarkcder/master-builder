@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.ask.context import (
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
 )
+from orchestrator.api.discord.ask.query_service import collect_ask_context as _collect_ask_context_query_service
 from orchestrator.api.discord.ask.history_service import DiscordAskHistoryService
 from orchestrator.storage.models import Tenant
 
@@ -31,67 +31,15 @@ def collect_ask_context(
     question: str,
     scoped_issue_key: str | None = None,
 ) -> tuple[str | None, str | None, list[dict], dict[str, int]]:
-    project_jql = _project_filter_jql(session=session, tenant=tenant, channel_id=channel_id)
-    if scoped_issue_key:
-        normalized_issue_key = scoped_issue_key.strip().upper()
-        jira_issues = _search_jira_issues_for_tenant(
-            session=session,
-            tenant=tenant,
-            jql=f'{project_jql} AND key = "{normalized_issue_key}"',
-            max_results=1,
-        )
-        if not jira_issues:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Issue {normalized_issue_key} was not found for this tenant",
-            )
-    else:
-        normalized_issue_key = None
-
-    lowered = question.strip().lower()
-    status_queries = {
-        "blocked": "Blocked",
-        "in progress": "In Progress",
-        "to do": "To Do",
-        "testing": "Testing",
-        "done": "Done",
-        "ready to release": "READY TO RELEASE",
-    }
-    requested_status = None
-    for needle, status_name in status_queries.items():
-        if needle in lowered:
-            requested_status = status_name
-            break
-
-    if normalized_issue_key is None and requested_status:
-        jira_issues = _search_jira_issues_for_tenant(
-            session=session,
-            tenant=tenant,
-            jql=f'{project_jql} AND status = "{requested_status}" ORDER BY updated DESC',
-            max_results=30,
-        )
-    elif normalized_issue_key is None:
-        jira_issues = _search_jira_issues_for_tenant(
-            session=session,
-            tenant=tenant,
-            jql=f"{project_jql} ORDER BY updated DESC",
-            max_results=60,
-        )
-
-    issues = [
-        {
-            "key": issue.key,
-            "summary": issue.summary,
-            "status": issue.status,
-        }
-        for issue in jira_issues
-    ]
-    status_counts: dict[str, int] = {}
-    for issue in issues:
-        issue_status = issue["status"]
-        status_counts[issue_status] = status_counts.get(issue_status, 0) + 1
-
-    return normalized_issue_key, requested_status, issues, status_counts
+    return _collect_ask_context_query_service(
+        session=session,
+        tenant=tenant,
+        channel_id=channel_id,
+        question=question,
+        scoped_issue_key=scoped_issue_key,
+        project_filter_jql_fn=_project_filter_jql,
+        search_issues_fn=_search_jira_issues_for_tenant,
+    )
 
 
 def remove_issue_key_from_tenant_ask_history(

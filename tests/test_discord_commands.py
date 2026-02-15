@@ -23,6 +23,8 @@ from orchestrator.api.routes.discord import (
 )
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
@@ -349,6 +351,25 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch(
                 "orchestrator.api.routes.discord.evaluate_decision_gate",
                 return_value=SimpleNamespace(triggered=False, reason="", questions=[]),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+                return_value=PreRunCheckResult(
+                    outcome="ready_for_agent",
+                    ready_label="agent:ready",
+                    ready_label_present=True,
+                    required_worker_capability="linux",
+                    required_worker_label="worker:linux",
+                    required_worker_label_present=True,
+                    decision_gate=DecisionGateResult(
+                        triggered=False,
+                        reason="Decision Gate not required",
+                        missing_sections=(),
+                        questions=(),
+                        recommendation="Proceed",
+                        tags=(),
+                    ),
+                ),
             ),
         ):
             response = self.client.post(
@@ -1706,7 +1727,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(data["requires_input"])
         self.assertEqual(data["created_issue_keys"], ["TP-301"])
         self.assertIn("What is the rollout plan?", data["questions"])
-        self.assertTrue(any("objective" in question.lower() for question in data["questions"]))
+        self.assertEqual(data["questions"], ["What is the rollout plan?"])
 
     def test_seed_issues_updates_matching_existing_issue(self) -> None:
         now = datetime.now(timezone.utc)

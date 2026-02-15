@@ -1,151 +1,43 @@
 from __future__ import annotations
 
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import unittest
-from orchestrator.core.decision_gate import (
-    evaluate_decision_gate,
-    format_decision_gate_summary,
-    reset_decision_gate_rules_cache,
-)
+from unittest.mock import patch
+
+from orchestrator.core.decision_gate import DecisionGateResult, evaluate_decision_gate, format_decision_gate_summary
 
 
 class DecisionGateTests(unittest.TestCase):
-    def tearDown(self) -> None:
-        reset_decision_gate_rules_cache()
-
-    def test_decision_gate_triggers_when_required_sections_missing(self) -> None:
-        result = evaluate_decision_gate(
-            issue_summary="Implement workflow",
-            issue_description="Need to clarify rollout and constraints.",
-        )
+    def test_decision_gate_returns_codex_payload(self) -> None:
+        with patch(
+            "orchestrator.core.decision_gate._evaluate_decision_gate_with_codex",
+            return_value=DecisionGateResult(
+                triggered=True,
+                reason="Missing GTD sections: Objective",
+                missing_sections=("Objective",),
+                questions=("What is the objective?",),
+                recommendation="Decision required before build",
+                tags=("[NEEDS-PM]",),
+            ),
+        ):
+            result = evaluate_decision_gate(issue_summary="x", issue_description="y")
 
         self.assertTrue(result.triggered)
-        self.assertIn("Missing GTD sections", result.reason)
         self.assertIn("Objective", result.missing_sections)
-        self.assertEqual(len(result.questions), 5)
-        self.assertIn("Decision required before build", format_decision_gate_summary(result))
+        self.assertIn("Decision Gate required", format_decision_gate_summary(result))
 
-    def test_decision_gate_passes_when_gtd_and_nfr_intent_present(self) -> None:
-        description = """
-        Objective: Improve orchestration reliability.
-        Scope: in scope and out of scope are documented.
-        Acceptance Criteria: explicit checks listed.
-        How to test: run unit and integration checks.
-        NFR intent: MVP first.
-        """
-        result = evaluate_decision_gate(
-            issue_summary="MAB-3 implementation",
-            issue_description=description,
-        )
-
-        self.assertFalse(result.triggered)
-        self.assertEqual(result.reason, "Decision Gate not required")
-
-    def test_decision_gate_does_not_flag_fail_closed_unknown_policy_as_ambiguity(self) -> None:
-        description = """
-        Objective: Deliver MVP onboarding guardrails.
-        Scope: splash to onboarding and demo gating.
-        Acceptance Criteria: blocked paths enforce paywall state.
-        How to test: verify launch, onboarding, attempts, and paywall behavior.
-        NFR intent: MVP-first.
-        Reliability/security constraints: Fail-closed policy where unknown subscription defaults to unsubscribed.
-        """
-        result = evaluate_decision_gate(
-            issue_summary="GP-80",
-            issue_description=description,
-        )
+    def test_decision_gate_clear_summary(self) -> None:
+        with patch(
+            "orchestrator.core.decision_gate._evaluate_decision_gate_with_codex",
+            return_value=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+        ):
+            result = evaluate_decision_gate(issue_summary="x", issue_description="y")
 
         self.assertFalse(result.triggered)
-        self.assertEqual(result.reason, "Decision Gate not required")
-
-    def test_decision_gate_still_flags_plain_unknown_as_ambiguity(self) -> None:
-        description = """
-        Objective: Deliver MVP onboarding guardrails.
-        Scope: splash to onboarding and demo gating.
-        Acceptance Criteria: blocked paths enforce paywall state.
-        How to test: verify launch, onboarding, attempts, and paywall behavior.
-        NFR intent: MVP-first.
-        Decision owner: unknown.
-        """
-        result = evaluate_decision_gate(
-            issue_summary="GP-80",
-            issue_description=description,
-        )
-
-        self.assertTrue(result.triggered)
-        self.assertIn("Ambiguity markers found: unknown", result.reason)
-
-    def test_decision_gate_does_not_flag_unknown_when_guardrail_behavior_is_explicit(self) -> None:
-        description = """
-        Objective: Deliver MVP onboarding guardrails.
-        Scope: splash to onboarding and demo gating.
-        Acceptance Criteria: blocked paths enforce paywall state.
-        How to test: verify launch, onboarding, attempts, and paywall behavior.
-        NFR intent: MVP-first.
-        Mandatory reliability/security constraints:
-        Fail-closed logic (unknown subscription/attempt state = locked).
-        Stub subscription flag: inactive or unknown = demo-only with Paywall enforcement.
-        """
-        result = evaluate_decision_gate(
-            issue_summary="GP-80",
-            issue_description=description,
-        )
-
-        self.assertFalse(result.triggered)
-        self.assertEqual(result.reason, "Decision Gate not required")
-
-    def test_decision_gate_rules_file_required(self) -> None:
-        with self.assertRaises(FileNotFoundError):
-            evaluate_decision_gate(
-                issue_summary="MAB-3 implementation",
-                issue_description="Objective: x\nScope: y\nAcceptance Criteria: z\nHow to test: t\nMVP",
-                rules_path=Path("/tmp/not-a-real-decision-gate-rules.md"),
-            )
-
-    def test_decision_gate_uses_custom_rules_file(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            rules_path = Path(tmpdir) / "decision_gate.md"
-            rules_path.write_text(
-                "\n".join(
-                    [
-                        "# Decision Gate Rules",
-                        "## Required sections",
-                        "- Objective",
-                        "## NFR markers",
-                        "- mvp",
-                        "## Ambiguity markers",
-                        "- ???",
-                        "## Resolution questions",
-                        "- Q1?",
-                        "## Tags",
-                        "- [NEEDS-PM]",
-                        "## Messages",
-                        "- clear_reason: No gate",
-                        "- blocked_recommendation: Stop",
-                        "- clear_summary: clear",
-                        "- blocked_title: blocked",
-                        "- missing_sections_prefix: Missing",
-                        "- ambiguity_prefix: Ambiguous",
-                        "- options_line: options",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            result = evaluate_decision_gate(
-                issue_summary="Anything",
-                issue_description="Objective: present. MVP.",
-                rules_path=rules_path,
-            )
-
-        self.assertFalse(result.triggered)
-        self.assertEqual(result.reason, "No gate")
-
-    def test_decision_gate_requires_local_rules_when_default_path_missing(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            with self.assertRaises(FileNotFoundError):
-                evaluate_decision_gate(
-                    issue_summary="MAB-3 implementation",
-                    issue_description="Objective: done.",
-                    rules_path=Path(tmpdir) / "missing-decision-gate.md",
-                )
+        self.assertEqual(format_decision_gate_summary(result), "Decision Gate not required.")

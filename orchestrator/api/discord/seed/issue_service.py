@@ -10,7 +10,6 @@ from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraOAuthError
 
 SEED_FOLLOWUP_CONTEXT_MAX_AGE = timedelta(hours=24)
-ALLOWED_ISSUE_TYPES = {"Task", "Bug", "Story"}
 
 
 def _string_list_field(*, issue_index: int, field_name: str, raw_value: object) -> list[str]:
@@ -99,7 +98,6 @@ def seed_issues_with_codex(
     build_codex_runtime_fn,
     plan_seed_issues_with_codex_fn,
     codex_runtime_error_type,
-    collect_seed_issue_questions_fn,
     build_seed_issue_description_fn,
     issue_key_pattern,
     tenant_jira_oauth_context_fn,
@@ -182,12 +180,11 @@ def seed_issues_with_codex(
         dependencies = _string_list_field(issue_index=issue_index, field_name="dependencies", raw_value=item.get("dependencies"))
         risks = _string_list_field(issue_index=issue_index, field_name="risks", raw_value=item.get("risks"))
         labels = _string_list_field(issue_index=issue_index, field_name="labels", raw_value=item.get("labels"))
-        issue_type_raw = item.get("issue_type")
-        issue_type = str(issue_type_raw).strip() if isinstance(issue_type_raw, str) else ""
-        if issue_type not in ALLOWED_ISSUE_TYPES:
+        issue_type = _optional_string(issue_index=issue_index, field_name="issue_type", raw_value=item.get("issue_type"))
+        if not issue_type:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Codex issue draft {issue_index} has invalid issue_type '{issue_type or 'missing'}'",
+                detail=f"Codex issue draft {issue_index} has missing issue_type",
             )
         requested_issue_key_raw = item.get("issue_key")
         requested_issue_key = str(requested_issue_key_raw).strip() if isinstance(requested_issue_key_raw, str) else None
@@ -200,19 +197,6 @@ def seed_issues_with_codex(
             requested_issue_key = normalized_force_issue_keys[len(issue_requested_keys)]
         if not summary:
             continue
-        draft_questions = collect_seed_issue_questions_fn(
-            issue_summary=summary,
-            objective=objective,
-            scope_in=scope_in,
-            scope_out=scope_out,
-            acceptance=acceptance,
-            how_to_test=how_to_test,
-            nfr_intent=nfr_intent,
-        )
-        for question in draft_questions:
-            if question not in question_set:
-                question_set.add(question)
-                clarification_questions.append(question)
         issue_inputs.append(
             JiraIssueCreateInput(
                 summary=summary[:90],

@@ -96,6 +96,8 @@ def dispatch_issues_command(
         context = find_seed_followup_context(
             tenant=tenant,
             channel_id=payload.channel_id,
+            user_id=normalized_user_id,
+            project_key=scoped_project_keys[0] if len(scoped_project_keys) == 1 else None,
         )
         if context is None:
             raise HTTPException(
