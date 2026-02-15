@@ -20,10 +20,6 @@ def build_workflow_request_for_run(
         effective_policy.get("max_dev_test_review_loops"),
         default=1,
     )
-    max_runtime_minutes = coerce_positive_int(
-        effective_policy.get("max_runtime_minutes"),
-        default=30,
-    )
     suggested_test_commands_raw = effective_policy.get("allowed_commands") or []
     suggested_test_commands: list[str] = []
     for command in suggested_test_commands_raw:
@@ -53,7 +49,6 @@ def build_workflow_request_for_run(
         issue_summary=run.issue_summary or f"Execute {run.issue_key}",
         issue_description=issue_description,
         max_dev_test_review_loops=max_loops,
-        max_runtime_minutes=max_runtime_minutes,
         suggested_test_commands=suggested_test_commands,
         execution_repo_dir=execution_repo_dir,
     )

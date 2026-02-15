@@ -75,7 +75,7 @@ class _FakeAgents:
 
 
 class WorkflowRunnerTests(unittest.TestCase):
-    def _request(self, *, loops: int = 2, max_runtime_minutes: int = 30) -> WorkflowRequest:
+    def _request(self, *, loops: int = 2) -> WorkflowRequest:
         return WorkflowRequest(
             tenant_id="tenant-a",
             run_id="run-1",
@@ -91,7 +91,6 @@ class WorkflowRunnerTests(unittest.TestCase):
                 "Risks: dependency on GitHub integration."
             ),
             max_dev_test_review_loops=loops,
-            max_runtime_minutes=max_runtime_minutes,
             suggested_test_commands=["python3 -m unittest discover -s tests -p 'test_*.py'"],
         )
 
@@ -305,18 +304,6 @@ class WorkflowRunnerTests(unittest.TestCase):
             ["pm", "dev:1:-", "test:1", "review:1"],
         )
 
-    def test_runtime_limit_returns_failure_diagnostics(self) -> None:
-        agents = _FakeAgents()
-        time_values = iter([0.0, 0.0, 61.0, 61.0, 61.0])
-        runner = WorkflowRunner(agents, monotonic_fn=lambda: next(time_values))
-
-        result = runner.run(self._request(loops=1, max_runtime_minutes=1))
-
-        self.assertFalse(result.succeeded)
-        self.assertIsNotNone(result.diagnostics)
-        self.assertEqual(result.diagnostics.stage, "runtime")
-        self.assertEqual(result.diagnostics.message, "Run exceeded max runtime of 1 minute(s)")
-
     def test_gtd_preflight_blocks_when_required_context_missing(self) -> None:
         agents = _FakeAgents()
         request = WorkflowRequest(
@@ -326,7 +313,6 @@ class WorkflowRunnerTests(unittest.TestCase):
             issue_summary="Implement GTD preflight",
             issue_description="Implement this quickly.",
             max_dev_test_review_loops=1,
-            max_runtime_minutes=30,
             suggested_test_commands=["python3 -m unittest"],
         )
 
