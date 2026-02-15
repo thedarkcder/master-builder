@@ -22,6 +22,7 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
             "command_name": "issues",
             "arguments": [],
             "scoped_project_keys": [],
+            "codex_working_dir": "/tmp",
             "normalized_user_id": "u-1",
             "defer_seed_issues": False,
             "seed_issues_with_codex": MagicMock(return_value=("ok", {"requires_input": False})),

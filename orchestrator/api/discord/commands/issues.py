@@ -18,6 +18,7 @@ def dispatch_issues_command(
     command_name: str,
     arguments: list[str],
     scoped_project_keys: list[str],
+    codex_working_dir: str,
     normalized_user_id: str,
     defer_seed_issues: bool,
     seed_issues_with_codex: Callable[..., Any],
@@ -53,6 +54,7 @@ def dispatch_issues_command(
             tenant=tenant,
             prompt_markdown=prompt_markdown,
             scoped_project_keys=scoped_project_keys,
+            codex_working_dir=codex_working_dir,
         )
         if (
             isinstance(payload.channel_id, str)
@@ -134,6 +136,7 @@ def dispatch_issues_command(
             scoped_project_keys=[str(context.get("project_key") or "").strip().upper()]
             if str(context.get("project_key") or "").strip()
             else scoped_project_keys,
+            codex_working_dir=codex_working_dir,
         )
         if bool(data.get("requires_input")):
             request_id = store_seed_followup_context(

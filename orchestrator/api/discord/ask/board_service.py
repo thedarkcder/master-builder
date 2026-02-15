@@ -17,6 +17,7 @@ def ask_board_message(
     get_settings_fn,
     build_codex_runtime_fn,
     tenant_project_keys_fn,
+    resolve_codex_working_dir_fn,
     normalize_scope_channel_id_fn,
     channel_scope_repository,
     answer_board_question_with_codex_fn,
@@ -50,6 +51,13 @@ def ask_board_message(
         tenant=tenant,
         project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
     )
+    codex_working_dir = resolve_codex_working_dir_fn(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        project_id=None,
+        project_keys=scoped_project_keys,
+    )
     try:
         message = answer_board_question_with_codex_fn(
             runtime=runtime,
@@ -59,6 +67,7 @@ def ask_board_message(
             status_counts=status_counts,
             history=history_context,
             github_context=github_context,
+            working_dir=codex_working_dir,
         )
     except codex_runtime_error_type as exc:
         raise HTTPException(

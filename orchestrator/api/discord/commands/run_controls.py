@@ -82,6 +82,7 @@ def _plan_decision_gate_jira_update(
     current_summary: str,
     current_description: str,
     reply_text: str,
+    working_dir: str,
 ) -> tuple[str, str]:
     payload = runtime.run_json(
         system_prompt=(
@@ -102,6 +103,7 @@ def _plan_decision_gate_jira_update(
             "- Include field text only when supported by user reply.\n"
             "- Keep summary concise (<=255 chars), close to current summary wording.\n"
         ),
+        working_dir=working_dir,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return JSON object for Decision Gate update")
@@ -160,6 +162,7 @@ def dispatch_run_control_command(
     tenant_jira_oauth_context: Callable[..., Any],
     evaluate_decision_gate: Callable[..., Any],
     ensure_issue_is_executable: Callable[..., Any],
+    resolve_codex_working_dir: Callable[..., str],
 ) -> DiscordCommandResponse | None:
     if command_name == "run":
         if len(arguments) != 1:
@@ -369,12 +372,25 @@ def dispatch_run_control_command(
                 issue_id_or_key=issue_key,
             )
             runtime = build_codex_runtime(session=session, settings=settings)
+            project = resolve_project_for_issue(
+                session=session,
+                tenant=tenant,
+                issue_key=issue_key,
+            )
+            codex_working_dir = resolve_codex_working_dir(
+                session=session,
+                tenant=tenant,
+                settings=settings,
+                project_id=project.project_id,
+                project_keys=[project.jira_project_key],
+            )
             updated_summary, updated_description = _plan_decision_gate_jira_update(
                 runtime=runtime,
                 issue_key=issue_key,
                 current_summary=issue_detail.summary,
                 current_description=issue_detail.description,
                 reply_text=reply_text,
+                working_dir=codex_working_dir,
             )
             oauth_client.update_issue_summary_and_description(
                 access_token=oauth_access_token,
@@ -437,6 +453,7 @@ def dispatch_run_control_command(
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             evaluate_decision_gate=evaluate_decision_gate,
             ensure_issue_is_executable=ensure_issue_is_executable,
+            resolve_codex_working_dir=resolve_codex_working_dir,
         )
 
     return None

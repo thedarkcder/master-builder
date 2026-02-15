@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.workflow.runner import WorkflowRequest
@@ -56,10 +58,12 @@ def build_workflow_request_for_run(
 
 def _resolve_execution_repo_dir(*, settings, tenant: Tenant, project: Project | None) -> str:
     if project is None:
-        return ""
+        return str(Path.cwd())
     repo_dir = project_repo_dir(
         base_dir=settings.project_repo_checkout_base_dir,
         tenant_id=tenant.tenant_id,
         project_id=project.project_id,
     )
-    return str(repo_dir)
+    if repo_dir.is_dir():
+        return str(repo_dir)
+    return str(Path.cwd())

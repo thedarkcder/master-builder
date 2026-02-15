@@ -38,6 +38,7 @@ def build_discord_ingress_dependencies(
     tenant_jira_oauth_context_fn,
     evaluate_decision_gate_fn,
     ensure_issue_is_executable_fn,
+    resolve_codex_working_dir_fn,
 ):  # noqa: ANN001
     handlers = DiscordIngressHandlers(
         simple=lambda ctx: dispatch_simple_discord_command(
@@ -66,6 +67,13 @@ def build_discord_ingress_dependencies(
             store_ask_history_entry=store_ask_history_entry_fn,
             ask_board_message=ask_board_message_fn,
             scoped_project_keys=list(ctx.scope.project_keys),
+            codex_working_dir=resolve_codex_working_dir_fn(
+                session=ctx.session,
+                tenant=ctx.tenant,
+                settings=settings_factory_fn(),
+                project_id=ctx.scope.project_id,
+                project_keys=list(ctx.scope.project_keys),
+            ),
         ),
         bug_gap=lambda ctx: dispatch_bug_gap_command(
             session=ctx.session,
@@ -87,6 +95,13 @@ def build_discord_ingress_dependencies(
             command_name=ctx.command_name,
             arguments=list(ctx.arguments),
             scoped_project_keys=list(ctx.scope.project_keys),
+            codex_working_dir=resolve_codex_working_dir_fn(
+                session=ctx.session,
+                tenant=ctx.tenant,
+                settings=settings_factory_fn(),
+                project_id=ctx.scope.project_id,
+                project_keys=list(ctx.scope.project_keys),
+            ),
             normalized_user_id=ctx.normalized_user_id,
             defer_seed_issues=bool(ctx.flags.get("defer_seed_issues")),
             seed_issues_with_codex=seed_issues_with_codex_fn,
@@ -111,6 +126,7 @@ def build_discord_ingress_dependencies(
             tenant_jira_oauth_context=tenant_jira_oauth_context_fn,
             evaluate_decision_gate=evaluate_decision_gate_fn,
             ensure_issue_is_executable=ensure_issue_is_executable_fn,
+            resolve_codex_working_dir=resolve_codex_working_dir_fn,
         ),
     )
     return DiscordIngressDependencies(

@@ -31,6 +31,7 @@ def dispatch_ask_command(
     store_ask_history_entry: Callable[..., Any],
     ask_board_message: Callable[..., Any],
     scoped_project_keys: list[str],
+    codex_working_dir: str,
 ) -> DiscordCommandResponse | None:
     if command_name != "ask":
         return None
@@ -90,6 +91,7 @@ def dispatch_ask_command(
                 status_counts=status_counts,
                 history=history_context,
                 github_context=github_context,
+                working_dir=codex_working_dir,
             )
         except CodexRuntimeError as exc:
             raise HTTPException(
@@ -131,6 +133,7 @@ def dispatch_ask_command(
             status_counts=status_counts,
             history=history_context,
             github_context=github_context,
+            working_dir=codex_working_dir,
         )
         store_ask_history_entry(
             session=session,
