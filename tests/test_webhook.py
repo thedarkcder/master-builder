@@ -196,6 +196,8 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["board_id"], 1)
         self.assertEqual(body["pre_run_check"]["outcome"], "decision_gate_required")
         self.assertTrue(body["pre_run_check"]["decision_gate_triggered"])
+        self.assertEqual(body["pre_run_check"]["required_worker_capability"], "linux")
+        self.assertEqual(body["pre_run_check"]["required_worker_label"], "worker:linux")
         notify_mock.assert_called_once()
         sent_message = notify_mock.call_args.kwargs["message"]
         self.assertIn("added to the backlog", sent_message)
@@ -271,7 +273,41 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(body["pre_run_check"]["outcome"], "ready_for_agent")
         self.assertTrue(body["pre_run_check"]["ready_label_present"])
         self.assertFalse(body["pre_run_check"]["decision_gate_triggered"])
+        self.assertEqual(body["pre_run_check"]["required_worker_label"], "worker:linux")
         notify_mock.assert_not_called()
+
+    def test_webhook_applies_required_worker_label_using_pre_run_check(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-126", status_name="To Do", labels=["agent:ready"])
+        payload["issue"]["fields"]["summary"] = "Build iOS app shell"
+        payload["issue"]["fields"]["description"] = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "Objective: implement SwiftUI onboarding. How to test: Xcode build."}],
+                }
+            ],
+        }
+        oauth_client = MagicMock()
+        oauth_context = SimpleNamespace(
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1"),
+            client=oauth_client,
+        )
+        with patch(
+            "orchestrator.api.webhooks.jira_ingress.tenant_jira_oauth_context",
+            return_value=oauth_context,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        oauth_client.add_issue_labels.assert_called_once_with(
+            access_token="tok",
+            cloud_id="cloud-1",
+            issue_id_or_key="TP-126",
+            labels=["worker:macos"],
+        )
 
     def test_webhook_does_not_enqueue_when_issue_is_not_on_configured_board(self) -> None:
         with self.session_factory() as session:

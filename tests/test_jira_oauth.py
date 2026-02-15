@@ -215,6 +215,7 @@ class JiraOAuthTests(unittest.TestCase):
             patch.object(client._issue_service, "list_projects", return_value=["project"]) as list_projects_mock,
             patch.object(client._issue_service, "get_issue_detail", return_value="detail") as issue_detail_mock,
             patch.object(client._issue_service, "update_issue_fields") as update_mock,
+            patch.object(client._issue_service, "add_issue_labels") as add_labels_mock,
             patch.object(client._issue_service, "add_issue_comment", return_value={"id": "c1"}) as comment_mock,
             patch.object(client._webhook_manager, "register_webhook", return_value=[1]) as register_mock,
             patch.object(client._webhook_manager, "list_webhooks", return_value=[{"id": 1}]) as list_webhooks_mock,
@@ -232,6 +233,12 @@ class JiraOAuthTests(unittest.TestCase):
                 summary="Summary",
                 description="Desc",
                 labels=["a"],
+            )
+            client.add_issue_labels(
+                access_token="tok",
+                cloud_id="cloud",
+                issue_id_or_key="MAB-1",
+                labels=["worker:linux"],
             )
             self.assertEqual(
                 client.add_issue_comment(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1", comment="hi"),
@@ -256,6 +263,7 @@ class JiraOAuthTests(unittest.TestCase):
         list_projects_mock.assert_called_once()
         issue_detail_mock.assert_called_once()
         update_mock.assert_called_once()
+        add_labels_mock.assert_called_once()
         comment_mock.assert_called_once()
         register_mock.assert_called_once()
         list_webhooks_mock.assert_called_once()
