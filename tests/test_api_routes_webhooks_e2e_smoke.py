@@ -356,6 +356,14 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(404,),
             ),
+            ("GET", "/api/admin/codex/logs"): RouteScenario(
+                path="/api/admin/codex/logs?tenant_id=example&project_id=example-default",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/codex/events/stream"): RouteScenario(
+                path="/api/admin/codex/events/stream?tenant_id=example&project_id=example-default",
+                auth=admin,
+            ),
             ("POST", "/api/admin/runs/{run_id}/rerun"): RouteScenario(
                 path="/api/admin/runs/run-e2e/rerun",
                 auth=admin,

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from orchestrator.core.codex_agents import CodexWorkflowAgents, answer_board_question_with_codex
 from orchestrator.core.codex_invocation import CodexInvocationContext
@@ -52,10 +53,11 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        plan = agents.pm(request)
-        dev = agents.dev(request, plan, 1, None)
-        test_result = agents.test(request, plan, dev, 1)
-        review = agents.review(request, plan, dev, test_result, 1)
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            plan = agents.pm(request)
+            dev = agents.dev(request, plan, 1, None)
+            test_result = agents.test(request, plan, dev, 1)
+            review = agents.review(request, plan, dev, test_result, 1)
 
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(dev.pr_url, "https://example/pull/1")
@@ -70,21 +72,22 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _request=lambda _system, _user, _working_dir=None, _on_log_line=None: '{"message":"2 blocked issues: MAB-1, MAB-2"}',
         )
 
-        message = answer_board_question_with_codex(
-            runtime=runtime,
-            question="what is blocked?",
-            project_keys=["MAB"],
-            issues=[{"key": "MAB-1", "summary": "A", "status": "Blocked"}],
-            status_counts={"Blocked": 1},
-            invocation_context=CodexInvocationContext(
-                channel="discord",
-                tenant_id="tenant-1",
-                project_id=None,
-                command="ask",
-                stage="answer",
-                working_dir="/tmp",
-            ),
-        )
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            message = answer_board_question_with_codex(
+                runtime=runtime,
+                question="what is blocked?",
+                project_keys=["MAB"],
+                issues=[{"key": "MAB-1", "summary": "A", "status": "Blocked"}],
+                status_counts={"Blocked": 1},
+                invocation_context=CodexInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id=None,
+                    command="ask",
+                    stage="answer",
+                    working_dir="/tmp",
+                ),
+            )
 
         self.assertIn("MAB-1", message)
 
@@ -105,7 +108,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime, log_sink=lambda payload: captured_logs.append(payload))
 
-        plan = agents.pm(self._request())
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            plan = agents.pm(self._request())
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(len(captured_logs), 2)
         self.assertEqual(captured_logs[0]["stage"], "pm")
@@ -113,6 +117,31 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured_logs[0]["stream"], "stdout")
         self.assertEqual(captured_logs[0]["message"], "line-1")
         self.assertEqual(captured_logs[1]["stream"], "stderr")
+
+    def test_stage_log_sink_survives_log_persist_failure(self) -> None:
+        captured_logs: list[dict] = []
+
+        def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
+            if _on_log_line is not None:
+                _on_log_line("stdout", "line-1")
+            return '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[]}'
+
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_request,
+        )
+        agents = CodexWorkflowAgents(runtime=runtime, log_sink=lambda payload: captured_logs.append(payload))
+
+        with (
+            patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch("orchestrator.core.codex_invocation._persist_codex_log_line", side_effect=RuntimeError("db down")),
+        ):
+            plan = agents.pm(self._request())
+        self.assertEqual(plan.plan_steps, ["step1"])
+        self.assertEqual(len(captured_logs), 1)
+        self.assertEqual(captured_logs[0]["message"], "line-1")
 
 
 if __name__ == "__main__":
