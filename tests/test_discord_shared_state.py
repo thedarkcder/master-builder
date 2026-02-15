@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -234,6 +235,57 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertEqual(entries[0]["questions"], ["q1"])
         self.assertEqual(entries[0]["issue_keys"], ["MAB-1"])
         self.assertEqual(entries[0]["project_key"], "MAB")
+
+    def test_find_seed_followup_context_skips_stale_entries(self) -> None:
+        stale_time = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        tenant = SimpleNamespace(
+            discord_config={
+                "seed_followups": [
+                    {
+                        "request_id": "stale-1",
+                        "channel_ids": ["c1"],
+                        "issue_keys": ["MAB-1"],
+                        "prompt_markdown": "stale",
+                        "updated_at": stale_time,
+                    }
+                ]
+            }
+        )
+        found = state_module.find_seed_followup_context(tenant=tenant, channel_id="c1")
+        self.assertIsNone(found)
+
+    def test_remove_issue_key_from_seed_followups_prunes_entries(self) -> None:
+        session = MagicMock()
+        tenant = SimpleNamespace(
+            discord_config={
+                "seed_followups": [
+                    {
+                        "request_id": "r1",
+                        "channel_ids": ["c1"],
+                        "issue_keys": ["MAB-1", "MAB-2"],
+                        "prompt_markdown": "prompt",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    {
+                        "request_id": "r2",
+                        "channel_ids": ["c2"],
+                        "issue_keys": ["MAB-1"],
+                        "prompt_markdown": "prompt",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                ],
+                "seed_followup_thread_channel_ids": ["c1", "c2"],
+            },
+            updated_at=None,
+        )
+        with patch("orchestrator.api.discord.shared.state.save_seed_followups") as save_mock:
+            removed_contexts, removed_issue_refs = state_module.remove_issue_key_from_seed_followups(
+                session=session,
+                tenant=tenant,
+                issue_key="MAB-1",
+            )
+        self.assertEqual((removed_contexts, removed_issue_refs), (1, 2))
+        save_mock.assert_called_once()
 
 
 if __name__ == "__main__":

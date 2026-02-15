@@ -1,11 +1,55 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import HTTPException, status
 
 from orchestrator.api.discord.shared.response_format import build_issue_url_list, format_issue_markdown_list
 from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraOAuthError
+
+SEED_FOLLOWUP_CONTEXT_MAX_AGE = timedelta(hours=24)
+
+
+def validate_seed_followup_context(
+    *,
+    session,
+    tenant: Tenant,
+    context: dict,
+    get_settings_fn,
+    tenant_jira_oauth_context_fn,
+) -> tuple[bool, str | None]:  # noqa: ANN001
+    updated_at_raw = str(context.get("updated_at") or "").strip()
+    if updated_at_raw:
+        try:
+            updated_at = datetime.fromisoformat(updated_at_raw)
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - updated_at.astimezone(timezone.utc)) > SEED_FOLLOWUP_CONTEXT_MAX_AGE:
+                return False, "stale follow-up context"
+        except ValueError:
+            return False, "invalid follow-up context timestamp"
+
+    issue_keys = [str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()]
+    if not issue_keys:
+        return True, None
+    try:
+        settings = get_settings_fn()
+        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        escaped_keys = ", ".join(f'"{value.replace(chr(34), "").strip()}"' for value in issue_keys)
+        existing = oauth["client"].search_issues_by_jql(
+            access_token=oauth["access_token"],
+            cloud_id=oauth["connection"].cloud_id,
+            jql=f"issuekey in ({escaped_keys})",
+            max_results=min(len(issue_keys), 50),
+        )
+    except (HTTPException, ValueError, JiraOAuthError):
+        return True, None
+    existing_keys = {str(issue.key).strip().upper() for issue in existing if str(issue.key).strip()}
+    if not existing_keys:
+        return False, "referenced Jira issues no longer exist"
+    return True, None
 
 
 def seed_issues_with_codex(

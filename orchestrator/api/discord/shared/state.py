@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -29,6 +29,7 @@ REQUEST_PERMISSION_LABELS = {
     "all_sensitive": "all sensitive commands",
 }
 MAX_PENDING_SEED_FOLLOWUPS = 30
+MAX_PENDING_SEED_FOLLOWUP_AGE = timedelta(hours=24)
 
 
 def normalize_status_name(value: str) -> str:
@@ -188,7 +189,7 @@ def assert_channel_scope(*, session: Session, tenant: Tenant, channel_id: str | 
 
 
 def tenant_seed_followups(tenant: Tenant) -> list[dict]:
-    discord_config = tenant.discord_config or {}
+    discord_config = getattr(tenant, "discord_config", None) or {}
     raw_entries = discord_config.get("seed_followups")
     if not isinstance(raw_entries, list):
         return []
@@ -233,6 +234,27 @@ def tenant_seed_followups(tenant: Tenant) -> list[dict]:
             }
         )
     return normalized
+
+
+def _parse_iso_timestamp(raw_value: str) -> datetime | None:
+    normalized = str(raw_value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_seed_followup_stale(entry: dict, *, now: datetime | None = None) -> bool:
+    updated_at = _parse_iso_timestamp(str(entry.get("updated_at") or ""))
+    if updated_at is None:
+        return False
+    reference_time = now or datetime.now(timezone.utc)
+    return (reference_time - updated_at) > MAX_PENDING_SEED_FOLLOWUP_AGE
 
 
 def store_seed_followup_context(
@@ -304,7 +326,10 @@ def find_seed_followup_context(
     if not normalized_channel_id:
         return None
     entries = tenant_seed_followups(tenant)
+    now = datetime.now(timezone.utc)
     for entry in reversed(entries):
+        if _is_seed_followup_stale(entry, now=now):
+            continue
         channel_ids = entry.get("channel_ids")
         if not isinstance(channel_ids, list):
             continue
@@ -337,3 +362,53 @@ def clear_seed_followup_context(
         entries=kept_entries,
         removed_channel_ids=removed_channel_ids,
     )
+
+
+def remove_issue_key_from_seed_followups(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+) -> tuple[int, int]:
+    normalized_issue_key = issue_key.strip().upper()
+    if not normalized_issue_key:
+        return 0, 0
+    entries = tenant_seed_followups(tenant)
+    updated_entries: list[dict] = []
+    removed_channel_ids: set[str] = set()
+    removed_contexts = 0
+    removed_issue_refs = 0
+
+    for entry in entries:
+        raw_issue_keys = entry.get("issue_keys")
+        issue_keys = [str(value).strip().upper() for value in raw_issue_keys if str(value).strip()] if isinstance(raw_issue_keys, list) else []
+        if not issue_keys:
+            updated_entries.append(entry)
+            continue
+        kept_issue_keys = [key for key in issue_keys if key != normalized_issue_key]
+        removed_for_entry = len(issue_keys) - len(kept_issue_keys)
+        if removed_for_entry <= 0:
+            updated_entries.append(entry)
+            continue
+        removed_issue_refs += removed_for_entry
+        if not kept_issue_keys:
+            removed_contexts += 1
+            raw_channels = entry.get("channel_ids")
+            if isinstance(raw_channels, list):
+                removed_channel_ids.update(
+                    str(value).strip() for value in raw_channels if str(value).strip()
+                )
+            continue
+        updated_entry = dict(entry)
+        updated_entry["issue_keys"] = kept_issue_keys
+        updated_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        updated_entries.append(updated_entry)
+
+    if removed_contexts or removed_issue_refs:
+        save_seed_followups(
+            session=session,
+            tenant=tenant,
+            entries=updated_entries,
+            removed_channel_ids=removed_channel_ids,
+        )
+    return removed_contexts, removed_issue_refs

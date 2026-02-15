@@ -17,6 +17,7 @@ from orchestrator.api.discord.shared.followup_format import (
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
 )
+from orchestrator.api.discord.shared.state import find_seed_followup_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.config import Settings
@@ -304,7 +305,15 @@ class DiscordGatewayListener:
                 tenant_id=tenant.tenant_id,
             )
 
-            if channel_id in seed_followup_thread_ids and not command_text.startswith("!"):
+            seed_followup_context = find_seed_followup_context(
+                tenant=tenant,
+                channel_id=channel_id,
+            )
+            if (
+                channel_id in seed_followup_thread_ids
+                and seed_followup_context is not None
+                and not command_text.startswith("!")
+            ):
                 command_text = f"!issues followup {command_text}"
 
             message_content = f"<@{user_id}> Command failed due to an internal error."

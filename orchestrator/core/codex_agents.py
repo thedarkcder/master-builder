@@ -239,7 +239,7 @@ def answer_board_question_with_codex(
     history: list[dict] | None = None,
     github_context: dict | None = None,
 ) -> str:
-    normalized_history = history or []
+    normalized_history: list[dict] = []
     normalized_github_context = github_context or {}
     payload = invoke_codex_json(
         runtime=runtime,
@@ -251,7 +251,7 @@ def answer_board_question_with_codex(
             project_keys_json=json.dumps(project_keys),
             status_counts_json=json.dumps(status_counts),
             github_context_json=json.dumps(normalized_github_context),
-            history_json=json.dumps(normalized_history[:6]),
+            history_json=json.dumps(normalized_history),
             issues_json=json.dumps(issues[:40]),
         ),
     )
@@ -272,7 +272,7 @@ def plan_discord_ask_intent_with_codex(
     history: list[dict] | None = None,
     github_context: dict | None = None,
 ) -> dict:
-    normalized_history = history or []
+    normalized_history: list[dict] = []
     normalized_github_context = github_context or {}
     payload = invoke_codex_json(
         runtime=runtime,
@@ -284,7 +284,7 @@ def plan_discord_ask_intent_with_codex(
             project_keys_json=json.dumps(project_keys),
             status_counts_json=json.dumps(status_counts),
             github_context_json=json.dumps(normalized_github_context),
-            history_json=json.dumps(normalized_history[:6]),
+            history_json=json.dumps(normalized_history),
             issues_json=json.dumps(issues[:40]),
         ),
     )

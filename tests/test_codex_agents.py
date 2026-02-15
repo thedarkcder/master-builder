@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+import json
 
 from orchestrator.core.codex_agents import CodexWorkflowAgents, answer_board_question_with_codex
 from orchestrator.core.codex_invocation import CodexInvocationContext
@@ -90,6 +91,43 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             )
 
         self.assertIn("MAB-1", message)
+
+    def test_answer_board_question_ignores_history_in_prompt(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=lambda _system, _user, _working_dir=None, _on_log_line=None: '{"message":"ok"}',
+        )
+        captured: dict = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "discord/ask_answer_user.j2":
+                captured["history_json"] = kwargs.get("history_json")
+            return template_name
+
+        with (
+            patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.codex_agents.invoke_codex_json", return_value={"message": "ok"}),
+        ):
+            answer_board_question_with_codex(
+                runtime=runtime,
+                question="what is blocked?",
+                project_keys=["MAB"],
+                issues=[{"key": "MAB-1", "summary": "A", "status": "Blocked"}],
+                status_counts={"Blocked": 1},
+                invocation_context=CodexInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id=None,
+                    command="ask",
+                    stage="answer",
+                    working_dir="/tmp",
+                ),
+                history=[{"question": "status?", "answer": "MAB-74 stale", "issue_key": "MAB-74"}],
+            )
+
+        self.assertEqual(json.loads(captured["history_json"]), [])
 
     def test_stage_log_sink_emits_payload(self) -> None:
         captured_logs: list[dict] = []

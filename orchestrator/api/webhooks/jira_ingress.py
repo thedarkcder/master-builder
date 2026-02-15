@@ -33,7 +33,7 @@ from orchestrator.core.communications.enqueue_reason_contract import enqueue_rea
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED, RUN_STATUS_FAILED, enqueue_run
-from orchestrator.api.discord.shared.state import normalize_status_name
+from orchestrator.api.discord.shared.state import normalize_status_name, remove_issue_key_from_seed_followups
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.core.worker_capabilities import worker_label_for_capability
 from orchestrator.storage.models import Run
@@ -345,6 +345,7 @@ async def stage_parse_jira_webhook_context(
         tenant=tenant,
         delivery_id=delivery_id,
         issue_key=issue_key,
+        webhook_event=webhook_event,
     )
     logger.info(
         "jira_webhook_issue_parsed request_id=%s tenant_id=%s issue_key=%s delivery_id=%s webhook_event=%s comment_command=%s comment_command_error=%s",
@@ -394,18 +395,27 @@ def stage_handle_issue_deleted(
         tenant=context.tenant,
         issue_key=context.issue_key,
     )
+    removed_seed_contexts, removed_seed_issue_refs = remove_issue_key_from_seed_followups(
+        session=session,
+        tenant=context.tenant,
+        issue_key=context.issue_key,
+    )
     logger.info(
-        "jira_webhook_issue_deleted request_id=%s tenant_id=%s issue_key=%s removed_history_entries=%s",
+        "jira_webhook_issue_deleted request_id=%s tenant_id=%s issue_key=%s removed_history_entries=%s removed_seed_contexts=%s removed_seed_issue_refs=%s",
         context.request_id,
         context.tenant_id,
         context.issue_key,
         removed_entries,
+        removed_seed_contexts,
+        removed_seed_issue_refs,
     )
     return jira_webhook_response(
         context,
         enqueued=False,
         reason="issue_deleted",
         removed_history_entries=removed_entries,
+        removed_seed_contexts=removed_seed_contexts,
+        removed_seed_issue_refs=removed_seed_issue_refs,
         webhook_event=context.webhook_event,
     )
 
