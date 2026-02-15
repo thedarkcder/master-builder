@@ -25,7 +25,6 @@ class CodexRuntimeError(RuntimeError):
 @dataclass(frozen=True)
 class CodexRuntime:
     model: str
-    timeout_seconds: int
     max_output_tokens: int
     command: str
     _request: Callable[[str, str, str | None, Callable[[str, str], None] | None], str]
@@ -90,13 +89,6 @@ def _extract_json_payload(content: str) -> object:
     raise CodexRuntimeError("Codex runtime response did not include JSON")
 
 
-def _effective_wait_timeout(timeout_seconds: int) -> float | None:
-    if timeout_seconds <= 0:
-        return None
-    return float(timeout_seconds)
-
-
-
 def build_codex_runtime(
     *,
     session: Session | None = None,
@@ -119,7 +111,6 @@ def build_codex_runtime(
 
         return CodexRuntime(
             model=settings.codex_model,
-            timeout_seconds=settings.codex_timeout_seconds,
             max_output_tokens=settings.codex_max_output_tokens,
             command="override",
             _request=_request_with_override,
@@ -195,16 +186,9 @@ def build_codex_runtime(
             assert process.stdin is not None
             process.stdin.write(combined_prompt)
             process.stdin.close()
-            wait_timeout = _effective_wait_timeout(settings.codex_timeout_seconds)
-            try:
-                returncode = process.wait(timeout=wait_timeout)
-            except subprocess.TimeoutExpired as exc:
-                process.kill()
-                raise CodexRuntimeError(
-                    f"Codex CLI command timed out after {settings.codex_timeout_seconds}s"
-                ) from exc
-            stdout_thread.join(timeout=1.0)
-            stderr_thread.join(timeout=1.0)
+            returncode = process.wait()
+            stdout_thread.join()
+            stderr_thread.join()
             process_stdout = "".join(stdout_lines)
             process_stderr = "".join(stderr_lines)
             if returncode != 0:
@@ -228,7 +212,6 @@ def build_codex_runtime(
 
     return CodexRuntime(
         model=settings.codex_model,
-        timeout_seconds=settings.codex_timeout_seconds,
         max_output_tokens=settings.codex_max_output_tokens,
         command=codex_command,
         _request=_request,

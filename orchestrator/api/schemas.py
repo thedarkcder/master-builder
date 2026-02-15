@@ -44,7 +44,6 @@ class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
     allow_label_mutations: bool = True
-    max_runtime_minutes: int = 30
     max_dev_test_review_loops: int = 2
     max_concurrent_runs: int = 2
     allowed_commands: list[str] = Field(default_factory=list)

@@ -30,7 +30,6 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             issue_summary="Integrate Codex runtime",
             issue_description="Objective and acceptance criteria",
             max_dev_test_review_loops=1,
-            max_runtime_minutes=30,
             suggested_test_commands=["python -m unittest"],
             execution_repo_dir="/tmp/test-repo",
         )
@@ -38,7 +37,6 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
     def test_agents_map_json_payloads(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
-            timeout_seconds=30,
             max_output_tokens=1200,
             command="override",
             _request=_RuntimeQueue(
@@ -66,7 +64,6 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
     def test_answer_board_question(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
-            timeout_seconds=30,
             max_output_tokens=1200,
             command="override",
             _request=lambda _system, _user, _working_dir=None, _on_log_line=None: '{"message":"2 blocked issues: MAB-1, MAB-2"}',
@@ -93,7 +90,6 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         runtime = CodexRuntime(
             model="gpt-5-codex",
-            timeout_seconds=30,
             max_output_tokens=1200,
             command="override",
             _request=_request,

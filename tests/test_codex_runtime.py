@@ -9,7 +9,6 @@ from orchestrator.core.codex_runtime import (
     CodexRuntime,
     CodexRuntimeError,
     _extract_json_payload,
-    _effective_wait_timeout,
     build_codex_runtime,
 )
 
@@ -27,18 +26,10 @@ class ExtractJsonPayloadTests(unittest.TestCase):
             _extract_json_payload("no json here")
 
 
-class CodexRuntimeTimeoutSemanticsTests(unittest.TestCase):
-    def test_effective_wait_timeout(self) -> None:
-        self.assertIsNone(_effective_wait_timeout(0))
-        self.assertIsNone(_effective_wait_timeout(-1))
-        self.assertEqual(_effective_wait_timeout(30), 30.0)
-
-
 class CodexRuntimeTests(unittest.TestCase):
     def test_run_text_and_json(self) -> None:
         runtime = CodexRuntime(
             model="m",
-            timeout_seconds=10,
             max_output_tokens=1000,
             command="override",
             _request=lambda _s, _u, _w, _l=None: " {\"ok\": true} ",
@@ -57,7 +48,6 @@ class CodexRuntimeTests(unittest.TestCase):
 
         empty_runtime = CodexRuntime(
             model="m",
-            timeout_seconds=10,
             max_output_tokens=1000,
             command="override",
             _request=lambda _s, _u, _w, _l=None: "   ",
@@ -67,7 +57,6 @@ class CodexRuntimeTests(unittest.TestCase):
 
         non_dict_runtime = CodexRuntime(
             model="m",
-            timeout_seconds=10,
             max_output_tokens=1000,
             command="override",
             _request=lambda _s, _u, _w, _l=None: "[1,2]",
@@ -80,7 +69,6 @@ class BuildCodexRuntimeTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(
             codex_model="gpt-5-codex",
-            codex_timeout_seconds=30,
             codex_max_output_tokens=4096,
             codex_cli_command="codex",
             codex_sandbox_mode="workspace-write",
@@ -183,9 +171,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             runtime = build_codex_runtime(settings=settings)
             self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "stdout-output")
 
-    def test_cli_request_uses_no_wait_timeout_when_disabled(self) -> None:
+    def test_cli_request_waits_without_timeout(self) -> None:
         settings = self._settings()
-        settings.codex_timeout_seconds = 0
 
         class _FakePipe:
             def readline(self) -> str:
