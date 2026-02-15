@@ -469,6 +469,7 @@ class JiraWebhookTests(unittest.TestCase):
 
     def test_webhook_records_last_delivery_metadata(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-777", labels=["agent:ready"])
+        payload["webhookEvent"] = "jira:issue_updated"
         headers = {"X-Atlassian-Webhook-Identifier": "delivery-meta-1"}
 
         response = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
@@ -481,6 +482,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(jira_config["webhook_last_delivery_id"], "delivery-meta-1")
         self.assertEqual(jira_config["webhook_last_issue_key"], "TP-777")
         self.assertIsNotNone(jira_config["webhook_last_received_at"])
+        self.assertEqual(jira_config["webhook_last_event"], "issue_updated")
 
     def test_webhook_issue_deleted_clears_discord_ask_history(self) -> None:
         with self.session_factory() as session:
@@ -500,6 +502,19 @@ class JiraWebhookTests(unittest.TestCase):
                         "created_at": "2026-01-01T00:00:00+00:00",
                     }
                 ],
+                "seed_followups": [
+                    {
+                        "request_id": "req-1",
+                        "user_id": "u-viewer",
+                        "channel_ids": ["seed-thread-1"],
+                        "project_key": "TP",
+                        "issue_keys": ["TP-404"],
+                        "questions": ["Need rollout plan"],
+                        "prompt_markdown": "Seed prompt",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ],
+                "seed_followup_thread_channel_ids": ["seed-thread-1"],
             }
             tenant.discord_config = discord_config
             session.commit()
@@ -513,12 +528,16 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(response.json()["enqueued"])
         self.assertEqual(response.json()["reason"], "issue_deleted")
         self.assertEqual(response.json()["removed_history_entries"], 1)
+        self.assertEqual(response.json()["removed_seed_contexts"], 1)
+        self.assertEqual(response.json()["removed_seed_issue_refs"], 1)
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-webhook")
             self.assertIsNotNone(tenant)
             ask_history = (tenant.discord_config or {}).get("ask_history", [])
             self.assertFalse(ask_history)
+            seed_followups = (tenant.discord_config or {}).get("seed_followups", [])
+            self.assertFalse(seed_followups)
 
     def test_webhook_issue_deleted_without_prefix_clears_discord_ask_history(self) -> None:
         with self.session_factory() as session:

@@ -30,6 +30,7 @@ def build_discord_ingress_dependencies(
     find_seed_followup_context_fn,
     store_seed_followup_context_fn,
     clear_seed_followup_context_fn,
+    validate_seed_followup_context_fn,
     resolve_project_for_issue_fn,
     fetch_issue_preview_fn,
     fetch_issue_detail_fn,
@@ -108,6 +109,7 @@ def build_discord_ingress_dependencies(
             find_seed_followup_context=find_seed_followup_context_fn,
             store_seed_followup_context=store_seed_followup_context_fn,
             clear_seed_followup_context=clear_seed_followup_context_fn,
+            validate_seed_followup_context=validate_seed_followup_context_fn,
         ),
         run_control=lambda ctx: dispatch_run_control_command(
             session=ctx.session,

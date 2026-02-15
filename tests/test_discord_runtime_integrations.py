@@ -165,6 +165,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value={"thread-1"}),
+            patch(
+                "orchestrator.core.discord.gateway_listener.find_seed_followup_context",
+                return_value={"request_id": "req-1"},
+            ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -185,6 +189,33 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!issues followup follow up text")
         post_kwargs = client_cls.return_value.post_message.call_args.kwargs
         self.assertEqual(post_kwargs["components"], [{"type": 1}])
+
+    def test_handle_message_create_seed_followup_thread_without_context_does_not_rewrite(self) -> None:
+        listener, _session = self._listener()
+        tenant = SimpleNamespace(tenant_id="route25")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="ask", message="ok", data={})
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value={"thread-1"}),
+            patch("orchestrator.core.discord.gateway_listener.find_seed_followup_context", return_value=None),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "thread-1",
+                    "content": "follow up text",
+                    "attachments": [],
+                },
+                bot_token="token",
+            )
+
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "follow up text")
 
     def test_handle_message_create_decision_gate_thread_routes_to_decision_gate_reply_command(self) -> None:
         listener, _session = self._listener()

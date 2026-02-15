@@ -29,6 +29,7 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
             "find_seed_followup_context": MagicMock(return_value=None),
             "store_seed_followup_context": MagicMock(return_value="req-1"),
             "clear_seed_followup_context": MagicMock(),
+            "validate_seed_followup_context": None,
         }
         params.update(overrides)
         return dispatch_issues_command(**params)
@@ -93,4 +94,24 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
             clear_seed_followup_context=clear_context,
         )
         self.assertEqual(response.message, "updated")
+        clear_context.assert_called_once()
+
+    def test_followup_invalid_context_is_cleared_and_rejected(self) -> None:
+        clear_context = MagicMock()
+        context = {
+            "request_id": "req-1",
+            "user_id": "u-1",
+            "channel_ids": ["c-1"],
+            "prompt_markdown": "seed spec",
+            "issue_keys": ["TP-1"],
+            "questions": ["Question?"],
+        }
+        with self.assertRaises(HTTPException) as ctx:
+            self._call(
+                arguments=["followup", "answer text"],
+                find_seed_followup_context=MagicMock(return_value=context),
+                validate_seed_followup_context=MagicMock(return_value=(False, "referenced Jira issues no longer exist")),
+                clear_seed_followup_context=clear_context,
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
         clear_context.assert_called_once()

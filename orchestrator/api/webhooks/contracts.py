@@ -166,10 +166,13 @@ def record_jira_webhook_receipt(
     tenant: Tenant,
     delivery_id: str | None,
     issue_key: str,
+    webhook_event: str | None = None,
 ) -> None:
     jira_config = dict(tenant.jira_config)
     jira_config["webhook_last_received_at"] = datetime.now(timezone.utc).isoformat()
     jira_config["webhook_last_issue_key"] = issue_key
+    if webhook_event:
+        jira_config["webhook_last_event"] = str(webhook_event).strip().lower()
     if delivery_id:
         jira_config["webhook_last_delivery_id"] = delivery_id
     tenant.jira_config = jira_config

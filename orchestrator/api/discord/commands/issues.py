@@ -25,6 +25,7 @@ def dispatch_issues_command(
     find_seed_followup_context: Callable[..., Any],
     store_seed_followup_context: Callable[..., Any],
     clear_seed_followup_context: Callable[..., Any],
+    validate_seed_followup_context: Callable[..., Any] | None = None,
 ) -> DiscordCommandResponse | None:
     if command_name != "issues":
         return None
@@ -101,6 +102,26 @@ def dispatch_issues_command(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="No pending issue-seed follow-up context was found for this channel",
             )
+        if validate_seed_followup_context is not None:
+            is_valid, invalid_reason = validate_seed_followup_context(
+                session=session,
+                tenant=tenant,
+                context=context,
+            )
+            if not is_valid:
+                clear_seed_followup_context(
+                    session=session,
+                    tenant=tenant,
+                    request_id=str(context.get("request_id") or ""),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "No pending issue-seed follow-up context was found for this channel"
+                        if not invalid_reason
+                        else f"Issue-seed follow-up context expired: {invalid_reason}"
+                    ),
+                )
         context_user_id = str(context.get("user_id") or "").strip()
         if context_user_id and context_user_id != normalized_user_id:
             raise HTTPException(

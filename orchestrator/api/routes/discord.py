@@ -76,7 +76,10 @@ from orchestrator.api.discord.ask.memory import (
     tenant_ask_history as _tenant_ask_history_impl,
 )
 from orchestrator.api.discord.ask.board_service import ask_board_message as _ask_board_message_impl
-from orchestrator.api.discord.seed.issue_service import seed_issues_with_codex as _seed_issues_with_codex_impl
+from orchestrator.api.discord.seed.issue_service import (
+    seed_issues_with_codex as _seed_issues_with_codex_impl,
+    validate_seed_followup_context as _validate_seed_followup_context_impl,
+)
 from orchestrator.api.jira_oauth.connection_service import resolve_tenant_jira_connection
 from orchestrator.api.commands.executor_registry import register_tenant_command_executor
 from orchestrator.api.discord.shared.state import (
@@ -786,6 +789,21 @@ def _seed_issues_with_codex(
     )
 
 
+def _validate_seed_followup_context(
+    *,
+    session: Session,
+    tenant: Tenant,
+    context: dict,
+) -> tuple[bool, str | None]:
+    return _validate_seed_followup_context_impl(
+        session=session,
+        tenant=tenant,
+        context=context,
+        get_settings_fn=get_settings,
+        tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
+    )
+
+
 def _ask_board_message(
     *,
     session: Session,
@@ -876,6 +894,7 @@ def execute_tenant_command_ingress(
         find_seed_followup_context_fn=_find_seed_followup_context,
         store_seed_followup_context_fn=_store_seed_followup_context,
         clear_seed_followup_context_fn=_clear_seed_followup_context,
+        validate_seed_followup_context_fn=_validate_seed_followup_context,
         resolve_project_for_issue_fn=_resolve_project_for_issue,
         fetch_issue_preview_fn=_fetch_jira_issue_preview,
         fetch_issue_detail_fn=_fetch_jira_issue_detail,

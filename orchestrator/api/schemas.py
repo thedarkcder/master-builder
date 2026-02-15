@@ -24,6 +24,7 @@ class JiraConfig(BaseModel):
     webhook_last_received_at: str | None = None
     webhook_last_delivery_id: str | None = None
     webhook_last_issue_key: str | None = None
+    webhook_last_event: str | None = None
 
 
 class GithubConfig(BaseModel):
