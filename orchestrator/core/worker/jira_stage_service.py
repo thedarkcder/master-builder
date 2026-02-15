@@ -10,7 +10,7 @@ from orchestrator.tools.jira_oauth import JiraOAuthError
 
 logger = logging.getLogger(__name__)
 
-JIRA_STAGE_COMMENT_EVENTS = {"decision_gate_required", "run_failed"}
+JIRA_STAGE_COMMENT_EVENTS = {"decision_gate_required", "run_failed", "test_feedback"}
 
 
 def send_stage_update_to_jira(

@@ -43,6 +43,8 @@ def _evaluate_pr_readiness_with_codex(
     review_summary_markdown: str | None,
     required_workflows: tuple[str, ...],
     workflow_checks: list[WorkflowCheckSuite],
+    tenant_id: str | None,
+    project_id: str | None,
 ) -> PrReadinessResult:
     settings = get_settings()
     runtime = build_codex_runtime(session=None, settings=settings)
@@ -51,8 +53,8 @@ def _evaluate_pr_readiness_with_codex(
             runtime=runtime,
             context=CodexInvocationContext(
                 channel="system",
-                tenant_id="policy-evaluator",
-                project_id=None,
+                tenant_id=tenant_id,
+                project_id=project_id,
                 command="policy",
                 stage="pr_ready",
                 working_dir=".",
@@ -95,9 +97,13 @@ def evaluate_pr_readiness(
     review_summary_markdown: str | None,
     required_workflows: tuple[str, ...],
     workflow_checks: list[WorkflowCheckSuite],
+    tenant_id: str | None = None,
+    project_id: str | None = None,
 ) -> PrReadinessResult:
     return _evaluate_pr_readiness_with_codex(
         review_summary_markdown=review_summary_markdown,
         required_workflows=required_workflows,
         workflow_checks=workflow_checks,
+        tenant_id=tenant_id,
+        project_id=project_id,
     )

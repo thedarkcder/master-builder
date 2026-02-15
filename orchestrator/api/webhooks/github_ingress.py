@@ -224,7 +224,11 @@ async def ingest_github_webhook_event(
                 encryption_key=settings.secrets_encryption_key,
             ),
         )
-        reviewer_gate = ReviewAgentGate(github_client)
+        reviewer_gate = ReviewAgentGate(
+            github_client,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        )
     except ValueError as exc:
         logger.warning(
             "github_webhook_review_misconfigured request_id=%s tenant_id=%s error=%s",

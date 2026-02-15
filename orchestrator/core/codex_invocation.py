@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class CodexInvocationContext:
     channel: str
-    tenant_id: str
+    tenant_id: str | None
     project_id: str | None
     command: str
     stage: str
@@ -94,12 +94,15 @@ def _combined_log_sink(
 
 
 def _persist_codex_log_line(*, context: CodexInvocationContext, stream: str, message: str) -> None:
+    tenant_id = str(context.tenant_id or "").strip()
+    if not tenant_id:
+        return
     settings = get_settings()
     session_factory = create_session_factory(database_url=settings.database_url)
     with session_factory() as session:
         record_run_log_event(
             session=session,
-            tenant_id=context.tenant_id,
+            tenant_id=tenant_id,
             project_id=context.project_id,
             run_id=context.run_id,
             issue_key=context.issue_key,

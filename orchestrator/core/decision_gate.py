@@ -73,7 +73,15 @@ def _string_list(value: object) -> tuple[str, ...]:
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 
-def _evaluate_decision_gate_with_codex(*, issue_summary: str, issue_description: str) -> DecisionGateResult:
+def _evaluate_decision_gate_with_codex(
+    *,
+    issue_summary: str,
+    issue_description: str,
+    tenant_id: str | None,
+    project_id: str | None,
+    issue_key: str | None,
+    run_id: str | None,
+) -> DecisionGateResult:
     settings = get_settings()
     runtime = build_codex_runtime(session=None, settings=settings)
     try:
@@ -81,11 +89,13 @@ def _evaluate_decision_gate_with_codex(*, issue_summary: str, issue_description:
             runtime=runtime,
             context=CodexInvocationContext(
                 channel="system",
-                tenant_id="policy-evaluator",
-                project_id=None,
+                tenant_id=tenant_id,
+                project_id=project_id,
                 command="policy",
                 stage="decision_gate",
                 working_dir=".",
+                issue_key=issue_key,
+                run_id=run_id,
             ),
             system_prompt=render_prompt("policy/decision_gate_system.j2"),
             user_prompt=render_prompt(
@@ -123,12 +133,20 @@ def evaluate_decision_gate(
     *,
     issue_summary: str | None,
     issue_description: str | None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+    issue_key: str | None = None,
+    run_id: str | None = None,
     rules_path: str | None = None,
 ) -> DecisionGateResult:
     _ = rules_path
     return _evaluate_decision_gate_with_codex(
         issue_summary=(issue_summary or "").strip(),
         issue_description=(issue_description or "").strip(),
+        tenant_id=tenant_id,
+        project_id=project_id,
+        issue_key=issue_key,
+        run_id=run_id,
     )
 
 

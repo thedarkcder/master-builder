@@ -72,6 +72,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             codex_max_output_tokens=4096,
             codex_cli_command="codex",
             codex_sandbox_mode="workspace-write",
+            codex_reasoning_effort="medium",
         )
 
     def test_build_with_request_override(self) -> None:
@@ -159,6 +160,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             call_args = list(popen_mock.call_args.args[0])
             sandbox_idx = call_args.index("--sandbox") + 1
             self.assertEqual(call_args[sandbox_idx], "workspace-write")
+            config_idx = call_args.index("-c") + 1
+            self.assertEqual(call_args[config_idx], 'reasoning.effort="medium"')
 
         def fake_popen_stdout(args, **kwargs):  # noqa: ANN001
             output_idx = args.index("--output-last-message") + 1

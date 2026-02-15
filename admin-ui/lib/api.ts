@@ -181,6 +181,8 @@ export type RunRecord = {
   tenant_id: string;
   project_id: string | null;
   issue_key: string;
+  issue_summary: string | null;
+  issue_url: string | null;
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
@@ -560,7 +562,17 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
 
 export function listRuns(
   credentials: Credentials,
-  params: { tenantId?: string; projectId?: string; status?: string }
+  params: {
+    tenantId?: string;
+    projectId?: string;
+    status?: string;
+    issue?: string;
+    prState?: "none" | "has_value";
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+  }
 ): Promise<RunRecord[]> {
   const query = new URLSearchParams();
   if (params.tenantId) {
@@ -571,6 +583,24 @@ export function listRuns(
   }
   if (params.status) {
     query.set("status", params.status);
+  }
+  if (params.issue) {
+    query.set("issue", params.issue);
+  }
+  if (params.prState) {
+    query.set("pr_state", params.prState);
+  }
+  if (params.from) {
+    query.set("from", params.from);
+  }
+  if (params.to) {
+    query.set("to", params.to);
+  }
+  if (typeof params.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params.offset === "number") {
+    query.set("offset", String(params.offset));
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return request<RunRecord[]>(credentials, `/api/admin/runs${suffix}`);

@@ -27,6 +27,8 @@ def run_to_schema(run: Run) -> RunRead:
         tenant_id=run.tenant_id,
         project_id=run.project_id,
         issue_key=run.issue_key,
+        issue_summary=run.issue_summary,
+        issue_url=None,
         repo_url=run.repo_url,
         branch=run.branch,
         pr_url=run.pr_url,

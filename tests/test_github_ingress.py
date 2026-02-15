@@ -142,7 +142,6 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             *,
             tenant_secret_lookup=None,
             platform_secret_lookup=None,
-            **_: object,
         ) -> MagicMock:
             self.assertIsNotNone(tenant_secret_lookup)
             self.assertIsNotNone(platform_secret_lookup)
@@ -156,12 +155,17 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(platform_secret_lookup("GITHUB_APP_ID"), "platform-app-id")
             self.assertEqual(platform_secret_lookup("GITHUB_APP_PRIVATE_KEY"), "platform-private-key")
-            return SimpleNamespace(
-                evaluate_pr=lambda **_kwargs: SimpleNamespace(
+
+            def _evaluate_pr(*, repo_full_name: str, pr_number: int):
+                _ = repo_full_name, pr_number
+                return SimpleNamespace(
                     ready=True,
                     state="ready",
                     message="ready",
                 )
+
+            return SimpleNamespace(
+                evaluate_pr=_evaluate_pr
             )
 
         response = await self._call(

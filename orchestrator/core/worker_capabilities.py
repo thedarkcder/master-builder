@@ -57,6 +57,10 @@ def _infer_required_worker_capability_with_codex(
     issue_summary: str,
     issue_description: str,
     issue_labels: list[str],
+    tenant_id: str | None,
+    project_id: str | None,
+    issue_key: str | None,
+    run_id: str | None,
 ) -> str:
     settings = get_settings()
     runtime = build_codex_runtime(session=None, settings=settings)
@@ -65,11 +69,13 @@ def _infer_required_worker_capability_with_codex(
             runtime=runtime,
             context=CodexInvocationContext(
                 channel="system",
-                tenant_id="policy-evaluator",
-                project_id=None,
+                tenant_id=tenant_id,
+                project_id=project_id,
                 command="policy",
                 stage="worker_capability",
                 working_dir=".",
+                issue_key=issue_key,
+                run_id=run_id,
             ),
             system_prompt=render_prompt("policy/worker_capability_system.j2"),
             user_prompt=render_prompt(
@@ -93,11 +99,19 @@ def infer_required_worker_capability(
     issue_summary: str | None,
     issue_description: str | None,
     issue_labels: list[str] | None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+    issue_key: str | None = None,
+    run_id: str | None = None,
 ) -> str:
     return _infer_required_worker_capability_with_codex(
         issue_summary=(issue_summary or "").strip(),
         issue_description=(issue_description or "").strip(),
         issue_labels=[str(label).strip() for label in (issue_labels or []) if str(label).strip()],
+        tenant_id=tenant_id,
+        project_id=project_id,
+        issue_key=issue_key,
+        run_id=run_id,
     )
 
 
@@ -110,4 +124,8 @@ def required_worker_capability_for_run(run) -> str:  # noqa: ANN001
         issue_summary=run.issue_summary,
         issue_description=run.issue_description,
         issue_labels=None,
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        issue_key=run.issue_key,
+        run_id=run.run_id,
     )

@@ -135,14 +135,30 @@ class RunsServiceTests(unittest.TestCase):
             tenant_id="example",
             project_id="example-default",
             status_filter="queued",
+            issue_query="GP-113",
+            pr_state="none",
             from_time=None,
             to_time=None,
+            limit=50,
+            offset=0,
             build_runs_query_fn=build_query,
             run_to_schema_fn=to_schema,
+            tenant_model=object,
+            tenant_jira_issue_url_fn=MagicMock(return_value=None),
         )
 
         self.assertEqual(rows, ["schema-r1", "schema-r2"])
-        build_query.assert_called_once()
+        build_query.assert_called_once_with(
+            tenant_id="example",
+            project_id="example-default",
+            status_filter="queued",
+            issue_query="GP-113",
+            pr_state="none",
+            from_time=None,
+            to_time=None,
+            limit=50,
+            offset=0,
+        )
 
     def test_get_run_404(self) -> None:
         session = MagicMock()
@@ -154,24 +170,30 @@ class RunsServiceTests(unittest.TestCase):
                 run_id="missing",
                 run_model=object,
                 run_to_schema_fn=MagicMock(),
+                tenant_model=object,
+                tenant_jira_issue_url_fn=MagicMock(return_value=None),
             )
 
         self.assertEqual(exc_ctx.exception.status_code, 404)
 
     def test_get_run_success(self) -> None:
         session = MagicMock()
-        run = SimpleNamespace(run_id="r1")
-        session.get.return_value = run
+        run = SimpleNamespace(run_id="r1", tenant_id="example", issue_key="R1")
+        tenant = SimpleNamespace(tenant_id="example")
+        session.get.side_effect = [run, tenant]
 
-        to_schema = MagicMock(return_value={"run_id": "r1"})
+        to_schema = MagicMock(return_value={"run_id": "r1", "issue_url": None})
+        issue_url_fn = MagicMock(return_value="https://jira.example/browse/R1")
         payload = runs_service.get_run(
             session=session,
             run_id="r1",
             run_model=object,
             run_to_schema_fn=to_schema,
+            tenant_model=object,
+            tenant_jira_issue_url_fn=issue_url_fn,
         )
 
-        self.assertEqual(payload, {"run_id": "r1"})
+        self.assertEqual(payload, {"run_id": "r1", "issue_url": "https://jira.example/browse/R1"})
         to_schema.assert_called_once_with(run)
 
 

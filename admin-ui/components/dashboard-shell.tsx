@@ -20,7 +20,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth-provider";
-import { listProjects, type ProjectRecord } from "@/lib/api";
+import { getRun, listProjects, type ProjectRecord } from "@/lib/api";
 import {
   Sidebar,
   SidebarContent,
@@ -53,7 +53,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const { credentials, ready, logout } = useAuth();
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
   const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\//);
-  const tenantId = tenantMatch ? tenantMatch[1] : null;
+  const runMatch = pathname.match(/^\/runs\/([^/]+)$/);
+  const [runTenantId, setRunTenantId] = useState<string | null>(null);
+  const tenantId = tenantMatch ? tenantMatch[1] : runTenantId;
 
   useEffect(() => {
     if (ready && !credentials) {
@@ -61,6 +63,29 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       router.replace("/login");
     }
   }, [credentials, logout, ready, router]);
+
+  useEffect(() => {
+    if (!credentials || !runMatch) {
+      setRunTenantId(null);
+      return;
+    }
+    let cancelled = false;
+    const runId = decodeURIComponent(runMatch[1]);
+    void getRun(credentials, runId)
+      .then((run) => {
+        if (!cancelled) {
+          setRunTenantId(run.tenant_id);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRunTenantId(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, runMatch]);
 
   useEffect(() => {
     if (!credentials || !tenantId) {
@@ -145,6 +170,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           label: "Projects",
           icon: FolderKanban,
           matchPrefix: `/tenants/${tenantId}/projects`
+        },
+        {
+          href: `/tenants/${tenantId}/runs`,
+          label: "Runs",
+          icon: Activity,
+          matchPrefix: `/tenants/${tenantId}/runs`
         },
         {
           href: `/tenants/${tenantId}/edit/health`,

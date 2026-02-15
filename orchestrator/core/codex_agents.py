@@ -46,7 +46,16 @@ class CodexWorkflowAgents:
 
         return _emit
 
-    def pm(self, request: WorkflowRequest) -> PmPlan:
+    def pm(
+        self,
+        request: WorkflowRequest,
+        attempt: int,
+        feedback: str | None,
+        history: list[dict[str, str]],
+        last_dev_result: DevResult | None,
+        last_test_result: TestResult | None,
+        last_review_result: ReviewResult | None,
+    ) -> PmPlan:
         payload = invoke_codex_json(
             runtime=self._runtime,
             context=CodexInvocationContext(
@@ -58,7 +67,7 @@ class CodexWorkflowAgents:
                 working_dir=request.execution_repo_dir or ".",
                 issue_key=request.issue_key,
                 run_id=request.run_id,
-                attempt=0,
+                attempt=attempt,
             ),
             system_prompt=render_prompt("workflow/pm_system.j2"),
             user_prompt=render_prompt(
@@ -68,9 +77,35 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 issue_summary=request.issue_summary,
                 issue_description=request.issue_description,
+                attempt=attempt,
+                feedback=feedback or "none",
+                history_json=json.dumps(history[-25:]),
+                last_dev_summary_json=json.dumps(last_dev_result.change_summary if last_dev_result else []),
+                last_dev_pr_url=last_dev_result.pr_url if last_dev_result and last_dev_result.pr_url else "none",
+                last_test_passed=(
+                    "none"
+                    if last_test_result is None
+                    else ("true" if last_test_result.passed else "false")
+                ),
+                last_test_feedback=last_test_result.feedback if last_test_result and last_test_result.feedback else "none",
+                last_test_guidance_json=json.dumps(last_test_result.guidance if last_test_result else []),
+                last_review_approved=(
+                    "none"
+                    if last_review_result is None
+                    else ("true" if last_review_result.approved else "false")
+                ),
+                last_review_feedback=(
+                    last_review_result.feedback
+                    if last_review_result and last_review_result.feedback
+                    else "none"
+                ),
+                last_review_summary_json=json.dumps(last_review_result.summary if last_review_result else []),
             ),
-            extra_on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=0),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=attempt),
         )
+        next_stage = str(payload.get("next_stage") or "dev").strip().lower()
+        if next_stage not in {"dev", "test"}:
+            next_stage = "dev"
         return PmPlan(
             plan_steps=_string_list(payload.get("plan_steps"), fallback=["Analyze scope", "Implement", "Validate"]),
             acceptance_criteria=_string_list(
@@ -78,6 +113,7 @@ class CodexWorkflowAgents:
                 fallback=["Behavior implemented", "Tests and verification provided"],
             ),
             risks=_string_list(payload.get("risks"), fallback=[]),
+            next_stage=next_stage,
         )
 
     def dev(

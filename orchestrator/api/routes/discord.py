@@ -351,7 +351,6 @@ def _create_discord_bug_issue(
         issue_key: str,
         attachments: list[dict[str, str]],
         correlation_id: str | None = None,
-        **kwargs: object,
     ) -> tuple[int, list[AttachmentUploadFailure]]:
         return _upload_discord_attachments_to_jira_impl(
             client=client,

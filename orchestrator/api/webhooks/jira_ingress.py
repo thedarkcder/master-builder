@@ -145,6 +145,9 @@ def _resolve_ready_label_for_tenant(tenant: Tenant) -> str | None:
 def _build_backlog_pre_run_check(context: JiraWebhookContext) -> dict[str, object]:
     ready_label = _resolve_ready_label_for_tenant(context.tenant)
     pre_check = evaluate_pre_run_check(
+        tenant_id=context.tenant_id,
+        project_id=context.project.project_id if context.project is not None else None,
+        issue_key=context.issue_key,
         issue_summary=context.issue_summary,
         issue_description=context.issue_description,
         issue_labels=context.issue_labels,
@@ -161,6 +164,9 @@ def _build_backlog_pre_run_check(context: JiraWebhookContext) -> dict[str, objec
         "required_worker_label_present": pre_check.required_worker_label_present,
         "decision_gate_triggered": pre_check.decision_gate_triggered,
         "decision_gate_reason": decision_gate_reason,
+        "gtd_valid": pre_check.gtd_valid,
+        "gtd_missing_criteria": list(pre_check.gtd_missing_criteria),
+        "gtd_clarification_questions": list(pre_check.gtd_clarification_questions),
     }
 
 
@@ -177,6 +183,11 @@ def _notify_backlog_pre_run_check(
     decision_gate_reason = _normalize_backlog_pre_run_check_text(
         pre_run_check.get("decision_gate_reason") if isinstance(pre_run_check.get("decision_gate_reason"), str) else None
     )
+    gtd_missing_criteria = [
+        str(item).strip()
+        for item in (pre_run_check.get("gtd_missing_criteria") or [])
+        if str(item).strip()
+    ]
 
     lines = [
         f"New issue `{context.issue_key}` was added to the backlog on board `{board_id}`.",
@@ -194,6 +205,10 @@ def _notify_backlog_pre_run_check(
         lines.append("Pre-run check: Decision Gate required before execution.")
         if decision_gate_reason:
             lines.append(f"Decision Gate reason: {decision_gate_reason}")
+    elif outcome == "gtd_required":
+        lines.append("Pre-run check: Good To Do details are incomplete.")
+        if gtd_missing_criteria:
+            lines.append("Missing GTD criteria: " + ", ".join(gtd_missing_criteria))
     elif outcome == "missing_ready_label":
         if isinstance(ready_label, str) and ready_label.strip():
             lines.append(f"Pre-run check: missing ready label `{ready_label.strip()}`.")
@@ -220,6 +235,9 @@ def _apply_required_worker_label(
     settings,  # noqa: ANN001
 ) -> None:
     pre_check = evaluate_pre_run_check(
+        tenant_id=context.tenant_id,
+        project_id=context.project.project_id if context.project is not None else None,
+        issue_key=context.issue_key,
         issue_summary=context.issue_summary,
         issue_description=context.issue_description,
         issue_labels=context.issue_labels,
@@ -274,6 +292,75 @@ def _apply_required_worker_label(
         context.tenant_id,
         context.issue_key,
         required_label,
+    )
+
+
+def _apply_ready_label(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> None:
+    pre_check = evaluate_pre_run_check(
+        tenant_id=context.tenant_id,
+        project_id=context.project.project_id if context.project is not None else None,
+        issue_key=context.issue_key,
+        issue_summary=context.issue_summary,
+        issue_description=context.issue_description,
+        issue_labels=context.issue_labels,
+        ready_label=_resolve_ready_label_for_tenant(context.tenant),
+    )
+    ready_label = str(pre_check.ready_label or "").strip()
+    if not ready_label:
+        return
+    if pre_check.outcome != "missing_ready_label":
+        return
+
+    project_overrides = context.project.policy_overrides if context.project is not None else {}
+    effective_policy = resolve_effective_policy(
+        tenant_policy=context.tenant.policy_config,
+        project_overrides=project_overrides,
+    )
+    if not bool(effective_policy.get("allow_label_mutations", True)):
+        logger.info(
+            "jira_webhook_ready_label_skip request_id=%s tenant_id=%s issue_key=%s reason=label_mutations_disabled label=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            ready_label,
+        )
+        return
+
+    try:
+        oauth = tenant_jira_oauth_context(
+            session=session,
+            tenant=context.tenant,
+            settings=settings,
+        )
+        oauth.client.add_issue_labels(
+            access_token=oauth.access_token,
+            cloud_id=oauth.connection.cloud_id,
+            issue_id_or_key=context.issue_key,
+            labels=[ready_label],
+        )
+    except (HTTPException, JiraOAuthError, ValueError, AttributeError) as exc:
+        logger.warning(
+            "jira_webhook_ready_label_apply_failed request_id=%s tenant_id=%s issue_key=%s label=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            ready_label,
+            exc,
+        )
+        return
+
+    context.issue_labels = [*context.issue_labels, ready_label]
+    logger.info(
+        "jira_webhook_ready_label_applied request_id=%s tenant_id=%s issue_key=%s label=%s",
+        context.request_id,
+        context.tenant_id,
+        context.issue_key,
+        ready_label,
     )
 
 
@@ -865,6 +952,11 @@ async def ingest_jira_webhook_event(
             session=session,
             settings=settings,
         )
+        _apply_ready_label(
+            context=context,
+            session=session,
+            settings=settings,
+        )
 
         board_gate_response = stage_handle_run_board_gate(
             context=context,
@@ -1005,6 +1097,51 @@ async def ingest_jira_webhook_event(
                 )
             resolved_issue_description = retry_source_run.issue_description
 
+        pre_check = evaluate_pre_run_check(
+            tenant_id=context.tenant_id,
+            project_id=context.project.project_id if context.project is not None else None,
+            issue_key=context.issue_key,
+            issue_summary=context.issue_summary,
+            issue_description=resolved_issue_description,
+            issue_labels=context.issue_labels,
+            ready_label=_resolve_ready_label_for_tenant(context.tenant),
+        )
+        if pre_check.outcome in {"decision_gate_required", "gtd_required", "missing_ready_label"}:
+            logger.info(
+                "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s",
+                request_id,
+                tenant_id,
+                context.issue_key,
+                pre_check.outcome,
+            )
+            _notify_jira_enqueue_skipped(
+                context=context,
+                session=session,
+                settings=settings,
+                reason=pre_check.outcome,
+                extra_detail=(
+                    f"decision_gate_reason={pre_check.decision_gate_reason}"
+                    if pre_check.outcome == "decision_gate_required"
+                    else (
+                        "missing_gtd=" + ", ".join(pre_check.gtd_missing_criteria)
+                        if pre_check.outcome == "gtd_required"
+                        else None
+                    )
+                ),
+            )
+            return jira_webhook_response(
+                context,
+                enqueued=False,
+                reason=pre_check.outcome,
+                guidance=enqueue_reason_guidance(pre_check.outcome),
+                trigger_reason=trigger_reason,
+                webhook_event=context.webhook_event,
+                decision_gate_reason=pre_check.decision_gate_reason if pre_check.outcome == "decision_gate_required" else None,
+                gtd_missing_criteria=list(pre_check.gtd_missing_criteria) if pre_check.outcome == "gtd_required" else None,
+                gtd_questions=list(pre_check.gtd_clarification_questions) if pre_check.outcome == "gtd_required" else None,
+                ready_label=_resolve_ready_label_for_tenant(context.tenant) if pre_check.outcome == "missing_ready_label" else None,
+            )
+
         enqueue_result = enqueue_run(
             session,
             tenant_id=tenant_id,
@@ -1049,12 +1186,7 @@ async def ingest_jira_webhook_event(
             context.issue_key,
             enqueue_result.run.run_id,
         )
-        required_worker_capability = evaluate_pre_run_check(
-            issue_summary=context.issue_summary,
-            issue_description=resolved_issue_description,
-            issue_labels=context.issue_labels,
-            ready_label=_resolve_ready_label_for_tenant(context.tenant),
-        ).required_worker_capability
+        required_worker_capability = pre_check.required_worker_capability
         run_plan = dict(enqueue_result.run.plan or {})
         run_plan["required_worker_capability"] = required_worker_capability
         run_plan["required_worker_label"] = worker_label_for_capability(required_worker_capability)

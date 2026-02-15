@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from collections.abc import Callable
 from typing import Protocol
 
 from orchestrator.core.followups import build_backlog_follow_up_draft
-from orchestrator.core.gtd import validate_good_to_do
 from orchestrator.core.workflow.runner_policies import (
     evaluate_placeholder_policy,
 )
@@ -27,6 +27,7 @@ class PmPlan:
     plan_steps: list[str]
     acceptance_criteria: list[str]
     risks: list[str]
+    next_stage: str = "dev"
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,16 @@ class WorkflowResult:
 
 
 class WorkflowAgents(Protocol):
-    def pm(self, request: WorkflowRequest) -> PmPlan:
+    def pm(
+        self,
+        request: WorkflowRequest,
+        attempt: int,
+        feedback: str | None,
+        history: list[dict[str, str]],
+        last_dev_result: DevResult | None,
+        last_test_result: TestResult | None,
+        last_review_result: ReviewResult | None,
+    ) -> PmPlan:
         ...
 
     def dev(
@@ -129,69 +139,83 @@ class WorkflowRunner:
     ):
         self._agents = agents
 
-    def run(self, request: WorkflowRequest) -> WorkflowResult:
+    def run(
+        self,
+        request: WorkflowRequest,
+        *,
+        test_feedback_hook: Callable[[int, str], None] | None = None,
+    ) -> WorkflowResult:
         history: list[dict[str, str]] = []
         max_attempts = max(1, request.max_dev_test_review_loops)
 
-        gtd_result = validate_good_to_do(
-            issue_summary=request.issue_summary,
-            issue_description=request.issue_description,
-        )
-        if not gtd_result.valid:
-            history.append(
-                {
-                    "stage": "preflight",
-                    "attempt": "0",
-                    "event": f"missing_gtd:{', '.join(gtd_result.missing_criteria)}",
-                }
-            )
-            question_lines = "\n".join(
-                f"- {question}" for question in gtd_result.clarification_questions
-            )
-            return self._failure(
-                plan=None,
-                stage="preflight",
-                message=(
-                    "Good To Do validation failed. Missing criteria: "
-                    f"{', '.join(gtd_result.missing_criteria)}.\n"
-                    "Clarification needed before execution:\n"
-                    f"{question_lines}"
-                ),
-                attempts=0,
-                history=history,
-                request=request,
-            )
-
-        try:
-            plan = self._agents.pm(request)
-        except Exception as exc:  # pragma: no cover - exercised via tests
-            return self._failure(
-                plan=None,
-                stage="pm",
-                message=f"PM stage failed: {exc}",
-                attempts=0,
-                history=history,
-                request=request,
-            )
-        pm_blocker = _extract_list_blocker(
-            [*plan.plan_steps, *plan.acceptance_criteria, *plan.risks]
-        )
-        if pm_blocker is not None:
-            history.append({"stage": "pm", "attempt": "0", "event": pm_blocker})
-            return self._failure(
-                plan=plan,
-                stage="pm",
-                message=f"PM stage blocked: {pm_blocker}",
-                attempts=0,
-                history=history,
-                request=request,
-            )
-
         feedback: str | None = None
+        last_dev_result: DevResult | None = None
+        last_test_result: TestResult | None = None
+        last_review_result: ReviewResult | None = None
+        plan: PmPlan | None = None
 
         for attempt in range(1, max_attempts + 1):
             try:
-                dev_result = self._agents.dev(request, plan, attempt, feedback)
+                plan = self._agents.pm(
+                    request,
+                    attempt,
+                    feedback,
+                    history,
+                    last_dev_result,
+                    last_test_result,
+                    last_review_result,
+                )
+            except Exception as exc:  # pragma: no cover - exercised via tests
+                return self._failure(
+                    plan=plan,
+                    stage="pm",
+                    message=f"PM stage failed: {exc}",
+                    attempts=attempt - 1,
+                    history=history,
+                    request=request,
+                )
+            pm_blocker = _extract_list_blocker(
+                [*plan.plan_steps, *plan.acceptance_criteria, *plan.risks]
+            )
+            if pm_blocker is not None:
+                history.append({"stage": "pm", "attempt": str(attempt), "event": pm_blocker})
+                return self._failure(
+                    plan=plan,
+                    stage="pm",
+                    message=f"PM stage blocked: {pm_blocker}",
+                    attempts=attempt - 1,
+                    history=history,
+                    request=request,
+                )
+
+            desired_next_stage = str(plan.next_stage or "dev").strip().lower()
+            route_to_test = desired_next_stage == "test" and last_dev_result is not None
+            if desired_next_stage not in {"dev", "test"}:
+                route_to_test = False
+
+            dev_result: DevResult
+            if route_to_test:
+                dev_result = last_dev_result
+                history.append({"stage": "pm", "attempt": str(attempt), "event": "route:test"})
+            else:
+                history.append({"stage": "pm", "attempt": str(attempt), "event": "route:dev"})
+                feedback_for_dev = feedback
+                feedback = None
+            try:
+                if not route_to_test:
+                    dev_result = self._agents.dev(request, plan, attempt, feedback_for_dev)
+                    dev_blocker = _extract_dev_blocker(dev_result)
+                    if dev_blocker is not None:
+                        history.append({"stage": "dev", "attempt": str(attempt), "event": dev_blocker})
+                        return self._failure(
+                            plan=plan,
+                            stage="dev",
+                            message=f"Dev stage blocked: {dev_blocker}",
+                            attempts=attempt,
+                            history=history,
+                            request=request,
+                        )
+                    last_dev_result = dev_result
             except Exception as exc:  # pragma: no cover - exercised via tests
                 history.append(
                     {"stage": "dev", "attempt": str(attempt), "event": f"exception:{exc}"}
@@ -200,17 +224,6 @@ class WorkflowRunner:
                     plan=plan,
                     stage="dev",
                     message=f"Dev stage failed: {exc}",
-                    attempts=attempt,
-                    history=history,
-                    request=request,
-                )
-            dev_blocker = _extract_dev_blocker(dev_result)
-            if dev_blocker is not None:
-                history.append({"stage": "dev", "attempt": str(attempt), "event": dev_blocker})
-                return self._failure(
-                    plan=plan,
-                    stage="dev",
-                    message=f"Dev stage blocked: {dev_blocker}",
                     attempts=attempt,
                     history=history,
                     request=request,
@@ -230,21 +243,29 @@ class WorkflowRunner:
                     history=history,
                     request=request,
                 )
+            last_test_result = test_result
             test_blocker = _extract_first_blocker([test_result.feedback, *test_result.guidance])
             if test_blocker is not None:
                 history.append({"stage": "test", "attempt": str(attempt), "event": test_blocker})
-                return self._failure(
-                    plan=plan,
-                    stage="test",
-                    message=f"Test stage blocked: {test_blocker}",
-                    attempts=attempt,
-                    history=history,
-                    request=request,
-                )
+                if test_feedback_hook is not None:
+                    test_feedback_hook(attempt, test_blocker)
+                feedback = test_blocker
+                if attempt >= max_attempts:
+                    return self._failure(
+                        plan=plan,
+                        stage="test",
+                        message="Max workflow attempts reached after test failures",
+                        attempts=attempt,
+                        history=history,
+                        request=request,
+                    )
+                continue
 
             if not test_result.passed:
                 feedback = test_result.feedback or "Tests failed with no feedback"
                 history.append({"stage": "test", "attempt": str(attempt), "event": feedback})
+                if test_feedback_hook is not None:
+                    test_feedback_hook(attempt, feedback)
                 if attempt >= max_attempts:
                     return self._failure(
                         plan=plan,
@@ -276,6 +297,7 @@ class WorkflowRunner:
                     history=history,
                     request=request,
                 )
+            last_review_result = review_result
             review_blocker = _extract_first_blocker([review_result.feedback, *review_result.summary])
             if review_blocker is not None:
                 history.append({"stage": "review", "attempt": str(attempt), "event": review_blocker})

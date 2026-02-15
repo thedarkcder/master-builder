@@ -24,6 +24,7 @@ from orchestrator.api.routes.discord import (
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -368,6 +369,11 @@ class DiscordCommandApiTests(unittest.TestCase):
                         questions=(),
                         recommendation="Proceed",
                         tags=(),
+                    ),
+                    gtd=GoodToDoValidationResult(
+                        valid=True,
+                        missing_criteria=(),
+                        clarification_questions=(),
                     ),
                 ),
             ),

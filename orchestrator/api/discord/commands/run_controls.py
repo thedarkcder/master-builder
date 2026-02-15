@@ -13,6 +13,7 @@ from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_co
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (
+    enqueue_reason_guidance,
     format_enqueue_conflict_detail,
 )
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
@@ -38,6 +39,18 @@ def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, q
     if questions:
         lines.append("Please reply with:")
         lines.extend(f"- {question}" for question in questions[:5])
+    return "\n".join(lines)
+
+
+def _gtd_missing_message(*, issue_key: str, missing_criteria: tuple[str, ...], questions: tuple[str, ...]) -> str:
+    lines = [f"Good To Do still needs clarification for `{issue_key}`."]
+    cleaned_missing = [item.strip() for item in missing_criteria if item.strip()]
+    cleaned_questions = [question.strip() for question in questions if question.strip()]
+    if cleaned_missing:
+        lines.append("Missing criteria: " + ", ".join(cleaned_missing))
+    if cleaned_questions:
+        lines.append("Please reply with:")
+        lines.extend(f"- {question}" for question in cleaned_questions)
     return "\n".join(lines)
 
 
@@ -190,6 +203,39 @@ def dispatch_run_control_command(
                 issue_description = refreshed_description
         except HTTPException:
             issue_description = None
+        pre_check = evaluate_pre_run_check(
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key=issue_key,
+            issue_summary=issue_preview.summary,
+            issue_description=issue_description,
+            issue_labels=None,
+            ready_label=(tenant.jira_config or {}).get("ready_label"),
+        )
+        if pre_check.decision_gate_triggered:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_decision_gate_remaining_questions_message(
+                    issue_key=issue_key,
+                    reason=str(pre_check.decision_gate.reason or "").strip(),
+                    questions=[question.strip() for question in pre_check.decision_gate.questions if question.strip()],
+                ),
+            )
+        if not pre_check.gtd_valid:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_gtd_missing_message(
+                    issue_key=issue_key,
+                    missing_criteria=pre_check.gtd_missing_criteria,
+                    questions=pre_check.gtd_clarification_questions,
+                ),
+            )
+        if pre_check.outcome == "missing_ready_label":
+            ready_label = str(pre_check.ready_label or "").strip()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})",
+            )
         enqueue_result = enqueue_run(
             session,
             tenant_id=tenant_id,
@@ -287,6 +333,39 @@ def dispatch_run_control_command(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Issue {run.issue_key} is outside the mapped project scope",
+            )
+        pre_check = evaluate_pre_run_check(
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key=run.issue_key,
+            issue_summary=issue_preview.summary,
+            issue_description=issue_description,
+            issue_labels=None,
+            ready_label=(tenant.jira_config or {}).get("ready_label"),
+        )
+        if pre_check.decision_gate_triggered:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_decision_gate_remaining_questions_message(
+                    issue_key=run.issue_key,
+                    reason=str(pre_check.decision_gate.reason or "").strip(),
+                    questions=[question.strip() for question in pre_check.decision_gate.questions if question.strip()],
+                ),
+            )
+        if not pre_check.gtd_valid:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_gtd_missing_message(
+                    issue_key=run.issue_key,
+                    missing_criteria=pre_check.gtd_missing_criteria,
+                    questions=pre_check.gtd_clarification_questions,
+                ),
+            )
+        if pre_check.outcome == "missing_ready_label":
+            ready_label = str(pre_check.ready_label or "").strip()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})",
             )
         enqueue_result = enqueue_run(
             session,
@@ -416,6 +495,9 @@ def dispatch_run_control_command(
             ) from exc
 
         pre_check = evaluate_pre_run_check(
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key=issue_key,
             issue_summary=updated_summary,
             issue_description=updated_description,
             issue_labels=None,
@@ -443,6 +525,26 @@ def dispatch_run_control_command(
                         for question in pre_check.decision_gate.questions
                         if str(question).strip()
                     ],
+                },
+            )
+        if not pre_check.gtd_valid:
+            questions = [question.strip() for question in pre_check.gtd_clarification_questions if question.strip()]
+            missing = [item.strip() for item in pre_check.gtd_missing_criteria if item.strip()]
+            lines = [f"Good To Do still needs clarification for `{issue_key}`."]
+            if missing:
+                lines.append("Missing criteria: " + ", ".join(missing))
+            if questions:
+                lines.append("Please reply with:")
+                lines.extend(f"- {question}" for question in questions)
+            return DiscordCommandResponse(
+                ok=True,
+                command=command_name,
+                message="\n".join(lines),
+                data={
+                    "issue_key": issue_key,
+                    "recheck_required": True,
+                    "gtd_missing_criteria": missing,
+                    "questions": questions,
                 },
             )
 

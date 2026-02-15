@@ -185,6 +185,7 @@ from orchestrator.api.schemas import (
 from orchestrator.core.config import get_settings
 from orchestrator.core.enforcement_context import validate_enforcement_assets
 from orchestrator.core.project_policy import normalize_project_policy_overrides
+from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run as _resolve_project_for_run
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_GITHUB_APP_ID_REF,
@@ -262,6 +263,20 @@ def _resolve_project_discord_channel_binding(
 
 
 def _admin_project_service() -> AdminProjectService:
+    def _resolve_project_run_board_id(
+        *,
+        session: Session,
+        tenant: Tenant,
+        jira_project_key: str,
+        settings,  # noqa: ANN001
+    ) -> int | None:
+        return _discover_project_run_board_id_impl(
+            session=session,
+            tenant=tenant,
+            jira_project_key=jira_project_key,
+            settings=settings,
+        )
+
     return AdminProjectService(
         normalize_project_repo=_normalize_project_repo,
         normalize_project_key=_normalize_project_key,
@@ -272,7 +287,7 @@ def _admin_project_service() -> AdminProjectService:
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
-        resolve_project_run_board_id=lambda **kwargs: _discover_project_run_board_id_impl(**kwargs),
+        resolve_project_run_board_id=_resolve_project_run_board_id,
         project_to_schema=_project_to_schema,
         settings_factory=get_settings,
     )
@@ -936,8 +951,12 @@ def list_runs(
     tenant_id: str | None = Query(default=None),
     project_id: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
+    issue_query: str | None = Query(default=None, alias="issue"),
+    pr_state: str | None = Query(default=None, alias="pr_state"),
     from_time: datetime | None = Query(default=None, alias="from"),
     to_time: datetime | None = Query(default=None, alias="to"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[RunRead]:
@@ -946,10 +965,16 @@ def list_runs(
         tenant_id=tenant_id,
         project_id=project_id,
         status_filter=status_filter,
+        issue_query=issue_query,
+        pr_state=pr_state,
         from_time=from_time,
         to_time=to_time,
+        limit=limit,
+        offset=offset,
         build_runs_query_fn=_build_runs_query_impl,
         run_to_schema_fn=_run_to_schema,
+        tenant_model=Tenant,
+        tenant_jira_issue_url_fn=tenant_jira_issue_url,
     )
 
 
@@ -964,6 +989,8 @@ def get_run(
         run_id=run_id,
         run_model=Run,
         run_to_schema_fn=_run_to_schema,
+        tenant_model=Tenant,
+        tenant_jira_issue_url_fn=tenant_jira_issue_url,
     )
 
 
