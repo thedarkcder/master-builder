@@ -9,7 +9,7 @@ if [[ -f ".env" ]]; then
   source .env
 fi
 
-docker compose up -d postgres packages api worker admin-ui
+docker compose up -d postgres packages api worker tailscale
 
 export ORCHESTRATOR_DATABASE_URL="${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator}"
 export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"
