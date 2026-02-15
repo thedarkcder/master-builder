@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from orchestrator.api.discord.shared.response_format import build_issue_url_list, format_issue_markdown_list
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraOAuthError
 
@@ -50,7 +51,14 @@ def seed_issues_with_codex(
             runtime=runtime,
             prompt_markdown=prompt_markdown,
             allowed_project_keys=project_keys,
-            working_dir=codex_working_dir,
+            invocation_context=CodexInvocationContext(
+                channel="discord",
+                tenant_id=tenant.tenant_id,
+                project_id=None,
+                command="issues",
+                stage="seed",
+                working_dir=codex_working_dir,
+            ),
         )
     except codex_runtime_error_type as exc:
         raise HTTPException(

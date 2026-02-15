@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.storage.models import Tenant
 
 
@@ -65,9 +66,17 @@ def ask_board_message(
             project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
             issues=issues,
             status_counts=status_counts,
+            invocation_context=CodexInvocationContext(
+                channel="discord",
+                tenant_id=tenant.tenant_id,
+                project_id=None,
+                command="ask",
+                stage="answer",
+                working_dir=codex_working_dir,
+                issue_key=scoped_issue_key,
+            ),
             history=history_context,
             github_context=github_context,
-            working_dir=codex_working_dir,
         )
     except codex_runtime_error_type as exc:
         raise HTTPException(

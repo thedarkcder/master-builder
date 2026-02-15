@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.codex_agents import answer_board_question_with_codex, plan_discord_ask_intent_with_codex
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.storage.models import Tenant
@@ -77,6 +78,15 @@ def dispatch_ask_command(
         )
         settings = get_settings()
         runtime = build_codex_runtime(session=session, settings=settings)
+        invocation_context = CodexInvocationContext(
+            channel="discord",
+            tenant_id=tenant.tenant_id,
+            project_id=None,
+            command="ask",
+            stage="intent",
+            working_dir=codex_working_dir,
+            issue_key=scoped_issue_key,
+        )
         github_context = collect_github_ask_context(
             session=session,
             tenant=tenant,
@@ -89,9 +99,9 @@ def dispatch_ask_command(
                 project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
                 issues=issues,
                 status_counts=status_counts,
+                invocation_context=invocation_context,
                 history=history_context,
                 github_context=github_context,
-                working_dir=codex_working_dir,
             )
         except CodexRuntimeError as exc:
             raise HTTPException(
@@ -131,9 +141,17 @@ def dispatch_ask_command(
             project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
             issues=issues,
             status_counts=status_counts,
+            invocation_context=CodexInvocationContext(
+                channel="discord",
+                tenant_id=tenant.tenant_id,
+                project_id=None,
+                command="ask",
+                stage="answer",
+                working_dir=codex_working_dir,
+                issue_key=scoped_issue_key,
+            ),
             history=history_context,
             github_context=github_context,
-            working_dir=codex_working_dir,
         )
         store_ask_history_entry(
             session=session,

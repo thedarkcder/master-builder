@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
+from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (
@@ -78,13 +79,15 @@ def _upsert_decision_gate_clarifications_block(*, current_description: str, bloc
 def _plan_decision_gate_jira_update(
     *,
     runtime,  # noqa: ANN001
+    invocation_context: CodexInvocationContext,
     issue_key: str,
     current_summary: str,
     current_description: str,
     reply_text: str,
-    working_dir: str,
 ) -> tuple[str, str]:
-    payload = runtime.run_json(
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
         system_prompt=(
             "You extract Decision Gate clarification fields from a user reply. "
             "Return strict JSON only with keys: "
@@ -103,7 +106,6 @@ def _plan_decision_gate_jira_update(
             "- Include field text only when supported by user reply.\n"
             "- Keep summary concise (<=255 chars), close to current summary wording.\n"
         ),
-        working_dir=working_dir,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return JSON object for Decision Gate update")
@@ -386,11 +388,19 @@ def dispatch_run_control_command(
             )
             updated_summary, updated_description = _plan_decision_gate_jira_update(
                 runtime=runtime,
+                invocation_context=CodexInvocationContext(
+                    channel="discord",
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    command="reply",
+                    stage="decision_gate_normalize",
+                    working_dir=codex_working_dir,
+                    issue_key=issue_key,
+                ),
                 issue_key=issue_key,
                 current_summary=issue_detail.summary,
                 current_description=issue_detail.description,
                 reply_text=reply_text,
-                working_dir=codex_working_dir,
             )
             oauth_client.update_issue_summary_and_description(
                 access_token=oauth_access_token,
