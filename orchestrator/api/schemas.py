@@ -248,6 +248,8 @@ class RunRead(BaseModel):
     tenant_id: str
     project_id: str | None
     issue_key: str
+    issue_summary: str | None = None
+    issue_url: str | None = None
     repo_url: str | None
     branch: str | None
     pr_url: str | None

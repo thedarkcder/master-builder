@@ -44,7 +44,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"]}',
+                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
                     '{"change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
                     '{"passed":true,"guidance":["run tests"],"feedback":null}',
                     '{"approved":true,"summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1"}',
@@ -55,7 +55,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         request = self._request()
 
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            plan = agents.pm(request)
+            plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
             review = agents.review(request, plan, dev, test_result, 1)
@@ -136,7 +136,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
                 _on_log_line("stderr", "line-2")
-            return '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[]}'
+            return '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -147,11 +147,11 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime, log_sink=lambda payload: captured_logs.append(payload))
 
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            plan = agents.pm(self._request())
+            plan = agents.pm(self._request(), 1, None, [], None, None, None)
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(len(captured_logs), 2)
         self.assertEqual(captured_logs[0]["stage"], "pm")
-        self.assertEqual(captured_logs[0]["attempt"], 0)
+        self.assertEqual(captured_logs[0]["attempt"], 1)
         self.assertEqual(captured_logs[0]["stream"], "stdout")
         self.assertEqual(captured_logs[0]["message"], "line-1")
         self.assertEqual(captured_logs[1]["stream"], "stderr")
@@ -162,7 +162,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
-            return '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[]}'
+            return '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -176,7 +176,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
             patch("orchestrator.core.codex_invocation._persist_codex_log_line", side_effect=RuntimeError("db down")),
         ):
-            plan = agents.pm(self._request())
+            plan = agents.pm(self._request(), 1, None, [], None, None, None)
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(len(captured_logs), 1)
         self.assertEqual(captured_logs[0]["message"], "line-1")

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException, Request
+from starlette.requests import ClientDisconnect
 
 from orchestrator.api.webhooks import contracts, jira_payload_contracts, payload_utils
 
@@ -50,6 +51,23 @@ class PayloadUtilsTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(payload_utils.read_json_payload(request, request_id="req-1", source="jira"))
         self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_read_json_payload_handles_client_disconnect(self) -> None:
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [],
+        }
+
+        async def receive() -> dict:
+            raise ClientDisconnect()
+
+        request = Request(scope, receive)
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(payload_utils.read_json_payload(request, request_id="req-1", source="jira"))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Client disconnected", str(ctx.exception.detail))
 
     def test_extract_webhook_token_prefers_custom_header_then_bearer(self) -> None:
         direct = _build_request(headers={"X-Webhook-Token": "abc"})
@@ -147,4 +165,3 @@ class WebhookContractsTests(unittest.TestCase):
             session=MagicMock(),
             settings=SimpleNamespace(secrets_encryption_key="key"),
         )
-

@@ -13,12 +13,23 @@ from orchestrator.core.workflow.runner import (
 class _FakeAgents:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.pm_results_by_attempt: dict[int, PmPlan] = {}
         self.test_results_by_attempt: dict[int, TestResult] = {}
         self.review_results_by_attempt: dict[int, ReviewResult] = {}
 
-    def pm(self, request: WorkflowRequest) -> PmPlan:
-        self.calls.append("pm")
-        return PmPlan(
+    def pm(
+        self,
+        request: WorkflowRequest,
+        attempt: int,
+        feedback: str | None,
+        history: list[dict[str, str]],
+        last_dev_result: DevResult | None,
+        last_test_result: TestResult | None,
+        last_review_result: ReviewResult | None,
+    ) -> PmPlan:
+        _ = request, history, last_dev_result, last_test_result, last_review_result
+        self.calls.append(f"pm:{attempt}:{feedback or '-'}")
+        return self.pm_results_by_attempt.get(attempt) or PmPlan(
             plan_steps=["analyze", "implement", "validate"],
             acceptance_criteria=["ship PR output", "include tests"],
             risks=["integration drift"],
@@ -102,7 +113,7 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertEqual(result.attempts, 1)
         self.assertEqual(
             agents.calls,
-            ["pm", "dev:1:-", "test:1", "review:1"],
+            ["pm:1:-", "dev:1:-", "test:1", "review:1"],
         )
         self.assertEqual(result.pr_url, "https://github.com/example/repo/pull/1")
         self.assertEqual(result.summary, ["ready for PR"])
@@ -126,9 +137,10 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertEqual(
             agents.calls,
             [
-                "pm",
+                "pm:1:-",
                 "dev:1:-",
                 "test:1",
+                "pm:2:unit tests failed",
                 "dev:2:unit tests failed",
                 "test:2",
                 "review:2",
@@ -150,10 +162,11 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertEqual(
             agents.calls,
             [
-                "pm",
+                "pm:1:-",
                 "dev:1:-",
                 "test:1",
                 "review:1",
+                "pm:2:needs edge-case handling",
                 "dev:2:needs edge-case handling",
                 "test:2",
                 "review:2",
@@ -187,7 +200,9 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertEqual(
             result.diagnostics.history,
             [
+                {"stage": "pm", "attempt": "1", "event": "route:dev"},
                 {"stage": "test", "attempt": "1", "event": "test failure attempt 1"},
+                {"stage": "pm", "attempt": "2", "event": "route:dev"},
                 {"stage": "test", "attempt": "2", "event": "test failure attempt 2"},
             ],
         )
@@ -245,13 +260,22 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "dev")
         self.assertIn("Dev stage blocked", result.diagnostics.message)
-        self.assertEqual(agents.calls, ["pm", "dev:1:-"])
+        self.assertEqual(agents.calls, ["pm:1:-", "dev:1:-"])
 
     def test_blocked_pm_result_fails_immediately(self) -> None:
         agents = _FakeAgents()
 
-        def _blocked_pm(_request: WorkflowRequest) -> PmPlan:
-            agents.calls.append("pm")
+        def _blocked_pm(
+            _request: WorkflowRequest,
+            attempt: int,
+            feedback: str | None,
+            history: list[dict[str, str]],
+            last_dev_result: DevResult | None,
+            last_test_result: TestResult | None,
+            last_review_result: ReviewResult | None,
+        ) -> PmPlan:
+            _ = feedback, history, last_dev_result, last_test_result, last_review_result
+            agents.calls.append(f"pm:{attempt}:-")
             return PmPlan(
                 plan_steps=["Blocked: unresolved runtime dependency"],
                 acceptance_criteria=["ac1"],
@@ -265,25 +289,80 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "pm")
         self.assertIn("PM stage blocked", result.diagnostics.message)
-        self.assertEqual(agents.calls, ["pm"])
+        self.assertEqual(agents.calls, ["pm:1:-"])
 
-    def test_blocked_test_result_fails_immediately_without_retry(self) -> None:
+    def test_blocked_test_result_retries_dev_with_blocker_feedback(self) -> None:
         agents = _FakeAgents()
         agents.test_results_by_attempt[1] = TestResult(
             passed=False,
             guidance=["Blocked: cannot run required test suite"],
             feedback=None,
         )
+        agents.test_results_by_attempt[2] = TestResult(
+            passed=True,
+            guidance=["tests now pass"],
+            feedback=None,
+        )
         result = WorkflowRunner(agents).run(self._request(loops=2))
 
-        self.assertFalse(result.succeeded)
-        self.assertIsNotNone(result.diagnostics)
-        self.assertEqual(result.diagnostics.stage, "test")
-        self.assertIn("Test stage blocked", result.diagnostics.message)
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.attempts, 2)
         self.assertEqual(
             agents.calls,
-            ["pm", "dev:1:-", "test:1"],
+            [
+                "pm:1:-",
+                "dev:1:-",
+                "test:1",
+                "pm:2:Blocked: cannot run required test suite",
+                "dev:2:Blocked: cannot run required test suite",
+                "test:2",
+                "review:2",
+            ],
         )
+
+    def test_test_feedback_hook_receives_blocker_before_retry(self) -> None:
+        agents = _FakeAgents()
+        agents.test_results_by_attempt[1] = TestResult(
+            passed=False,
+            guidance=["Blocked: simulator unavailable"],
+            feedback=None,
+        )
+        agents.test_results_by_attempt[2] = TestResult(
+            passed=True,
+            guidance=["tests pass"],
+            feedback=None,
+        )
+        feedback_events: list[tuple[int, str]] = []
+
+        result = WorkflowRunner(agents).run(
+            self._request(loops=2),
+            test_feedback_hook=lambda attempt, feedback: feedback_events.append((attempt, feedback)),
+        )
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(feedback_events, [(1, "Blocked: simulator unavailable")])
+
+    def test_test_feedback_hook_receives_non_blocking_test_failure(self) -> None:
+        agents = _FakeAgents()
+        agents.test_results_by_attempt[1] = TestResult(
+            passed=False,
+            guidance=["fix assertion mismatch"],
+            feedback="assertion mismatch in onboarding flow",
+        )
+        agents.test_results_by_attempt[2] = TestResult(
+            passed=True,
+            guidance=["tests pass"],
+            feedback=None,
+        )
+        feedback_events: list[tuple[int, str]] = []
+
+        result = WorkflowRunner(agents).run(
+            self._request(loops=2),
+            test_feedback_hook=lambda attempt, feedback: feedback_events.append((attempt, feedback)),
+        )
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(feedback_events, [(1, "assertion mismatch in onboarding flow")])
 
     def test_blocked_review_result_fails_immediately_without_retry(self) -> None:
         agents = _FakeAgents()
@@ -301,10 +380,10 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertIn("Review stage blocked", result.diagnostics.message)
         self.assertEqual(
             agents.calls,
-            ["pm", "dev:1:-", "test:1", "review:1"],
+            ["pm:1:-", "dev:1:-", "test:1", "review:1"],
         )
 
-    def test_gtd_preflight_blocks_when_required_context_missing(self) -> None:
+    def test_runner_does_not_apply_gtd_preflight_gate(self) -> None:
         agents = _FakeAgents()
         request = WorkflowRequest(
             tenant_id="tenant-a",
@@ -318,11 +397,40 @@ class WorkflowRunnerTests(unittest.TestCase):
 
         result = WorkflowRunner(agents).run(request)
 
-        self.assertFalse(result.succeeded)
-        self.assertIsNotNone(result.diagnostics)
-        self.assertEqual(result.diagnostics.stage, "preflight")
-        self.assertIn("Good To Do validation failed", result.diagnostics.message)
-        self.assertEqual(agents.calls, [])
+        self.assertTrue(result.succeeded)
+        self.assertIsNone(result.diagnostics)
+        self.assertEqual(
+            agents.calls,
+            ["pm:1:-", "dev:1:-", "test:1", "review:1"],
+        )
+
+    def test_pm_can_route_directly_to_test_on_retry(self) -> None:
+        agents = _FakeAgents()
+        agents.test_results_by_attempt[1] = TestResult(
+            passed=False,
+            guidance=["rerun tests"],
+            feedback="transient simulator failure",
+        )
+        agents.pm_results_by_attempt[2] = PmPlan(
+            plan_steps=["Re-run validation only"],
+            acceptance_criteria=["tests pass"],
+            risks=[],
+            next_stage="test",
+        )
+        result = WorkflowRunner(agents).run(self._request(loops=2))
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(
+            agents.calls,
+            [
+                "pm:1:-",
+                "dev:1:-",
+                "test:1",
+                "pm:2:transient simulator failure",
+                "test:2",
+                "review:2",
+            ],
+        )
 
     def test_placeholder_without_tracked_followup_blocks_with_draft_followup(self) -> None:
         agents = _FakeAgents()

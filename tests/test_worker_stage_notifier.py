@@ -41,12 +41,30 @@ class WorkerStageNotifierTests(unittest.TestCase):
         discord_calls: list[dict[str, object]] = []
         jira_calls: list[dict[str, object]] = []
 
-        def fake_discord(**kwargs):  # noqa: ANN003
-            discord_calls.append(kwargs)
+        def fake_discord(*, session, tenant, project, message: str, settings, event: str):  # noqa: ANN001
+            discord_calls.append(
+                {
+                    "session": session,
+                    "tenant": tenant,
+                    "project": project,
+                    "message": message,
+                    "settings": settings,
+                    "event": event,
+                }
+            )
             return SimpleNamespace(sent=True, reason=None)
 
-        def fake_jira(**kwargs):  # noqa: ANN003
-            jira_calls.append(kwargs)
+        def fake_jira(*, session, tenant, issue_key: str, stage: str, message: str, settings):  # noqa: ANN001
+            jira_calls.append(
+                {
+                    "session": session,
+                    "tenant": tenant,
+                    "issue_key": issue_key,
+                    "stage": stage,
+                    "message": message,
+                    "settings": settings,
+                }
+            )
 
         session = MagicMock()
         notifier = RunStageNotifier(

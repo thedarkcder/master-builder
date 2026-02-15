@@ -31,6 +31,7 @@ from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.discord.channel_tenant_index import invalidate_discord_channel_tenant_index
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests, webhook_health_tracker
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -57,6 +58,15 @@ class JiraWebhookTests(unittest.TestCase):
                 questions=(),
                 recommendation="Proceed" if outcome != "decision_gate_required" else "Decision required before build",
                 tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=(outcome != "gtd_required"),
+                missing_criteria=(() if outcome != "gtd_required" else ("Dependencies and risks identified",)),
+                clarification_questions=(
+                    ()
+                    if outcome != "gtd_required"
+                    else ("Which dependencies or risks may impact delivery?",)
+                ),
             ),
         )
 

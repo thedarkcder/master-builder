@@ -25,6 +25,13 @@ export function TenantProjectDetailsPage() {
   const [jiraOptions, setJiraOptions] = useState<string[]>([]);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsBusy, setRunsBusy] = useState(false);
+  const [runIssueFilter, setRunIssueFilter] = useState("");
+  const [runStatusFilter, setRunStatusFilter] = useState("");
+  const [runPrFilter, setRunPrFilter] = useState<"any" | "none" | "has_value">("any");
+  const [runFromDate, setRunFromDate] = useState("");
+  const [runToDate, setRunToDate] = useState("");
+  const [runPage, setRunPage] = useState(1);
+  const [runPageSize, setRunPageSize] = useState(25);
 
   async function loadOptions() {
     if (!credentials) {
@@ -78,9 +85,18 @@ export function TenantProjectDetailsPage() {
     }
     setRunsBusy(true);
     try {
+      const from = runFromDate ? new Date(`${runFromDate}T00:00:00.000Z`).toISOString() : undefined;
+      const to = runToDate ? new Date(`${runToDate}T23:59:59.999Z`).toISOString() : undefined;
       const payload = await listRuns(credentials, {
         tenantId: params.tenantId,
         projectId: params.projectId,
+        issue: runIssueFilter || undefined,
+        status: runStatusFilter || undefined,
+        prState: runPrFilter === "any" ? undefined : runPrFilter,
+        from,
+        to,
+        limit: runPageSize,
+        offset: (runPage - 1) * runPageSize,
       });
       setRuns(payload);
     } finally {
@@ -103,6 +119,12 @@ export function TenantProjectDetailsPage() {
       void loadProject();
     }
   }, [ready, credentials, params.tenantId, params.projectId]);
+
+  useEffect(() => {
+    if (ready && credentials && project) {
+      void loadRuns();
+    }
+  }, [ready, credentials, project, runPage, runPageSize]);
 
   async function toggleArchive() {
     if (!credentials || !project) {
@@ -261,6 +283,72 @@ export function TenantProjectDetailsPage() {
             </div>
             <div className="space-y-2 border-t pt-4">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Project runs</p>
+              <div className="grid gap-2 md:grid-cols-3">
+                <Input
+                  value={runIssueFilter}
+                  onChange={(event) => setRunIssueFilter(event.target.value)}
+                  placeholder="Issue key or summary"
+                  disabled={runsBusy}
+                />
+                <Input
+                  value={runStatusFilter}
+                  onChange={(event) => setRunStatusFilter(event.target.value)}
+                  placeholder="Status"
+                  disabled={runsBusy}
+                />
+                <select
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  value={runPrFilter}
+                  onChange={(event) => setRunPrFilter(event.target.value as "any" | "none" | "has_value")}
+                  disabled={runsBusy}
+                >
+                  <option value="any">PR: Any</option>
+                  <option value="none">PR: None</option>
+                  <option value="has_value">PR: Has value</option>
+                </select>
+                <Input
+                  type="date"
+                  value={runFromDate}
+                  onChange={(event) => setRunFromDate(event.target.value)}
+                  placeholder="From date"
+                  disabled={runsBusy}
+                />
+                <Input
+                  type="date"
+                  value={runToDate}
+                  onChange={(event) => setRunToDate(event.target.value)}
+                  placeholder="To date"
+                  disabled={runsBusy}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setRunPage(1);
+                      void loadRuns();
+                    }}
+                    disabled={runsBusy}
+                  >
+                    Apply
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setRunIssueFilter("");
+                      setRunStatusFilter("");
+                      setRunPrFilter("any");
+                      setRunFromDate("");
+                      setRunToDate("");
+                      setRunPage(1);
+                    }}
+                    disabled={runsBusy}
+                  >
+                    Clear
+                  </Button>
+                </div>
+              </div>
               {runs.length === 0 ? (
                 <p className="rounded-md border p-3 text-sm text-muted-foreground">No runs for this project yet.</p>
               ) : (
@@ -279,10 +367,19 @@ export function TenantProjectDetailsPage() {
                       <TableRow key={run.run_id}>
                         <TableCell className="font-medium">
                           <Link className="text-primary hover:underline" href={`/runs/${encodeURIComponent(run.run_id)}`}>
-                            {run.run_id}
+                            {run.issue_summary?.trim() || run.issue_key || run.run_id}
                           </Link>
+                          <p className="text-xs text-muted-foreground">{run.run_id}</p>
                         </TableCell>
-                        <TableCell>{run.issue_key}</TableCell>
+                        <TableCell>
+                          {run.issue_url ? (
+                            <Link className="text-primary hover:underline" href={run.issue_url} target="_blank" rel="noopener noreferrer">
+                              {run.issue_key}
+                            </Link>
+                          ) : (
+                            run.issue_key
+                          )}
+                        </TableCell>
                         <TableCell>{statusBadge(run.status)}</TableCell>
                         <TableCell>{new Date(run.created_at).toLocaleString()}</TableCell>
                         <TableCell>
@@ -299,6 +396,41 @@ export function TenantProjectDetailsPage() {
                   </TableBody>
                 </Table>
               )}
+              <div className="flex items-center justify-end gap-2">
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  Page size
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-2"
+                    value={String(runPageSize)}
+                    onChange={(event) => {
+                      setRunPageSize(Number(event.target.value));
+                      setRunPage(1);
+                    }}
+                    disabled={runsBusy}
+                  >
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRunPage((current) => Math.max(1, current - 1))}
+                  disabled={runsBusy || runPage <= 1}
+                >
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {runPage}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRunPage((current) => current + 1)}
+                  disabled={runsBusy || runs.length < runPageSize}
+                >
+                  Next
+                </Button>
+              </div>
             </div>
           </>
         ) : (

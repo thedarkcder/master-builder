@@ -10,34 +10,86 @@ from orchestrator.core.communications.enqueue_reason_contract import format_enqu
 from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent
 
 
+def _with_issue_url(payload, issue_url: str | None):  # noqa: ANN001
+    if hasattr(payload, "model_copy"):
+        return payload.model_copy(update={"issue_url": issue_url})
+    if isinstance(payload, dict):
+        updated = dict(payload)
+        updated["issue_url"] = issue_url
+        return updated
+    if hasattr(payload, "issue_url"):
+        payload.issue_url = issue_url
+    return payload
+
+
 def list_runs(
     *,
     session,
     tenant_id: str | None,
     project_id: str | None,
     status_filter: str | None,
+    issue_query: str | None,
+    pr_state: str | None,
     from_time,
     to_time,
+    limit: int,
+    offset: int,
     build_runs_query_fn,
     run_to_schema_fn,
+    tenant_model,
+    tenant_jira_issue_url_fn,
 ):  # noqa: ANN001
     query = build_runs_query_fn(
         tenant_id=tenant_id,
         project_id=project_id,
         status_filter=status_filter,
+        issue_query=issue_query,
+        pr_state=pr_state,
         from_time=from_time,
         to_time=to_time,
+        limit=limit,
+        offset=offset,
     )
     runs = session.execute(query).scalars().all()
-    return [run_to_schema_fn(run) for run in runs]
+    tenant_cache: dict[str, object | None] = {}
+    payloads = []
+    for run in runs:
+        schema = run_to_schema_fn(run)
+        run_tenant_id = str(getattr(run, "tenant_id", "") or "").strip()
+        run_issue_key = str(getattr(run, "issue_key", "") or "").strip()
+        current_tenant = tenant_cache.get(run_tenant_id) if run_tenant_id else None
+        if run_tenant_id and run_tenant_id not in tenant_cache:
+            current_tenant = session.get(tenant_model, run_tenant_id)
+            tenant_cache[run_tenant_id] = current_tenant
+        issue_url = (
+            tenant_jira_issue_url_fn(
+                session=session,
+                tenant=current_tenant,
+                issue_key=run_issue_key,
+            )
+            if current_tenant is not None and run_issue_key
+            else None
+        )
+        payloads.append(_with_issue_url(schema, issue_url))
+    return payloads
 
 
-def get_run(*, session, run_id: str, run_model, run_to_schema_fn):  # noqa: ANN001
+def get_run(*, session, run_id: str, run_model, run_to_schema_fn, tenant_model, tenant_jira_issue_url_fn):  # noqa: ANN001
     run = session.get(run_model, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-
-    return run_to_schema_fn(run)
+    payload = run_to_schema_fn(run)
+    tenant = session.get(tenant_model, run.tenant_id)
+    issue_url = (
+        tenant_jira_issue_url_fn(
+            session=session,
+            tenant=tenant,
+            issue_key=run.issue_key,
+        )
+        if tenant is not None
+        else None
+    )
+    return _with_issue_url(payload, issue_url)
 
 
 def rerun_run(

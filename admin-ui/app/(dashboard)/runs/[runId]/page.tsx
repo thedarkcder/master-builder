@@ -189,20 +189,32 @@ export default function RunDetailPage() {
   const liveStageUpdates = Array.isArray(run?.plan?.["live_stage_updates"])
     ? (run?.plan?.["live_stage_updates"] as Array<Record<string, unknown>>)
     : [];
-  const availableLogAgents = useMemo(
-    () => Array.from(new Set(logs.map((entry) => entry.agent_id))).sort(),
-    [logs]
-  );
+  function selectedAgentStage(filter: string): string {
+    if (filter === "tester") {
+      return "test";
+    }
+    return filter;
+  }
   const filteredLogs = useMemo(
     () =>
       logs.filter((entry) => {
-        const agentMatch = logAgentFilter === "all" || entry.agent_id === logAgentFilter;
+        const agentMatch =
+          logAgentFilter === "all" || entry.stage === selectedAgentStage(logAgentFilter);
         const stageMatch = logStageFilter === "all" || entry.stage === logStageFilter;
         const streamMatch = logStreamFilter === "all" || entry.stream === logStreamFilter;
         return agentMatch && stageMatch && streamMatch;
       }),
     [logs, logAgentFilter, logStageFilter, logStreamFilter]
   );
+  const codePath = useMemo(() => {
+    for (let idx = logs.length - 1; idx >= 0; idx -= 1) {
+      const value = logs[idx]?.working_dir?.trim();
+      if (value) {
+        return value;
+      }
+    }
+    return null;
+  }, [logs]);
 
   return (
     <Card>
@@ -227,7 +239,7 @@ export default function RunDetailPage() {
               </Button>
             ) : null}
             <Button asChild variant="outline">
-              <Link href="/runs">
+              <Link href={run ? `/tenants/${encodeURIComponent(run.tenant_id)}/runs` : "/tenants/select"}>
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back to Runs
               </Link>
@@ -247,7 +259,14 @@ export default function RunDetailPage() {
                 <strong>Project:</strong> {run.project_id ?? "None"}
               </p>
               <p>
-                <strong>Issue:</strong> {run.issue_key || "None"}
+                <strong>Issue:</strong>{" "}
+                {run.issue_url && run.issue_key ? (
+                  <Link className="text-primary hover:underline" href={run.issue_url} target="_blank" rel="noopener noreferrer">
+                    {run.issue_key}
+                  </Link>
+                ) : (
+                  run.issue_key || "None"
+                )}
               </p>
               <p>
                 <strong>Status:</strong> {statusBadge(run.status)}
@@ -265,7 +284,32 @@ export default function RunDetailPage() {
                 <strong>Branch:</strong> {run.branch ?? "None"}
               </p>
               <p className="md:col-span-2">
-                <strong>Repository:</strong> {run.repo_url ?? "None"}
+                <strong>Repository:</strong>{" "}
+                {run.repo_url ? (
+                  <Link className="text-primary hover:underline" href={run.repo_url} target="_blank" rel="noopener noreferrer">
+                    {run.repo_url}
+                  </Link>
+                ) : (
+                  "None"
+                )}
+              </p>
+              <p className="md:col-span-2">
+                <strong>Code Path:</strong>{" "}
+                {codePath ? (
+                  <>
+                    <a
+                      className="text-primary hover:underline"
+                      href={`file://${encodeURI(codePath)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open local path
+                    </a>
+                    <span className="ml-2 break-all text-muted-foreground">{codePath}</span>
+                  </>
+                ) : (
+                  "Not available yet"
+                )}
               </p>
               <p className="md:col-span-2">
                 <strong>PR:</strong>{" "}
@@ -333,11 +377,10 @@ export default function RunDetailPage() {
                       onChange={(event) => setLogAgentFilter(event.target.value)}
                     >
                       <option value="all">All</option>
-                      {availableLogAgents.map((agentId) => (
-                        <option key={agentId} value={agentId}>
-                          {agentId}
-                        </option>
-                      ))}
+                      <option value="pm">pm</option>
+                      <option value="dev">dev</option>
+                      <option value="tester">tester</option>
+                      <option value="review">review</option>
                     </select>
                   </label>
                   <label className="flex items-center gap-1">

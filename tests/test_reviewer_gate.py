@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+from orchestrator.core.pr_ready import PrReadinessResult
 from orchestrator.core.reviewer import ReviewAgentGate
 from orchestrator.tools.github_app import PullRequestDetails, PullRequestFileChange, WorkflowCheckSuite
 
@@ -40,8 +42,25 @@ class _FakeGitHubClient:
 
 
 class ReviewerGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._readiness_patch = patch(
+            "orchestrator.core.reviewer.evaluate_pr_readiness",
+            side_effect=_stub_readiness_evaluator,
+        )
+        self._readiness_patch.start()
+
+    def tearDown(self) -> None:
+        self._readiness_patch.stop()
+
+    def _gate(self, client: _FakeGitHubClient) -> ReviewAgentGate:
+        return ReviewAgentGate(
+            client,
+            tenant_id="route25",
+            project_id="route25-default",
+        )
+
     def test_reviewer_emits_ready_only_when_checks_green(self) -> None:
-        gate = ReviewAgentGate(
+        gate = self._gate(
             _FakeGitHubClient(
                 checks=[
                     WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
@@ -59,7 +78,7 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertIn("✅ PR Ready", signal.message)
 
     def test_reviewer_reports_pending_without_ready_signal(self) -> None:
-        gate = ReviewAgentGate(
+        gate = self._gate(
             _FakeGitHubClient(
                 checks=[
                     WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
@@ -77,7 +96,7 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertEqual(signal.message, "PR opened, checks running: Security")
 
     def test_reviewer_reports_failures_without_ready_signal(self) -> None:
-        gate = ReviewAgentGate(
+        gate = self._gate(
             _FakeGitHubClient(
                 checks=[
                     WorkflowCheckSuite(name="CI", status="completed", conclusion="failure"),
@@ -95,7 +114,7 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertEqual(signal.message, "PR checks failing: CI")
 
     def test_reviewer_reports_policy_violations_as_must_fix(self) -> None:
-        gate = ReviewAgentGate(
+        gate = self._gate(
             _FakeGitHubClient(
                 checks=[
                     WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
@@ -121,7 +140,7 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertTrue(signal.must_fix_findings)
 
     def test_reviewer_reports_missing_review_sections_as_not_ready(self) -> None:
-        gate = ReviewAgentGate(
+        gate = self._gate(
             _FakeGitHubClient(
                 checks=[
                     WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
@@ -139,7 +158,7 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertIn("missing required sections", signal.message)
 
     def test_reviewer_reports_missing_test_coverage_for_source_changes(self) -> None:
-        gate = ReviewAgentGate(
+        gate = self._gate(
             _FakeGitHubClient(
                 checks=[
                     WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
@@ -156,7 +175,7 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertEqual(signal.state, "missing_test_coverage")
 
     def test_reviewer_accepts_jest_test_js_coverage(self) -> None:
-        gate = ReviewAgentGate(
+        gate = self._gate(
             _FakeGitHubClient(
                 checks=[
                     WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
@@ -173,3 +192,88 @@ class ReviewerGateTests(unittest.TestCase):
             pr_number=16,
         )
         self.assertNotEqual(signal.state, "missing_test_coverage")
+
+
+def _stub_readiness_evaluator(  # noqa: ANN001
+    *,
+    review_summary_markdown,
+    required_workflows,
+    workflow_checks,
+    tenant_id=None,
+    project_id=None,
+):
+    _ = tenant_id, project_id
+    check_by_name = {check.name: check for check in workflow_checks}
+    missing_workflows = tuple(name for name in required_workflows if name not in check_by_name)
+    if missing_workflows:
+        return PrReadinessResult(
+            ready=False,
+            state="missing_checks",
+            reason="Missing required workflows",
+            missing_workflows=missing_workflows,
+            pending_workflows=(),
+            failing_workflows=(),
+            missing_review_sections=(),
+        )
+
+    pending_workflows = tuple(
+        check.name
+        for check in workflow_checks
+        if check.name in required_workflows
+        and (check.status != "completed" or not check.conclusion)
+    )
+    if pending_workflows:
+        return PrReadinessResult(
+            ready=False,
+            state="pending_checks",
+            reason="Required workflows pending",
+            missing_workflows=(),
+            pending_workflows=pending_workflows,
+            failing_workflows=(),
+            missing_review_sections=(),
+        )
+
+    failing_workflows = tuple(
+        check.name
+        for check in workflow_checks
+        if check.name in required_workflows
+        and check.status == "completed"
+        and check.conclusion != "success"
+    )
+    if failing_workflows:
+        return PrReadinessResult(
+            ready=False,
+            state="failing_checks",
+            reason="Required workflows failing",
+            missing_workflows=(),
+            pending_workflows=(),
+            failing_workflows=failing_workflows,
+            missing_review_sections=(),
+        )
+
+    required_sections = ("Good:", "Risks:", "Must-fix:", "Tests:", "Questions:", "Follow-ups:")
+    missing_review_sections = tuple(
+        section.rstrip(":")
+        for section in required_sections
+        if section.lower() not in str(review_summary_markdown or "").lower()
+    )
+    if missing_review_sections:
+        return PrReadinessResult(
+            ready=False,
+            state="missing_review_sections",
+            reason="Missing required review sections",
+            missing_workflows=(),
+            pending_workflows=(),
+            failing_workflows=(),
+            missing_review_sections=missing_review_sections,
+        )
+
+    return PrReadinessResult(
+        ready=True,
+        state="ready",
+        reason="All checks passed",
+        missing_workflows=(),
+        pending_workflows=(),
+        failing_workflows=(),
+        missing_review_sections=(),
+    )

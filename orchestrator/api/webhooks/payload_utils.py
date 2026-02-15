@@ -5,6 +5,7 @@ import logging
 import os
 
 from fastapi import HTTPException, Request, status
+from starlette.requests import ClientDisconnect
 
 DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1_048_576
 HTTP_413_TOO_LARGE = getattr(
@@ -38,7 +39,18 @@ async def read_json_payload(
     request_id: str,
     source: str,
 ) -> tuple[dict, bytes]:
-    body = await request.body()
+    try:
+        body = await request.body()
+    except ClientDisconnect as exc:
+        logger.warning(
+            "%s_webhook_client_disconnected request_id=%s",
+            source,
+            request_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Client disconnected before payload was fully received",
+        ) from exc
     max_bytes = max_webhook_body_bytes()
     if len(body) > max_bytes:
         logger.warning(

@@ -25,10 +25,22 @@ docker compose up --build -d postgres packages api worker tailscale
 export ORCHESTRATOR_DATABASE_URL="${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator}"
 export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"
 export ORCHESTRATOR_AGENT_ID="${ORCHESTRATOR_AGENT_ID:-worker-macos-local}"
+export ORCHESTRATOR_CODEX_SANDBOX_MODE="${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}"
+
+VENV_DIR="${ROOT_DIR}/.venv"
+if [[ ! -d "${VENV_DIR}" ]]; then
+  echo "Creating virtual environment at ${VENV_DIR}..."
+  python3 -m venv "${VENV_DIR}"
+fi
+
+echo "Installing/updating Python dependencies in ${VENV_DIR}..."
+"${VENV_DIR}/bin/python" -m pip install --upgrade pip
+"${VENV_DIR}/bin/pip" install -e .
 
 echo "Hybrid worker mode started."
 echo "Docker worker capability: linux (container)"
 echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"
+echo "Local Codex sandbox: ${ORCHESTRATOR_CODEX_SANDBOX_MODE}"
 echo "Starting local worker..."
 
-python -m orchestrator worker
+"${VENV_DIR}/bin/python" -m orchestrator worker

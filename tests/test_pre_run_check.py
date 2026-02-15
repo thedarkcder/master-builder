@@ -1,5 +1,6 @@
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.gtd import GoodToDoValidationResult
 from unittest.mock import patch
 
 
@@ -15,6 +16,14 @@ def test_pre_run_check_ready_for_agent_when_label_present_and_gate_clear() -> No
                 questions=(),
                 recommendation="Proceed",
                 tags=(),
+            ),
+        ),
+        patch(
+            "orchestrator.core.pre_run_check.validate_good_to_do",
+            return_value=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
             ),
         ),
     ):
@@ -46,6 +55,14 @@ def test_pre_run_check_missing_ready_label_when_gate_clear() -> None:
                 tags=(),
             ),
         ),
+        patch(
+            "orchestrator.core.pre_run_check.validate_good_to_do",
+            return_value=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        ),
     ):
         result = evaluate_pre_run_check(
             issue_summary="GP-80",
@@ -73,6 +90,14 @@ def test_pre_run_check_decision_gate_required_takes_priority() -> None:
                 tags=("[NEEDS-PM]",),
             ),
         ),
+        patch(
+            "orchestrator.core.pre_run_check.validate_good_to_do",
+            return_value=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        ),
     ):
         result = evaluate_pre_run_check(
             issue_summary="GP-80",
@@ -98,6 +123,14 @@ def test_pre_run_check_infers_macos_worker_requirement() -> None:
                 tags=(),
             ),
         ),
+        patch(
+            "orchestrator.core.pre_run_check.validate_good_to_do",
+            return_value=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        ),
     ):
         result = evaluate_pre_run_check(
             issue_summary="Build iOS onboarding flow",
@@ -108,3 +141,36 @@ def test_pre_run_check_infers_macos_worker_requirement() -> None:
     assert result.required_worker_capability == "macos"
     assert result.required_worker_label == "worker:macos"
     assert result.required_worker_label_present is True
+
+
+def test_pre_run_check_requires_gtd_before_ready_for_agent() -> None:
+    with (
+        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch(
+            "orchestrator.core.pre_run_check.evaluate_decision_gate",
+            return_value=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+        ),
+        patch(
+            "orchestrator.core.pre_run_check.validate_good_to_do",
+            return_value=GoodToDoValidationResult(
+                valid=False,
+                missing_criteria=("Dependencies and risks identified",),
+                clarification_questions=("Which dependencies or risks may impact delivery?",),
+            ),
+        ),
+    ):
+        result = evaluate_pre_run_check(
+            issue_summary="GP-80",
+            issue_description="desc",
+            issue_labels=["agent:ready"],
+            ready_label="agent:ready",
+        )
+    assert result.outcome == "gtd_required"
+    assert result.gtd_valid is False

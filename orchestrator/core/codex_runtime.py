@@ -145,6 +145,8 @@ def build_codex_runtime(
                     "--skip-git-repo-check",
                     "--sandbox",
                     settings.codex_sandbox_mode,
+                    "-c",
+                    f'reasoning.effort="{settings.codex_reasoning_effort}"',
                     "--color",
                     "never",
                     "--model",

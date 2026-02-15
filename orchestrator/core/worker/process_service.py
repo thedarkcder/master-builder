@@ -156,7 +156,20 @@ def process_next_queued_run(
         agent_id=agent_id,
     )
 
-    workflow_result = runner.run(workflow_request)
+    def _emit_test_feedback(attempt: int, feedback: str) -> None:
+        send_jira_message_fn(
+            session=session,
+            tenant=tenant,
+            issue_key=run.issue_key,
+            stage="test_feedback",
+            message=(
+                f"Test feedback (attempt {attempt}) for run {run.run_id}:\n{feedback}\n"
+                "Routing back to Dev for another iteration."
+            ),
+            settings=settings,
+        )
+
+    workflow_result = runner.run(workflow_request, test_feedback_hook=_emit_test_feedback)
     session.refresh(run)
     if run.status == run_status_cancelled:
         return finalize_cancelled_run_fn(session, run=run, stage_updates=notifier.stage_updates)

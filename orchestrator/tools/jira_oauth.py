@@ -47,8 +47,13 @@ class JiraOAuthClient:
             get_json=lambda url, access_token: self._get_json(url, access_token=access_token),
         )
         self._issue_service = JiraOAuthIssueService(
-            get_json=lambda **kwargs: self._get_json(kwargs["url"], access_token=kwargs["access_token"]),
-            request_json=lambda **kwargs: self._request_json(**kwargs),
+            get_json=lambda *, url, access_token: self._get_json(url, access_token=access_token),
+            request_json=lambda *, method, url, access_token, payload=None: self._request_json(
+                method=method,
+                url=url,
+                access_token=access_token,
+                payload=payload,
+            ),
         )
         self._webhook_manager = JiraOAuthWebhookManager(
             request_json=lambda method, url, access_token, payload: self._request_json(
@@ -59,7 +64,13 @@ class JiraOAuthClient:
             )
         )
         self._attachment_service = JiraOAuthAttachmentService(
-            post_multipart=lambda **kwargs: self._post_multipart(**kwargs),
+            post_multipart=lambda *, url, access_token, filename, content, content_type="application/octet-stream": self._post_multipart(
+                url=url,
+                access_token=access_token,
+                filename=filename,
+                content=content,
+                content_type=content_type,
+            ),
         )
 
     def _post_json(self, url: str, payload: dict) -> dict:
