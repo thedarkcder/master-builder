@@ -75,6 +75,14 @@ services:
         condition: service_healthy
       packages:
         condition: service_healthy
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        python -m orchestrator migrate
+        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000
     volumes:
       - codex-home:/root/.codex
       - project-repos:/tmp/master-builder-project-repos
@@ -109,7 +117,14 @@ services:
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
-    command: ["sh", "-c", "python -m orchestrator migrate && python -m orchestrator worker"]
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        python -m orchestrator migrate
+        python -m orchestrator worker
     volumes:
       - codex-home:/root/.codex
       - project-repos:/tmp/master-builder-project-repos
