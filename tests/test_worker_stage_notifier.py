@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
 from orchestrator.storage.models import Run, Tenant
@@ -47,8 +48,9 @@ class WorkerStageNotifierTests(unittest.TestCase):
         def fake_jira(**kwargs):  # noqa: ANN003
             jira_calls.append(kwargs)
 
+        session = MagicMock()
         notifier = RunStageNotifier(
-            session=object(),
+            session=session,
             tenant=tenant,
             run=run,
             settings=SimpleNamespace(),
@@ -74,3 +76,4 @@ class WorkerStageNotifierTests(unittest.TestCase):
         self.assertEqual(len(jira_calls), 1)
         self.assertEqual(jira_calls[0]["stage"], "lock_acquired")
         self.assertEqual(jira_calls[0]["message"], "jira text")
+        session.commit.assert_called_once()

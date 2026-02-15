@@ -1154,6 +1154,11 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("\"event_kind\":\"run_log\"", response.text)
         self.assertIn("\"message\":\"live line\"", response.text)
 
+    def test_stream_run_events_missing_run_returns_not_found(self) -> None:
+        response = self.client.get("/api/admin/runs/run-missing/events/stream", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Run not found")
+
     def test_list_agent_activity_returns_dark_and_active_agents(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(

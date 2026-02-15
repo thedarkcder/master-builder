@@ -85,8 +85,10 @@ class SeedNormalizationTests(unittest.TestCase):
             scope_in=[],
             scope_out=[],
             acceptance=[],
+            how_to_test=[],
+            nfr_intent="TBD",
         )
-        self.assertEqual(len(questions), 4)
+        self.assertEqual(len(questions), 6)
 
 
 class QueueListenerTests(unittest.IsolatedAsyncioTestCase):

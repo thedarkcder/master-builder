@@ -63,7 +63,7 @@ class DiscordRouteWrapperHelperTests(unittest.TestCase):
 
         with patch.object(discord_route, "_download_discord_attachment_impl", return_value=(b"x", "text/plain")) as impl:
             self.assertEqual(discord_route._download_discord_attachment(url="https://example/file"), (b"x", "text/plain"))
-            impl.assert_called_once_with(url="https://example/file")
+            impl.assert_called_once_with(url="https://example/file", bot_token=None)
 
     def test_ask_history_and_existing_issue_key_helpers(self) -> None:
         tenant = SimpleNamespace(tenant_id="route25")
