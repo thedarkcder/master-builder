@@ -18,6 +18,7 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
             force_issue_keys=None,
             allow_create=True,
             scoped_project_keys=["GP"],
+            codex_working_dir="/tmp",
             tenant_project_keys_fn=lambda **_kwargs: ["GP", "example"],
             get_settings_fn=lambda: SimpleNamespace(),
             build_codex_runtime_fn=lambda **_kwargs: object(),

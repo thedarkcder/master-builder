@@ -192,6 +192,7 @@ def answer_board_question_with_codex(
     status_counts: dict[str, int],
     history: list[dict] | None = None,
     github_context: dict | None = None,
+    working_dir: str | None = None,
 ) -> str:
     normalized_history = history or []
     normalized_github_context = github_context or {}
@@ -206,6 +207,7 @@ def answer_board_question_with_codex(
             history_json=json.dumps(normalized_history[:6]),
             issues_json=json.dumps(issues[:40]),
         ),
+        working_dir=working_dir,
     )
     message = str(payload.get("message") or "").strip()
     if not message:
@@ -222,6 +224,7 @@ def plan_discord_ask_intent_with_codex(
     status_counts: dict[str, int],
     history: list[dict] | None = None,
     github_context: dict | None = None,
+    working_dir: str | None = None,
 ) -> dict:
     normalized_history = history or []
     normalized_github_context = github_context or {}
@@ -236,6 +239,7 @@ def plan_discord_ask_intent_with_codex(
             history_json=json.dumps(normalized_history[:6]),
             issues_json=json.dumps(issues[:40]),
         ),
+        working_dir=working_dir,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return an ask-intent JSON object")
@@ -247,6 +251,7 @@ def plan_seed_issues_with_codex(
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
+    working_dir: str | None = None,
 ) -> dict:
     payload = runtime.run_json(
         system_prompt=render_prompt("discord/issues_seed_system.j2"),
@@ -255,6 +260,7 @@ def plan_seed_issues_with_codex(
             allowed_project_keys_json=json.dumps(allowed_project_keys),
             prompt_markdown=prompt_markdown,
         ),
+        working_dir=working_dir,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return an issue-seeding JSON object")

@@ -15,6 +15,7 @@ def seed_issues_with_codex(
     force_issue_keys: list[str] | None,
     allow_create: bool,
     scoped_project_keys: list[str] | None,
+    codex_working_dir: str,
     tenant_project_keys_fn,
     get_settings_fn,
     build_codex_runtime_fn,
@@ -49,6 +50,7 @@ def seed_issues_with_codex(
             runtime=runtime,
             prompt_markdown=prompt_markdown,
             allowed_project_keys=project_keys,
+            working_dir=codex_working_dir,
         )
     except codex_runtime_error_type as exc:
         raise HTTPException(

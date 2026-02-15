@@ -94,6 +94,7 @@ from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,
     plan_seed_issues_with_codex,
 )
+from orchestrator.core.codex_working_dir import resolve_codex_working_dir as _resolve_codex_working_dir_impl
 from orchestrator.core.communications.command_pipeline import (
     CommandScope,
 )
@@ -758,6 +759,7 @@ def _seed_issues_with_codex(
     force_issue_keys: list[str] | None = None,
     allow_create: bool = True,
     scoped_project_keys: list[str] | None = None,
+    codex_working_dir: str = "",
 ) -> tuple[str, dict]:
     return _seed_issues_with_codex_impl(
         session=session,
@@ -766,6 +768,7 @@ def _seed_issues_with_codex(
         force_issue_keys=force_issue_keys,
         allow_create=allow_create,
         scoped_project_keys=scoped_project_keys,
+        codex_working_dir=codex_working_dir,
         tenant_project_keys_fn=_tenant_project_keys,
         get_settings_fn=get_settings,
         build_codex_runtime_fn=build_codex_runtime,
@@ -803,12 +806,30 @@ def _ask_board_message(
         get_settings_fn=get_settings,
         build_codex_runtime_fn=build_codex_runtime,
         tenant_project_keys_fn=_tenant_project_keys,
+        resolve_codex_working_dir_fn=_resolve_codex_working_dir,
         normalize_scope_channel_id_fn=_normalize_scope_channel_id,
         channel_scope_repository=_channel_scope_repository,
         answer_board_question_with_codex_fn=answer_board_question_with_codex,
         collect_github_ask_context_fn=_collect_github_ask_context,
         codex_runtime_error_type=CodexRuntimeError,
         store_ask_history_entry_fn=_store_ask_history_entry,
+    )
+
+
+def _resolve_codex_working_dir(
+    *,
+    session: Session,
+    tenant: Tenant,
+    settings,  # noqa: ANN001
+    project_id: str | None = None,
+    project_keys: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    return _resolve_codex_working_dir_impl(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        project_id=project_id,
+        project_keys=project_keys,
     )
 
 
@@ -863,6 +884,7 @@ def execute_tenant_command_ingress(
         tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
         evaluate_decision_gate_fn=evaluate_decision_gate,
         ensure_issue_is_executable_fn=_ensure_issue_is_executable,
+        resolve_codex_working_dir_fn=_resolve_codex_working_dir,
     )
     return _execute_tenant_command_ingress(
         tenant_id=tenant_id,
