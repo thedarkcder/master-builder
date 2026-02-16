@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,6 +74,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             codex_cli_command="codex",
             codex_sandbox_mode="workspace-write",
             codex_reasoning_effort="medium",
+            codex_hang_detection_quiet_seconds=300,
+            codex_hang_detection_report_interval_seconds=120,
         )
 
     def test_build_with_request_override(self) -> None:
@@ -174,7 +177,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             runtime = build_codex_runtime(settings=settings)
             self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "stdout-output")
 
-    def test_cli_request_waits_without_timeout(self) -> None:
+    def test_cli_request_waits_with_polling_timeout(self) -> None:
         settings = self._settings()
 
         class _FakePipe:
@@ -221,7 +224,78 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             runtime = build_codex_runtime(settings=settings)
             self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
             self.assertIn("proc", holder)
-            self.assertIsNone(holder["proc"].last_wait_timeout)
+            self.assertEqual(holder["proc"].last_wait_timeout, 1.0)
+
+    def test_cli_request_reports_suspected_hang_without_failing(self) -> None:
+        settings = self._settings()
+        settings.codex_hang_detection_quiet_seconds = 30
+        settings.codex_hang_detection_report_interval_seconds = 15
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                self.pid = 4321
+                self._wait_calls = 0
+                Path(output_path).write_text('{"ok": true}', encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                self._wait_calls += 1
+                if self._wait_calls <= 3:
+                    raise subprocess.TimeoutExpired(cmd="codex", timeout=1.0)
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args, **kwargs):  # noqa: ANN001
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        # Monotonic timeline:
+        # initial=0, mark_activity=0, then three polling loops at 40/60/80 seconds idle.
+        monotonic_values = iter([0.0, 0.0, 40.0, 60.0, 80.0, 95.0, 110.0, 125.0, 140.0])
+
+        def _fake_monotonic() -> float:
+            try:
+                return next(monotonic_values)
+            except StopIteration:
+                return 140.0
+
+        with (
+            patch("orchestrator.core.codex_runtime.time.monotonic", side_effect=_fake_monotonic),
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            logged: list[tuple[str, str]] = []
+            payload = runtime.run_json(
+                system_prompt="s",
+                user_prompt="u",
+                on_log_line=lambda stream, message: logged.append((stream, message)),
+            )
+            self.assertEqual(payload, {"ok": True})
+            self.assertTrue(
+                any(
+                    stream == "system" and "codex_process_suspected_hung" in message
+                    for stream, message in logged
+                )
+            )
 
     def test_cli_request_streams_log_lines(self) -> None:
         settings = self._settings()
