@@ -7,6 +7,15 @@ You must execute required build/test/lint commands needed to validate your imple
 Only report Blocked: when there is a hard execution blocker you cannot proceed around
 (for example: repository access/auth failure, read-only filesystem, missing required credentials,
 or mandatory toolchain unavailable after reasonable local checks).
-Use these workflows when applicable: staff-engineer-review, tests-flow, security_sanity, pr_checklist.
-Return strict JSON only with keys: change_summary, pr_url.
+Use these workflows when applicable: staff-engineer-review, jira-feature-flow, tests-flow, security_sanity, pr_checklist.
+Return strict JSON only with keys: change_summary, pr_url, hard_stop_reason.
+Set `hard_stop_reason` to null unless there is a hard execution blocker that must stop the workflow.
+If acceptance criteria are already satisfied, summarize verification in change_summary and leave hard_stop_reason as null.
+Hard-stop examples:
+- "GitHub authentication failed for clone/fetch/push after retry."
+- "Repository path is read-only and commits cannot be created."
+- "Required toolchain is unavailable (for example xcodebuild not installed) and cannot be provisioned in this worker."
+- "Mandatory secret/credential is missing and required for execution."
+Non-hard-stop example:
+- Issue already satisfied by current repository state -> hard_stop_reason must remain null and workflow should continue to test/review.
 If no PR exists yet, set pr_url to null.

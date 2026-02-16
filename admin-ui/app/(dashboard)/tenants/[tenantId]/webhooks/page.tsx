@@ -236,7 +236,6 @@ export default function TenantWebhooksPage() {
           <div className="space-y-1 text-xs text-muted-foreground">
             <p>Events: {githubExpectedEvents}</p>
             <p>Installation ID: {tenant?.github.installation_id || "not connected"}</p>
-            <p>Mode: {tenant?.github.mode || "unknown"}</p>
           </div>
         </div>
 

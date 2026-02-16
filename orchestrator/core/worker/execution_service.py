@@ -11,6 +11,7 @@ from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
+from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
 from orchestrator.core.worker.queue_selector import select_next_queued_run
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
@@ -151,6 +152,7 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         run_failed_update_fn=run_failed_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
+        transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
         run_status_queued=RUN_STATUS_QUEUED,
@@ -239,6 +241,7 @@ def process_next_queued_run_with_dependencies(
         run_failed_update_fn=run_failed_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
+        transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
         run_status_queued=RUN_STATUS_QUEUED,

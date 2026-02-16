@@ -203,6 +203,21 @@ class JiraOAuthClient:
             comment=comment,
         )
 
+    def transition_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        target_status: str,
+    ) -> dict:
+        return self._issue_service.transition_issue(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            target_status=target_status,
+        )
+
     def add_issue_labels(
         self,
         *,

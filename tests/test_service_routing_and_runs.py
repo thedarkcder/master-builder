@@ -271,6 +271,27 @@ class RunsRouteTests(unittest.TestCase):
         self.assertEqual(payload.project_id, "example-default")
         self.assertEqual(payload.issue_key, "MAB-1")
 
+    def test_run_to_schema_clears_last_error_when_succeeded(self) -> None:
+        now = datetime.now(timezone.utc)
+        run = SimpleNamespace(
+            run_id="r2",
+            tenant_id="example",
+            project_id="example-default",
+            issue_key="MAB-2",
+            repo_url=None,
+            branch=None,
+            pr_url="https://github.com/org/repo/pull/2",
+            status="succeeded",
+            last_error="Workflow succeeded but no PR URL was produced",
+            plan={},
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+        )
+
+        payload = runs_route._run_to_schema(run)
+        self.assertIsNone(payload.last_error)
+
     def test_get_run_404(self) -> None:
         session = MagicMock()
         session.get.return_value = None

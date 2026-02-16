@@ -17,12 +17,15 @@ Last test guidance: {{ last_test_guidance_json }}
 Last review approved: {{ last_review_approved }}
 Last review feedback: {{ last_review_feedback }}
 Last review summary: {{ last_review_summary_json }}
+Allowed tools for this stage: {{ allowed_tools_json }}
+Agent tool command: {{ agent_tool_command }}
 
 Required actions:
 1. Produce concrete, ordered execution steps.
 2. Convert requirements into observable acceptance criteria.
 3. Surface delivery risks that can block or degrade delivery.
-4. Decide next stage:
+4. Use allowed tools when needed to verify Jira context instead of assuming.
+5. Decide next stage:
    - Use "dev" if code changes are still needed.
    - Use "test" only when prior dev output is sufficient and we should retest/validate.
 

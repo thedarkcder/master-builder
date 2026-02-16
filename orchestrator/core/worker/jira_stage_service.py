@@ -10,7 +10,14 @@ from orchestrator.tools.jira_oauth import JiraOAuthError
 
 logger = logging.getLogger(__name__)
 
-JIRA_STAGE_COMMENT_EVENTS = {"decision_gate_required", "run_failed", "test_feedback"}
+JIRA_STAGE_COMMENT_EVENTS = {
+    "decision_gate_required",
+    "run_failed",
+    "test_feedback",
+    "dev_rationale",
+    "review_summary",
+    "review_feedback",
+}
 
 
 def send_stage_update_to_jira(
@@ -68,5 +75,63 @@ def send_stage_update_to_jira(
             tenant.tenant_id,
             issue_key,
             stage,
+            exc,
+        )
+
+
+def transition_issue_status(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str | None,
+    target_status: str,
+    settings,
+) -> None:  # noqa: ANN001
+    normalized_issue_key = str(issue_key or "").strip()
+    normalized_target_status = str(target_status or "").strip()
+    if not normalized_issue_key or not normalized_target_status:
+        return
+
+    jira_config = tenant.jira_config or {}
+    connection_id = str(jira_config.get("connection_id") or "").strip()
+    if not connection_id:
+        logger.info(
+            "worker_jira_transition_not_sent tenant_id=%s issue_key=%s target_status=%s reason=missing_connection",
+            tenant.tenant_id,
+            normalized_issue_key,
+            normalized_target_status,
+        )
+        return
+
+    connection = session.get(JiraOAuthConnection, connection_id)
+    if connection is None:
+        logger.info(
+            "worker_jira_transition_not_sent tenant_id=%s issue_key=%s target_status=%s reason=connection_not_found",
+            tenant.tenant_id,
+            normalized_issue_key,
+            normalized_target_status,
+        )
+        return
+
+    try:
+        access_token = refresh_jira_connection_tokens(
+            session,
+            connection=connection,
+            settings=settings,
+            tenant_id=tenant.tenant_id,
+        )
+        client = jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
+        client.transition_issue(
+            access_token=access_token,
+            cloud_id=connection.cloud_id,
+            issue_id_or_key=normalized_issue_key,
+            target_status=normalized_target_status,
+        )
+    except (JiraOAuthError, ValueError) as exc:
+        logger.warning(
+            "worker_jira_transition_failed tenant_id=%s issue_key=%s target_status=%s error=%s",
+            tenant.tenant_id,
+            normalized_issue_key,
+            normalized_target_status,
             exc,
         )

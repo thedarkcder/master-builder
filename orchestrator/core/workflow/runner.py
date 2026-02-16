@@ -34,6 +34,7 @@ class PmPlan:
 class DevResult:
     change_summary: list[str]
     pr_url: str | None
+    hard_stop_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,9 @@ class WorkflowResult:
     summary: list[str]
     test_guidance: list[str]
     attempts: int
+    dev_rationale: list[str] = field(default_factory=list)
+    review_summary: list[str] = field(default_factory=list)
+    review_feedback: str | None = None
     follow_up_issue: dict | None = None
     diagnostics: WorkflowDiagnostics | None = None
 
@@ -81,6 +85,9 @@ class WorkflowResult:
             "summary": self.summary,
             "test_guidance": self.test_guidance,
             "pr_url": self.pr_url,
+            "dev_rationale": self.dev_rationale,
+            "review_summary": self.review_summary,
+            "review_feedback": self.review_feedback,
             "follow_up_issue": self.follow_up_issue,
         }
         if self.plan is not None:
@@ -204,8 +211,8 @@ class WorkflowRunner:
             try:
                 if not route_to_test:
                     dev_result = self._agents.dev(request, plan, attempt, feedback_for_dev)
-                    dev_blocker = _extract_dev_blocker(dev_result)
-                    if dev_blocker is not None:
+                    if dev_result.hard_stop_reason:
+                        dev_blocker = dev_result.hard_stop_reason
                         history.append({"stage": "dev", "attempt": str(attempt), "event": dev_blocker})
                         return self._failure(
                             plan=plan,
@@ -258,6 +265,9 @@ class WorkflowRunner:
                         attempts=attempt,
                         history=history,
                         request=request,
+                        dev_rationale=last_dev_result.change_summary if last_dev_result else None,
+                        review_summary=last_review_result.summary if last_review_result else None,
+                        review_feedback=last_review_result.feedback if last_review_result else None,
                     )
                 continue
 
@@ -274,6 +284,9 @@ class WorkflowRunner:
                         attempts=attempt,
                         history=history,
                         request=request,
+                        dev_rationale=last_dev_result.change_summary if last_dev_result else None,
+                        review_summary=last_review_result.summary if last_review_result else None,
+                        review_feedback=last_review_result.feedback if last_review_result else None,
                     )
                 continue
 
@@ -321,26 +334,30 @@ class WorkflowRunner:
                         attempts=attempt,
                         history=history,
                         request=request,
+                        dev_rationale=last_dev_result.change_summary if last_dev_result else None,
+                        review_summary=review_result.summary,
+                        review_feedback=review_result.feedback,
                     )
                 continue
 
             pr_url = dev_result.pr_url or review_result.pr_url
             if not pr_url:
-                history.append(
-                    {
-                        "stage": "review",
-                        "attempt": str(attempt),
-                        "event": "missing_pr_url",
-                    }
-                )
-                return self._failure(
-                    plan=plan,
-                    stage="review",
-                    message="Workflow succeeded but no PR URL was produced",
-                    attempts=attempt,
-                    history=history,
-                    request=request,
-                )
+                feedback = "PR URL missing after review approval; dev must create/publish PR."
+                history.append({"stage": "review", "attempt": str(attempt), "event": "missing_pr_url"})
+                history.append({"stage": "review", "attempt": str(attempt), "event": feedback})
+                if attempt >= max_attempts:
+                    return self._failure(
+                        plan=plan,
+                        stage="review",
+                        message="Max workflow attempts reached after missing PR URL publication",
+                        attempts=attempt,
+                        history=history,
+                        request=request,
+                        dev_rationale=last_dev_result.change_summary if last_dev_result else None,
+                        review_summary=review_result.summary,
+                        review_feedback=review_result.feedback,
+                    )
+                continue
 
             placeholder_failure = self._placeholder_policy_failure(
                 request=request,
@@ -361,6 +378,9 @@ class WorkflowRunner:
                 summary=review_result.summary or dev_result.change_summary,
                 test_guidance=test_result.guidance,
                 attempts=attempt,
+                dev_rationale=dev_result.change_summary,
+                review_summary=review_result.summary,
+                review_feedback=review_result.feedback,
             )
 
         return self._failure(
@@ -370,6 +390,9 @@ class WorkflowRunner:
             attempts=max_attempts,
             history=history,
             request=request,
+            dev_rationale=last_dev_result.change_summary if last_dev_result else None,
+            review_summary=last_review_result.summary if last_review_result else None,
+            review_feedback=last_review_result.feedback if last_review_result else None,
         )
 
     def _failure(
@@ -383,6 +406,9 @@ class WorkflowRunner:
         request: WorkflowRequest | None,
         follow_up_issue: dict | None = None,
         skip_auto_follow_up: bool = False,
+        dev_rationale: list[str] | None = None,
+        review_summary: list[str] | None = None,
+        review_feedback: str | None = None,
     ) -> WorkflowResult:
         if follow_up_issue is None and request is not None and not skip_auto_follow_up:
             draft = build_backlog_follow_up_draft(
@@ -404,6 +430,9 @@ class WorkflowRunner:
             summary=[],
             test_guidance=[],
             attempts=attempts,
+            dev_rationale=list(dev_rationale or ()),
+            review_summary=list(review_summary or ()),
+            review_feedback=review_feedback,
             follow_up_issue=follow_up_issue,
             diagnostics=WorkflowDiagnostics(
                 stage=stage,
@@ -434,10 +463,6 @@ class WorkflowRunner:
             history=history,
             failure_factory=self._failure,
         )
-
-def _extract_dev_blocker(dev_result: DevResult) -> str | None:
-    return _extract_list_blocker(dev_result.change_summary)
-
 
 def _extract_list_blocker(entries: list[str]) -> str | None:
     return _extract_first_blocker(entries)

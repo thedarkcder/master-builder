@@ -174,7 +174,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.codex_invocation._persist_codex_log_line", side_effect=RuntimeError("db down")),
+            patch("orchestrator.core.codex_invocation._enqueue_codex_log_line", side_effect=RuntimeError("db down")),
         ):
             plan = agents.pm(self._request(), 1, None, [], None, None, None)
         self.assertEqual(plan.plan_steps, ["step1"])

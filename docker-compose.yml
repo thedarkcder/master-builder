@@ -81,6 +81,7 @@ services:
       - |
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000
     volumes:
@@ -123,6 +124,7 @@ services:
       - |
         mkdir -p /root/.codex
         cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         python -m orchestrator worker
     volumes:
