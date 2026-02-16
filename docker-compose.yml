@@ -41,6 +41,7 @@ services:
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
       ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
+      ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}
     ports:
       - "4000:4000"
     depends_on:
@@ -54,7 +55,7 @@ services:
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
-        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000
+        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
     volumes:
       - codex-home:/root/.codex
       - project-repos:/tmp/master-builder-project-repos
@@ -99,6 +100,28 @@ services:
     volumes:
       - codex-home:/root/.codex
       - project-repos:/tmp/master-builder-project-repos
+
+  discord-gateway:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-discord-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY: ${ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY:-947102033127}
+      ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS:-3}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        python -m orchestrator migrate
+        python -m orchestrator discord-gateway
 
   admin-ui:
     build:

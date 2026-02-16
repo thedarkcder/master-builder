@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
     worker_poll_interval_seconds: int = 5
+    discord_gateway_lock_key: int = 947102033127
+    discord_gateway_poll_seconds: int = 3
     auto_migrate_on_startup: bool = True
     sentry_dsn: str = ""
     sentry_environment: str = "dev"

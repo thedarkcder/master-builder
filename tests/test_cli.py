@@ -7,6 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from orchestrator.cli import main as cli_main
 from orchestrator.core.config import get_settings
@@ -109,3 +110,9 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(payload["tenant_filter"], "all")
         self.assertEqual(len(payload["tenants"]), 1)
         self.assertEqual(payload["tenants"][0]["tenant_id"], "tenant-cli")
+
+    def test_discord_gateway_command_invokes_runtime(self) -> None:
+        with patch("orchestrator.cli.run_discord_gateway") as gateway_mock:
+            exit_code = cli_main(["discord-gateway"])
+        self.assertEqual(exit_code, 0)
+        gateway_mock.assert_called_once_with()

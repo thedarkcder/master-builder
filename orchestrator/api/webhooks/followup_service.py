@@ -75,6 +75,7 @@ class DiscordWebhookFollowupService:
                     if tenant is None or not tenant.is_enabled:
                         content = f"<@{user_id}> Command failed: tenant is unavailable."
                     else:
+                        initial_thread_attempted = False
                         try:
                             command_response = self._execute_command_ingress(
                                 tenant_id=tenant_id,
@@ -119,6 +120,7 @@ class DiscordWebhookFollowupService:
                                 if command_response.command == "reply" and bool(data.get("recheck_required")):
                                     components = self._ask_reply_components()
                                 if command_response.command == "ask" and not reply_to_message_id:
+                                    initial_thread_attempted = True
                                     try:
                                         self._reply_transport.send_ask_with_thread(
                                             session=session,
@@ -127,6 +129,7 @@ class DiscordWebhookFollowupService:
                                             channel_id=channel_id,
                                             user_id=user_id,
                                             content=content,
+                                            components=components,
                                         )
                                         sent_to_thread = True
                                     except (DiscordApiError, RuntimeError, ValueError) as exc:
@@ -142,6 +145,7 @@ class DiscordWebhookFollowupService:
                                     and bool(data.get("requires_input"))
                                     and not reply_to_message_id
                                 ):
+                                    initial_thread_attempted = True
                                     followup_request_id = str(data.get("followup_request_id") or "").strip()
                                     question_values = data.get("questions")
                                     questions = (
@@ -218,6 +222,29 @@ class DiscordWebhookFollowupService:
                                     tenant_id,
                                     user_id,
                                     reply_to_message_id,
+                                    exc,
+                                )
+                        if (
+                            not sent_to_thread
+                            and not reply_to_message_id
+                            and not initial_thread_attempted
+                        ):
+                            try:
+                                self._reply_transport.send_ask_with_thread(
+                                    session=session,
+                                    settings=settings,
+                                    tenant=tenant,
+                                    channel_id=channel_id,
+                                    user_id=user_id,
+                                    content=content,
+                                    components=components,
+                                )
+                                sent_to_thread = True
+                            except (DiscordApiError, RuntimeError, ValueError) as exc:
+                                logger.exception(
+                                    "discord_command_thread_send_failed tenant_id=%s user_id=%s error=%s",
+                                    tenant_id,
+                                    user_id,
                                     exc,
                                 )
             except Exception as exc:  # pragma: no cover - defensive logging path

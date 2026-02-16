@@ -24,7 +24,6 @@ from orchestrator.api.routes.webhook_discord_interactions import (
 from orchestrator.api.routes.webhook_github import router as webhook_github_router
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
-from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.platform_metrics import platform_metrics
@@ -54,11 +53,7 @@ def create_app() -> FastAPI:
         register_discord_command_executor()
         # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
         sync_discord_guild_commands(settings=settings)
-        gateway_listener.start()
-        try:
-            yield
-        finally:
-            gateway_listener.stop()
+        yield
 
     app = FastAPI(title="master-builder orchestrator", lifespan=lifespan)
     app.add_middleware(
@@ -190,8 +185,6 @@ def create_app() -> FastAPI:
     app.include_router(webhook_discord_interactions_router)
     app.include_router(webhook_github_router)
     register_discord_command_executor()
-    gateway_listener = DiscordGatewayListener(settings=settings)
-
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}

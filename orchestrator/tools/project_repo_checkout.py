@@ -16,6 +16,17 @@ class ProjectRepoCheckoutError(RuntimeError):
     pass
 
 
+_SEEDED_GITIGNORE_CONTENT = """# Seeded by Master Builder
+# Add project-specific ignore rules below.
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+!.env.example
+"""
+
+
 def _repo_full_name(repository_url: str) -> str:
     normalized = normalize_repo_identifier(repository_url)
     prefix = "github.com/"
@@ -66,6 +77,10 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
 
     if codex_src.exists() and codex_src.is_dir():
         shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
+
+    gitignore_path = repo_dir / ".gitignore"
+    if not gitignore_path.exists():
+        gitignore_path.write_text(_SEEDED_GITIGNORE_CONTENT, encoding="utf-8")
 
     # Keep workspace policy files out of accidental commits inside project repos.
     info_dir = repo_dir / ".git" / "info"

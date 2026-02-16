@@ -314,14 +314,20 @@ class WorkflowRunner:
             review_blocker = _extract_first_blocker([review_result.feedback, *review_result.summary])
             if review_blocker is not None:
                 history.append({"stage": "review", "attempt": str(attempt), "event": review_blocker})
-                return self._failure(
-                    plan=plan,
-                    stage="review",
-                    message=f"Review stage blocked: {review_blocker}",
-                    attempts=attempt,
-                    history=history,
-                    request=request,
-                )
+                feedback = review_blocker
+                if attempt >= max_attempts:
+                    return self._failure(
+                        plan=plan,
+                        stage="review",
+                        message="Max workflow attempts reached after review blockers",
+                        attempts=attempt,
+                        history=history,
+                        request=request,
+                        dev_rationale=last_dev_result.change_summary if last_dev_result else None,
+                        review_summary=review_result.summary,
+                        review_feedback=review_result.feedback,
+                    )
+                continue
 
             if not review_result.approved:
                 feedback = review_result.feedback or "Review requested changes"
@@ -366,10 +372,18 @@ class WorkflowRunner:
                 review_result=review_result,
                 pr_url=pr_url,
                 attempts=attempt,
+                terminal=attempt >= max_attempts,
                 history=history,
             )
             if placeholder_failure is not None:
-                return placeholder_failure
+                if attempt >= max_attempts:
+                    return placeholder_failure
+                feedback = (
+                    placeholder_failure.diagnostics.message
+                    if placeholder_failure.diagnostics is not None
+                    else "Placeholder policy feedback"
+                )
+                continue
 
             return WorkflowResult(
                 succeeded=True,
@@ -451,6 +465,7 @@ class WorkflowRunner:
         review_result: ReviewResult,
         pr_url: str,
         attempts: int,
+        terminal: bool,
         history: list[dict[str, str]],
     ) -> WorkflowResult | None:
         return evaluate_placeholder_policy(
@@ -460,6 +475,7 @@ class WorkflowRunner:
             review_result=review_result,
             pr_url=pr_url,
             attempts=attempts,
+            terminal=terminal,
             history=history,
             failure_factory=self._failure,
         )
