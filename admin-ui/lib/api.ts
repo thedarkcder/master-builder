@@ -207,6 +207,7 @@ export type RunLogEventRecord = {
   issue_key: string | null;
   project_id: string | null;
   agent_id: string;
+  working_dir: string | null;
   stage: string;
   attempt: number | null;
   stream: string;
