@@ -4,7 +4,6 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
 from orchestrator.core.enforcement_context import (
     EnforcementAssetsError,
@@ -44,7 +43,7 @@ class EnforcementContextEdgeTests(unittest.TestCase):
             with self.assertRaisesRegex(EnforcementAssetsError, "Missing policy packs"):
                 build_agent_enforcement_context(repo_root=repo_root)
 
-    def test_build_enforcement_context_includes_agents_and_skills(self) -> None:
+    def test_build_enforcement_context_includes_agents_but_not_skills(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             repo_root = Path(tmp_dir) / "repo"
             repo_root.mkdir(parents=True, exist_ok=True)
@@ -67,23 +66,8 @@ class EnforcementContextEdgeTests(unittest.TestCase):
                 json.dumps({"name": "python"}),
                 encoding="utf-8",
             )
-            (codex_dir / "skills" / "staff-engineer-review").mkdir(parents=True, exist_ok=True)
-            (codex_dir / "skills" / "staff-engineer-review" / "SKILL.md").write_text(
-                "repo skill content",
-                encoding="utf-8",
-            )
-            user_home = Path(tmp_dir) / "user-home"
-            (user_home / ".codex" / "skills" / "tests-flow").mkdir(parents=True, exist_ok=True)
-            (user_home / ".codex" / "skills" / "tests-flow" / "SKILL.md").write_text(
-                "user skill content",
-                encoding="utf-8",
-            )
-            with patch("orchestrator.core.enforcement_context.Path.home", return_value=user_home):
-                context = build_agent_enforcement_context(repo_root=repo_root)
+            context = build_agent_enforcement_context(repo_root=repo_root)
 
         self.assertIn("AGENTS.md excerpt:", context)
         self.assertIn("agent instructions", context)
-        self.assertIn(".codex/skills/staff-engineer-review/SKILL.md excerpt:", context)
-        self.assertIn("repo skill content", context)
-        self.assertIn("user-home/.codex/skills/tests-flow/SKILL.md excerpt:", context)
-        self.assertIn("user skill content", context)
+        self.assertNotIn("Loaded skills:", context)
