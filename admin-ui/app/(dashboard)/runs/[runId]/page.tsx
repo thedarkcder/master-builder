@@ -59,6 +59,8 @@ export default function RunDetailPage() {
   const [logAgentFilter, setLogAgentFilter] = useState("all");
   const [logStageFilter, setLogStageFilter] = useState("all");
   const [logStreamFilter, setLogStreamFilter] = useState("all");
+  const [loadingOlderLogs, setLoadingOlderLogs] = useState(false);
+  const [hasMoreLogs, setHasMoreLogs] = useState(false);
 
   const loadRun = useCallback(async () => {
     if (!credentials) {
@@ -69,11 +71,12 @@ export default function RunDetailPage() {
       const [payload, runEvents, runLogs] = await Promise.all([
         getRun(credentials, params.runId),
         listRunEvents(credentials, params.runId, { limit: 200 }),
-        listRunLogs(credentials, params.runId, { limit: 500 })
+        listRunLogs(credentials, params.runId, { limit: 200 })
       ]);
       setRun(payload);
       setEvents(runEvents);
       setLogs(runLogs);
+      setHasMoreLogs(runLogs.length >= 200);
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load run: ${(error as Error).message}`);
@@ -115,7 +118,7 @@ export default function RunDetailPage() {
               return prev;
             }
             const next = [...prev, logEvent];
-            return next.slice(-500);
+            return next.slice(-800);
           });
         } else {
           const lifecycleEvent = event as RunEventRecord;
@@ -181,6 +184,38 @@ export default function RunDetailPage() {
       setStatusLine(`Failed to force rerun: ${(error as Error).message}`);
     } finally {
       setForceRerunBusy(false);
+    }
+  }
+
+  async function handleLoadOlderLogs() {
+    if (!credentials || logs.length === 0 || loadingOlderLogs || !hasMoreLogs) {
+      return;
+    }
+    const oldest = logs[logs.length - 1];
+    setLoadingOlderLogs(true);
+    try {
+      const olderLogs = await listRunLogs(credentials, params.runId, {
+        limit: 200,
+        beforeRecordedAt: oldest.recorded_at
+      });
+      setLogs((prev) => {
+        const dedupe = new Set(prev.map((entry) => `${entry.recorded_at}:${entry.stage}:${entry.stream}:${entry.message}`));
+        const merged = [...prev];
+        for (const candidate of olderLogs) {
+          const key = `${candidate.recorded_at}:${candidate.stage}:${candidate.stream}:${candidate.message}`;
+          if (dedupe.has(key)) {
+            continue;
+          }
+          dedupe.add(key);
+          merged.push(candidate);
+        }
+        return merged;
+      });
+      setHasMoreLogs(olderLogs.length >= 200);
+    } catch (error) {
+      setStatusLine(`Failed to load older logs: ${(error as Error).message}`);
+    } finally {
+      setLoadingOlderLogs(false);
     }
   }
 
@@ -369,6 +404,14 @@ export default function RunDetailPage() {
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent logs (live)</p>
                 <div className="flex items-center gap-2 text-xs">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleLoadOlderLogs()}
+                    disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}
+                  >
+                    {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older logs" : "All logs loaded"}
+                  </Button>
                   <label className="flex items-center gap-1">
                     Agent
                     <select
