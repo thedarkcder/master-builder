@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +49,33 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "github.open_pr",
         "repo.read",
     },
+}
+
+_READ_ONLY_SHELL_OPERATOR_PATTERN = re.compile(r"[|;&><`]|(?:\$\()")
+_READ_ONLY_REPO_COMMANDS = {
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "pwd",
+    "find",
+    "rg",
+    "stat",
+    "du",
+    "tree",
+}
+_READ_ONLY_GIT_SUBCOMMANDS = {
+    "status",
+    "diff",
+    "log",
+    "show",
+    "rev-parse",
+    "remote",
+    "ls-files",
+    "ls-tree",
+    "describe",
+    "tag",
 }
 
 
@@ -152,6 +181,7 @@ def _tool_repo_read(*, context: AgentToolContext, args: dict[str, Any]) -> dict[
     command = str(args.get("command") or "").strip()
     if not command:
         raise ValueError("repo.read requires 'command'")
+    _enforce_repo_command_for_stage(stage=context.stage, command=command)
     process = subprocess.run(  # noqa: S603
         ["/bin/zsh", "-lc", command],
         cwd=str(context.repo_dir),
@@ -165,6 +195,36 @@ def _tool_repo_read(*, context: AgentToolContext, args: dict[str, Any]) -> dict[
         "stdout": process.stdout,
         "stderr": process.stderr,
     }
+
+
+def _enforce_repo_command_for_stage(*, stage: str, command: str) -> None:
+    if _READ_ONLY_SHELL_OPERATOR_PATTERN.search(command):
+        raise PermissionError("repo.read only allows a single command (no shell operators)")
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        raise PermissionError("repo.read command could not be parsed safely") from exc
+    if not tokens:
+        raise PermissionError("repo.read command must not be empty")
+
+    if str(stage).strip().lower() == "dev":
+        return
+
+    executable = tokens[0]
+    if executable == "git":
+        if len(tokens) < 2:
+            raise PermissionError("repo.read git command must include a read-only subcommand")
+        subcommand = tokens[1]
+        if subcommand not in _READ_ONLY_GIT_SUBCOMMANDS:
+            raise PermissionError(
+                f"repo.read does not allow mutating git subcommand '{subcommand}'"
+            )
+        return
+
+    if executable not in _READ_ONLY_REPO_COMMANDS:
+        raise PermissionError(
+            f"repo.read does not allow command '{executable}'; use a read-only command"
+        )
 
 
 def _execute_jira_tool(
@@ -273,9 +333,16 @@ def _execute_github_tool(
         summary = str(args.get("summary") or context.issue_key).strip()
         branch_name = str(args.get("branch_name") or build_branch_name(context.issue_key, summary)).strip()
         base_branch = str(args.get("base_branch") or "").strip()
-        if base_branch:
-            _run_git(context.repo_dir, ["checkout", base_branch])
-            _run_git(context.repo_dir, ["pull", "--ff-only", "origin", base_branch], token=github_client.get_installation_token())
+        installation_token = github_client.get_installation_token()
+        resolved_base_branch = base_branch or _resolve_remote_default_branch(
+            context.repo_dir,
+            token=installation_token,
+        )
+        _sync_local_base_branch_to_origin(
+            context.repo_dir,
+            base_branch=resolved_base_branch,
+            token=installation_token,
+        )
         _run_git(context.repo_dir, ["checkout", "-B", branch_name])
         return {"branch_name": branch_name}
 
@@ -351,6 +418,27 @@ def _run_git(repo_dir: Path, args: list[str], *, token: str | None = None) -> st
     if process.returncode != 0:
         raise RuntimeError(process.stderr.strip() or process.stdout.strip() or f"git {' '.join(args)} failed")
     return process.stdout
+
+
+def _resolve_remote_default_branch(repo_dir: Path, *, token: str) -> str:
+    _run_git(repo_dir, ["fetch", "origin", "--prune"], token=token)
+    symbolic_ref = _run_git(
+        repo_dir,
+        ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    ).strip()
+    if symbolic_ref.startswith("origin/"):
+        branch_name = symbolic_ref[len("origin/") :].strip()
+        if branch_name:
+            return branch_name
+    raise RuntimeError("Unable to resolve remote default branch from origin/HEAD")
+
+
+def _sync_local_base_branch_to_origin(repo_dir: Path, *, base_branch: str, token: str) -> None:
+    normalized_base_branch = str(base_branch).strip()
+    if not normalized_base_branch:
+        raise ValueError("Base branch is required")
+    _run_git(repo_dir, ["fetch", "origin", normalized_base_branch], token=token)
+    _run_git(repo_dir, ["checkout", "-B", normalized_base_branch, f"origin/{normalized_base_branch}"])
 
 
 def print_tool_event(*, stage: str, tool_name: str, args: dict[str, Any], outcome: str) -> None:  # noqa: ANN401
