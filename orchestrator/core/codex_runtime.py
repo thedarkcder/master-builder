@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -163,10 +164,22 @@ def build_codex_runtime(
             )
             stdout_lines: list[str] = []
             stderr_lines: list[str] = []
+            activity_lock = threading.Lock()
+            last_activity_monotonic = time.monotonic()
+
+            def _mark_activity() -> None:
+                nonlocal last_activity_monotonic
+                with activity_lock:
+                    last_activity_monotonic = time.monotonic()
+
+            def _current_idle_seconds() -> float:
+                with activity_lock:
+                    return max(0.0, time.monotonic() - last_activity_monotonic)
 
             def _consume(pipe, stream_name: str, collector: list[str]) -> None:  # noqa: ANN001
                 for line in iter(pipe.readline, ""):
                     collector.append(line)
+                    _mark_activity()
                     if on_log_line is not None:
                         text_line = line.rstrip("\n")
                         if text_line:
@@ -188,7 +201,50 @@ def build_codex_runtime(
             assert process.stdin is not None
             process.stdin.write(combined_prompt)
             process.stdin.close()
-            returncode = process.wait()
+            _mark_activity()
+            quiet_threshold_seconds = max(
+                30,
+                int(getattr(settings, "codex_hang_detection_quiet_seconds", 300)),
+            )
+            report_interval_seconds = max(
+                15,
+                int(getattr(settings, "codex_hang_detection_report_interval_seconds", 120)),
+            )
+            suspected_hung = False
+            next_idle_report_at_monotonic: float | None = None
+            while True:
+                try:
+                    returncode = process.wait(timeout=1.0)
+                    break
+                except subprocess.TimeoutExpired:
+                    idle_seconds = _current_idle_seconds()
+                    if idle_seconds < quiet_threshold_seconds:
+                        continue
+                    if not suspected_hung:
+                        suspected_hung = True
+                        next_idle_report_at_monotonic = time.monotonic() + report_interval_seconds
+                        if on_log_line is not None:
+                            on_log_line(
+                                "system",
+                                "codex_process_suspected_hung "
+                                f"idle_seconds={int(idle_seconds)} "
+                                f"quiet_threshold_seconds={quiet_threshold_seconds} "
+                                f"pid={getattr(process, 'pid', 'unknown')}",
+                            )
+                        continue
+                    if (
+                        next_idle_report_at_monotonic is not None
+                        and time.monotonic() >= next_idle_report_at_monotonic
+                    ):
+                        next_idle_report_at_monotonic = time.monotonic() + report_interval_seconds
+                        if on_log_line is not None:
+                            on_log_line(
+                                "system",
+                                "codex_process_still_idle "
+                                f"idle_seconds={int(idle_seconds)} "
+                                f"report_interval_seconds={report_interval_seconds} "
+                                f"pid={getattr(process, 'pid', 'unknown')}",
+                            )
             stdout_thread.join()
             stderr_thread.join()
             process_stdout = "".join(stdout_lines)
