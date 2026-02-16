@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from orchestrator.core.config import Settings
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+_STDERR_ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -90,6 +91,24 @@ def _extract_json_payload(content: str) -> object:
     raise CodexRuntimeError("Codex runtime response did not include JSON")
 
 
+def _normalize_stderr_log_mode(raw_value: object) -> str:
+    normalized = str(raw_value or "all").strip().lower()
+    if normalized in {"all", "errors_only", "off"}:
+        return normalized
+    return "all"
+
+
+def _should_emit_log_line(*, stream_name: str, line: str, stderr_log_mode: str) -> bool:
+    if stream_name != "stderr":
+        return True
+    if stderr_log_mode == "off":
+        return False
+    if stderr_log_mode == "errors_only":
+        lowered = line.lower()
+        return any(marker in lowered for marker in _STDERR_ERROR_MARKERS)
+    return True
+
+
 def build_codex_runtime(
     *,
     session: Session | None = None,
@@ -138,6 +157,7 @@ def build_codex_runtime(
             f"## User request\n{user_prompt}"
         )
         command_cwd = str(working_dir).strip() if working_dir else None
+        stderr_log_mode = _normalize_stderr_log_mode(getattr(settings, "codex_stderr_log_mode", "all"))
         with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", suffix=".txt") as output_file:
             process = subprocess.Popen(  # noqa: S603
                 [
@@ -182,7 +202,11 @@ def build_codex_runtime(
                     _mark_activity()
                     if on_log_line is not None:
                         text_line = line.rstrip("\n")
-                        if text_line:
+                        if text_line and _should_emit_log_line(
+                            stream_name=stream_name,
+                            line=text_line,
+                            stderr_log_mode=stderr_log_mode,
+                        ):
                             on_log_line(stream_name, text_line)
                 pipe.close()
 

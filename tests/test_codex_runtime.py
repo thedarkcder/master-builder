@@ -74,6 +74,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             codex_cli_command="codex",
             codex_sandbox_mode="workspace-write",
             codex_reasoning_effort="medium",
+            codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
         )
@@ -352,6 +353,120 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(payload, {"ok": True})
             self.assertEqual(logged, [("stdout", "out-1"), ("stdout", "out-2"), ("stderr", "err-1")])
+
+    def test_cli_request_suppresses_stderr_log_lines_when_disabled(self) -> None:
+        settings = self._settings()
+        settings.codex_stderr_log_mode = "off"
+
+        class _FakePipe:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = list(lines)
+                self._index = 0
+
+            def readline(self) -> str:
+                if self._index >= len(self._lines):
+                    return ""
+                line = self._lines[self._index]
+                self._index += 1
+                return line
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe(["out-1\n"])
+                self.stderr = _FakePipe(["thinking\n", "error: broken\n"])
+                Path(output_path).write_text('{"ok": true}', encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args, **kwargs):  # noqa: ANN001
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            logged: list[tuple[str, str]] = []
+            payload = runtime.run_json(
+                system_prompt="s",
+                user_prompt="u",
+                on_log_line=lambda stream, message: logged.append((stream, message)),
+            )
+            self.assertEqual(payload, {"ok": True})
+            self.assertEqual(logged, [("stdout", "out-1")])
+
+    def test_cli_request_emits_only_error_stderr_lines_when_configured(self) -> None:
+        settings = self._settings()
+        settings.codex_stderr_log_mode = "errors_only"
+
+        class _FakePipe:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = list(lines)
+                self._index = 0
+
+            def readline(self) -> str:
+                if self._index >= len(self._lines):
+                    return ""
+                line = self._lines[self._index]
+                self._index += 1
+                return line
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe(["out-1\n"])
+                self.stderr = _FakePipe(["thinking\n", "fatal: boom\n", "done\n"])
+                Path(output_path).write_text('{"ok": true}', encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args, **kwargs):  # noqa: ANN001
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            logged: list[tuple[str, str]] = []
+            payload = runtime.run_json(
+                system_prompt="s",
+                user_prompt="u",
+                on_log_line=lambda stream, message: logged.append((stream, message)),
+            )
+            self.assertEqual(payload, {"ok": True})
+            self.assertEqual(logged, [("stdout", "out-1"), ("stderr", "fatal: boom")])
 
     def test_cli_request_failures(self) -> None:
         settings = self._settings()
