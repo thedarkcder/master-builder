@@ -1041,7 +1041,9 @@ def list_run_events(
 @router.get("/runs/{run_id}/logs", response_model=list[RunLogEventRead])
 def list_run_logs(
     run_id: str,
-    limit: int = Query(default=500, ge=1, le=2000),
+    limit: int = Query(default=200, ge=1, le=1000),
+    before_recorded_at: datetime | None = Query(default=None),
+    before_event_id: str | None = Query(default=None),
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[RunLogEventRead]:
@@ -1051,6 +1053,8 @@ def list_run_logs(
         run_model=Run,
         run_log_schema_cls=RunLogEventRead,
         limit=limit,
+        before_recorded_at=before_recorded_at,
+        before_event_id=before_event_id,
     )
 
 
