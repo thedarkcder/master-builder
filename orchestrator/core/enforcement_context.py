@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable
 
 REQUIRED_GUIDANCE_FILES = (
     ".codex/POLICY.md",
@@ -13,8 +12,6 @@ REQUIRED_GUIDANCE_FILES = (
 )
 MANIFEST_RELATIVE_PATH = ".codex/codex_assets_manifest.json"
 OPTIONAL_GUIDANCE_FILES = ("AGENTS.md",)
-SKILL_RELATIVE_GLOB = ".codex/skills/**/SKILL.md"
-USER_SKILL_RELATIVE_GLOB = ".codex/skills/**/SKILL.md"
 
 class EnforcementAssetsError(ValueError):
     """Raised when required enforcement assets are unavailable or invalid."""
@@ -38,36 +35,6 @@ def _load_optional_text(*, repo_root: Path, relative_path: str) -> str | None:
         content = local_path.read_text(encoding="utf-8").strip()
         return content or None
     return None
-
-
-def _iter_skill_paths(*, repo_root: Path) -> Iterable[Path]:
-    repo_skill_paths = list((repo_root / ".codex" / "skills").glob("**/SKILL.md"))
-    user_skill_root = Path.home() / ".codex" / "skills"
-    user_skill_paths = list(user_skill_root.glob("**/SKILL.md")) if user_skill_root.exists() else []
-    seen: set[str] = set()
-    for skill_path in sorted([*repo_skill_paths, *user_skill_paths], key=lambda p: str(p)):
-        key = str(skill_path.resolve()) if skill_path.exists() else str(skill_path)
-        if key in seen:
-            continue
-        seen.add(key)
-        yield skill_path
-
-
-def _load_skill_texts(*, repo_root: Path) -> list[tuple[str, str]]:
-    payload: list[tuple[str, str]] = []
-    for skill_path in _iter_skill_paths(repo_root=repo_root):
-        if not skill_path.exists():
-            continue
-        content = skill_path.read_text(encoding="utf-8").strip()
-        if not content:
-            continue
-        try:
-            relative_to_repo = skill_path.relative_to(repo_root)
-            display_path = str(relative_to_repo)
-        except ValueError:
-            display_path = str(skill_path)
-        payload.append((display_path, content))
-    return payload
 
 
 def _load_policy_pack_payload(*, repo_root: Path) -> dict[str, dict]:
@@ -150,11 +117,5 @@ def build_agent_enforcement_context(
         optional_content = _load_optional_text(repo_root=repo_root, relative_path=relative_path)
         if optional_content:
             context_parts.extend(["", f"{relative_path} excerpt:", optional_content])
-
-    skill_texts = _load_skill_texts(repo_root=repo_root)
-    if skill_texts:
-        context_parts.extend(["", "Loaded skills:"])
-        for skill_path, skill_content in skill_texts:
-            context_parts.extend(["", f"{skill_path} excerpt:", skill_content])
     context_parts.extend(["", "Loaded policy packs:", json.dumps(policy_pack_payload, indent=2, sort_keys=True)])
     return "\n".join(context_parts).strip()

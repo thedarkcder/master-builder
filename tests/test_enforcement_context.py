@@ -27,7 +27,6 @@ class EnforcementContextTests(unittest.TestCase):
         self.assertIn(".codex/DECISION_GATE_TEMPLATE.md excerpt:", context)
         self.assertIn(".codex/PR_READY_TEMPLATES.md excerpt:", context)
         self.assertIn("AGENTS.md excerpt:", context)
-        self.assertIn("Loaded skills:", context)
         self.assertIn("Loaded policy packs", context)
         self.assertIn(f"Codex assets version: {expected_version}", context)
 
