@@ -10,7 +10,6 @@ REQUIRED_GUIDANCE_FILES = (
     ".codex/DECISION_GATE_TEMPLATE.md",
     ".codex/PR_READY_TEMPLATES.md",
 )
-MANIFEST_RELATIVE_PATH = ".codex/codex_assets_manifest.json"
 OPTIONAL_GUIDANCE_FILES = ("AGENTS.md",)
 
 class EnforcementAssetsError(ValueError):
@@ -54,63 +53,26 @@ def _load_policy_pack_payload(*, repo_root: Path) -> dict[str, dict]:
     return payload
 
 
-def _load_assets_manifest(*, repo_root: Path) -> dict[str, object]:
-    manifest_content = _load_required_text(repo_root=repo_root, relative_path=MANIFEST_RELATIVE_PATH)
-    try:
-        manifest_payload = json.loads(manifest_content)
-    except json.JSONDecodeError as exc:
-        raise EnforcementAssetsError(
-            f"Invalid codex assets manifest JSON: {MANIFEST_RELATIVE_PATH}"
-        ) from exc
-    if not isinstance(manifest_payload, dict):
-        raise EnforcementAssetsError("Invalid codex assets manifest payload: expected JSON object")
-    return manifest_payload
-
-
-def codex_assets_version(*, repo_root: Path) -> str:
-    manifest_payload = _load_assets_manifest(repo_root=repo_root)
-    raw_version = manifest_payload.get("assets_version")
-    if not isinstance(raw_version, str) or not raw_version.strip():
-        raise EnforcementAssetsError("Codex assets manifest missing non-empty 'assets_version'")
-    return raw_version.strip()
-
-
 def validate_enforcement_assets(
     *,
     repo_root: Path,
-    required_assets_version: str | None = None,
-) -> str:
+) -> None:
     for relative_path in REQUIRED_GUIDANCE_FILES:
         _load_required_text(repo_root=repo_root, relative_path=relative_path)
     _load_policy_pack_payload(repo_root=repo_root)
-    detected_version = codex_assets_version(repo_root=repo_root)
-
-    expected_version = (required_assets_version or "").strip()
-    if expected_version and detected_version != expected_version:
-        raise EnforcementAssetsError(
-            f"Codex assets version mismatch: required={expected_version}, found={detected_version}"
-        )
-    return detected_version
 
 
 def build_agent_enforcement_context(
     *,
     repo_root: Path,
-    required_assets_version: str | None = None,
 ) -> str:
     guidance_text = {
         relative_path: _load_required_text(repo_root=repo_root, relative_path=relative_path)
         for relative_path in REQUIRED_GUIDANCE_FILES
     }
     policy_pack_payload = _load_policy_pack_payload(repo_root=repo_root)
-    assets_version = codex_assets_version(repo_root=repo_root)
-    expected_version = (required_assets_version or "").strip()
-    if expected_version and assets_version != expected_version:
-        raise EnforcementAssetsError(
-            f"Codex assets version mismatch: required={expected_version}, found={assets_version}"
-        )
 
-    context_parts = ["Run enforcement context (must apply):", f"Codex assets version: {assets_version}"]
+    context_parts = ["Run enforcement context (must apply):"]
     for relative_path, content in guidance_text.items():
         context_parts.extend(["", f"{relative_path} excerpt:", content])
     for relative_path in OPTIONAL_GUIDANCE_FILES:

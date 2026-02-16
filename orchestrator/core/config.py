@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     public_api_base_url: str = "http://localhost:4000"
     jira_oauth_state_secret: str = "local-dev-change-me"
     secrets_encryption_key: str = ""
-    required_codex_assets_version: str = ""
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
