@@ -6,6 +6,7 @@ from collections.abc import Callable
 from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.agent_tools import allowed_tools_for_stage
 from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
@@ -100,6 +101,15 @@ class CodexWorkflowAgents:
                     else "none"
                 ),
                 last_review_summary_json=json.dumps(last_review_result.summary if last_review_result else []),
+                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("pm"))),
+                agent_tool_command=(
+                    "python -m orchestrator agent-tool "
+                    f"--tenant {request.tenant_id} "
+                    f"--project {request.project_id or ''} "
+                    f"--run {request.run_id} "
+                    f"--issue {request.issue_key} "
+                    "--stage pm --tool <tool_name> --args '<json-object>'"
+                ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=attempt),
         )
@@ -147,14 +157,30 @@ class CodexWorkflowAgents:
                 feedback=feedback or "none",
                 plan_json=json.dumps(plan.plan_steps),
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
+                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("dev"))),
+                agent_tool_command=(
+                    "python -m orchestrator agent-tool "
+                    f"--tenant {request.tenant_id} "
+                    f"--project {request.project_id or ''} "
+                    f"--run {request.run_id} "
+                    f"--issue {request.issue_key} "
+                    "--stage dev --tool <tool_name> --args '<json-object>'"
+                ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="dev", attempt=attempt),
         )
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
+        hard_stop_raw = payload.get("hard_stop_reason")
+        hard_stop_reason = (
+            str(hard_stop_raw).strip()
+            if isinstance(hard_stop_raw, str) and str(hard_stop_raw).strip()
+            else None
+        )
         return DevResult(
             change_summary=_string_list(payload.get("change_summary"), fallback=["No change summary provided by Codex"]),
             pr_url=pr_url,
+            hard_stop_reason=hard_stop_reason,
         )
 
     def test(
@@ -188,6 +214,15 @@ class CodexWorkflowAgents:
                 dev_summary_json=json.dumps(dev_result.change_summary),
                 pr_url=dev_result.pr_url or "none",
                 suggested_test_commands_json=json.dumps(request.suggested_test_commands),
+                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("test"))),
+                agent_tool_command=(
+                    "python -m orchestrator agent-tool "
+                    f"--tenant {request.tenant_id} "
+                    f"--project {request.project_id or ''} "
+                    f"--run {request.run_id} "
+                    f"--issue {request.issue_key} "
+                    "--stage test --tool <tool_name> --args '<json-object>'"
+                ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="test", attempt=attempt),
         )
@@ -237,6 +272,15 @@ class CodexWorkflowAgents:
                 test_guidance_json=json.dumps(test_result.guidance),
                 test_feedback=test_result.feedback or "none",
                 pr_url=dev_result.pr_url or "none",
+                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
+                agent_tool_command=(
+                    "python -m orchestrator agent-tool "
+                    f"--tenant {request.tenant_id} "
+                    f"--project {request.project_id or ''} "
+                    f"--run {request.run_id} "
+                    f"--issue {request.issue_key} "
+                    "--stage review --tool <tool_name> --args '<json-object>'"
+                ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="review", attempt=attempt),
         )

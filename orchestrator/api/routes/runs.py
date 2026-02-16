@@ -23,7 +23,7 @@ def _run_to_schema(run: Run) -> RunRead:
         branch=run.branch,
         pr_url=run.pr_url,
         status=run.status,
-        last_error=run.last_error,
+        last_error=None if run.status == "succeeded" else run.last_error,
         plan=run.plan,
         created_at=run.created_at,
         started_at=run.started_at,

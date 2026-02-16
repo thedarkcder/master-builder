@@ -46,6 +46,7 @@ class _FakeAgents:
         return DevResult(
             change_summary=[f"attempt {attempt} implementation"],
             pr_url=f"https://github.com/example/repo/pull/{attempt}",
+            hard_stop_reason=None,
         )
 
     def test(
@@ -117,6 +118,9 @@ class WorkflowRunnerTests(unittest.TestCase):
         )
         self.assertEqual(result.pr_url, "https://github.com/example/repo/pull/1")
         self.assertEqual(result.summary, ["ready for PR"])
+        self.assertEqual(result.dev_rationale, ["attempt 1 implementation"])
+        self.assertEqual(result.review_summary, ["ready for PR"])
+        self.assertIsNone(result.review_feedback)
         self.assertEqual(
             result.test_guidance,
             ["python3 -m unittest discover -s tests -p 'test_*.py'"],
@@ -206,12 +210,15 @@ class WorkflowRunnerTests(unittest.TestCase):
                 {"stage": "test", "attempt": "2", "event": "test failure attempt 2"},
             ],
         )
+        self.assertEqual(result.dev_rationale, ["attempt 2 implementation"])
+        self.assertEqual(result.review_summary, [])
+        self.assertIsNone(result.review_feedback)
         self.assertIsNotNone(result.follow_up_issue)
         self.assertEqual(result.follow_up_issue["target_status"], "Backlog")
         self.assertFalse(result.follow_up_issue["auto_promote"])
         self.assertIn("Why it matters", result.follow_up_issue["description"])
 
-    def test_missing_pr_url_is_safe_failure(self) -> None:
+    def test_missing_pr_url_retries_then_fails_at_max_attempts(self) -> None:
         agents = _FakeAgents()
 
         def _dev_without_pr(
@@ -221,7 +228,7 @@ class WorkflowRunnerTests(unittest.TestCase):
             feedback: str | None,
         ) -> DevResult:
             agents.calls.append(f"dev:{attempt}:{feedback or '-'}")
-            return DevResult(change_summary=["no pr yet"], pr_url=None)
+            return DevResult(change_summary=["no pr yet"], pr_url=None, hard_stop_reason=None)
 
         agents.dev = _dev_without_pr  # type: ignore[method-assign]
         agents.review_results_by_attempt[1] = ReviewResult(
@@ -236,7 +243,50 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertFalse(result.succeeded)
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "review")
-        self.assertEqual(result.diagnostics.message, "Workflow succeeded but no PR URL was produced")
+        self.assertEqual(
+            result.diagnostics.message,
+            "Max workflow attempts reached after missing PR URL publication",
+        )
+
+    def test_missing_pr_url_routes_back_to_dev_on_next_attempt(self) -> None:
+        agents = _FakeAgents()
+
+        def _dev_maybe_pr(
+            request: WorkflowRequest,
+            plan: PmPlan,
+            attempt: int,
+            feedback: str | None,
+        ) -> DevResult:
+            agents.calls.append(f"dev:{attempt}:{feedback or '-'}")
+            if attempt == 1:
+                return DevResult(change_summary=["implemented changes, PR pending"], pr_url=None, hard_stop_reason=None)
+            return DevResult(change_summary=["implemented and published PR"], pr_url="https://github.com/example/repo/pull/2", hard_stop_reason=None)
+
+        agents.dev = _dev_maybe_pr  # type: ignore[method-assign]
+        agents.review_results_by_attempt[1] = ReviewResult(
+            approved=True,
+            summary=["approved changes"],
+            feedback=None,
+            pr_url=None,
+        )
+
+        result = WorkflowRunner(agents).run(self._request(loops=2))
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.pr_url, "https://github.com/example/repo/pull/2")
+        self.assertEqual(
+            agents.calls,
+            [
+                "pm:1:-",
+                "dev:1:-",
+                "test:1",
+                "review:1",
+                "pm:2:PR URL missing after review approval; dev must create/publish PR.",
+                "dev:2:PR URL missing after review approval; dev must create/publish PR.",
+                "test:2",
+                "review:2",
+            ],
+        )
 
     def test_blocked_dev_result_fails_immediately_without_test_stage(self) -> None:
         agents = _FakeAgents()
@@ -251,6 +301,7 @@ class WorkflowRunnerTests(unittest.TestCase):
             return DevResult(
                 change_summary=["Blocked: repository checkout is empty; no sources available to modify."],
                 pr_url=None,
+                hard_stop_reason="Blocked: repository checkout is empty; no sources available to modify.",
             )
 
         agents.dev = _blocked_dev  # type: ignore[method-assign]
