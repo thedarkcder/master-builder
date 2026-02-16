@@ -254,6 +254,31 @@ class JiraOAuthIssueService:
             },
         )
 
+    def add_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        normalized_issue = issue_id_or_key.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue label update")
+        normalized_labels = [str(label).strip() for label in labels if str(label).strip()]
+        if not normalized_labels:
+            return
+        self._request_json(
+            method="PUT",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
+            access_token=access_token,
+            payload={
+                "update": {
+                    "labels": [{"add": label} for label in normalized_labels],
+                }
+            },
+        )
+
     def add_issue_comment(
         self,
         *,
@@ -275,6 +300,73 @@ class JiraOAuthIssueService:
         if not isinstance(payload, dict):
             raise JiraOAuthError("Jira comment create response was not an object")
         return payload
+
+    def transition_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        target_status: str,
+    ) -> dict[str, Any]:
+        normalized_issue = issue_id_or_key.strip()
+        normalized_target = target_status.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for transition")
+        if not normalized_target:
+            raise JiraOAuthError("Missing target status for transition")
+
+        transitions_payload = self._request_json(
+            method="GET",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}/transitions",
+            access_token=access_token,
+        )
+        transitions = transitions_payload.get("transitions") if isinstance(transitions_payload, dict) else None
+        if not isinstance(transitions, list):
+            raise JiraOAuthError("Jira transitions response did not include transitions list")
+
+        desired = normalized_target.casefold()
+        selected_transition_id: str | None = None
+        selected_transition_name: str | None = None
+        selected_to_status: str | None = None
+        available_statuses: list[str] = []
+
+        for transition in transitions:
+            if not isinstance(transition, dict):
+                continue
+            transition_id = transition.get("id")
+            transition_name = transition.get("name")
+            to_obj = transition.get("to") if isinstance(transition.get("to"), dict) else {}
+            to_name = to_obj.get("name") if isinstance(to_obj, dict) else None
+            if isinstance(to_name, str) and to_name.strip():
+                available_statuses.append(to_name.strip())
+            if not isinstance(transition_id, str) or not transition_id.strip():
+                continue
+            normalized_name = transition_name.strip().casefold() if isinstance(transition_name, str) else ""
+            normalized_to = to_name.strip().casefold() if isinstance(to_name, str) else ""
+            if desired in {normalized_name, normalized_to}:
+                selected_transition_id = transition_id.strip()
+                selected_transition_name = transition_name.strip() if isinstance(transition_name, str) else None
+                selected_to_status = to_name.strip() if isinstance(to_name, str) else None
+                break
+
+        if not selected_transition_id:
+            available = ", ".join(sorted({item for item in available_statuses if item})) or "none"
+            raise JiraOAuthError(
+                f"Transition '{normalized_target}' not available for {normalized_issue}; available statuses: {available}"
+            )
+
+        self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}/transitions",
+            access_token=access_token,
+            payload={"transition": {"id": selected_transition_id}},
+        )
+        return {
+            "transition_id": selected_transition_id,
+            "transition_name": selected_transition_name,
+            "to_status": selected_to_status,
+        }
 
     def update_issue_summary(
         self,
@@ -298,6 +390,34 @@ class JiraOAuthIssueService:
             payload={
                 "fields": {
                     "summary": normalized_summary,
+                }
+            },
+        )
+
+    def update_issue_summary_and_description(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+        description: str | dict[str, Any],
+    ) -> None:
+        normalized_issue = issue_id_or_key.strip()
+        normalized_summary = summary.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue update")
+        if not normalized_summary:
+            raise JiraOAuthError("Missing issue summary for issue update")
+
+        self._request_json(
+            method="PUT",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
+            access_token=access_token,
+            payload={
+                "fields": {
+                    "summary": normalized_summary,
+                    "description": _to_adf_description(description),
                 }
             },
         )

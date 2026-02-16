@@ -13,15 +13,15 @@ from sqlalchemy import select
 from orchestrator.api.main import create_app
 from orchestrator.api.routes.admin import _resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
-from orchestrator.core.enforcement_context import EnforcementAssetsError
 from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
     reset_agent_observability_for_tests,
 )
+from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, Project, Run, RunLock, Tenant
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -851,6 +851,321 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(filtered_runs[0]["run_id"], "run-created-project")
         self.assertEqual(filtered_runs[0]["project_id"], created_project_id)
 
+    def test_rerun_failed_run_from_admin(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-failed-rerun",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-999",
+                    issue_summary="failed run",
+                    issue_description="Objective: rerun from admin.",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="failed",
+                    last_error="boom",
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post("/api/admin/runs/run-failed-rerun/rerun", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body["tenant_id"], "tenant-a")
+        self.assertEqual(body["issue_key"], "TP-999")
+        self.assertEqual(body["status"], "queued")
+        self.assertNotEqual(body["run_id"], "run-failed-rerun")
+
+    def test_cancel_active_run_from_admin(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-active-cancel",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-998",
+                    issue_summary="active run",
+                    issue_description="Objective: cancel from admin.",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="running",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                )
+            )
+            session.add(
+                RunLock(
+                    tenant_id="tenant-a",
+                    issue_key="TP-998",
+                    run_id="run-active-cancel",
+                    locked_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post("/api/admin/runs/run-active-cancel/cancel", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["run_id"], "run-active-cancel")
+        self.assertEqual(body["status"], "cancelled")
+
+        with session_factory() as session:
+            lock = session.execute(
+                select(RunLock).where(
+                    RunLock.tenant_id == "tenant-a",
+                    RunLock.issue_key == "TP-998",
+                )
+            ).scalar_one_or_none()
+            self.assertIsNone(lock)
+
+    def test_cancel_terminal_run_from_admin_returns_conflict(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-terminal-cancel",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-997",
+                    issue_summary="terminal run",
+                    issue_description="Objective: cancel from admin.",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="failed",
+                    last_error="boom",
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post("/api/admin/runs/run-terminal-cancel/cancel", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Cannot cancel run", response.json()["detail"])
+
+    def test_list_run_events_for_run(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-events-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-501",
+                    issue_summary="event run",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="running",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                )
+            )
+            record_agent_lifecycle_event(
+                session=session,
+                event_type="TASK_STARTED",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-events-1",
+                issue_key="TP-501",
+                agent_id="worker-1",
+                recorded_at=now,
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/runs/run-events-1/events", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["run_id"], "run-events-1")
+        self.assertEqual(body[0]["event_type"], "TASK_STARTED")
+
+    def test_list_run_logs_for_run(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-log-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-503",
+                    issue_summary="event log run",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="running",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                )
+            )
+            session.flush()
+            record_run_log_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-log-1",
+                issue_key="TP-503",
+                agent_id="worker-logs",
+                invocation_id="inv-run-log-1",
+                channel="worker",
+                command="workflow.dev",
+                working_dir="/tmp/repo",
+                stage="dev",
+                attempt=1,
+                stream="stdout",
+                message="hello from codex",
+                recorded_at=now,
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/runs/run-log-1/logs", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["run_id"], "run-log-1")
+        self.assertEqual(body[0]["message"], "hello from codex")
+
+    def test_stream_run_events_returns_ndjson_snapshot(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-events-stream",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-502",
+                    issue_summary="event stream run",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="running",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                )
+            )
+            record_agent_lifecycle_event(
+                session=session,
+                event_type="TASK_STARTED",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-events-stream",
+                issue_key="TP-502",
+                agent_id="worker-stream",
+                recorded_at=now,
+            )
+            record_run_log_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-events-stream",
+                issue_key="TP-502",
+                agent_id="worker-stream",
+                invocation_id="inv-run-events-stream",
+                channel="worker",
+                command="workflow.dev",
+                working_dir="/tmp/repo",
+                stage="dev",
+                attempt=1,
+                stream="stdout",
+                message="live line",
+                recorded_at=now,
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/runs/run-events-stream/events/stream", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("content-type"), "application/x-ndjson")
+        self.assertIn("\"run_id\":\"run-events-stream\"", response.text)
+        self.assertIn("\"event_type\":\"TASK_STARTED\"", response.text)
+        self.assertIn("\"event_kind\":\"codex_log\"", response.text)
+        self.assertIn("\"message\":\"live line\"", response.text)
+
+    def test_stream_run_events_missing_run_returns_not_found(self) -> None:
+        response = self.client.get("/api/admin/runs/run-missing/events/stream", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Run not found")
+
     def test_list_agent_activity_returns_dark_and_active_agents(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
@@ -1169,7 +1484,6 @@ class AdminApiTests(unittest.TestCase):
         payload["repos"]["allowlist"] = []
         payload["repos"]["mapping_rules_by_project_key"] = {}
         payload["repos"]["mapping_rules_by_component"] = {}
-        payload["repos"]["fallback_repo"] = None
 
         response = self.client.post(
             "/api/admin/tenants",
@@ -1178,45 +1492,6 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["repos"]["allowlist"], [])
-        self.assertIsNone(response.json()["repos"]["fallback_repo"])
-
-    def test_create_tenant_blocks_when_codex_assets_invalid(self) -> None:
-        payload = self._tenant_payload()
-        with patch(
-            "orchestrator.api.routes.admin.validate_enforcement_assets",
-            side_effect=EnforcementAssetsError("version mismatch"),
-        ):
-            response = self.client.post(
-                "/api/admin/tenants",
-                json=payload,
-                auth=("admin", "secret"),
-            )
-
-        self.assertEqual(response.status_code, 503)
-        self.assertIn("Codex assets validation failed", response.json()["detail"])
-
-    def test_update_tenant_blocks_when_codex_assets_invalid(self) -> None:
-        payload = self._tenant_payload()
-        create_response = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 201)
-
-        payload["name"] = "Tenant Updated"
-        with patch(
-            "orchestrator.api.routes.admin.validate_enforcement_assets",
-            side_effect=EnforcementAssetsError("missing packaged asset"),
-        ):
-            update_response = self.client.put(
-                "/api/admin/tenants/tenant-a",
-                json=payload,
-                auth=("admin", "secret"),
-            )
-
-        self.assertEqual(update_response.status_code, 503)
-        self.assertIn("Codex assets validation failed", update_response.json()["detail"])
 
     def test_start_install_and_callback_persist_installation_id(self) -> None:
         payload = self._tenant_payload()

@@ -20,6 +20,9 @@ _ENQUEUE_REASON_GUIDANCE = {
     "board_gate_check_failed": "Board-location gate check failed; verify Jira OAuth connection/scopes and board configuration.",
     "board_gate_unconfigured": "Run board gating is enabled but no valid board id is configured.",
     "decision_gate_cooldown_active": "Decision Gate was recently required for this issue. Wait for cooldown, then rerun.",
+    "decision_gate_required": "Decision Gate is required before execution. Reply with the missing clarifications.",
+    "gtd_required": "Good To Do details are incomplete. Add the missing GTD details, then rerun.",
+    "missing_ready_label": "Issue is missing the configured ready label.",
 }
 
 

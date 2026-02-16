@@ -25,13 +25,6 @@ def start_github_install(
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
-    github = tenant.github_config
-    if github.get("mode") != "github_app":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only github_app mode is supported",
-        )
-
     app_slug = resolve_platform_secret_ref_fn(
         session,
         secret_ref=PLATFORM_SECRET_GITHUB_APP_SLUG_REF,
@@ -118,8 +111,6 @@ def list_tenant_github_repositories(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
     github = tenant.github_config
-    if github.get("mode") != "github_app":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only github_app mode is supported")
     if not github.get("installation_id"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -32,7 +32,7 @@ class DiscordAskMemoryTests(unittest.TestCase):
                 )
         self.assertEqual(exc_ctx.exception.status_code, 404)
 
-    def test_collect_ask_context_status_filter_and_counts(self) -> None:
+    def test_collect_ask_context_counts_without_status_filter(self) -> None:
         issues = [
             self._preview("MAB-1", "One", "Blocked"),
             self._preview("MAB-2", "Two", "Blocked"),
@@ -50,10 +50,10 @@ class DiscordAskMemoryTests(unittest.TestCase):
             )
 
         self.assertIsNone(normalized_issue_key)
-        self.assertEqual(requested_status, "Blocked")
+        self.assertIsNone(requested_status)
         self.assertEqual(len(result_issues), 3)
         self.assertEqual(counts["Blocked"], 2)
-        self.assertIn('status = "Blocked"', search_mock.call_args.kwargs["jql"])
+        self.assertNotIn('status = "Blocked"', search_mock.call_args.kwargs["jql"])
 
     def test_collect_ask_context_default_query_path(self) -> None:
         with (

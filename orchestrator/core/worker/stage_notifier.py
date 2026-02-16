@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from collections.abc import Callable
 from typing import Any
 
@@ -34,6 +35,23 @@ class RunStageNotifier:
 
     def append(self, stage_update: dict[str, str]) -> None:
         self.stage_updates.append(stage_update)
+        existing_plan = dict(self._run.plan or {})
+        live_updates_raw = existing_plan.get("live_stage_updates")
+        live_updates: list[dict[str, str]] = []
+        if isinstance(live_updates_raw, list):
+            for item in live_updates_raw:
+                if isinstance(item, dict):
+                    live_updates.append({str(k): str(v) for k, v in item.items()})
+        live_updates.append(
+            {
+                "stage": stage_update["stage"],
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        existing_plan["live_stage_updates"] = live_updates[-40:]
+        self._run.plan = existing_plan
+        self._session.commit()
+        self._session.refresh(self._run)
         send_result = self._send_discord_message(
             session=self._session,
             tenant=self._tenant,

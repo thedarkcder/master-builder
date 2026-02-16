@@ -8,6 +8,7 @@ from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
     fail_missing_project_mapping,
+    fail_project_repository_checkout,
     finalize_workflow_result,
     resolve_project_for_run,
     start_run,
@@ -148,6 +149,37 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "ZZ-404"})
             self.assertIsNone(lock)
 
+    def test_fail_project_repository_checkout_releases_lock(self) -> None:
+        with self.session_factory() as session:
+            queued = enqueue_run(
+                session,
+                tenant_id="tenant-a",
+                project_id=None,
+                issue_key="TA-401",
+                issue_summary="Checkout failed",
+                issue_description=(
+                    "Objective: fail checkout safely. "
+                    "Acceptance Criteria: lock released. "
+                    "How to test: fail repository checkout."
+                ),
+                repo_url="https://github.com/example/a",
+            )
+            self.assertTrue(queued.enqueued)
+            run = queued.run
+
+            failed_run = fail_project_repository_checkout(
+                session,
+                run=run,
+                error="clone failed",
+            )
+            self.assertEqual(failed_run.status, "failed")
+            self.assertEqual(
+                failed_run.last_error,
+                "Project repository checkout failed: clone failed",
+            )
+            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-401"})
+            self.assertIsNone(lock)
+
     def test_start_block_and_finalize_workflow_result(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -172,6 +204,14 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 project_id="tenant-a-default",
             )
             session.add(run)
+            session.add(
+                RunLock(
+                    tenant_id="tenant-a",
+                    issue_key="TA-200",
+                    run_id="run-2",
+                    locked_at=now,
+                )
+            )
             session.commit()
             session.refresh(run)
 
@@ -218,3 +258,5 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(finalized.status, "failed")
             self.assertEqual(finalized.last_error, "failure details")
             self.assertEqual(finalized.plan["stage_updates"], [{"stage": "run_failed"}])
+            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-200"})
+            self.assertIsNone(lock)

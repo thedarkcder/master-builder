@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from functools import lru_cache
-from pathlib import Path
-
-from orchestrator.core.enforcement_context import build_agent_enforcement_context
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.workflow.runner import WorkflowRequest
 from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.tools.project_repo_checkout import project_repo_dir
+
 
 
 def build_workflow_request_for_run(
@@ -22,18 +20,12 @@ def build_workflow_request_for_run(
         effective_policy.get("max_dev_test_review_loops"),
         default=1,
     )
-    max_runtime_minutes = coerce_positive_int(
-        effective_policy.get("max_runtime_minutes"),
-        default=30,
-    )
     suggested_test_commands_raw = effective_policy.get("allowed_commands") or []
     suggested_test_commands: list[str] = []
     for command in suggested_test_commands_raw:
         command_text = str(command).strip()
         enforce_safe_command(command_text)
         suggested_test_commands.append(command_text)
-
-    enforcement_context = _cached_enforcement_context(settings.required_codex_assets_version or "")
 
     issue_description = run.issue_description or ""
     if project is not None:
@@ -47,31 +39,32 @@ def build_workflow_request_for_run(
         issue_description = f"{issue_description}{project_context}".strip()
     else:
         issue_description = issue_description.strip()
-    issue_description_with_enforcement = (
-        f"{issue_description}\n\n{enforcement_context}" if issue_description else enforcement_context
-    )
+    execution_repo_dir = _resolve_execution_repo_dir(settings=settings, tenant=tenant, project=project)
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
+        project_id=project.project_id if project is not None else run.project_id,
         run_id=run.run_id,
         issue_key=run.issue_key,
         issue_summary=run.issue_summary or f"Execute {run.issue_key}",
-        issue_description=issue_description_with_enforcement,
+        issue_description=issue_description,
         max_dev_test_review_loops=max_loops,
-        max_runtime_minutes=max_runtime_minutes,
         suggested_test_commands=suggested_test_commands,
+        execution_repo_dir=execution_repo_dir,
     )
 
 
-@lru_cache(maxsize=1)
-def _cached_enforcement_context(required_assets_version: str) -> str:
-    module_path = Path(__file__).resolve()
-    repo_root = module_path.parent
-    for candidate in [repo_root, *repo_root.parents]:
-        if (candidate / ".codex").exists():
-            repo_root = candidate
-            break
-    return build_agent_enforcement_context(
-        repo_root=repo_root,
-        required_assets_version=required_assets_version or None,
+def _resolve_execution_repo_dir(*, settings, tenant: Tenant, project: Project | None) -> str:
+    if project is None:
+        raise ValueError("Run project routing is required before workflow execution")
+    repo_dir = project_repo_dir(
+        base_dir=settings.project_repo_checkout_base_dir,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
     )
+    if not repo_dir.is_dir():
+        raise ValueError(
+            "Project repository checkout is missing for workflow execution "
+            f"(tenant_id={tenant.tenant_id}, project_id={project.project_id}, repo_dir={repo_dir})"
+        )
+    return str(repo_dir)

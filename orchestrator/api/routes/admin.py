@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -83,11 +83,22 @@ from orchestrator.api.admin.github_helpers import (
 )
 from orchestrator.api.admin.runs_query import build_runs_query as _build_runs_query_impl
 from orchestrator.api.admin.runs_service import (
+    cancel_run_admin as _cancel_run_admin_impl,
     get_run as _get_run_impl,
+    list_run_log_events as _list_run_log_events_impl,
+    list_run_events as _list_run_events_impl,
     list_runs as _list_runs_impl,
+    rerun_run as _rerun_run_impl,
 )
 from orchestrator.api.admin.agent_activity_service import (
     list_agent_activity as _list_agent_activity_impl,
+)
+from orchestrator.api.admin.run_event_stream_service import (
+    stream_run_events_ndjson as _stream_run_events_ndjson_impl,
+)
+from orchestrator.api.admin.codex_logs_service import (
+    list_codex_log_events as _list_codex_log_events_impl,
+    stream_codex_events_ndjson as _stream_codex_events_ndjson_impl,
 )
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as _project_execution_metrics_impl,
@@ -161,6 +172,8 @@ from orchestrator.api.schemas import (
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
     RunRead,
+    RunEventRead,
+    RunLogEventRead,
     AgentActivityRead,
     ProjectExecutionMetricsRead,
     AlertEvaluationRead,
@@ -170,8 +183,9 @@ from orchestrator.api.schemas import (
     TenantUpdate,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.enforcement_context import validate_enforcement_assets
 from orchestrator.core.project_policy import normalize_project_policy_overrides
+from orchestrator.core.jira_links import tenant_jira_issue_url
+from orchestrator.core.worker.run_lifecycle import resolve_project_for_run as _resolve_project_for_run
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_GITHUB_APP_ID_REF,
     PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF,
@@ -189,6 +203,11 @@ from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
 
+try:
+    import psycopg
+except ImportError:  # pragma: no cover - dependency is required at runtime
+    psycopg = None
+
 JIRA_WEBHOOK_EVENTS = [
     "jira:issue_created",
     "jira:issue_updated",
@@ -203,7 +222,6 @@ def _validate_codex_assets_for_tenant_init() -> None:
     _validate_codex_assets_for_tenant_init_core(
         settings=get_settings(),
         module_file=__file__,
-        validate_enforcement_assets_fn=validate_enforcement_assets,
     )
 
 
@@ -243,6 +261,20 @@ def _resolve_project_discord_channel_binding(
 
 
 def _admin_project_service() -> AdminProjectService:
+    def _resolve_project_run_board_id(
+        *,
+        session: Session,
+        tenant: Tenant,
+        jira_project_key: str,
+        settings,  # noqa: ANN001
+    ) -> int | None:
+        return _discover_project_run_board_id_impl(
+            session=session,
+            tenant=tenant,
+            jira_project_key=jira_project_key,
+            settings=settings,
+        )
+
     return AdminProjectService(
         normalize_project_repo=_normalize_project_repo,
         normalize_project_key=_normalize_project_key,
@@ -253,7 +285,7 @@ def _admin_project_service() -> AdminProjectService:
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
-        resolve_project_run_board_id=lambda **kwargs: _discover_project_run_board_id_impl(**kwargs),
+        resolve_project_run_board_id=_resolve_project_run_board_id,
         project_to_schema=_project_to_schema,
         settings_factory=get_settings,
     )
@@ -267,8 +299,6 @@ def _ensure_project_repository_checkout(
 ) -> None:  # noqa: ANN001
     settings = get_settings()
     github_config = tenant.github_config or {}
-    if str(github_config.get("mode") or "").strip() != "github_app":
-        return
     app_id_ref = str(github_config.get("app_id_ref") or PLATFORM_SECRET_GITHUB_APP_ID_REF).strip()
     private_key_ref = str(github_config.get("private_key_ref") or PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF).strip()
 
@@ -302,12 +332,9 @@ def _ensure_project_repository_checkout(
         )
     )
     if not app_id or not private_key:
-        logger.info(
-            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_secrets_unavailable",
-            tenant.tenant_id,
-            project.project_id,
+        raise ProjectRepoCheckoutError(
+            "GitHub App secrets are unavailable for repository checkout"
         )
-        return
     try:
         github_client = github_client_from_tenant_config(
             github_config,
@@ -323,13 +350,8 @@ def _ensure_project_repository_checkout(
                 encryption_key=settings.secrets_encryption_key,
             ),
         )
-    except ValueError:
-        logger.info(
-            "project_repository_checkout_skipped tenant_id=%s project_id=%s reason=github_configuration_incomplete",
-            tenant.tenant_id,
-            project.project_id,
-        )
-        return
+    except ValueError as exc:
+        raise ProjectRepoCheckoutError(str(exc)) from exc
 
     try:
         installation_token = github_client.get_installation_token()
@@ -927,8 +949,12 @@ def list_runs(
     tenant_id: str | None = Query(default=None),
     project_id: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
+    issue_query: str | None = Query(default=None, alias="issue"),
+    pr_state: str | None = Query(default=None, alias="pr_state"),
     from_time: datetime | None = Query(default=None, alias="from"),
     to_time: datetime | None = Query(default=None, alias="to"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> list[RunRead]:
@@ -937,10 +963,16 @@ def list_runs(
         tenant_id=tenant_id,
         project_id=project_id,
         status_filter=status_filter,
+        issue_query=issue_query,
+        pr_state=pr_state,
         from_time=from_time,
         to_time=to_time,
+        limit=limit,
+        offset=offset,
         build_runs_query_fn=_build_runs_query_impl,
         run_to_schema_fn=_run_to_schema,
+        tenant_model=Tenant,
+        tenant_jira_issue_url_fn=tenant_jira_issue_url,
     )
 
 
@@ -955,6 +987,139 @@ def get_run(
         run_id=run_id,
         run_model=Run,
         run_to_schema_fn=_run_to_schema,
+        tenant_model=Tenant,
+        tenant_jira_issue_url_fn=tenant_jira_issue_url,
+    )
+
+
+@router.post("/runs/{run_id}/rerun", response_model=RunRead, status_code=status.HTTP_201_CREATED)
+def rerun_failed_run(
+    run_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> RunRead:
+    return _rerun_run_impl(
+        session=session,
+        run_id=run_id,
+        run_model=Run,
+        tenant_model=Tenant,
+        resolve_project_for_run_fn=_resolve_project_for_run,
+        run_to_schema_fn=_run_to_schema,
+    )
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunRead)
+def cancel_run(
+    run_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> RunRead:
+    return _cancel_run_admin_impl(
+        session=session,
+        run_id=run_id,
+        run_to_schema_fn=_run_to_schema,
+        cancelled_by="admin",
+    )
+
+
+@router.get("/runs/{run_id}/events", response_model=list[RunEventRead])
+def list_run_events(
+    run_id: str,
+    limit: int = Query(default=200, ge=1, le=500),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[RunEventRead]:
+    return _list_run_events_impl(
+        session=session,
+        run_id=run_id,
+        run_model=Run,
+        run_event_schema_cls=RunEventRead,
+        limit=limit,
+    )
+
+
+@router.get("/runs/{run_id}/logs", response_model=list[RunLogEventRead])
+def list_run_logs(
+    run_id: str,
+    limit: int = Query(default=500, ge=1, le=2000),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[RunLogEventRead]:
+    return _list_run_log_events_impl(
+        session=session,
+        run_id=run_id,
+        run_model=Run,
+        run_log_schema_cls=RunLogEventRead,
+        limit=limit,
+    )
+
+
+@router.get("/runs/{run_id}/events/stream")
+def stream_run_events(
+    run_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    return StreamingResponse(
+        _stream_run_events_ndjson_impl(
+            session=session,
+            run_id=run_id,
+            run_model=Run,
+            settings=get_settings(),
+            psycopg_module=psycopg,
+        ),
+        media_type="application/x-ndjson",
+    )
+
+
+@router.get("/codex/logs", response_model=list[RunLogEventRead])
+def list_codex_logs(
+    tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    run_id: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
+    command: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[RunLogEventRead]:
+    return _list_codex_log_events_impl(
+        session=session,
+        run_log_schema_cls=RunLogEventRead,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        run_id=run_id,
+        channel=channel,
+        command=command,
+        limit=limit,
+    )
+
+
+@router.get("/codex/events/stream")
+def stream_codex_events(
+    tenant_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    run_id: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
+    command: str | None = Query(default=None),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    return StreamingResponse(
+        _stream_codex_events_ndjson_impl(
+            session=session,
+            settings=get_settings(),
+            psycopg_module=psycopg,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+            channel=channel,
+            command=command,
+        ),
+        media_type="application/x-ndjson",
     )
 
 

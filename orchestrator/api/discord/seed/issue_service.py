@@ -1,10 +1,87 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import HTTPException, status
 
 from orchestrator.api.discord.shared.response_format import build_issue_url_list, format_issue_markdown_list
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraOAuthError
+
+SEED_FOLLOWUP_CONTEXT_MAX_AGE = timedelta(hours=24)
+
+
+def _string_list_field(*, issue_index: int, field_name: str, raw_value: object) -> list[str]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Codex issue draft {issue_index} has invalid '{field_name}' (expected list of strings)",
+        )
+    values: list[str] = []
+    for entry in raw_value:
+        if not isinstance(entry, str):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Codex issue draft {issue_index} has invalid '{field_name}' entry type",
+            )
+        text = entry.strip()
+        if text:
+            values.append(text)
+    return values
+
+
+def _optional_string(*, issue_index: int, field_name: str, raw_value: object) -> str:
+    if raw_value is None:
+        return ""
+    if not isinstance(raw_value, str):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Codex issue draft {issue_index} has invalid '{field_name}' (expected string)",
+        )
+    return raw_value.strip()
+
+
+def validate_seed_followup_context(
+    *,
+    session,
+    tenant: Tenant,
+    context: dict,
+    get_settings_fn,
+    tenant_jira_oauth_context_fn,
+) -> tuple[bool, str | None]:  # noqa: ANN001
+    updated_at_raw = str(context.get("updated_at") or "").strip()
+    if updated_at_raw:
+        try:
+            updated_at = datetime.fromisoformat(updated_at_raw)
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - updated_at.astimezone(timezone.utc)) > SEED_FOLLOWUP_CONTEXT_MAX_AGE:
+                return False, "stale follow-up context"
+        except ValueError:
+            return False, "invalid follow-up context timestamp"
+
+    issue_keys = [str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()]
+    if not issue_keys:
+        return True, None
+    try:
+        settings = get_settings_fn()
+        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        escaped_keys = ", ".join(f'"{value.replace(chr(34), "").strip()}"' for value in issue_keys)
+        existing = oauth["client"].search_issues_by_jql(
+            access_token=oauth["access_token"],
+            cloud_id=oauth["connection"].cloud_id,
+            jql=f"issuekey in ({escaped_keys})",
+            max_results=min(len(issue_keys), 50),
+        )
+    except (HTTPException, ValueError, JiraOAuthError):
+        return True, None
+    existing_keys = {str(issue.key).strip().upper() for issue in existing if str(issue.key).strip()}
+    if not existing_keys:
+        return False, "referenced Jira issues no longer exist"
+    return True, None
 
 
 def seed_issues_with_codex(
@@ -14,22 +91,27 @@ def seed_issues_with_codex(
     prompt_markdown: str,
     force_issue_keys: list[str] | None,
     allow_create: bool,
+    scoped_project_keys: list[str] | None,
+    codex_working_dir: str,
     tenant_project_keys_fn,
     get_settings_fn,
     build_codex_runtime_fn,
     plan_seed_issues_with_codex_fn,
     codex_runtime_error_type,
-    normalize_seed_issue_scope_fn,
-    normalize_seed_issue_key_fn,
-    normalize_seed_issue_tags_fn,
-    normalize_seed_issue_labels_fn,
-    collect_seed_issue_questions_fn,
     build_seed_issue_description_fn,
-    parse_seed_issue_type_fn,
+    issue_key_pattern,
     tenant_jira_oauth_context_fn,
     select_seed_match_fn,
 ):  # noqa: ANN001
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
+    normalized_scoped_project_keys = [
+        str(value).strip().upper()
+        for value in (scoped_project_keys or [])
+        if str(value).strip()
+    ]
+    if normalized_scoped_project_keys:
+        allowed = set(normalized_scoped_project_keys)
+        project_keys = [value for value in project_keys if str(value).strip().upper() in allowed]
     if not project_keys:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
 
@@ -40,6 +122,14 @@ def seed_issues_with_codex(
             runtime=runtime,
             prompt_markdown=prompt_markdown,
             allowed_project_keys=project_keys,
+            invocation_context=CodexInvocationContext(
+                channel="discord",
+                tenant_id=tenant.tenant_id,
+                project_id=None,
+                command="issues",
+                stage="seed",
+                working_dir=codex_working_dir,
+            ),
         )
     except codex_runtime_error_type as exc:
         raise HTTPException(
@@ -47,7 +137,10 @@ def seed_issues_with_codex(
             detail=f"Codex issue seeding is unavailable: {exc}",
         ) from exc
 
-    project_key = str(plan_payload.get("project_key") or project_keys[0]).strip().upper()
+    project_key_raw = plan_payload.get("project_key")
+    project_key = str(project_key_raw).strip() if isinstance(project_key_raw, str) else ""
+    if not project_key:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return project_key")
     if project_key not in project_keys:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -67,66 +160,43 @@ def seed_issues_with_codex(
             if question and question not in question_set:
                 question_set.add(question)
                 clarification_questions.append(question)
-    normalized_force_issue_keys = [
-        str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()
-    ]
+    normalized_force_issue_keys = [str(value).strip() for value in (force_issue_keys or []) if str(value).strip()]
     issue_inputs: list[JiraIssueCreateInput] = []
     issue_requested_keys: list[str | None] = []
-    for item in raw_issues[:12]:
+    for issue_index, item in enumerate(raw_issues[:12], start=1):
         if not isinstance(item, dict):
             continue
-        summary = str(item.get("summary") or "").strip()
-        objective = str(item.get("objective") or "").strip()
-        scope_in = normalize_seed_issue_scope_fn(item.get("scope_in"))
-        scope_out = normalize_seed_issue_scope_fn(item.get("scope_out"))
-        acceptance_raw = item.get("acceptance_criteria")
-        acceptance = (
-            [str(entry).strip() for entry in acceptance_raw if str(entry).strip()]
-            if isinstance(acceptance_raw, list)
-            else []
+        summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=item.get("summary"))
+        objective = _optional_string(issue_index=issue_index, field_name="objective", raw_value=item.get("objective"))
+        scope_in = _string_list_field(issue_index=issue_index, field_name="scope_in", raw_value=item.get("scope_in"))
+        scope_out = _string_list_field(issue_index=issue_index, field_name="scope_out", raw_value=item.get("scope_out"))
+        acceptance = _string_list_field(
+            issue_index=issue_index,
+            field_name="acceptance_criteria",
+            raw_value=item.get("acceptance_criteria"),
         )
-        how_to_test_raw = item.get("how_to_test")
-        if isinstance(how_to_test_raw, list):
-            how_to_test = [str(entry).strip() for entry in how_to_test_raw if str(entry).strip()]
-        else:
-            normalized_how_to_test = str(how_to_test_raw or "").strip()
-            how_to_test = [normalized_how_to_test] if normalized_how_to_test else []
-        nfr_intent = str(item.get("nfr_intent") or "").strip()
-        dependencies_raw = item.get("dependencies")
-        dependencies = (
-            [str(entry).strip() for entry in dependencies_raw if str(entry).strip()]
-            if isinstance(dependencies_raw, list)
-            else []
-        )
-        risks_raw = item.get("risks")
-        risks = (
-            [str(entry).strip() for entry in risks_raw if str(entry).strip()]
-            if isinstance(risks_raw, list)
-            else []
-        )
-        requested_issue_key = normalize_seed_issue_key_fn(item.get("issue_key"))
+        how_to_test = _string_list_field(issue_index=issue_index, field_name="how_to_test", raw_value=item.get("how_to_test"))
+        nfr_intent = _optional_string(issue_index=issue_index, field_name="nfr_intent", raw_value=item.get("nfr_intent"))
+        dependencies = _string_list_field(issue_index=issue_index, field_name="dependencies", raw_value=item.get("dependencies"))
+        risks = _string_list_field(issue_index=issue_index, field_name="risks", raw_value=item.get("risks"))
+        labels = _string_list_field(issue_index=issue_index, field_name="labels", raw_value=item.get("labels"))
+        issue_type = _optional_string(issue_index=issue_index, field_name="issue_type", raw_value=item.get("issue_type"))
+        if not issue_type:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Codex issue draft {issue_index} has missing issue_type",
+            )
+        requested_issue_key_raw = item.get("issue_key")
+        requested_issue_key = str(requested_issue_key_raw).strip() if isinstance(requested_issue_key_raw, str) else None
+        if requested_issue_key and issue_key_pattern.match(requested_issue_key) is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Codex issue draft {issue_index} has invalid issue_key '{requested_issue_key}'",
+            )
         if not requested_issue_key and len(normalized_force_issue_keys) > len(issue_requested_keys):
             requested_issue_key = normalized_force_issue_keys[len(issue_requested_keys)]
-        tags = normalize_seed_issue_tags_fn(item.get("tags"))
-        labels = normalize_seed_issue_labels_fn(item.get("labels"))
-        for tag in tags:
-            if tag not in labels:
-                labels.append(tag)
         if not summary:
             continue
-        draft_questions = collect_seed_issue_questions_fn(
-            issue_summary=summary,
-            objective=objective,
-            scope_in=scope_in,
-            scope_out=scope_out,
-            acceptance=acceptance,
-            how_to_test=how_to_test,
-            nfr_intent=nfr_intent,
-        )
-        for question in draft_questions:
-            if question not in question_set:
-                question_set.add(question)
-                clarification_questions.append(question)
         issue_inputs.append(
             JiraIssueCreateInput(
                 summary=summary[:90],
@@ -140,7 +210,7 @@ def seed_issues_with_codex(
                     dependencies_and_risks=[*dependencies, *risks],
                 ),
                 labels=labels,
-                issue_type=parse_seed_issue_type_fn(item.get("issue_type")),
+                issue_type=issue_type,
             )
         )
         issue_requested_keys.append(requested_issue_key)

@@ -8,7 +8,6 @@ POLICY_OVERRIDE_FIELDS = {
     "allow_jira_transitions",
     "allow_pr_creation",
     "allow_label_mutations",
-    "max_runtime_minutes",
     "max_dev_test_review_loops",
     "max_concurrent_runs",
     "allowed_commands",
@@ -22,7 +21,6 @@ _BOOLEAN_CAP_FIELDS = {
 }
 
 _NUMERIC_CAP_FIELDS = {
-    "max_runtime_minutes",
     "max_dev_test_review_loops",
     "max_concurrent_runs",
 }
@@ -65,6 +63,8 @@ def resolve_effective_policy(
     project_overrides: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     effective = deepcopy(dict(tenant_policy))
+    # Runtime limits are no longer policy-managed.
+    effective.pop("max_runtime_minutes", None)
     overrides = normalize_project_policy_overrides(project_overrides)
 
     for field in _NUMERIC_CAP_FIELDS:

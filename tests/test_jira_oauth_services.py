@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import unittest
 from io import BytesIO
 from urllib.error import HTTPError
@@ -237,6 +236,14 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             service.update_issue_fields(access_token="tok", cloud_id="c", issue_id_or_key="MAB-1", summary=" ", description="d", labels=[])
         with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
             service.update_issue_summary(access_token="tok", cloud_id="c", issue_id_or_key="MAB-1", summary=" ")
+        with self.assertRaisesRegex(JiraOAuthError, "Missing issue summary"):
+            service.update_issue_summary_and_description(
+                access_token="tok",
+                cloud_id="c",
+                issue_id_or_key="MAB-1",
+                summary=" ",
+                description="d",
+            )
         with self.assertRaisesRegex(JiraOAuthError, "Missing issue id/key"):
             service.add_issue_comment(access_token="tok", cloud_id="c", issue_id_or_key=" ", comment="hi")
 
@@ -294,9 +301,19 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             issue_id_or_key="MAB-2",
             summary="Summary-only update",
         )
+        service.add_issue_labels(
+            access_token="tok",
+            cloud_id="cloud",
+            issue_id_or_key="MAB-2",
+            labels=["worker:linux"],
+        )
         self.assertTrue(any(call["method"] == "PUT" for call in captured))
         self.assertIn(
             {"fields": {"summary": "Summary-only update"}},
+            [call.get("payload") for call in captured if call.get("method") == "PUT"],
+        )
+        self.assertIn(
+            {"update": {"labels": [{"add": "worker:linux"}]}},
             [call.get("payload") for call in captured if call.get("method") == "PUT"],
         )
 

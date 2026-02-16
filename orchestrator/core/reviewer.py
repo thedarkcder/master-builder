@@ -27,9 +27,13 @@ class ReviewAgentGate:
         github_client: GitHubAppClient,
         *,
         required_workflows: tuple[str, ...] = ("CI", "Security"),
+        tenant_id: str | None = None,
+        project_id: str | None = None,
     ):
         self._github_client = github_client
         self._required_workflows = required_workflows
+        self._tenant_id = tenant_id
+        self._project_id = project_id
 
     def evaluate_pr(
         self,
@@ -70,6 +74,8 @@ class ReviewAgentGate:
             review_summary_markdown=pr.body,
             required_workflows=self._required_workflows,
             workflow_checks=checks,
+            tenant_id=self._tenant_id,
+            project_id=self._project_id,
         )
 
         if must_fix_findings:

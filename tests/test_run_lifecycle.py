@@ -184,3 +184,25 @@ class RunLifecycleTests(unittest.TestCase):
 
             with self.assertRaises(RunStateTransitionError):
                 mark_run_running(session, run_id=enqueue.run.run_id)
+
+    def test_enqueue_ignores_stale_lock_for_terminal_run(self) -> None:
+        with self.session_factory() as session:
+            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
+            mark_run_terminal(
+                session,
+                run_id=first.run.run_id,
+                terminal_status=RUN_STATUS_SUCCEEDED,
+            )
+
+            stale_lock = RunLock(
+                tenant_id="tenant-runs",
+                issue_key="TP-906",
+                run_id=first.run.run_id,
+                locked_at=datetime.now(timezone.utc),
+            )
+            session.add(stale_lock)
+            session.commit()
+
+            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
+            self.assertTrue(second.enqueued)
+            self.assertNotEqual(second.run.run_id, first.run.run_id)

@@ -20,6 +20,9 @@ class _Session:
     def get(self, _model, _key):  # noqa: ANN001
         return None
 
+    def execute(self, _statement):  # noqa: ANN001
+        return None
+
 
 def _run() -> SimpleNamespace:
     return SimpleNamespace(
@@ -41,14 +44,51 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1")
 
+    def _raise_rules_missing(
+        *,
+        tenant_id: str,
+        project_id: str | None,
+        issue_key: str,
+        run_id: str,
+        issue_summary: str,
+        issue_description: str,
+    ):  # noqa: ANN202
+        assert tenant_id == run.tenant_id
+        assert project_id == run.project_id
+        assert issue_key == run.issue_key
+        assert run_id == run.run_id
+        assert issue_summary == run.issue_summary
+        assert issue_description == run.issue_description
+        raise ValueError("rules missing")
+
+    def _send_discord_message(
+        *,
+        session,
+        tenant,
+        project,
+        message: str,
+        settings,
+        event: str,
+        open_thread: bool = False,
+        thread_name: str | None = None,
+        thread_intro: str | None = None,
+        thread_intro_components: list[dict[str, object]] | None = None,
+    ) -> None:
+        _ = session, tenant, project, message, settings, event, open_thread, thread_name, thread_intro, thread_intro_components
+        return None
+
+    def _send_jira_message(*, session, tenant, issue_key: str, stage: str, message: str, settings) -> None:  # noqa: ANN001
+        _ = session, tenant, issue_key, stage, message, settings
+        return None
+
     terminal, meta = apply_decision_gate(
         session=session,
         run=run,
         tenant=tenant,
-        settings=SimpleNamespace(),
-        evaluate_decision_gate_fn=lambda **_kwargs: (_ for _ in ()).throw(ValueError("rules missing")),
-        send_discord_message_fn=lambda **_kwargs: None,
-        send_jira_message_fn=lambda **_kwargs: None,
+        settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
+        evaluate_decision_gate_fn=_raise_rules_missing,
+        send_discord_message_fn=_send_discord_message,
+        send_jira_message_fn=_send_jira_message,
         ask_reply_components_fn=lambda: [],
         blocked_status="blocked",
         failed_status="failed",
@@ -67,14 +107,51 @@ def test_apply_decision_gate_returns_none_when_not_triggered() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1")
     result = SimpleNamespace(triggered=False)
 
+    def _evaluate(
+        *,
+        tenant_id: str,
+        project_id: str | None,
+        issue_key: str,
+        run_id: str,
+        issue_summary: str,
+        issue_description: str,
+    ):  # noqa: ANN202
+        assert tenant_id == run.tenant_id
+        assert project_id == run.project_id
+        assert issue_key == run.issue_key
+        assert run_id == run.run_id
+        assert issue_summary == run.issue_summary
+        assert issue_description == run.issue_description
+        return result
+
+    def _send_discord_message(
+        *,
+        session,
+        tenant,
+        project,
+        message: str,
+        settings,
+        event: str,
+        open_thread: bool = False,
+        thread_name: str | None = None,
+        thread_intro: str | None = None,
+        thread_intro_components: list[dict[str, object]] | None = None,
+    ) -> None:
+        _ = session, tenant, project, message, settings, event, open_thread, thread_name, thread_intro, thread_intro_components
+        return None
+
+    def _send_jira_message(*, session, tenant, issue_key: str, stage: str, message: str, settings) -> None:  # noqa: ANN001
+        _ = session, tenant, issue_key, stage, message, settings
+        return None
+
     terminal, meta = apply_decision_gate(
         session=session,
         run=run,
         tenant=tenant,
-        settings=SimpleNamespace(),
-        evaluate_decision_gate_fn=lambda **_kwargs: result,
-        send_discord_message_fn=lambda **_kwargs: None,
-        send_jira_message_fn=lambda **_kwargs: None,
+        settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
+        evaluate_decision_gate_fn=_evaluate,
+        send_discord_message_fn=_send_discord_message,
+        send_jira_message_fn=_send_jira_message,
         ask_reply_components_fn=lambda: [],
         blocked_status="blocked",
         failed_status="failed",
@@ -101,9 +178,43 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
     )
     sent_discord_messages: list[str] = []
 
-    def _send_discord_message_fn(**kwargs):  # noqa: ANN003
-        sent_discord_messages.append(str(kwargs.get("message") or ""))
+    def _send_discord_message_fn(
+        *,
+        session,
+        tenant,
+        project,
+        message: str,
+        settings,
+        event: str,
+        open_thread: bool = False,
+        thread_name: str | None = None,
+        thread_intro: str | None = None,
+        thread_intro_components: list[dict[str, object]] | None = None,
+    ):
+        _ = session, tenant, project, settings, event, open_thread, thread_name, thread_intro, thread_intro_components
+        sent_discord_messages.append(str(message or ""))
         return SimpleNamespace(sent=True, reason="sent")
+
+    def _send_jira_message(*, session, tenant, issue_key: str, stage: str, message: str, settings) -> None:  # noqa: ANN001
+        _ = session, tenant, issue_key, stage, message, settings
+        return None
+
+    def _evaluate(
+        *,
+        tenant_id: str,
+        project_id: str | None,
+        issue_key: str,
+        run_id: str,
+        issue_summary: str,
+        issue_description: str,
+    ):  # noqa: ANN202
+        assert tenant_id == run.tenant_id
+        assert project_id == run.project_id
+        assert issue_key == run.issue_key
+        assert run_id == run.run_id
+        assert issue_summary == run.issue_summary
+        assert issue_description == run.issue_description
+        return decision_gate
 
     with (
         patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None),
@@ -113,10 +224,10 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
             session=session,
             run=run,
             tenant=tenant,
-            settings=SimpleNamespace(),
-            evaluate_decision_gate_fn=lambda **_kwargs: decision_gate,
+            settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
+            evaluate_decision_gate_fn=_evaluate,
             send_discord_message_fn=_send_discord_message_fn,
-            send_jira_message_fn=lambda **_kwargs: None,
+            send_jira_message_fn=_send_jira_message,
             ask_reply_components_fn=lambda: [],
             blocked_status="blocked",
             failed_status="failed",

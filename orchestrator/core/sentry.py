@@ -27,17 +27,34 @@ def initialize_sentry(
     else:
         integrations = []
 
-    kwargs: dict[str, Any] = {
-        "dsn": dsn,
-        "environment": settings.sentry_environment,
-        "traces_sample_rate": settings.sentry_traces_sample_rate,
-    }
-    if integrations:
-        kwargs["integrations"] = integrations
-    if settings.sentry_release:
-        kwargs["release"] = settings.sentry_release
-
-    init_fn(**kwargs)
+    if integrations and settings.sentry_release:
+        init_fn(
+            dsn=dsn,
+            environment=settings.sentry_environment,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            integrations=integrations,
+            release=settings.sentry_release,
+        )
+    elif integrations:
+        init_fn(
+            dsn=dsn,
+            environment=settings.sentry_environment,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            integrations=integrations,
+        )
+    elif settings.sentry_release:
+        init_fn(
+            dsn=dsn,
+            environment=settings.sentry_environment,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            release=settings.sentry_release,
+        )
+    else:
+        init_fn(
+            dsn=dsn,
+            environment=settings.sentry_environment,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+        )
     logger.info(
         "sentry_initialized environment=%s release=%s traces_sample_rate=%s",
         settings.sentry_environment,
@@ -45,4 +62,3 @@ def initialize_sentry(
         settings.sentry_traces_sample_rate,
     )
     return True
-

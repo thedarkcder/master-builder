@@ -93,34 +93,3 @@ def evaluate_placeholder_policy(
         request=request,
         follow_up_issue=draft.to_payload(),
     )
-
-
-def evaluate_runtime_limit(
-    *,
-    request,
-    started_at: float,
-    max_runtime_seconds: int,
-    history: list[dict[str, str]],
-    attempts: int,
-    monotonic_fn,
-    failure_factory,
-):  # noqa: ANN001
-    elapsed_seconds = monotonic_fn() - started_at
-    if elapsed_seconds <= max_runtime_seconds:
-        return None
-
-    history.append(
-        {
-            "stage": "runtime",
-            "attempt": str(attempts),
-            "event": f"exceeded_{request.max_runtime_minutes}_minutes",
-        }
-    )
-    return failure_factory(
-        plan=None,
-        stage="runtime",
-        message=f"Run exceeded max runtime of {request.max_runtime_minutes} minute(s)",
-        attempts=attempts,
-        history=history,
-        request=request,
-    )

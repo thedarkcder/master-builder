@@ -15,7 +15,7 @@ from orchestrator.core.secret_manager import (
 from orchestrator.core.tenant_secret_service import tenant_secret_service
 
 
-def test_resolve_secret_ref_platform_scope_falls_back_to_environment() -> None:
+def test_resolve_secret_ref_platform_scope_does_not_fall_back_to_environment_by_default() -> None:
     session = MagicMock()
     session.get.return_value = None
     session.bind = None
@@ -29,10 +29,10 @@ def test_resolve_secret_ref_platform_scope_falls_back_to_environment() -> None:
         )
     finally:
         os.environ.pop("DISCORD_INTERACTIONS_PUBLIC_KEY", None)
-    assert resolved == "env-public-key"
+    assert resolved is None
 
 
-def test_resolve_scoped_secret_ref_without_tenant_or_project_falls_back_to_environment() -> None:
+def test_resolve_scoped_secret_ref_without_tenant_or_project_returns_none() -> None:
     session = MagicMock()
     session.get.return_value = None
     session.bind = None
@@ -47,7 +47,7 @@ def test_resolve_scoped_secret_ref_without_tenant_or_project_falls_back_to_envir
     finally:
         os.environ.pop("DISCORD_INTERACTIONS_PUBLIC_KEY", None)
         os.environ.pop("platform/DISCORD_INTERACTIONS_PUBLIC_KEY", None)
-    assert resolved == "env-public-key"
+    assert resolved is None
 
 
 def test_resolve_secret_ref_metadata_platform_scope_reports_environment_when_available() -> None:
@@ -182,7 +182,7 @@ def test_platform_secret_service_get_supports_platform_refs() -> None:
         assert resolve_mock.call_args_list[1][1]["secret_ref"] == "platform/DISCORD_BOT_TOKEN"
 
 
-def test_platform_secret_service_falls_back_to_platform_env_names() -> None:
+def test_platform_secret_service_does_not_fall_back_to_platform_env_names_by_default() -> None:
     os.environ["platform/JIRA_OAUTH_CLIENT_SECRET"] = "env-platform-secret"
     try:
         with patch("orchestrator.core.platform_secret_service._resolve_platform_secret_ref", return_value=None):
@@ -192,7 +192,7 @@ def test_platform_secret_service_falls_back_to_platform_env_names() -> None:
                     secret_ref="JIRA_OAUTH_CLIENT_SECRET",
                     encryption_key="unused",
                 )
-                == "env-platform-secret"
+                is None
             )
     finally:
         os.environ.pop("platform/JIRA_OAUTH_CLIENT_SECRET", None)

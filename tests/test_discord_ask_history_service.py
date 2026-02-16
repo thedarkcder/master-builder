@@ -44,7 +44,7 @@ def test_store_and_consume_pending_ask_action_roundtrip() -> None:
     assert session.commits == 2
 
 
-def test_collect_ask_context_with_history_context_uses_recent_issue_scope() -> None:
+def test_collect_ask_context_with_history_context_does_not_infer_scope_from_history() -> None:
     service = DiscordAskHistoryService()
     session = _Session()
     tenant = _tenant(
@@ -63,8 +63,8 @@ def test_collect_ask_context_with_history_context_uses_recent_issue_scope() -> N
     )
 
     def _collect(**kwargs):  # type: ignore[no-untyped-def]
-        assert kwargs["scoped_issue_key"] == "YANA-46"
-        return "YANA-46", None, [{"key": "YANA-46", "summary": "x", "status": "Testing"}], {"Testing": 1}
+        assert kwargs["scoped_issue_key"] is None
+        return None, None, [{"key": "YANA-46", "summary": "x", "status": "Testing"}], {"Testing": 1}
 
     result = service.collect_ask_context_with_history_context(
         session=session,
@@ -76,5 +76,5 @@ def test_collect_ask_context_with_history_context_uses_recent_issue_scope() -> N
         collect_ask_context_fn=_collect,
         existing_issue_keys_fn=lambda **_kwargs: {"YANA-46"},
     )
-    assert result[0] == "YANA-46"
+    assert result[0] is None
     assert result[4][0]["issue_key"] == "YANA-46"

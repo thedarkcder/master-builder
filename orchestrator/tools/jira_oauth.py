@@ -47,8 +47,13 @@ class JiraOAuthClient:
             get_json=lambda url, access_token: self._get_json(url, access_token=access_token),
         )
         self._issue_service = JiraOAuthIssueService(
-            get_json=lambda **kwargs: self._get_json(kwargs["url"], access_token=kwargs["access_token"]),
-            request_json=lambda **kwargs: self._request_json(**kwargs),
+            get_json=lambda *, url, access_token: self._get_json(url, access_token=access_token),
+            request_json=lambda *, method, url, access_token, payload=None: self._request_json(
+                method=method,
+                url=url,
+                access_token=access_token,
+                payload=payload,
+            ),
         )
         self._webhook_manager = JiraOAuthWebhookManager(
             request_json=lambda method, url, access_token, payload: self._request_json(
@@ -59,7 +64,13 @@ class JiraOAuthClient:
             )
         )
         self._attachment_service = JiraOAuthAttachmentService(
-            post_multipart=lambda **kwargs: self._post_multipart(**kwargs),
+            post_multipart=lambda *, url, access_token, filename, content, content_type="application/octet-stream": self._post_multipart(
+                url=url,
+                access_token=access_token,
+                filename=filename,
+                content=content,
+                content_type=content_type,
+            ),
         )
 
     def _post_json(self, url: str, payload: dict) -> dict:
@@ -192,6 +203,36 @@ class JiraOAuthClient:
             comment=comment,
         )
 
+    def transition_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        target_status: str,
+    ) -> dict:
+        return self._issue_service.transition_issue(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            target_status=target_status,
+        )
+
+    def add_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        self._issue_service.add_issue_labels(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            labels=labels,
+        )
+
     def update_issue_summary(
         self,
         *,
@@ -205,6 +246,23 @@ class JiraOAuthClient:
             cloud_id=cloud_id,
             issue_id_or_key=issue_id_or_key,
             summary=summary,
+        )
+
+    def update_issue_summary_and_description(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+        description: str | dict,
+    ) -> None:
+        self._issue_service.update_issue_summary_and_description(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            summary=summary,
+            description=description,
         )
 
     def register_webhook(

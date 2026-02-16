@@ -11,12 +11,14 @@ from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
+from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
 from orchestrator.core.worker.queue_selector import select_next_queued_run
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
     fail_guardrail_violation,
     fail_missing_project_mapping,
+    fail_project_repository_checkout,
     finalize_cancelled_run,
     finalize_workflow_result,
     resolve_project_for_run,
@@ -32,6 +34,7 @@ from orchestrator.core.worker.workflow_request_service import (
     build_workflow_request_for_run as _build_workflow_request_for_run,
 )
 from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
+from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
 from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
@@ -79,22 +82,65 @@ def _workflow_request_for_run(
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
     from orchestrator.core.worker.process_service import process_next_queued_run as _process_next_queued_run_impl
 
+    def _apply_decision_gate(
+        *,
+        session,
+        run,
+        tenant,
+        settings,
+        send_discord_message_fn,
+        send_jira_message_fn,
+        ask_reply_components_fn,
+        blocked_status: str,
+        failed_status: str,
+    ):  # noqa: ANN001
+        return apply_decision_gate(
+            session=session,
+            run=run,
+            tenant=tenant,
+            settings=settings,
+            evaluate_decision_gate_fn=evaluate_decision_gate,
+            send_discord_message_fn=send_discord_message_fn,
+            send_jira_message_fn=send_jira_message_fn,
+            ask_reply_components_fn=ask_reply_components_fn,
+            blocked_status=blocked_status,
+            failed_status=failed_status,
+        )
+
+    def _emit_agent_event(
+        *,
+        event_type: str,
+        tenant_id: str,
+        project_id: str | None,
+        run_id: str,
+        issue_key: str,
+        agent_id: str | None,
+    ) -> None:
+        record_agent_lifecycle_event(
+            session=session,
+            event_type=event_type,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+            issue_key=issue_key,
+            agent_id=agent_id,
+        )
+
     return _process_next_queued_run_impl(
         session=session,
         runner=runner,
         logger=logger,
         settings_fn=get_settings,
         select_next_queued_run_fn=select_next_queued_run,
-        apply_decision_gate_fn=lambda **kwargs: apply_decision_gate(
-            evaluate_decision_gate_fn=evaluate_decision_gate,
-            **kwargs,
-        ),
+        apply_decision_gate_fn=_apply_decision_gate,
         send_discord_message_fn=send_tenant_discord_message,
         send_jira_message_fn=_send_stage_update_to_jira,
         ask_reply_components_fn=_ask_reply_components,
         resolve_project_for_run_fn=resolve_project_for_run,
         fail_missing_project_mapping_fn=fail_missing_project_mapping,
         block_archived_project_fn=block_archived_project,
+        ensure_project_repository_checkout_fn=ensure_project_repository_checkout,
+        fail_project_repository_checkout_fn=fail_project_repository_checkout,
         start_run_fn=start_run,
         bind_run_project_fn=bind_run_project,
         workflow_request_for_run_fn=_workflow_request_for_run,
@@ -106,7 +152,8 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         run_failed_update_fn=run_failed_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
-        emit_agent_event_fn=lambda **kwargs: record_agent_lifecycle_event(session=session, **kwargs),
+        transition_issue_status_fn=_transition_issue_status,
+        emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
         run_status_queued=RUN_STATUS_QUEUED,
         run_status_running=RUN_STATUS_RUNNING,
@@ -124,22 +171,65 @@ def process_next_queued_run_with_dependencies(
 ) -> Run | None:
     from orchestrator.core.worker.process_service import process_next_queued_run as _process_next_queued_run_impl
 
+    def _apply_decision_gate(
+        *,
+        session,
+        run,
+        tenant,
+        settings,
+        send_discord_message_fn,
+        send_jira_message_fn,
+        ask_reply_components_fn,
+        blocked_status: str,
+        failed_status: str,
+    ):  # noqa: ANN001
+        return apply_decision_gate(
+            session=session,
+            run=run,
+            tenant=tenant,
+            settings=settings,
+            evaluate_decision_gate_fn=evaluate_decision_gate,
+            send_discord_message_fn=send_discord_message_fn,
+            send_jira_message_fn=send_jira_message_fn,
+            ask_reply_components_fn=ask_reply_components_fn,
+            blocked_status=blocked_status,
+            failed_status=failed_status,
+        )
+
+    def _emit_agent_event(
+        *,
+        event_type: str,
+        tenant_id: str,
+        project_id: str | None,
+        run_id: str,
+        issue_key: str,
+        agent_id: str | None,
+    ) -> None:
+        record_agent_lifecycle_event(
+            session=session,
+            event_type=event_type,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+            issue_key=issue_key,
+            agent_id=agent_id,
+        )
+
     return _process_next_queued_run_impl(
         session=session,
         runner=runner,
         logger=logger,
         settings_fn=get_settings,
         select_next_queued_run_fn=select_next_queued_run,
-        apply_decision_gate_fn=lambda **kwargs: apply_decision_gate(
-            evaluate_decision_gate_fn=evaluate_decision_gate,
-            **kwargs,
-        ),
+        apply_decision_gate_fn=_apply_decision_gate,
         send_discord_message_fn=send_discord_message_fn,
         send_jira_message_fn=_send_stage_update_to_jira,
         ask_reply_components_fn=_ask_reply_components,
         resolve_project_for_run_fn=resolve_project_for_run,
         fail_missing_project_mapping_fn=fail_missing_project_mapping,
         block_archived_project_fn=block_archived_project,
+        ensure_project_repository_checkout_fn=ensure_project_repository_checkout,
+        fail_project_repository_checkout_fn=fail_project_repository_checkout,
         start_run_fn=start_run,
         bind_run_project_fn=bind_run_project,
         workflow_request_for_run_fn=_workflow_request_for_run,
@@ -151,7 +241,8 @@ def process_next_queued_run_with_dependencies(
         run_failed_update_fn=run_failed_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
-        emit_agent_event_fn=lambda **kwargs: record_agent_lifecycle_event(session=session, **kwargs),
+        transition_issue_status_fn=_transition_issue_status,
+        emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
         run_status_queued=RUN_STATUS_QUEUED,
         run_status_running=RUN_STATUS_RUNNING,

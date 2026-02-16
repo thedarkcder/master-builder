@@ -48,6 +48,36 @@ class _Session:
         return None
 
 
+def _resolve_project_discord_channel_binding(
+    *,
+    session,
+    settings,
+    tenant,
+    project,
+    discord_config: dict,
+) -> dict:  # noqa: ANN001
+    _ = session, settings, tenant, project
+    return discord_config
+
+
+def _sync_tenant_jira_project_keys(session, *, tenant) -> None:  # noqa: ANN001
+    _ = session, tenant
+
+
+def _ensure_project_repository_checkout(*, session, tenant, project) -> None:  # noqa: ANN001
+    _ = session, tenant, project
+
+
+def _resolve_project_run_board_id(*, session, tenant, jira_project_key: str, settings) -> int | None:  # noqa: ANN001
+    _ = session, tenant, jira_project_key, settings
+    return None
+
+
+def _project_to_schema(project, *, tenant_policy: dict) -> dict:  # noqa: ANN001
+    _ = tenant_policy
+    return {"project_id": project.project_id, "name": project.name}
+
+
 def _service() -> AdminProjectService:
     return AdminProjectService(
         normalize_project_repo=lambda value: value.strip(),
@@ -56,11 +86,11 @@ def _service() -> AdminProjectService:
         normalize_string_map=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
         with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
-        resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
-        sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
-        ensure_project_repository_checkout=lambda **_kwargs: None,
-        resolve_project_run_board_id=lambda **_kwargs: None,
-        project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=_resolve_project_run_board_id,
+        project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
 
@@ -101,13 +131,13 @@ def test_create_project_clones_repository_after_commit() -> None:
         normalize_string_map=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
         with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
-        resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
-        sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
-        ensure_project_repository_checkout=lambda **kwargs: checkout_calls.append(
-            (kwargs["tenant"].tenant_id, kwargs["project"].github_repository, session.commits)
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=lambda *, session, tenant, project: checkout_calls.append(
+            (tenant.tenant_id, project.github_repository, session.commits)
         ),
-        resolve_project_run_board_id=lambda **_kwargs: 11,
-        project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
+        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: 11,
+        project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
     payload = SimpleNamespace(
@@ -141,13 +171,13 @@ def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> No
         normalize_string_map=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
         with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
-        resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
-        sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
-        ensure_project_repository_checkout=lambda **_kwargs: (_ for _ in ()).throw(
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=lambda *, session, tenant, project: (_ for _ in ()).throw(
             ProjectRepoCheckoutError("clone failed")
         ),
-        resolve_project_run_board_id=lambda **_kwargs: 22,
-        project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
+        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: 22,
+        project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
     payload = SimpleNamespace(
@@ -184,11 +214,11 @@ def test_create_project_returns_502_when_jira_board_resolution_fails_with_oauth_
         normalize_string_map=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
         with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
-        resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
-        sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
-        ensure_project_repository_checkout=lambda **_kwargs: None,
-        resolve_project_run_board_id=lambda **_kwargs: (_ for _ in ()).throw(JiraOAuthError("oauth unavailable")),
-        project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: (_ for _ in ()).throw(JiraOAuthError("oauth unavailable")),
+        project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
     payload = SimpleNamespace(
@@ -237,11 +267,11 @@ def test_update_project_returns_502_when_jira_board_resolution_fails_with_oauth_
         normalize_string_map=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
         with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
-        resolve_project_discord_channel_binding=lambda **kwargs: kwargs["discord_config"],  # type: ignore[return-value]
-        sync_tenant_jira_project_keys=lambda *_args, **_kwargs: None,
-        ensure_project_repository_checkout=lambda **_kwargs: None,
-        resolve_project_run_board_id=lambda **_kwargs: (_ for _ in ()).throw(JiraOAuthError("token revoked")),
-        project_to_schema=lambda project, **_kwargs: {"project_id": project.project_id, "name": project.name},
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: (_ for _ in ()).throw(JiraOAuthError("token revoked")),
+        project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
     payload = SimpleNamespace(

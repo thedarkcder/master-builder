@@ -1,0 +1,26 @@
+Stage: review
+Tenant ID: {{ tenant_id }}
+Project ID: {{ project_id }}
+Run ID: {{ run_id }}
+Issue key: {{ issue_key }}
+Attempt: {{ attempt }}
+Plan steps: {{ plan_steps_json }}
+Acceptance criteria: {{ acceptance_criteria_json }}
+Dev summary: {{ dev_summary_json }}
+Test passed: {{ test_passed }}
+Test guidance: {{ test_guidance_json }}
+Test feedback: {{ test_feedback }}
+PR URL: {{ pr_url }}
+Allowed tools for this stage: {{ allowed_tools_json }}
+Agent tool command: {{ agent_tool_command }}
+
+Required actions:
+1. Decide if this run can be accepted now.
+2. Provide concise findings and unresolved blockers.
+3. Preserve fail-closed behavior when verification is incomplete.
+
+Output contract:
+- approved: boolean decision.
+- summary: array of review findings/outcome notes.
+- feedback: blocking feedback string or null.
+- pr_url: PR URL string or null.

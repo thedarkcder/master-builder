@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import re
@@ -18,6 +17,7 @@ from orchestrator.api.discord.shared.followup_format import (
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
 )
+from orchestrator.api.discord.shared.state import find_seed_followup_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.config import Settings
@@ -44,6 +44,22 @@ INTENT_GUILD_MESSAGES = 1 << 9
 INTENT_MESSAGE_CONTENT = 1 << 15
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
+
+def _ask_reply_components() -> list[dict]:
+    return [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 2,
+                    "label": "Reply",
+                    "custom_id": "ask.reply.open",
+                }
+            ],
+        }
+    ]
+
 def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
     projects = session.execute(
         select(Project).where(
@@ -61,6 +77,47 @@ def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  
             if normalized:
                 thread_ids.add(normalized)
     return thread_ids
+
+
+def _project_seed_followup_thread_project_keys(*, session, tenant_id: str) -> dict[str, str]:  # noqa: ANN001
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    thread_project_keys: dict[str, str] = {}
+    for project in projects:
+        project_key = str(project.jira_project_key or "").strip().upper()
+        if not project_key:
+            continue
+        raw_seed_thread_ids = (project.discord_config or {}).get("seed_followup_thread_channel_ids")
+        if not isinstance(raw_seed_thread_ids, list):
+            continue
+        for value in raw_seed_thread_ids:
+            normalized = str(value or "").strip()
+            if normalized:
+                thread_project_keys[normalized] = project_key
+    return thread_project_keys
+
+
+def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str) -> str | None:  # noqa: ANN001
+    normalized_channel_id = str(channel_id or "").strip()
+    if not normalized_channel_id:
+        return None
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    for project in projects:
+        raw_map = (project.discord_config or {}).get("decision_gate_thread_issue_by_channel_id")
+        issue_map = raw_map if isinstance(raw_map, dict) else {}
+        issue_key = str(issue_map.get(normalized_channel_id) or "").strip().upper()
+        if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
+            return issue_key
+    return None
 
 
 class DiscordGatewayListener:
@@ -251,13 +308,45 @@ class DiscordGatewayListener:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
             if tenant is None:
                 return
+            decision_gate_issue_key = _decision_gate_issue_for_thread(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                channel_id=channel_id,
+            )
+            if decision_gate_issue_key and not content.startswith("!"):
+                command_text = "!reply"
+                command_params = {
+                    "issue_key": decision_gate_issue_key,
+                    "reply_text": content,
+                }
+            else:
+                command_text = content
+                command_params = None
             seed_followup_thread_ids = _project_seed_followup_thread_ids(
                 session=session,
                 tenant_id=tenant.tenant_id,
             )
+            seed_followup_thread_project_keys = _project_seed_followup_thread_project_keys(
+                session=session,
+                tenant_id=tenant.tenant_id,
+            )
 
-            command_text = content
-            if channel_id in seed_followup_thread_ids and not command_text.startswith("!"):
+            seed_followup_context = find_seed_followup_context(
+                tenant=tenant,
+                channel_id=channel_id,
+            )
+            if seed_followup_context is None and channel_id in seed_followup_thread_ids:
+                seed_followup_context = find_seed_followup_context(
+                    tenant=tenant,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    project_key=seed_followup_thread_project_keys.get(channel_id),
+                )
+            if (
+                channel_id in seed_followup_thread_ids
+                and seed_followup_context is not None
+                and not command_text.startswith("!")
+            ):
                 command_text = f"!issues followup {command_text}"
 
             message_content = f"<@{user_id}> Command failed due to an internal error."
@@ -269,6 +358,7 @@ class DiscordGatewayListener:
                         user_id=user_id,
                         channel_id=channel_id,
                         command=command_text,
+                        command_params=command_params,
                         attachments=attachments,
                     ),
                     session=session,
@@ -293,6 +383,8 @@ class DiscordGatewayListener:
                     request_id = str(data.get("request_id") or "").strip()
                     if request_id:
                         components = build_ask_confirmation_components(request_id)
+                elif command_response.command == "reply" and bool(data.get("recheck_required")):
+                    components = _ask_reply_components()
             except HTTPException as exc:
                 logger.exception(
                     "discord_gateway_command_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",

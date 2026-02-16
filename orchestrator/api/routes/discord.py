@@ -13,6 +13,7 @@ from orchestrator.api.discord.ingress.service import (
 )
 from orchestrator.api.discord.ingress.wiring import build_discord_ingress_dependencies
 from orchestrator.api.discord.ask.context import (
+    fetch_jira_issue_detail_for_tenant,
     fetch_jira_issue_preview_for_tenant,
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
@@ -38,19 +39,8 @@ from orchestrator.api.discord.bug.gap_analysis import (
 from orchestrator.api.discord.ask.query_service import (
     collect_ask_context as _collect_ask_context_impl,
 )
-from orchestrator.api.discord.seed.normalization import (
-    collect_seed_issue_questions as _collect_seed_issue_questions_impl,
-    normalize_seed_issue_key as _normalize_seed_issue_key_impl,
-    normalize_seed_issue_labels as _normalize_seed_issue_labels_impl,
-    normalize_seed_issue_scope as _normalize_seed_issue_scope_impl,
-    normalize_seed_issue_tags as _normalize_seed_issue_tags_impl,
-    parse_seed_issue_type as _parse_seed_issue_type_impl,
-    seed_text_is_missing as _seed_text_is_missing_impl,
-)
 from orchestrator.api.discord.seed.matching import (
-    normalized_summary_key as _normalized_summary_key_impl,
     select_seed_match as _select_seed_match_impl,
-    summary_similarity as _summary_similarity_impl,
 )
 from orchestrator.api.discord.seed.description import (
     build_seed_issue_description as _build_seed_issue_description_impl,
@@ -75,7 +65,10 @@ from orchestrator.api.discord.ask.memory import (
     tenant_ask_history as _tenant_ask_history_impl,
 )
 from orchestrator.api.discord.ask.board_service import ask_board_message as _ask_board_message_impl
-from orchestrator.api.discord.seed.issue_service import seed_issues_with_codex as _seed_issues_with_codex_impl
+from orchestrator.api.discord.seed.issue_service import (
+    seed_issues_with_codex as _seed_issues_with_codex_impl,
+    validate_seed_followup_context as _validate_seed_followup_context_impl,
+)
 from orchestrator.api.jira_oauth.connection_service import resolve_tenant_jira_connection
 from orchestrator.api.commands.executor_registry import register_tenant_command_executor
 from orchestrator.api.discord.shared.state import (
@@ -93,11 +86,13 @@ from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,
     plan_seed_issues_with_codex,
 )
+from orchestrator.core.codex_working_dir import resolve_codex_working_dir as _resolve_codex_working_dir_impl
 from orchestrator.core.communications.command_pipeline import (
     CommandScope,
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_gate import evaluate_decision_gate
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -142,6 +137,14 @@ def _tenant_jira_oauth_context(*, session: Session, tenant: Tenant, settings):  
 
 def _fetch_jira_issue_preview(*, session: Session, tenant: Tenant, issue_key: str) -> JiraIssuePreview:
     return fetch_jira_issue_preview_for_tenant(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+    )
+
+
+def _fetch_jira_issue_detail(*, session: Session, tenant: Tenant, issue_key: str):  # noqa: ANN001
+    return fetch_jira_issue_detail_for_tenant(
         session=session,
         tenant=tenant,
         issue_key=issue_key,
@@ -237,59 +240,6 @@ def _resolve_project_for_issue(
         issue_key=issue_key,
         find_active_project_for_issue_key_fn=find_active_project_for_issue_key,
     )
-
-
-def _normalize_seed_issue_labels(raw_labels: object) -> list[str]:
-    return _normalize_seed_issue_labels_impl(raw_labels)
-
-
-def _normalize_seed_issue_tags(raw_tags: object) -> list[str]:
-    return _normalize_seed_issue_tags_impl(raw_tags)
-
-
-def _parse_seed_issue_type(raw_issue_type: object) -> str:
-    return _parse_seed_issue_type_impl(raw_issue_type)
-
-
-def _normalize_seed_issue_scope(raw_scope: object) -> list[str]:
-    return _normalize_seed_issue_scope_impl(raw_scope)
-
-
-def _normalize_seed_issue_key(raw_issue_key: object) -> str | None:
-    return _normalize_seed_issue_key_impl(raw_issue_key, issue_key_pattern=ISSUE_KEY_PATTERN)
-
-
-def _seed_text_is_missing(value: str) -> bool:
-    return _seed_text_is_missing_impl(value)
-
-
-def _collect_seed_issue_questions(
-    *,
-    issue_summary: str,
-    objective: str,
-    scope_in: list[str],
-    scope_out: list[str],
-    acceptance: list[str],
-    how_to_test: list[str],
-    nfr_intent: str,
-) -> list[str]:
-    return _collect_seed_issue_questions_impl(
-        issue_summary=issue_summary,
-        objective=objective,
-        scope_in=scope_in,
-        scope_out=scope_out,
-        acceptance=acceptance,
-        how_to_test=how_to_test,
-        nfr_intent=nfr_intent,
-    )
-
-
-def _normalized_summary_key(summary: str) -> str:
-    return _normalized_summary_key_impl(summary)
-
-
-def _summary_similarity(left: str, right: str) -> float:
-    return _summary_similarity_impl(left, right)
 
 
 def _select_seed_match(
@@ -401,7 +351,6 @@ def _create_discord_bug_issue(
         issue_key: str,
         attachments: list[dict[str, str]],
         correlation_id: str | None = None,
-        **kwargs: object,
     ) -> tuple[int, list[AttachmentUploadFailure]]:
         return _upload_discord_attachments_to_jira_impl(
             client=client,
@@ -747,6 +696,8 @@ def _seed_issues_with_codex(
     prompt_markdown: str,
     force_issue_keys: list[str] | None = None,
     allow_create: bool = True,
+    scoped_project_keys: list[str] | None = None,
+    codex_working_dir: str = "",
 ) -> tuple[str, dict]:
     return _seed_issues_with_codex_impl(
         session=session,
@@ -754,20 +705,32 @@ def _seed_issues_with_codex(
         prompt_markdown=prompt_markdown,
         force_issue_keys=force_issue_keys,
         allow_create=allow_create,
+        scoped_project_keys=scoped_project_keys,
+        codex_working_dir=codex_working_dir,
         tenant_project_keys_fn=_tenant_project_keys,
         get_settings_fn=get_settings,
         build_codex_runtime_fn=build_codex_runtime,
         plan_seed_issues_with_codex_fn=plan_seed_issues_with_codex,
         codex_runtime_error_type=CodexRuntimeError,
-        normalize_seed_issue_scope_fn=_normalize_seed_issue_scope,
-        normalize_seed_issue_key_fn=_normalize_seed_issue_key,
-        normalize_seed_issue_tags_fn=_normalize_seed_issue_tags,
-        normalize_seed_issue_labels_fn=_normalize_seed_issue_labels,
-        collect_seed_issue_questions_fn=_collect_seed_issue_questions,
         build_seed_issue_description_fn=_build_seed_issue_description,
-        parse_seed_issue_type_fn=_parse_seed_issue_type,
+        issue_key_pattern=ISSUE_KEY_PATTERN,
         tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
         select_seed_match_fn=_select_seed_match,
+    )
+
+
+def _validate_seed_followup_context(
+    *,
+    session: Session,
+    tenant: Tenant,
+    context: dict,
+) -> tuple[bool, str | None]:
+    return _validate_seed_followup_context_impl(
+        session=session,
+        tenant=tenant,
+        context=context,
+        get_settings_fn=get_settings,
+        tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
     )
 
 
@@ -791,12 +754,30 @@ def _ask_board_message(
         get_settings_fn=get_settings,
         build_codex_runtime_fn=build_codex_runtime,
         tenant_project_keys_fn=_tenant_project_keys,
+        resolve_codex_working_dir_fn=_resolve_codex_working_dir,
         normalize_scope_channel_id_fn=_normalize_scope_channel_id,
         channel_scope_repository=_channel_scope_repository,
         answer_board_question_with_codex_fn=answer_board_question_with_codex,
         collect_github_ask_context_fn=_collect_github_ask_context,
         codex_runtime_error_type=CodexRuntimeError,
         store_ask_history_entry_fn=_store_ask_history_entry,
+    )
+
+
+def _resolve_codex_working_dir(
+    *,
+    session: Session,
+    tenant: Tenant,
+    settings,  # noqa: ANN001
+    project_id: str | None = None,
+    project_keys: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    return _resolve_codex_working_dir_impl(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        project_id=project_id,
+        project_keys=project_keys,
     )
 
 
@@ -843,9 +824,16 @@ def execute_tenant_command_ingress(
         find_seed_followup_context_fn=_find_seed_followup_context,
         store_seed_followup_context_fn=_store_seed_followup_context,
         clear_seed_followup_context_fn=_clear_seed_followup_context,
+        validate_seed_followup_context_fn=_validate_seed_followup_context,
         resolve_project_for_issue_fn=_resolve_project_for_issue,
         fetch_issue_preview_fn=_fetch_jira_issue_preview,
+        fetch_issue_detail_fn=_fetch_jira_issue_detail,
+        settings_factory_fn=get_settings,
+        build_codex_runtime_fn=build_codex_runtime,
+        tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
+        evaluate_decision_gate_fn=evaluate_decision_gate,
         ensure_issue_is_executable_fn=_ensure_issue_is_executable,
+        resolve_codex_working_dir_fn=_resolve_codex_working_dir,
     )
     return _execute_tenant_command_ingress(
         tenant_id=tenant_id,

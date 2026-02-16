@@ -1,0 +1,52 @@
+from orchestrator.core.worker_capabilities import (
+    infer_required_worker_capability,
+    parse_worker_capabilities,
+    required_worker_capability_for_run,
+    worker_label_for_capability,
+)
+from unittest.mock import patch
+
+
+def test_parse_worker_capabilities_defaults_and_normalizes() -> None:
+    assert parse_worker_capabilities("") == {"linux"}
+    assert parse_worker_capabilities("linux,mac,invalid") == {"linux", "macos"}
+
+
+def test_infer_required_worker_capability_prefers_explicit_label() -> None:
+    with patch(
+        "orchestrator.core.worker_capabilities._infer_required_worker_capability_with_codex",
+        return_value="macos",
+    ):
+        inferred = infer_required_worker_capability(
+            issue_summary="Build backend",
+            issue_description="No mobile code",
+            issue_labels=["worker:macos"],
+        )
+    assert inferred == "macos"
+
+
+def test_infer_required_worker_capability_from_ios_text() -> None:
+    with patch(
+        "orchestrator.core.worker_capabilities._infer_required_worker_capability_with_codex",
+        return_value="macos",
+    ):
+        inferred = infer_required_worker_capability(
+            issue_summary="Implement SwiftUI onboarding",
+            issue_description="Use Xcode and XCTest",
+            issue_labels=[],
+        )
+    assert inferred == "macos"
+    assert worker_label_for_capability(inferred) == "worker:macos"
+
+
+def test_required_worker_capability_for_run_prefers_plan() -> None:
+    run = type(
+        "RunStub",
+        (),
+        {
+            "plan": {"required_worker_capability": "mac"},
+            "issue_summary": "Build backend",
+            "issue_description": "",
+        },
+    )()
+    assert required_worker_capability_for_run(run) == "macos"

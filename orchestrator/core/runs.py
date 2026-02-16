@@ -45,7 +45,11 @@ def _now() -> datetime:
 def _active_run_for_issue(session: Session, tenant_id: str, issue_key: str) -> Run | None:
     active_lock = session.get(RunLock, {"tenant_id": tenant_id, "issue_key": issue_key})
     if active_lock is not None:
-        return session.get(Run, active_lock.run_id)
+        locked_run = session.get(Run, active_lock.run_id)
+        if locked_run is not None and locked_run.status in ACTIVE_RUN_STATUSES:
+            return locked_run
+        session.delete(active_lock)
+        session.flush()
 
     return session.execute(
         select(Run).where(

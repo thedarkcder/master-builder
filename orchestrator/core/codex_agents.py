@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
+from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
+from orchestrator.core.prompt_templates import render_prompt
+from orchestrator.core.agent_tools import allowed_tools_for_stage
 from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
@@ -13,29 +17,105 @@ from orchestrator.core.workflow.runner import (
 
 
 class CodexWorkflowAgents:
-    def __init__(self, *, runtime: CodexRuntime):
+    def __init__(self, *, runtime: CodexRuntime, log_sink: Callable[[dict], None] | None = None):
         self._runtime = runtime
+        self._log_sink = log_sink
 
-    def pm(self, request: WorkflowRequest) -> PmPlan:
-        payload = self._runtime.run_json(
-            system_prompt=(
-                "You are the PM stage agent in an orchestrated software workflow. "
-                "Honor the enforcement context already supplied by the runtime. "
-                "Return strict JSON only with keys: plan_steps, acceptance_criteria, risks."
+    def _stage_log_sink(
+        self,
+        *,
+        request: WorkflowRequest,
+        stage: str,
+        attempt: int | None,
+    ) -> Callable[[str, str], None] | None:
+        if self._log_sink is None:
+            return None
+
+        def _emit(stream: str, message: str) -> None:
+            self._log_sink(
+                {
+                    "tenant_id": request.tenant_id,
+                    "project_id": request.project_id,
+                    "run_id": request.run_id,
+                    "issue_key": request.issue_key,
+                    "stage": stage,
+                    "attempt": attempt,
+                    "stream": stream,
+                    "message": message,
+                }
+            )
+
+        return _emit
+
+    def pm(
+        self,
+        request: WorkflowRequest,
+        attempt: int,
+        feedback: str | None,
+        history: list[dict[str, str]],
+        last_dev_result: DevResult | None,
+        last_test_result: TestResult | None,
+        last_review_result: ReviewResult | None,
+    ) -> PmPlan:
+        payload = invoke_codex_json(
+            runtime=self._runtime,
+            context=CodexInvocationContext(
+                channel="worker",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                command="workflow",
+                stage="pm",
+                working_dir=request.execution_repo_dir or ".",
+                issue_key=request.issue_key,
+                run_id=request.run_id,
+                attempt=attempt,
             ),
-            user_prompt=(
-                "Stage: pm\n"
-                f"Tenant ID: {request.tenant_id}\n"
-                f"Run ID: {request.run_id}\n"
-                f"Issue key: {request.issue_key}\n"
-                f"Summary: {request.issue_summary}\n"
-                f"Description:\n{request.issue_description}\n\n"
-                "Output contract:\n"
-                "- plan_steps: array of concrete execution steps.\n"
-                "- acceptance_criteria: array of observable outcomes.\n"
-                "- risks: array of risks.\n"
+            system_prompt=render_prompt("workflow/pm_system.j2"),
+            user_prompt=render_prompt(
+                "workflow/pm_user.j2",
+                tenant_id=request.tenant_id,
+                run_id=request.run_id,
+                issue_key=request.issue_key,
+                issue_summary=request.issue_summary,
+                issue_description=request.issue_description,
+                attempt=attempt,
+                feedback=feedback or "none",
+                history_json=json.dumps(history[-25:]),
+                last_dev_summary_json=json.dumps(last_dev_result.change_summary if last_dev_result else []),
+                last_dev_pr_url=last_dev_result.pr_url if last_dev_result and last_dev_result.pr_url else "none",
+                last_test_passed=(
+                    "none"
+                    if last_test_result is None
+                    else ("true" if last_test_result.passed else "false")
+                ),
+                last_test_feedback=last_test_result.feedback if last_test_result and last_test_result.feedback else "none",
+                last_test_guidance_json=json.dumps(last_test_result.guidance if last_test_result else []),
+                last_review_approved=(
+                    "none"
+                    if last_review_result is None
+                    else ("true" if last_review_result.approved else "false")
+                ),
+                last_review_feedback=(
+                    last_review_result.feedback
+                    if last_review_result and last_review_result.feedback
+                    else "none"
+                ),
+                last_review_summary_json=json.dumps(last_review_result.summary if last_review_result else []),
+                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("pm"))),
+                agent_tool_command=(
+                    "python -m orchestrator agent-tool "
+                    f"--tenant {request.tenant_id} "
+                    f"--project {request.project_id or ''} "
+                    f"--run {request.run_id} "
+                    f"--issue {request.issue_key} "
+                    "--stage pm --tool <tool_name> --args '<json-object>'"
+                ),
             ),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=attempt),
         )
+        next_stage = str(payload.get("next_stage") or "dev").strip().lower()
+        if next_stage not in {"dev", "test"}:
+            next_stage = "dev"
         return PmPlan(
             plan_steps=_string_list(payload.get("plan_steps"), fallback=["Analyze scope", "Implement", "Validate"]),
             acceptance_criteria=_string_list(
@@ -43,6 +123,7 @@ class CodexWorkflowAgents:
                 fallback=["Behavior implemented", "Tests and verification provided"],
             ),
             risks=_string_list(payload.get("risks"), fallback=[]),
+            next_stage=next_stage,
         )
 
     def dev(
@@ -52,31 +133,54 @@ class CodexWorkflowAgents:
         attempt: int,
         feedback: str | None,
     ) -> DevResult:
-        payload = self._runtime.run_json(
-            system_prompt=(
-                "You are the Dev stage agent. Honor the enforcement context already supplied by the runtime. "
-                "Return strict JSON only with keys: change_summary, pr_url. "
-                "If no PR exists yet set pr_url to null."
+        payload = invoke_codex_json(
+            runtime=self._runtime,
+            context=CodexInvocationContext(
+                channel="worker",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                command="workflow",
+                stage="dev",
+                working_dir=request.execution_repo_dir or ".",
+                issue_key=request.issue_key,
+                run_id=request.run_id,
+                attempt=attempt,
             ),
-            user_prompt=(
-                "Stage: dev\n"
-                f"Tenant ID: {request.tenant_id}\n"
-                f"Run ID: {request.run_id}\n"
-                f"Issue key: {request.issue_key}\n"
-                f"Attempt: {attempt}\n"
-                f"Feedback from prior stage: {feedback or 'none'}\n"
-                f"Plan: {json.dumps(plan.plan_steps)}\n"
-                f"Acceptance criteria: {json.dumps(plan.acceptance_criteria)}\n"
-                "Output contract:\n"
-                "- change_summary: array of implemented changes this attempt.\n"
-                "- pr_url: PR URL string or null.\n"
+            system_prompt=render_prompt("workflow/dev_system.j2"),
+            user_prompt=render_prompt(
+                "workflow/dev_user.j2",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id or "",
+                run_id=request.run_id,
+                issue_key=request.issue_key,
+                attempt=attempt,
+                feedback=feedback or "none",
+                plan_json=json.dumps(plan.plan_steps),
+                acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
+                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("dev"))),
+                agent_tool_command=(
+                    "python -m orchestrator agent-tool "
+                    f"--tenant {request.tenant_id} "
+                    f"--project {request.project_id or ''} "
+                    f"--run {request.run_id} "
+                    f"--issue {request.issue_key} "
+                    "--stage dev --tool <tool_name> --args '<json-object>'"
+                ),
             ),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="dev", attempt=attempt),
         )
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
+        hard_stop_raw = payload.get("hard_stop_reason")
+        hard_stop_reason = (
+            str(hard_stop_raw).strip()
+            if isinstance(hard_stop_raw, str) and str(hard_stop_raw).strip()
+            else None
+        )
         return DevResult(
             change_summary=_string_list(payload.get("change_summary"), fallback=["No change summary provided by Codex"]),
             pr_url=pr_url,
+            hard_stop_reason=hard_stop_reason,
         )
 
     def test(
@@ -86,26 +190,41 @@ class CodexWorkflowAgents:
         dev_result: DevResult,
         attempt: int,
     ) -> TestResult:
-        payload = self._runtime.run_json(
-            system_prompt=(
-                "You are the Test stage agent. Honor the enforcement context already supplied by the runtime. "
-                "Return strict JSON only with keys: "
-                "passed (boolean), guidance (array of strings), feedback (string|null)."
+        payload = invoke_codex_json(
+            runtime=self._runtime,
+            context=CodexInvocationContext(
+                channel="worker",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                command="workflow",
+                stage="test",
+                working_dir=request.execution_repo_dir or ".",
+                issue_key=request.issue_key,
+                run_id=request.run_id,
+                attempt=attempt,
             ),
-            user_prompt=(
-                "Stage: test\n"
-                f"Tenant ID: {request.tenant_id}\n"
-                f"Run ID: {request.run_id}\n"
-                f"Issue key: {request.issue_key}\n"
-                f"Attempt: {attempt}\n"
-                f"Dev summary: {json.dumps(dev_result.change_summary)}\n"
-                f"PR URL: {dev_result.pr_url or 'none'}\n"
-                f"Suggested test commands: {json.dumps(request.suggested_test_commands)}\n"
-                "Output contract:\n"
-                "- passed: boolean readiness signal.\n"
-                "- guidance: array of concrete validation actions.\n"
-                "- feedback: blocking reason string or null.\n"
+            system_prompt=render_prompt("workflow/test_system.j2"),
+            user_prompt=render_prompt(
+                "workflow/test_user.j2",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id or "",
+                run_id=request.run_id,
+                issue_key=request.issue_key,
+                attempt=attempt,
+                dev_summary_json=json.dumps(dev_result.change_summary),
+                pr_url=dev_result.pr_url or "none",
+                suggested_test_commands_json=json.dumps(request.suggested_test_commands),
+                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("test"))),
+                agent_tool_command=(
+                    "python -m orchestrator agent-tool "
+                    f"--tenant {request.tenant_id} "
+                    f"--project {request.project_id or ''} "
+                    f"--run {request.run_id} "
+                    f"--issue {request.issue_key} "
+                    "--stage test --tool <tool_name> --args '<json-object>'"
+                ),
             ),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="test", attempt=attempt),
         )
 
         passed = bool(payload.get("passed"))
@@ -125,31 +244,45 @@ class CodexWorkflowAgents:
         test_result: TestResult,
         attempt: int,
     ) -> ReviewResult:
-        payload = self._runtime.run_json(
-            system_prompt=(
-                "You are the Review stage agent. Honor the enforcement context already supplied by the runtime. "
-                "Return strict JSON only with keys: "
-                "approved (boolean), summary (array of strings), feedback (string|null), pr_url (string|null)."
+        payload = invoke_codex_json(
+            runtime=self._runtime,
+            context=CodexInvocationContext(
+                channel="worker",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                command="workflow",
+                stage="review",
+                working_dir=request.execution_repo_dir or ".",
+                issue_key=request.issue_key,
+                run_id=request.run_id,
+                attempt=attempt,
             ),
-            user_prompt=(
-                "Stage: review\n"
-                f"Tenant ID: {request.tenant_id}\n"
-                f"Run ID: {request.run_id}\n"
-                f"Issue key: {request.issue_key}\n"
-                f"Attempt: {attempt}\n"
-                f"Plan steps: {json.dumps(plan.plan_steps)}\n"
-                f"Acceptance criteria: {json.dumps(plan.acceptance_criteria)}\n"
-                f"Dev summary: {json.dumps(dev_result.change_summary)}\n"
-                f"Test passed: {test_result.passed}\n"
-                f"Test guidance: {json.dumps(test_result.guidance)}\n"
-                f"Test feedback: {test_result.feedback or 'none'}\n"
-                f"PR URL: {dev_result.pr_url or 'none'}\n"
-                "Output contract:\n"
-                "- approved: boolean decision.\n"
-                "- summary: array of review findings/outcome notes.\n"
-                "- feedback: blocking feedback string or null.\n"
-                "- pr_url: PR URL string or null.\n"
+            system_prompt=render_prompt("workflow/review_system.j2"),
+            user_prompt=render_prompt(
+                "workflow/review_user.j2",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id or "",
+                run_id=request.run_id,
+                issue_key=request.issue_key,
+                attempt=attempt,
+                plan_steps_json=json.dumps(plan.plan_steps),
+                acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
+                dev_summary_json=json.dumps(dev_result.change_summary),
+                test_passed=str(test_result.passed).lower(),
+                test_guidance_json=json.dumps(test_result.guidance),
+                test_feedback=test_result.feedback or "none",
+                pr_url=dev_result.pr_url or "none",
+                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
+                agent_tool_command=(
+                    "python -m orchestrator agent-tool "
+                    f"--tenant {request.tenant_id} "
+                    f"--project {request.project_id or ''} "
+                    f"--run {request.run_id} "
+                    f"--issue {request.issue_key} "
+                    "--stage review --tool <tool_name> --args '<json-object>'"
+                ),
             ),
+            extra_on_log_line=self._stage_log_sink(request=request, stage="review", attempt=attempt),
         )
 
         approved = bool(payload.get("approved"))
@@ -182,27 +315,24 @@ def answer_board_question_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
+    invocation_context: CodexInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
 ) -> str:
-    normalized_history = history or []
+    normalized_history: list[dict] = []
     normalized_github_context = github_context or {}
-    payload = runtime.run_json(
-        system_prompt=(
-            "You answer Discord board questions for an engineering team. "
-            "Honor the enforcement context already supplied by the runtime. "
-            "Return strict JSON only with key 'message' (string). "
-            "Be concise: max 5 lines, no markdown tables."
-        ),
-        user_prompt=(
-            "Stage: discord-ask-answer\n"
-            f"Question: {question}\n"
-            f"Projects: {json.dumps(project_keys)}\n"
-            f"Status counts: {json.dumps(status_counts)}\n"
-            f"GitHub context: {json.dumps(normalized_github_context)}\n"
-            f"Recent conversation context: {json.dumps(normalized_history[:6])}\n"
-            f"Issues (sample): {json.dumps(issues[:40])}\n"
-            "Answer directly and include specific issue keys when helpful."
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/ask_answer_system.j2"),
+        user_prompt=render_prompt(
+            "discord/ask_answer_user.j2",
+            question=question,
+            project_keys_json=json.dumps(project_keys),
+            status_counts_json=json.dumps(status_counts),
+            github_context_json=json.dumps(normalized_github_context),
+            history_json=json.dumps(normalized_history),
+            issues_json=json.dumps(issues[:40]),
         ),
     )
     message = str(payload.get("message") or "").strip()
@@ -218,31 +348,24 @@ def plan_discord_ask_intent_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
+    invocation_context: CodexInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
 ) -> dict:
-    normalized_history = history or []
+    normalized_history: list[dict] = []
     normalized_github_context = github_context or {}
-    payload = runtime.run_json(
-        system_prompt=(
-            "You route Discord /ask requests for an engineering orchestration bot. "
-            "Honor the enforcement context already supplied by the runtime. "
-            "Return strict JSON only with keys: mode, summary, command. "
-            "mode must be either 'answer' or 'command'. "
-            "If mode='command', command must be a single supported command string that starts with '!' "
-            "and uses one of: !status, !runs, !run <ISSUE_KEY>, !retry <ISSUE_KEY|RUN_ID>, "
-            "!cancel <RUN_ID>, !link <ISSUE_KEY>, !issues seed <markdown spec>. "
-            "If mode='answer', leave command empty."
-        ),
-        user_prompt=(
-            "Stage: discord-ask-intent\n"
-            f"Question: {question}\n"
-            f"Projects: {json.dumps(project_keys)}\n"
-            f"Status counts: {json.dumps(status_counts)}\n"
-            f"GitHub context: {json.dumps(normalized_github_context)}\n"
-            f"Recent conversation context: {json.dumps(normalized_history[:6])}\n"
-            f"Issues (sample): {json.dumps(issues[:40])}\n"
-            "Choose command mode only when the user is clearly requesting an operational action."
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/ask_intent_system.j2"),
+        user_prompt=render_prompt(
+            "discord/ask_intent_user.j2",
+            question=question,
+            project_keys_json=json.dumps(project_keys),
+            status_counts_json=json.dumps(status_counts),
+            github_context_json=json.dumps(normalized_github_context),
+            history_json=json.dumps(normalized_history),
+            issues_json=json.dumps(issues[:40]),
         ),
     )
     if not isinstance(payload, dict):
@@ -255,29 +378,16 @@ def plan_seed_issues_with_codex(
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
+    invocation_context: CodexInvocationContext,
 ) -> dict:
-    payload = runtime.run_json(
-        system_prompt=(
-            "You split product specs into Jira issue drafts. "
-            "Honor the enforcement context already supplied by the runtime. "
-            "Return strict JSON only with keys: project_key (string), issues (array), questions (array). "
-            "Each issue item must include: summary (string), objective (string), "
-            "scope_in (array of strings), scope_out (array of strings), "
-            "acceptance_criteria (array of strings), tags (array of strings), "
-            "labels (array of strings), issue_type (string), and optional issue_key (string). "
-            "questions should contain concise clarification questions only if required details are missing."
-        ),
-        user_prompt=(
-            "Stage: discord-issues-seed\n"
-            f"Allowed Jira project keys: {json.dumps(allowed_project_keys)}\n"
-            f"Markdown spec:\n{prompt_markdown}\n\n"
-            "Output contract:\n"
-            "- issues must be implementation-ready and concrete.\n"
-            "- project_key must be one of allowed_project_keys.\n"
-            "- tags/labels should be short normalized tokens when present.\n"
-            "- issue_type should be Task, Bug, or Story.\n"
-            "- description content should be detailed enough for Objective, Scope In/Out, and Acceptance Criteria.\n"
-            "- when reseeding existing work, set issue_key if explicitly known from source context.\n"
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/issues_seed_system.j2"),
+        user_prompt=render_prompt(
+            "discord/issues_seed_user.j2",
+            allowed_project_keys_json=json.dumps(allowed_project_keys),
+            prompt_markdown=prompt_markdown,
         ),
     )
     if not isinstance(payload, dict):

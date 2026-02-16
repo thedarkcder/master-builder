@@ -33,6 +33,8 @@ from orchestrator.core.sentry import initialize_sentry
 from orchestrator.storage.migrations import run_migrations
 
 logger = logging.getLogger(__name__)
+# Backward-compatible logger handle used by observability tests.
+request_logger = logger
 
 
 def create_app() -> FastAPI:
