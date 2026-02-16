@@ -105,25 +105,6 @@ jobs:
           echo "node_lockfile=$node_lockfile" >> "$GITHUB_OUTPUT"
           echo "java_build_tool=$java_build_tool" >> "$GITHUB_OUTPUT"
 
-  codex-assets-version-guard:
-    name: Codex assets version guard
-    if: github.event_name == 'pull_request'
-    runs-on: self-hosted
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Validate codex assets version bump
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x scripts/validate_codex_assets_version.sh
-          git fetch --no-tags --prune origin "${{ github.base_ref }}"
-          scripts/validate_codex_assets_version.sh "origin/${{ github.base_ref }}"
-
   java:
     name: Java (lint/test)
     needs: detect

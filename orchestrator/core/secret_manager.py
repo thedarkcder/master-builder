@@ -104,16 +104,16 @@ def resolve_secret_ref(
     encryption_key: str,
     scope: str = _SECRET_SCOPE_ALL,
     tenant_id: str | None = None,
-    allow_environment_fallback: bool = True,
+    allow_environment_fallback: bool = False,
 ) -> str | None:
     _apply_secret_scope_context(session=session, scope=scope, tenant_id=tenant_id)
     normalized_ref = normalize_secret_ref(secret_ref)
     row = session.get(ManagedSecret, normalized_ref)
     if row is not None:
         return decrypt_value(ciphertext=row.value_encrypted, encryption_key=encryption_key)
-    if not allow_environment_fallback:
-        return None
-    return os.environ.get(normalized_ref)
+    if allow_environment_fallback:
+        return os.environ.get(normalized_ref)
+    return None
 
 
 def scoped_secret_ref_candidates(
@@ -182,7 +182,7 @@ def resolve_scoped_secret_ref(
     elif normalized_tenant_id:
         _append(f"tenant/{normalized_tenant_id}/{normalized_ref}", _SECRET_SCOPE_TENANT)
     else:
-        _append(normalized_ref, _SECRET_SCOPE_ALL)
+        return None
 
     for candidate, scope in zip(candidates, scopes, strict=False):
         value = resolve_secret_ref(
@@ -191,7 +191,7 @@ def resolve_scoped_secret_ref(
             encryption_key=encryption_key,
             scope=scope,
             tenant_id=normalized_tenant_id if scope == _SECRET_SCOPE_TENANT else None,
-            allow_environment_fallback=scope == _SECRET_SCOPE_ALL,
+            allow_environment_fallback=False,
         )
         if value:
             return value
@@ -203,7 +203,7 @@ def resolve_platform_secret_ref(
     *,
     secret_ref: str,
     encryption_key: str,
-    allow_environment_fallback: bool = True,
+    allow_environment_fallback: bool = False,
 ) -> str | None:
     normalized_ref = normalize_secret_ref(secret_ref)
     if not normalized_ref.startswith("platform/"):

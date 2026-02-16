@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -17,14 +18,16 @@ class Settings(BaseSettings):
     public_api_base_url: str = "http://localhost:4000"
     jira_oauth_state_secret: str = "local-dev-change-me"
     secrets_encryption_key: str = ""
-    required_codex_assets_version: str = ""
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
     codex_cli_command: str = "codex"
+    codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5-codex"
-    codex_timeout_seconds: int = 120
+    codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_max_output_tokens: int = 1800
+    codex_hang_detection_quiet_seconds: int = 300
+    codex_hang_detection_report_interval_seconds: int = 120
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
     worker_poll_interval_seconds: int = 5
     auto_migrate_on_startup: bool = True
@@ -33,6 +36,7 @@ class Settings(BaseSettings):
     sentry_release: str = ""
     sentry_traces_sample_rate: float = 0.0
     agent_id: str = "worker-local"
+    worker_capabilities: str = "linux"
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",

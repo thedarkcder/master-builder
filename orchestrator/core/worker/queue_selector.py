@@ -4,12 +4,16 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.worker_capabilities import (
+    parse_worker_capabilities,
+    required_worker_capability_for_run,
+)
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Run, RunLock, Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +51,38 @@ def select_next_queued_run(
     queued_status: str,
     running_status: str,
     failed_status: str,
+    worker_capabilities: set[str] | None = None,
 ) -> QueueSelectionResult:
+    allowed_capabilities = parse_worker_capabilities(worker_capabilities or [])
     queued_runs = session.execute(
         select(Run).where(Run.status == queued_status).order_by(Run.created_at.asc())
     ).scalars().all()
 
     for candidate in queued_runs:
+        required_capability = required_worker_capability_for_run(candidate)
+        if required_capability not in allowed_capabilities:
+            logger.info(
+                "worker_skipping_run_due_to_capability_mismatch run_id=%s tenant_id=%s issue_key=%s required=%s available=%s",
+                candidate.run_id,
+                candidate.tenant_id,
+                candidate.issue_key,
+                required_capability,
+                ",".join(sorted(allowed_capabilities)),
+            )
+            continue
+
         candidate_tenant = session.get(Tenant, candidate.tenant_id)
         if candidate_tenant is None:
             candidate.status = failed_status
             candidate.last_error = "Tenant not found for queued run"
             candidate.finished_at = datetime.now(timezone.utc)
+            session.execute(
+                delete(RunLock).where(
+                    RunLock.tenant_id == candidate.tenant_id,
+                    RunLock.issue_key == candidate.issue_key,
+                    RunLock.run_id == candidate.run_id,
+                )
+            )
             session.commit()
             session.refresh(candidate)
             return QueueSelectionResult(terminal_run=candidate)

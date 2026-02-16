@@ -1,0 +1,21 @@
+Stage: test
+Tenant ID: {{ tenant_id }}
+Project ID: {{ project_id }}
+Run ID: {{ run_id }}
+Issue key: {{ issue_key }}
+Attempt: {{ attempt }}
+Dev summary: {{ dev_summary_json }}
+PR URL: {{ pr_url }}
+Suggested test commands: {{ suggested_test_commands_json }}
+Allowed tools for this stage: {{ allowed_tools_json }}
+Agent tool command: {{ agent_tool_command }}
+
+Required actions:
+1. Validate whether acceptance criteria are met using available tests/checks.
+2. Provide concrete guidance for missing verification or failures.
+3. Fail closed when verification cannot be completed.
+
+Output contract:
+- passed: boolean readiness signal.
+- guidance: array of concrete validation actions.
+- feedback: blocking reason string or null.

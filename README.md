@@ -23,7 +23,6 @@ export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
-export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.5
 export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
 export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
 export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
@@ -37,62 +36,13 @@ PY
 # - secret ref JIRA_OAUTH_CLIENT_ID -> Jira OAuth client id
 # - secret ref JIRA_OAUTH_CLIENT_SECRET -> Jira OAuth client secret
 
-# Optional extra Python index for pinned codex assets wheel
-# Example local package service (docker-compose):
-# export PIP_EXTRA_INDEX_URL=http://tenant:change-me@localhost:4401/simple/
-#
-# If not set, docker-compose defaults to:
-# http://tenant:change-me@host.docker.internal:4401/simple/
 ```
-
-`ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex assets version used for tenant init.
-If required assets are missing or the version mismatches, tenant create/update returns `503`.
-
-The orchestrator runtime loads codex assets from local `.codex` when present (including Docker image builds in this repo), and can fall back to the packaged `master-builder-codex-assets` dependency path where configured.
 
 Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
 For containers, run one-time login and keep the shared Codex auth volume:
 ```bash
 docker compose run --rm worker codex login --device-auth
 ```
-
-## Codex assets package publishing
-Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.
-
-How to cut a new codex assets package version:
-1. Update `.codex/codex_assets_manifest.json` and bump `assets_version`.
-2. Keep `.codex` content aligned with that version bump.
-3. Merge to `staging` or `main`.
-
-What happens automatically:
-- The workflow detects whether `assets_version` changed.
-- If changed, it builds a wheel/sdist directly from `.codex`.
-- Branch behavior:
-  - `staging` publishes beta/pre-release package versions (`<assets_version>b<run_number>`)
-  - `main` publishes stable package versions (`<assets_version>`)
-- It uploads artifacts to the workflow run and creates/updates a GitHub Release tag:
-  - `codex-assets-v<publish_version>`
-
-Optional direct package-index publish (same workflow run):
-- Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
-- Set repo variable `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` (must be repo-scoped for GitHub Packages, e.g. `https://pypi.pkg.github.com/<OWNER>/<REPO>/`)
-- Set repo variable `CODEX_ASSETS_PUBLISH_USERNAME`
-- Set repo secret `CODEX_ASSETS_PUBLISH_PASSWORD`
-
-Authentication:
-- Uses the explicit package-service credentials above (no fallback credentials).
-
-Same-repo quick setup:
-1. In GitHub repo settings, set Actions variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`.
-2. Merge a PR that bumps `.codex/codex_assets_manifest.json` `assets_version`.
-3. Confirm workflow `Publish Codex Assets` uploads release artifacts and publishes package index files.
-
-Version bump helpers:
-- Auto-bump patch version + sync pin:
-  - `python3 scripts/bump_codex_assets_version.py`
-- Validate bump + pin consistency:
-  - `scripts/validate_codex_assets_version.sh origin/staging`
-- CI enforces this on pull requests via job: `Codex assets version guard`.
 
 ## Jira release-train automation (repo-level)
 This repo uses two release-train workflows:
@@ -218,7 +168,7 @@ UI sections:
 - `/runs` for run observability
 
 ## Docker
-Build and run API + worker + Postgres + package service + optional admin UI + tailscale sidecar:
+Build and run API + worker + Postgres + optional admin UI + tailscale sidecar:
 ```bash
 cp .env.example .env
 docker compose up --build
@@ -226,19 +176,8 @@ docker compose up --build
 
 API is exposed on `http://localhost:4000`.
 Postgres is exposed on `localhost:4402`.
-Private package service is exposed on `http://localhost:4401`.
 Admin UI (if running locally) is exposed on `http://localhost:4100`.
 Tailscale sidecar uses `TS_AUTHKEY` from your environment (required for tailnet auth).
-
-Default local package service credentials:
-- username: `tenant`
-- password: `change-me`
-
-Examples:
-- Install from local package service:
-- `pip install --extra-index-url "http://tenant:change-me@localhost:4401/simple/" master-builder-codex-assets==0.1.5`
-- Upload with twine:
-  - `python -m twine upload --repository-url "http://localhost:4401/" -u tenant -p change-me dist/codex-assets/*`
 
 ### Worker build toolchains
 The worker image now includes:

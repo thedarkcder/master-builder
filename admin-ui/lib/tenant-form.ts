@@ -56,7 +56,6 @@ export function defaultTenantFormValues(): TenantFormValues {
       webhook_secret_ref: null
     },
     github: {
-      mode: "github_app",
       webhook_secret_ref: null,
       installation_id: null
     },
@@ -137,7 +136,6 @@ export function toCreatePayload(
     },
     github: {
       ...values.github,
-      mode: values.github.mode.trim(),
       webhook_secret_ref: values.github.webhook_secret_ref?.trim() || null,
       installation_id: values.github.installation_id?.trim() || null
     },

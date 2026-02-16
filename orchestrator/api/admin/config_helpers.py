@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from fastapi import HTTPException, status
-
-from orchestrator.core.enforcement_context import EnforcementAssetsError, validate_enforcement_assets
 from orchestrator.core.platform_secret_service import PLATFORM_SECRET_GITHUB_APP_ID_REF, PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF
 
 
@@ -19,24 +14,11 @@ def validate_codex_assets_for_tenant_init(
     *,
     settings,
     module_file: str,
-    validate_enforcement_assets_fn=validate_enforcement_assets,
+    validate_enforcement_assets_fn=None,
 ) -> None:  # noqa: ANN001
-    module_path = Path(module_file).resolve()
-    repo_root = module_path.parent
-    for candidate in [repo_root, *repo_root.parents]:
-        if (candidate / ".codex").exists():
-            repo_root = candidate
-            break
-    try:
-        validate_enforcement_assets_fn(
-            repo_root=repo_root,
-            required_assets_version=settings.required_codex_assets_version,
-        )
-    except EnforcementAssetsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Codex assets validation failed: {exc}",
-        ) from exc
+    _ = settings
+    _ = module_file
+    _ = validate_enforcement_assets_fn
 
 
 def with_preserved_jira_system_fields(*, existing: dict, proposed: dict) -> dict:

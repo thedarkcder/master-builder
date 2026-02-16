@@ -13,4 +13,3 @@ def build_workflow_runner_for_session(*, session: Session) -> WorkflowRunner:
     runtime = build_codex_runtime(session=session, settings=settings)
     agents = CodexWorkflowAgents(runtime=runtime)
     return WorkflowRunner(agents)
-

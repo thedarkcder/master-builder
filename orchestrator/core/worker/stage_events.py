@@ -12,6 +12,7 @@ def _build_stage_update(
     run_id: str,
     stage: str,
     jira_url: str | None,
+    run_url: str | None = None,
     pr_url: str | None = None,
     error: str | None = None,
     next_steps: Iterable[str] | None = None,
@@ -37,6 +38,7 @@ def _build_stage_update(
             run_id=run_id,
             stage=stage,
             jira_url=jira_url,
+            run_url=run_url,
             pr_url=pr_url,
             error=error,
             next_steps=next_steps or (),
@@ -50,6 +52,7 @@ def decision_gate_required_update(
     issue_key: str | None,
     run_id: str,
     jira_url: str | None,
+    run_url: str | None = None,
     reason: str,
     questions: Iterable[str],
 ) -> dict[str, str]:
@@ -59,6 +62,7 @@ def decision_gate_required_update(
         run_id=run_id,
         stage="decision_gate_required",
         jira_url=jira_url,
+        run_url=run_url,
         error=reason,
         next_steps=questions,
     )
@@ -70,6 +74,7 @@ def lock_acquired_update(
     issue_key: str | None,
     run_id: str,
     jira_url: str | None,
+    run_url: str | None = None,
 ) -> dict[str, str]:
     return _build_stage_update(
         tenant_id=tenant_id,
@@ -77,6 +82,7 @@ def lock_acquired_update(
         run_id=run_id,
         stage="lock_acquired",
         jira_url=jira_url,
+        run_url=run_url,
     )
 
 
@@ -86,6 +92,7 @@ def plan_posted_update(
     issue_key: str | None,
     run_id: str,
     jira_url: str | None,
+    run_url: str | None = None,
 ) -> dict[str, str]:
     return _build_stage_update(
         tenant_id=tenant_id,
@@ -93,6 +100,7 @@ def plan_posted_update(
         run_id=run_id,
         stage="plan_posted",
         jira_url=jira_url,
+        run_url=run_url,
     )
 
 
@@ -102,6 +110,7 @@ def pr_opened_update(
     issue_key: str | None,
     run_id: str,
     jira_url: str | None,
+    run_url: str | None = None,
     pr_url: str,
 ) -> dict[str, str]:
     return _build_stage_update(
@@ -110,6 +119,7 @@ def pr_opened_update(
         run_id=run_id,
         stage="pr_opened",
         jira_url=jira_url,
+        run_url=run_url,
         pr_url=pr_url,
     )
 
@@ -120,6 +130,7 @@ def run_failed_update(
     issue_key: str | None,
     run_id: str,
     jira_url: str | None,
+    run_url: str | None = None,
     error: str,
 ) -> dict[str, str]:
     return _build_stage_update(
@@ -128,6 +139,7 @@ def run_failed_update(
         run_id=run_id,
         stage="run_failed",
         jira_url=jira_url,
+        run_url=run_url,
         error=error,
         next_steps=(
             "Review diagnostics and follow-up issue payload.",

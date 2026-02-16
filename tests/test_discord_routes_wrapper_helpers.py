@@ -38,18 +38,6 @@ class DiscordRouteWrapperHelperTests(unittest.TestCase):
             )
             impl.assert_called_once()
 
-        with patch.object(discord_route, "_seed_text_is_missing_impl", return_value=True) as impl:
-            self.assertTrue(discord_route._seed_text_is_missing("  "))
-            impl.assert_called_once_with("  ")
-
-        with patch.object(discord_route, "_normalized_summary_key_impl", return_value="normalized") as impl:
-            self.assertEqual(discord_route._normalized_summary_key("Summary"), "normalized")
-            impl.assert_called_once_with("Summary")
-
-        with patch.object(discord_route, "_summary_similarity_impl", return_value=0.9) as impl:
-            self.assertEqual(discord_route._summary_similarity("a", "b"), 0.9)
-            impl.assert_called_once_with("a", "b")
-
         with (
             patch.object(
                 discord_route,
@@ -63,7 +51,7 @@ class DiscordRouteWrapperHelperTests(unittest.TestCase):
 
         with patch.object(discord_route, "_download_discord_attachment_impl", return_value=(b"x", "text/plain")) as impl:
             self.assertEqual(discord_route._download_discord_attachment(url="https://example/file"), (b"x", "text/plain"))
-            impl.assert_called_once_with(url="https://example/file")
+            impl.assert_called_once_with(url="https://example/file", bot_token=None)
 
     def test_ask_history_and_existing_issue_key_helpers(self) -> None:
         tenant = SimpleNamespace(tenant_id="example")

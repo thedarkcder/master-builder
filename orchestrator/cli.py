@@ -4,9 +4,12 @@ import argparse
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import func, select
 
+from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
+from orchestrator.core.config import get_settings
 from orchestrator.core.runs import enqueue_run
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
@@ -41,6 +44,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tenant",
         default="all",
         help="Tenant identifier or 'all' (default)",
+    )
+
+    tool_parser = subparsers.add_parser("agent-tool", help="Execute an agent tool action")
+    tool_parser.add_argument("--tenant", required=True, help="Tenant identifier")
+    tool_parser.add_argument("--project", default=None, help="Project identifier")
+    tool_parser.add_argument("--run", default=None, help="Run identifier")
+    tool_parser.add_argument("--issue", required=True, help="Issue key")
+    tool_parser.add_argument("--stage", required=True, help="Workflow stage (pm|dev|test|review)")
+    tool_parser.add_argument("--tool", required=True, help="Tool name")
+    tool_parser.add_argument(
+        "--args",
+        default="{}",
+        help="JSON object containing tool args",
     )
 
     return parser
@@ -130,6 +146,50 @@ def _handle_poll(*, tenant_filter: str) -> int:
     return 0
 
 
+def _handle_agent_tool(
+    *,
+    tenant_id: str,
+    project_id: str | None,
+    run_id: str | None,
+    issue_key: str,
+    stage: str,
+    tool_name: str,
+    args_json: str,
+) -> int:
+    try:
+        parsed_args = json.loads(args_json)
+    except json.JSONDecodeError as exc:
+        print(json.dumps({"ok": False, "error": f"Invalid --args JSON: {exc}"}))
+        return 2
+    if not isinstance(parsed_args, dict):
+        print(json.dumps({"ok": False, "error": "--args must decode to a JSON object"}))
+        return 2
+
+    settings = get_settings()
+    session_factory = create_session_factory()
+    print_tool_event(stage=stage, tool_name=tool_name, args=parsed_args, outcome="started")
+    with session_factory() as session:
+        try:
+            result: dict[str, Any] = execute_agent_tool(
+                session=session,
+                settings=settings,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                run_id=run_id,
+                issue_key=issue_key,
+                stage=stage,
+                tool_name=tool_name,
+                tool_args=parsed_args,
+            )
+            print_tool_event(stage=stage, tool_name=tool_name, args=parsed_args, outcome="succeeded")
+            print(json.dumps({"ok": True, "tool": tool_name, "result": result}))
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            print_tool_event(stage=stage, tool_name=tool_name, args=parsed_args, outcome="failed")
+            print(json.dumps({"ok": False, "tool": tool_name, "error": str(exc)}))
+            return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -147,6 +207,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "poll":
         return _handle_poll(tenant_filter=args.tenant)
+
+    if args.command == "agent-tool":
+        return _handle_agent_tool(
+            tenant_id=args.tenant,
+            project_id=args.project,
+            run_id=args.run,
+            issue_key=args.issue,
+            stage=args.stage,
+            tool_name=args.tool,
+            args_json=args.args,
+        )
 
     parser.error(f"Unknown command: {args.command}")
     return 2

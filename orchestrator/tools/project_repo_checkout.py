@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shutil
@@ -31,6 +32,12 @@ def _safe_git_error(stderr: str, stdout: str) -> str:
     return re.sub(r"https://x-access-token:[^@]+@", "https://x-access-token:[REDACTED]@", message)
 
 
+def _github_git_extraheader(github_installation_token: str) -> str:
+    credential_bytes = f"x-access-token:{github_installation_token}".encode("utf-8")
+    credential = base64.b64encode(credential_bytes).decode("ascii")
+    return f"AUTHORIZATION: basic {credential}"
+
+
 def _run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
     process = subprocess.run(
         ["git", *args],
@@ -49,6 +56,36 @@ def project_repo_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
     return Path(base_dir) / tenant_id / project_id / "repo"
 
 
+def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
+    source_root = Path(__file__).resolve().parents[2]
+    agents_src = source_root / "AGENTS.md"
+    codex_src = source_root / ".codex"
+
+    if agents_src.exists():
+        shutil.copy2(agents_src, repo_dir / "AGENTS.md")
+
+    if codex_src.exists() and codex_src.is_dir():
+        shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
+
+    # Keep workspace policy files out of accidental commits inside project repos.
+    info_dir = repo_dir / ".git" / "info"
+    info_dir.mkdir(parents=True, exist_ok=True)
+    exclude_path = info_dir / "exclude"
+    existing_lines = set()
+    if exclude_path.exists():
+        existing_lines = {
+            line.strip()
+            for line in exclude_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+    required_lines = {"AGENTS.md", ".codex/"}
+    missing_lines = [line for line in sorted(required_lines) if line not in existing_lines]
+    if missing_lines:
+        prefix = "\n" if exclude_path.exists() and exclude_path.read_text(encoding="utf-8") else ""
+        with exclude_path.open("a", encoding="utf-8") as handle:
+            handle.write(prefix + "\n".join(missing_lines) + "\n")
+
+
 def ensure_project_checkout(
     *,
     base_dir: str,
@@ -61,6 +98,7 @@ def ensure_project_checkout(
     repo_root.mkdir(parents=True, exist_ok=True)
     git_dir = repo_dir / ".git"
     if git_dir.exists():
+        _sync_agent_workspace_files(repo_dir=repo_dir)
         return repo_dir
 
     repo_full_name = _repo_full_name(project.github_repository)
@@ -69,7 +107,7 @@ def ensure_project_checkout(
         **os.environ,
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-        "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {github_installation_token}",
+        "GIT_CONFIG_VALUE_0": _github_git_extraheader(github_installation_token),
     }
     try:
         _run_git(["clone", "--origin", "origin", clone_url, str(repo_dir)], cwd=repo_root, env=clone_env)
@@ -78,6 +116,7 @@ def ensure_project_checkout(
             shutil.rmtree(repo_dir, ignore_errors=True)
         raise
     _run_git(["remote", "set-url", "origin", project.github_repository], cwd=repo_dir)
+    _sync_agent_workspace_files(repo_dir=repo_dir)
     return repo_dir
 
 

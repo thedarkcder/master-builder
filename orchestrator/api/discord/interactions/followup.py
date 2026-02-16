@@ -13,7 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.discord.ask.context import consume_pending_ask_action
 from orchestrator.api.discord.interactions.parser import _parse_discord_interaction_command
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
@@ -27,16 +26,14 @@ from orchestrator.api.discord.shared.state_repository import resolve_project_for
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_gate import evaluate_decision_gate
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
-from orchestrator.tools.jira_oauth import JiraOAuthError
 
 logger = logging.getLogger(__name__)
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
@@ -211,31 +208,6 @@ def _decision_gate_issue_for_thread(*, session: Session, channel_id: str) -> tup
     if not issue_key or ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
         return None
     return tenant.tenant_id, issue_key
-
-
-def _latest_retryable_run_for_issue(*, session: Session, tenant_id: str, issue_key: str) -> Run | None:
-    retryable_statuses = {"failed", "blocked", "cancelled"}
-    return session.execute(
-        select(Run)
-        .where(
-            Run.tenant_id == tenant_id,
-            Run.issue_key == issue_key,
-            Run.status.in_(retryable_statuses),
-        )
-        .order_by(Run.created_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _decision_gate_remaining_questions_message(*, user_id: str, issue_key: str, reason: str, questions: list[str]) -> str:
-    lines = [
-        f"<@{user_id}> Decision Gate still needs clarification for `{issue_key}`.",
-        f"Reason: {reason}",
-    ]
-    if questions:
-        lines.append("Please reply with:")
-        lines.extend(f"- {question}" for question in questions[:5])
-    return "\n".join(lines)
 
 
 def _build_command_followup_message(
@@ -681,16 +653,18 @@ async def _run_discord_decision_gate_reply_followup(
     interaction_token: str,
     reply_to_message_id: str | None = None,
 ) -> None:
-    await asyncio.to_thread(
-        _run_discord_decision_gate_reply_followup_blocking,
+    await _run_discord_command_followup(
         tenant_id=tenant_id,
         user_id=user_id,
         channel_id=channel_id,
-        issue_key=issue_key,
-        reply_text=reply_text,
+        command_text="!reply",
         application_id=application_id,
         interaction_token=interaction_token,
         reply_to_message_id=reply_to_message_id,
+        command_params={
+            "issue_key": issue_key,
+            "reply_text": reply_text,
+        },
     )
 
 
@@ -705,114 +679,18 @@ def _run_discord_decision_gate_reply_followup_blocking(
     interaction_token: str,
     reply_to_message_id: str | None = None,
 ) -> None:
-    normalized_issue_key = issue_key.strip().upper()
-    normalized_reply = " ".join(reply_text.split()).strip()
-    if not normalized_issue_key or not normalized_reply:
-        _send_discord_interaction_followup(
-            application_id=application_id,
-            interaction_token=interaction_token,
-            content="Decision Gate reply was empty or missing issue context.",
-            ephemeral=True,
-            reply_to_message_id=reply_to_message_id,
-            channel_id=channel_id,
-        )
-        return
-
-    resolved_tenant_id = str(tenant_id or "").strip()
-    if not resolved_tenant_id:
-        session_factory = create_session_factory()
-        with session_factory() as session:
-            tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
-            resolved_tenant_id = tenant.tenant_id if tenant is not None else ""
-    if not resolved_tenant_id:
-        _send_discord_interaction_followup(
-            application_id=application_id,
-            interaction_token=interaction_token,
-            content="No enabled tenant is configured for this Discord channel.",
-            ephemeral=True,
-            reply_to_message_id=reply_to_message_id,
-            channel_id=channel_id,
-        )
-        return
-
-    settings = get_settings()
-    session_factory = create_session_factory()
-    with session_factory() as session:
-        tenant = session.get(Tenant, resolved_tenant_id)
-        if tenant is None or not tenant.is_enabled:
-            _send_discord_interaction_followup(
-                application_id=application_id,
-                interaction_token=interaction_token,
-                content="Tenant is unavailable for Decision Gate reply handling.",
-                ephemeral=True,
-                reply_to_message_id=reply_to_message_id,
-                channel_id=channel_id,
-            )
-            return
-        latest_run = _latest_retryable_run_for_issue(
-            session=session,
-            tenant_id=resolved_tenant_id,
-            issue_key=normalized_issue_key,
-        )
-        if latest_run is None:
-            _send_discord_thread_followup(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                channel_id=channel_id,
-                reply_to_message_id=reply_to_message_id or f"dg-{normalized_issue_key}",
-                content=f"<@{user_id}> No retryable run was found for `{normalized_issue_key}`.",
-            )
-            return
-
-        try:
-            oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
-            oauth.client.update_issue_summary(
-                access_token=oauth.access_token,
-                cloud_id=oauth.connection.cloud_id,
-                issue_id_or_key=normalized_issue_key,
-                summary=normalized_reply[:255],
-            )
-        except (HTTPException, JiraOAuthError, RuntimeError, ValueError) as exc:
-            _send_discord_thread_followup(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                channel_id=channel_id,
-                reply_to_message_id=reply_to_message_id or f"dg-{normalized_issue_key}",
-                content=f"<@{user_id}> Failed to update Jira summary for `{normalized_issue_key}`: {exc}",
-            )
-            return
-
-        decision_gate = evaluate_decision_gate(
-            issue_summary=normalized_reply,
-            issue_description=latest_run.issue_description,
-        )
-        if decision_gate.triggered:
-            _send_discord_thread_followup(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                channel_id=channel_id,
-                reply_to_message_id=reply_to_message_id or f"dg-{normalized_issue_key}",
-                content=_decision_gate_remaining_questions_message(
-                    user_id=user_id,
-                    issue_key=normalized_issue_key,
-                    reason=decision_gate.reason,
-                    questions=[question.strip() for question in decision_gate.questions if question.strip()],
-                ),
-                components=_ask_reply_components(),
-            )
-            return
-
     _run_discord_command_followup_blocking(
-        tenant_id=resolved_tenant_id,
+        tenant_id=tenant_id,
         user_id=user_id,
         channel_id=channel_id,
-        command_text=f"!retry {normalized_issue_key}",
+        command_text="!reply",
         application_id=application_id,
         interaction_token=interaction_token,
         reply_to_message_id=reply_to_message_id,
+        command_params={
+            "issue_key": issue_key,
+            "reply_text": reply_text,
+        },
     )
 
 

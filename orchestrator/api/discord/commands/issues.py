@@ -17,12 +17,15 @@ def dispatch_issues_command(
     payload: DiscordCommandRequest,
     command_name: str,
     arguments: list[str],
+    scoped_project_keys: list[str],
+    codex_working_dir: str,
     normalized_user_id: str,
     defer_seed_issues: bool,
     seed_issues_with_codex: Callable[..., Any],
     find_seed_followup_context: Callable[..., Any],
     store_seed_followup_context: Callable[..., Any],
     clear_seed_followup_context: Callable[..., Any],
+    validate_seed_followup_context: Callable[..., Any] | None = None,
 ) -> DiscordCommandResponse | None:
     if command_name != "issues":
         return None
@@ -51,6 +54,8 @@ def dispatch_issues_command(
             session=session,
             tenant=tenant,
             prompt_markdown=prompt_markdown,
+            scoped_project_keys=scoped_project_keys,
+            codex_working_dir=codex_working_dir,
         )
         if (
             isinstance(payload.channel_id, str)
@@ -91,12 +96,34 @@ def dispatch_issues_command(
         context = find_seed_followup_context(
             tenant=tenant,
             channel_id=payload.channel_id,
+            user_id=normalized_user_id,
+            project_key=scoped_project_keys[0] if len(scoped_project_keys) == 1 else None,
         )
         if context is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="No pending issue-seed follow-up context was found for this channel",
             )
+        if validate_seed_followup_context is not None:
+            is_valid, invalid_reason = validate_seed_followup_context(
+                session=session,
+                tenant=tenant,
+                context=context,
+            )
+            if not is_valid:
+                clear_seed_followup_context(
+                    session=session,
+                    tenant=tenant,
+                    request_id=str(context.get("request_id") or ""),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "No pending issue-seed follow-up context was found for this channel"
+                        if not invalid_reason
+                        else f"Issue-seed follow-up context expired: {invalid_reason}"
+                    ),
+                )
         context_user_id = str(context.get("user_id") or "").strip()
         if context_user_id and context_user_id != normalized_user_id:
             raise HTTPException(
@@ -129,6 +156,10 @@ def dispatch_issues_command(
             prompt_markdown=followup_prompt,
             force_issue_keys=forced_issue_keys,
             allow_create=False,
+            scoped_project_keys=[str(context.get("project_key") or "").strip().upper()]
+            if str(context.get("project_key") or "").strip()
+            else scoped_project_keys,
+            codex_working_dir=codex_working_dir,
         )
         if bool(data.get("requires_input")):
             request_id = store_seed_followup_context(

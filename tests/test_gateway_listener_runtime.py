@@ -73,6 +73,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_run_loop_skips_without_websockets_or_token_ref(self) -> None:
         listener, _session = self._listener()
+        listener._stop_event.set()
         with patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=None):
             asyncio.run(listener._run_loop())
 

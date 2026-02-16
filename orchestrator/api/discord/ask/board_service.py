@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.storage.models import Tenant
 
 
@@ -17,6 +18,7 @@ def ask_board_message(
     get_settings_fn,
     build_codex_runtime_fn,
     tenant_project_keys_fn,
+    resolve_codex_working_dir_fn,
     normalize_scope_channel_id_fn,
     channel_scope_repository,
     answer_board_question_with_codex_fn,
@@ -50,6 +52,13 @@ def ask_board_message(
         tenant=tenant,
         project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
     )
+    codex_working_dir = resolve_codex_working_dir_fn(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        project_id=None,
+        project_keys=scoped_project_keys,
+    )
     try:
         message = answer_board_question_with_codex_fn(
             runtime=runtime,
@@ -57,6 +66,15 @@ def ask_board_message(
             project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
             issues=issues,
             status_counts=status_counts,
+            invocation_context=CodexInvocationContext(
+                channel="discord",
+                tenant_id=tenant.tenant_id,
+                project_id=None,
+                command="ask",
+                stage="answer",
+                working_dir=codex_working_dir,
+                issue_key=scoped_issue_key,
+            ),
             history=history_context,
             github_context=github_context,
         )

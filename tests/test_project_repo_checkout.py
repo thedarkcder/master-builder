@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 from orchestrator.tools.project_repo_checkout import (
     ProjectRepoCheckoutError,
+    _github_git_extraheader,
     collect_local_repo_context,
     ensure_project_checkout,
     project_repo_dir,
@@ -38,8 +40,25 @@ def test_ensure_project_checkout_clones_when_repo_missing() -> None:
         assert calls[0][0][3] == "https://github.com/example/repo.git"
         assert "token-123" not in " ".join(calls[0][0])
         assert calls[0][2] is not None
-        assert calls[0][2]["GIT_CONFIG_VALUE_0"] == "Authorization: Bearer token-123"
+        assert calls[0][2]["GIT_CONFIG_VALUE_0"].startswith("AUTHORIZATION: basic ")
+        encoded_credential = calls[0][2]["GIT_CONFIG_VALUE_0"].split(" ", 2)[2]
+        decoded_credential = base64.b64decode(encoded_credential).decode("utf-8")
+        assert decoded_credential == "x-access-token:token-123"
         assert calls[1][0][:3] == ("remote", "set-url", "origin")
+        assert (repo_dir / "AGENTS.md").exists()
+        assert (repo_dir / ".codex").is_dir()
+        exclude_lines = (repo_dir / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+        assert "AGENTS.md" in exclude_lines
+        assert ".codex/" in exclude_lines
+
+
+def test_github_git_extraheader_uses_basic_auth_with_x_access_token() -> None:
+    header = _github_git_extraheader("token-xyz")
+    assert header.startswith("AUTHORIZATION: basic ")
+    encoded = header.split(" ", 2)[2]
+    decoded = base64.b64decode(encoded).decode("utf-8")
+    assert decoded == "x-access-token:token-xyz"
+    assert "Bearer" not in header
 
 
 def test_collect_local_repo_context_returns_not_cloned_when_missing() -> None:

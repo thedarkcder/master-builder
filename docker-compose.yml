@@ -16,37 +16,11 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
-  packages:
-    image: pypiserver/pypiserver:latest
-    container_name: master-builder-packages
-    environment:
-      PACKAGE_INDEX_USERNAME: ${PACKAGE_INDEX_USERNAME:-tenant}
-      PACKAGE_INDEX_PASSWORD: ${PACKAGE_INDEX_PASSWORD:?Set PACKAGE_INDEX_PASSWORD}
-    ports:
-      - "4401:4401"
-    entrypoint:
-      - /bin/sh
-      - -ceu
-      - |
-        mkdir -p /data/packages
-        printf "%s:%s\n" "$${PACKAGE_INDEX_USERNAME}" "$${PACKAGE_INDEX_PASSWORD}" > /tmp/.htpasswd
-        exec pypi-server --hash-algo off run -p 4401 -P /tmp/.htpasswd -a update,download,list /data/packages
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - python -c "import socket; s = socket.create_connection(('127.0.0.1', 4401), 2); s.close()"
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    volumes:
-      - packages-data:/data/packages
-
   api:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your package index URL}
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-api
     environment:
@@ -56,30 +30,40 @@ services:
       ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:4100,http://127.0.0.1:4100}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
-      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.5}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
     ports:
       - "4000:4000"
     depends_on:
       postgres:
         condition: service_healthy
-      packages:
-        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000
     volumes:
       - codex-home:/root/.codex
+      - project-repos:/tmp/master-builder-project-repos
         
   worker:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:?Set PIP_EXTRA_INDEX_URL to your package index URL}
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-worker
     depends_on:
@@ -93,17 +77,28 @@ services:
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
-      ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION: ${ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION:-0.1.5}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
-    command: ["sh", "-c", "python -m orchestrator migrate && python -m orchestrator worker"]
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator worker
     volumes:
       - codex-home:/root/.codex
+      - project-repos:/tmp/master-builder-project-repos
 
   admin-ui:
     build:
@@ -155,7 +150,7 @@ services:
 
 volumes:
   postgres-data:
-  packages-data:
   tailscale-state:
   runner-data:
   codex-home:
+  project-repos:

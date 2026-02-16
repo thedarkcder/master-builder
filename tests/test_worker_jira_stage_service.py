@@ -88,6 +88,24 @@ class WorkerJiraStageServiceTests(unittest.TestCase):
             )
         client.add_issue_comment.assert_called_once()
 
+    def test_posts_comment_for_review_feedback_stage(self) -> None:
+        connection = SimpleNamespace(cloud_id="cloud-1")
+        client = MagicMock()
+        self.session.get.return_value = connection
+        with (
+            patch("orchestrator.core.worker.jira_stage_service.refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.core.worker.jira_stage_service.jira_oauth_client", return_value=client),
+        ):
+            send_stage_update_to_jira(
+                session=self.session,
+                tenant=self.tenant,
+                issue_key="TP-1",
+                stage="review_feedback",
+                message="review says rewrite",
+                settings=self.settings,
+            )
+        client.add_issue_comment.assert_called_once()
+
     def test_catches_refresh_or_client_errors(self) -> None:
         from orchestrator.tools.jira_oauth import JiraOAuthError
 
@@ -105,4 +123,3 @@ class WorkerJiraStageServiceTests(unittest.TestCase):
                 message="failed",
                 settings=self.settings,
             )
-

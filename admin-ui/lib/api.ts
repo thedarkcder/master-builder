@@ -11,7 +11,6 @@ export type JiraConfig = {
 };
 
 export type GithubConfig = {
-  mode: string;
   webhook_secret_ref: string | null;
   installation_id: string | null;
 };
@@ -181,6 +180,8 @@ export type RunRecord = {
   tenant_id: string;
   project_id: string | null;
   issue_key: string;
+  issue_summary: string | null;
+  issue_url: string | null;
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
@@ -190,6 +191,27 @@ export type RunRecord = {
   started_at: string | null;
   finished_at: string | null;
   plan: Record<string, unknown> | null;
+};
+
+export type RunEventRecord = {
+  event_type: string;
+  run_id: string;
+  issue_key: string | null;
+  project_id: string | null;
+  agent_id: string;
+  recorded_at: string;
+};
+
+export type RunLogEventRecord = {
+  run_id: string;
+  issue_key: string | null;
+  project_id: string | null;
+  agent_id: string;
+  stage: string;
+  attempt: number | null;
+  stream: string;
+  message: string;
+  recorded_at: string;
 };
 
 export type ManagedSecretRecord = {
@@ -539,7 +561,17 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
 
 export function listRuns(
   credentials: Credentials,
-  params: { tenantId?: string; projectId?: string; status?: string }
+  params: {
+    tenantId?: string;
+    projectId?: string;
+    status?: string;
+    issue?: string;
+    prState?: "none" | "has_value";
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+  }
 ): Promise<RunRecord[]> {
   const query = new URLSearchParams();
   if (params.tenantId) {
@@ -551,12 +583,122 @@ export function listRuns(
   if (params.status) {
     query.set("status", params.status);
   }
+  if (params.issue) {
+    query.set("issue", params.issue);
+  }
+  if (params.prState) {
+    query.set("pr_state", params.prState);
+  }
+  if (params.from) {
+    query.set("from", params.from);
+  }
+  if (params.to) {
+    query.set("to", params.to);
+  }
+  if (typeof params.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return request<RunRecord[]>(credentials, `/api/admin/runs${suffix}`);
 }
 
 export function getRun(credentials: Credentials, runId: string): Promise<RunRecord> {
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
+}
+
+export function rerunRun(credentials: Credentials, runId: string): Promise<RunRecord> {
+  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/rerun`, {
+    method: "POST"
+  });
+}
+
+export function cancelRun(credentials: Credentials, runId: string): Promise<RunRecord> {
+  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST"
+  });
+}
+
+export function listRunEvents(
+  credentials: Credentials,
+  runId: string,
+  params: { limit?: number } = {}
+): Promise<RunEventRecord[]> {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<RunEventRecord[]>(
+    credentials,
+    `/api/admin/runs/${encodeURIComponent(runId)}/events${suffix}`
+  );
+}
+
+export function listRunLogs(
+  credentials: Credentials,
+  runId: string,
+  params: { limit?: number } = {}
+): Promise<RunLogEventRecord[]> {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<RunLogEventRecord[]>(
+    credentials,
+    `/api/admin/runs/${encodeURIComponent(runId)}/logs${suffix}`
+  );
+}
+
+export async function streamRunEvents(
+  credentials: Credentials,
+  runId: string,
+  onEvent: (event: RunEventRecord | (RunLogEventRecord & { event_kind?: string })) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const base = credentials.apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/admin/runs/${encodeURIComponent(runId)}/events/stream`, {
+    method: "GET",
+    headers: {
+      Authorization: authHeader(credentials),
+      Accept: "application/x-ndjson"
+    },
+    signal
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`${response.status}: unable to open run event stream`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line) {
+          try {
+            const payload = JSON.parse(line) as RunEventRecord;
+            onEvent(payload);
+          } catch {
+            // Ignore malformed stream lines.
+          }
+        }
+        newline = buffer.indexOf("\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export function listManagedSecrets(credentials: Credentials): Promise<ManagedSecretRecord[]> {

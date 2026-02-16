@@ -24,10 +24,10 @@ class JiraConfig(BaseModel):
     webhook_last_received_at: str | None = None
     webhook_last_delivery_id: str | None = None
     webhook_last_issue_key: str | None = None
+    webhook_last_event: str | None = None
 
 
 class GithubConfig(BaseModel):
-    mode: str = Field(default="github_app", min_length=1)
     webhook_secret_ref: str | None = None
     installation_id: str | None = None
 
@@ -37,14 +37,12 @@ class ReposConfig(BaseModel):
     allowlist: list[str] = Field(default_factory=list)
     mapping_rules_by_project_key: dict[str, str] = Field(default_factory=dict)
     mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
-    fallback_repo: str | None = None
 
 
 class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
     allow_label_mutations: bool = True
-    max_runtime_minutes: int = 30
     max_dev_test_review_loops: int = 2
     max_concurrent_runs: int = 2
     allowed_commands: list[str] = Field(default_factory=list)
@@ -250,6 +248,8 @@ class RunRead(BaseModel):
     tenant_id: str
     project_id: str | None
     issue_key: str
+    issue_summary: str | None = None
+    issue_url: str | None = None
     repo_url: str | None
     branch: str | None
     pr_url: str | None
@@ -259,6 +259,31 @@ class RunRead(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class RunEventRead(BaseModel):
+    event_type: str
+    run_id: str
+    issue_key: str | None = None
+    project_id: str | None = None
+    agent_id: str
+    recorded_at: datetime
+
+
+class RunLogEventRead(BaseModel):
+    run_id: str | None = None
+    issue_key: str | None = None
+    project_id: str | None = None
+    agent_id: str
+    invocation_id: str | None = None
+    channel: str | None = None
+    command: str | None = None
+    working_dir: str | None = None
+    stage: str
+    attempt: int | None = None
+    stream: str
+    message: str
+    recorded_at: datetime
 
 
 class AgentEventRead(BaseModel):

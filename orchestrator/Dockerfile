@@ -11,10 +11,8 @@ ENV ANDROID_HOME=/opt/android-sdk
 ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools"
 
-ARG PIP_EXTRA_INDEX_URL=""
 ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708
 ARG CODEX_NPM_VERSION=latest
-ENV PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}
 
 WORKDIR /app
 
@@ -47,14 +45,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -rf /var/lib/apt/lists/* /tmp/android-cmdline-tools.zip
 
 COPY pyproject.toml README.md ./
+COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip && \
-    test -n "$PIP_EXTRA_INDEX_URL" && \
-    PIP_TRUSTED_HOST="$(echo "$PIP_EXTRA_INDEX_URL" | sed -E 's#^[a-zA-Z]+://([^/@]+@)?([^/:]+).*#\2#')" && \
-    pip install --trusted-host "$PIP_TRUSTED_HOST" .[codex_assets]
+    pip install .
 
 RUN mkdir -p /app/data
 

@@ -18,7 +18,6 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "allow_jira_transitions": True,
                 "allow_pr_creation": False,
                 "allow_label_mutations": "nope",
-                "max_runtime_minutes": "15",
                 "max_dev_test_review_loops": 0,
                 "max_concurrent_runs": "bad",
                 "allowed_commands": [" run ", "", "  ", "retry"],
@@ -29,7 +28,6 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(normalized["allow_jira_transitions"], True)
         self.assertEqual(normalized["allow_pr_creation"], False)
         self.assertNotIn("allow_label_mutations", normalized)
-        self.assertEqual(normalized["max_runtime_minutes"], 15)
         self.assertEqual(normalized["max_dev_test_review_loops"], 1)
         self.assertNotIn("max_concurrent_runs", normalized)
         self.assertEqual(normalized["allowed_commands"], ["run", "retry"])
@@ -41,7 +39,6 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "allow_jira_transitions": True,
                 "allow_pr_creation": True,
                 "allow_label_mutations": True,
-                "max_runtime_minutes": 60,
                 "max_dev_test_review_loops": 10,
                 "max_concurrent_runs": 8,
                 "allowed_commands": ["run", "retry"],
@@ -49,7 +46,6 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             },
             project_overrides={
                 "allow_pr_creation": False,
-                "max_runtime_minutes": 15,
                 "max_dev_test_review_loops": 999,
                 "max_concurrent_runs": 3,
                 "allowed_commands": ["retry", "cancel"],
@@ -57,7 +53,6 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             },
         )
         self.assertEqual(effective["allow_pr_creation"], False)
-        self.assertEqual(effective["max_runtime_minutes"], 15)
         self.assertEqual(effective["max_dev_test_review_loops"], 10)
         self.assertEqual(effective["max_concurrent_runs"], 3)
         self.assertEqual(effective["allowed_commands"], ["retry"])
