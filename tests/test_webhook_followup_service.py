@@ -131,6 +131,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
         service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        transport.send_ask_with_thread.side_effect = DiscordApiError("thread unavailable")
         transport.send_interaction_followup.side_effect = DiscordInteractionWebhookExpiredError("Unknown Webhook")
 
         asyncio.run(
@@ -144,6 +145,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
+        transport.send_ask_with_thread.assert_called_once()
         transport.send_interaction_followup.assert_called_once()
         transport.send_thread_reply.assert_called_once()
         kwargs = transport.send_thread_reply.call_args.kwargs
@@ -173,9 +175,43 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        transport.send_interaction_followup.assert_called_once()
-        sent_content = transport.send_interaction_followup.call_args.kwargs["content"]
+        transport.send_ask_with_thread.assert_called_once()
+        sent_content = transport.send_ask_with_thread.call_args.kwargs["content"]
         self.assertIn("ask confirmation payload was incomplete", sent_content)
+
+    def test_command_followup_ask_confirmation_uses_thread_transport_with_components(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(
+            return_value=SimpleNamespace(
+                command="ask",
+                message="Needs approval",
+                data={
+                    "requires_confirmation": True,
+                    "summary": "Review command",
+                    "request_id": "req-1",
+                    "proposed_command": "!issues TEST-1",
+                },
+            )
+        )
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!ask please",
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        transport.send_ask_with_thread.assert_called_once()
+        self.assertEqual(
+            transport.send_ask_with_thread.call_args.kwargs["components"],
+            [{"type": 1, "request_id": "req-1"}],
+        )
 
     def test_command_followup_falls_back_to_reply_components_when_thread_send_fails(self) -> None:
         session = MagicMock()
@@ -218,7 +254,8 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        sent_content = transport.send_interaction_followup.call_args.kwargs["content"]
+        transport.send_ask_with_thread.assert_called_once()
+        sent_content = transport.send_ask_with_thread.call_args.kwargs["content"]
         self.assertIn("Command failed: bad request", sent_content)
 
     def test_command_followup_disabled_tenant(self) -> None:
@@ -261,7 +298,8 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
 
         emit_mock.assert_called_once()
-        sent_content = transport.send_interaction_followup.call_args.kwargs["content"]
+        transport.send_ask_with_thread.assert_called_once()
+        sent_content = transport.send_ask_with_thread.call_args.kwargs["content"]
         self.assertIn("Ref:", sent_content)
 
     def test_command_followup_resets_log_context_when_settings_factory_fails(self) -> None:

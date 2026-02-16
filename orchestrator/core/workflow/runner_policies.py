@@ -17,6 +17,7 @@ def evaluate_placeholder_policy(
     review_result,
     pr_url: str,
     attempts: int,
+    terminal: bool,
     history: list[dict[str, str]],
     failure_factory,
 ):  # noqa: ANN001
@@ -48,13 +49,19 @@ def evaluate_placeholder_policy(
                 "event": f"placeholder_detected_tracked:{key_summary}",
             }
         )
+        message = (
+            "Placeholder content detected; tracked follow-up issue(s) present "
+            f"({key_summary}). Remove placeholders before final approval."
+        )
+        if terminal:
+            message = (
+                "Placeholder content detected; tracked follow-up issue(s) present "
+                f"({key_summary}). Run must remain blocked until placeholders are removed."
+            )
         return failure_factory(
             plan=None,
             stage="review",
-            message=(
-                "Placeholder content detected; tracked follow-up issue(s) present "
-                f"({key_summary}). Run must remain blocked until placeholders are removed."
-            ),
+            message=message,
             attempts=attempts,
             history=history,
             request=request,
@@ -64,6 +71,20 @@ def evaluate_placeholder_policy(
     history.append(
         {"stage": "review", "attempt": str(attempts), "event": "placeholder_detected_untracked"}
     )
+    if not terminal:
+        return failure_factory(
+            plan=None,
+            stage="review",
+            message=(
+                "Placeholder content detected without tracked follow-up issue. "
+                "Remove placeholders or cite a tracked issue key in review context."
+            ),
+            attempts=attempts,
+            history=history,
+            request=request,
+            skip_auto_follow_up=True,
+        )
+
     draft = build_backlog_follow_up_draft(
         title=f"Follow-up for {request.issue_key}: remove placeholder implementation(s)",
         why_it_matters=(
