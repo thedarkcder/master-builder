@@ -69,7 +69,6 @@ from orchestrator.api.schemas import (
     JiraWebhookActionResult,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.enforcement_context import validate_enforcement_assets
 from orchestrator.core.project_policy import normalize_project_policy_overrides
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform_secret_service import (
@@ -164,7 +163,6 @@ def validate_codex_assets_for_tenant_init() -> None:
     _validate_codex_assets_for_tenant_init_impl(
         settings=get_settings(),
         module_file=__file__,
-        validate_enforcement_assets_fn=validate_enforcement_assets,
     )
 
 
