@@ -185,6 +185,7 @@ export type RunRecord = {
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
+  codex_session_id: string | null;
   status: string;
   last_error: string | null;
   created_at: string;
@@ -207,6 +208,9 @@ export type RunLogEventRecord = {
   issue_key: string | null;
   project_id: string | null;
   agent_id: string;
+  invocation_id?: string | null;
+  channel?: string | null;
+  command?: string | null;
   working_dir: string | null;
   stage: string;
   attempt: number | null;

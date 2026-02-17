@@ -76,6 +76,8 @@ def _infer_required_worker_capability_with_codex(
                 working_dir=".",
                 issue_key=issue_key,
                 run_id=run_id,
+                reasoning_effort="low",
+                issue_description_chars=len(issue_description or ""),
             ),
             system_prompt=render_prompt("policy/worker_capability_system.j2"),
             user_prompt=render_prompt(
