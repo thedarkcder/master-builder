@@ -21,6 +21,27 @@ import {
   type RunRecord
 } from "@/lib/api";
 
+type InvocationTelemetry = {
+  event_kind: string;
+  status?: string;
+  duration_ms?: number;
+  resumed_session?: boolean;
+  codex_session_id?: string;
+};
+
+type InvocationSessionRow = {
+  key: string;
+  stage: string;
+  attempt: number | null;
+  invocationId: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  status: string | null;
+  durationMs: number | null;
+  resumedSession: boolean | null;
+  codexSessionId: string | null;
+};
+
 function isAbortLikeError(error: unknown): boolean {
   const message = (error as Error)?.message?.toLowerCase() ?? "";
   return message.includes("aborted");
@@ -44,6 +65,34 @@ function statusBadge(status: string) {
     return <Badge variant="secondary">{status}</Badge>;
   }
   return <Badge variant="outline">{status}</Badge>;
+}
+
+function parseTelemetryPayload(message: string): InvocationTelemetry | null {
+  try {
+    const payload = JSON.parse(message) as InvocationTelemetry;
+    if (typeof payload !== "object" || payload === null) {
+      return null;
+    }
+    const eventKind = String(payload.event_kind ?? "").trim();
+    if (!eventKind) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function stageFromCommand(command: string | null | undefined): string {
+  const value = String(command ?? "").trim();
+  if (!value) {
+    return "unknown";
+  }
+  const idx = value.lastIndexOf(".");
+  if (idx < 0 || idx === value.length - 1) {
+    return value;
+  }
+  return value.slice(idx + 1);
 }
 
 export default function RunDetailPage() {
@@ -241,6 +290,65 @@ export default function RunDetailPage() {
       }),
     [logs, logAgentFilter, logStageFilter, logStreamFilter]
   );
+  const invocationSessionRows = useMemo(() => {
+    const telemetryRows = logs
+      .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
+      .slice()
+      .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+    const byInvocation = new Map<string, InvocationSessionRow>();
+    for (const entry of telemetryRows) {
+      const payload = parseTelemetryPayload(entry.message);
+      if (!payload) {
+        continue;
+      }
+      if (payload.event_kind !== "stage_invocation_started" && payload.event_kind !== "stage_invocation_finished") {
+        continue;
+      }
+      const invocationId = String(entry.invocation_id ?? "").trim() || `unknown-${entry.recorded_at}-${entry.command ?? ""}`;
+      const stage = stageFromCommand(entry.command);
+      const current =
+        byInvocation.get(invocationId) ??
+        ({
+          key: invocationId,
+          stage,
+          attempt: entry.attempt ?? null,
+          invocationId,
+          startedAt: null,
+          finishedAt: null,
+          status: null,
+          durationMs: null,
+          resumedSession: null,
+          codexSessionId: null
+        } satisfies InvocationSessionRow);
+      if (payload.event_kind === "stage_invocation_started") {
+        current.startedAt = entry.recorded_at;
+      }
+      if (payload.event_kind === "stage_invocation_finished") {
+        current.finishedAt = entry.recorded_at;
+        current.status = payload.status ? String(payload.status) : current.status;
+        current.durationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : current.durationMs;
+      }
+      if (typeof payload.resumed_session === "boolean") {
+        current.resumedSession = payload.resumed_session;
+      }
+      if (payload.codex_session_id) {
+        current.codexSessionId = String(payload.codex_session_id);
+      }
+      byInvocation.set(invocationId, current);
+    }
+    return Array.from(byInvocation.values()).sort((a, b) => {
+      const aTime = new Date(a.startedAt ?? a.finishedAt ?? 0).getTime();
+      const bTime = new Date(b.startedAt ?? b.finishedAt ?? 0).getTime();
+      return bTime - aTime;
+    });
+  }, [logs]);
+  const latestCodexSessionId = useMemo(() => {
+    const fromTimeline = invocationSessionRows.find((row) => row.codexSessionId)?.codexSessionId;
+    if (fromTimeline) {
+      return fromTimeline;
+    }
+    return run?.codex_session_id ?? null;
+  }, [invocationSessionRows, run?.codex_session_id]);
   const codePath = useMemo(() => {
     for (let idx = logs.length - 1; idx >= 0; idx -= 1) {
       const value = logs[idx]?.working_dir?.trim();
@@ -319,6 +427,14 @@ export default function RunDetailPage() {
                 <strong>Branch:</strong> {run.branch ?? "None"}
               </p>
               <p className="md:col-span-2">
+                <strong>Codex session:</strong>{" "}
+                {latestCodexSessionId ? (
+                  <code className="rounded bg-muted px-1 py-0.5 text-xs">{latestCodexSessionId}</code>
+                ) : (
+                  "Not established yet"
+                )}
+              </p>
+              <p className="md:col-span-2">
                 <strong>Repository:</strong>{" "}
                 {run.repo_url ? (
                   <Link className="text-primary hover:underline" href={run.repo_url} target="_blank" rel="noopener noreferrer">
@@ -378,6 +494,37 @@ export default function RunDetailPage() {
                         <strong>{String(entry.stage ?? "unknown_stage")}</strong>
                       </p>
                       <p className="text-muted-foreground">{String(entry.recorded_at ?? "")}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded-md border bg-muted/20 p-3">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Codex session timeline
+              </p>
+              {invocationSessionRows.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
+              ) : (
+                <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
+                  {invocationSessionRows.map((row) => (
+                    <li key={row.key} className="rounded border p-2">
+                      <p>
+                        <strong>{row.stage}</strong>
+                        {row.attempt !== null ? ` #${row.attempt}` : ""} ·{" "}
+                        <strong>
+                          {row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}
+                        </strong>
+                        {row.durationMs !== null ? ` · ${row.durationMs}ms` : ""}
+                        {row.status ? ` · ${row.status}` : ""}
+                      </p>
+                      <p className="text-muted-foreground">
+                        start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish:{" "}
+                        {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}
+                      </p>
+                      <p className="break-all text-muted-foreground">
+                        session: {row.codexSessionId ?? "n/a"} · invocation: {row.invocationId}
+                      </p>
                     </li>
                   ))}
                 </ul>

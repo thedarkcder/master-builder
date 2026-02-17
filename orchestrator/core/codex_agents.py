@@ -69,6 +69,8 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 run_id=request.run_id,
                 attempt=attempt,
+                reasoning_effort="medium",
+                issue_description_chars=len(request.issue_description or ""),
             ),
             system_prompt=render_prompt("workflow/pm_system.j2"),
             user_prompt=render_prompt(
@@ -145,6 +147,8 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 run_id=request.run_id,
                 attempt=attempt,
+                reasoning_effort="medium",
+                issue_description_chars=len(request.issue_description or ""),
             ),
             system_prompt=render_prompt("workflow/dev_system.j2"),
             user_prompt=render_prompt(
@@ -202,6 +206,8 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 run_id=request.run_id,
                 attempt=attempt,
+                reasoning_effort="medium",
+                issue_description_chars=len(request.issue_description or ""),
             ),
             system_prompt=render_prompt("workflow/test_system.j2"),
             user_prompt=render_prompt(
@@ -256,6 +262,8 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 run_id=request.run_id,
                 attempt=attempt,
+                reasoning_effort="medium",
+                issue_description_chars=len(request.issue_description or ""),
             ),
             system_prompt=render_prompt("workflow/review_system.j2"),
             user_prompt=render_prompt(

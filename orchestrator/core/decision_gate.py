@@ -96,6 +96,8 @@ def _evaluate_decision_gate_with_codex(
                 working_dir=".",
                 issue_key=issue_key,
                 run_id=run_id,
+                reasoning_effort="low",
+                issue_description_chars=len(issue_description or ""),
             ),
             system_prompt=render_prompt("policy/decision_gate_system.j2"),
             user_prompt=render_prompt(

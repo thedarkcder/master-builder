@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5-codex"
     codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
-    codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "all"
+    codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "errors_only"
+    codex_db_log_sampling_interval: int = 100
+    codex_raw_log_path: str = "/tmp/orchestrator-codex.ndjson"
     codex_max_output_tokens: int = 1800
     codex_hang_detection_quiet_seconds: int = 300
     codex_hang_detection_report_interval_seconds: int = 120

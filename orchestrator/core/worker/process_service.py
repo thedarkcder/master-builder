@@ -1,9 +1,44 @@
 from __future__ import annotations
 
+import json
+from uuid import uuid4
+
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.worker_capabilities import parse_worker_capabilities
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
+
+
+def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: str) -> None:  # noqa: ANN001
+    if run.started_at is None or run.created_at is None:
+        return
+    wait_ms = max(0, int((run.started_at - run.created_at).total_seconds() * 1000))
+    record_run_log_event(
+        session=session,
+        tenant_id=run.tenant_id,
+        project_id=project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
+        invocation_id=uuid4().hex,
+        channel="worker",
+        command="workflow.queue_wait",
+        working_dir=None,
+        stage="telemetry",
+        attempt=None,
+        stream="system",
+        message=json.dumps(
+            {
+                "event_kind": "queue_wait",
+                "queue_wait_ms": wait_ms,
+                "created_at": run.created_at.isoformat(),
+                "started_at": run.started_at.isoformat(),
+            },
+            sort_keys=True,
+        ),
+    )
+    session.commit()
 
 
 def process_next_queued_run(
@@ -116,6 +151,12 @@ def process_next_queued_run(
         project_overrides=project.policy_overrides,
     )
     start_run_fn(session, run=run)
+    _emit_queue_wait_metric(
+        session=session,
+        run=run,
+        project_id=project.project_id,
+        agent_id=agent_id,
+    )
     if bool(effective_policy.get("allow_jira_transitions")):
         transition_issue_status_fn(
             session=session,

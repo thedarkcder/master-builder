@@ -524,8 +524,26 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth),
         ):
             runtime = build_codex_runtime(settings=settings)
-            with self.assertRaises(CodexRuntimeError):
+            with self.assertRaises(CodexRuntimeError) as exc_info:
                 runtime.run_text(system_prompt="s", user_prompt="u")
+            self.assertIn("docker compose run --rm worker codex login --device-auth", str(exc_info.exception))
+
+        def fake_popen_auth_with_link(args, **kwargs):  # noqa: ANN001
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(
+                args[output_idx],
+                returncode=1,
+                stderr_lines=["auth required https://auth.openai.com/device/abc123\n"],
+            )
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth_with_link),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            with self.assertRaises(CodexRuntimeError) as exc_info:
+                runtime.run_text(system_prompt="s", user_prompt="u")
+            self.assertIn("https://auth.openai.com/device/abc123", str(exc_info.exception))
 
         def fake_popen_boom(args, **kwargs):  # noqa: ANN001
             output_idx = args.index("--output-last-message") + 1
@@ -550,6 +568,67 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):
                 runtime.run_text(system_prompt="s", user_prompt="u")
+
+    def test_cli_resume_uses_session_id_and_parses_json_response(self) -> None:
+        settings = self._settings()
+
+        class _FakePipe:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = list(lines)
+                self._index = 0
+
+            def readline(self) -> str:
+                if self._index >= len(self._lines):
+                    return ""
+                line = self._lines[self._index]
+                self._index += 1
+                return line
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe(
+                    [
+                        '{"type":"session_meta","payload":{"id":"11111111-2222-3333-4444-555555555555"}}\n',
+                        '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"resume-output"}]}}\n',
+                    ]
+                )
+                self.stderr = _FakePipe([])
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", return_value=_FakePopen()) as popen_mock,
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            captured_session_ids: list[str] = []
+            output = runtime.run_text(
+                system_prompt="s",
+                user_prompt="u",
+                resume_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+            self.assertEqual(output, "resume-output")
+            call_args = list(popen_mock.call_args.args[0])
+            self.assertEqual(call_args[:4], ["codex", "exec", "resume", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"])
+            self.assertIn("--json", call_args)
+            self.assertNotIn("--output-last-message", call_args)
+            self.assertEqual(captured_session_ids, ["11111111-2222-3333-4444-555555555555"])
 
 
 if __name__ == "__main__":
