@@ -25,9 +25,14 @@ class Settings(BaseSettings):
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5-codex"
     codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
+    codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "all"
     codex_max_output_tokens: int = 1800
     codex_hang_detection_quiet_seconds: int = 300
     codex_hang_detection_report_interval_seconds: int = 120
+    codex_log_batch_size: int = 50
+    codex_log_batch_flush_ms: int = 50
+    run_events_initial_limit: int = 100
+    run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
     worker_poll_interval_seconds: int = 5
     auto_migrate_on_startup: bool = True

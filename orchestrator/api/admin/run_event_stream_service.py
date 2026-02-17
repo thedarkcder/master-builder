@@ -23,11 +23,14 @@ def stream_run_events_ndjson(
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
+    initial_event_limit = max(1, min(int(getattr(settings, "run_events_initial_limit", 100)), 500))
+    initial_log_limit = max(1, min(int(getattr(settings, "run_logs_initial_limit", 200)), 1000))
+
     initial_rows = session.execute(
         select(AgentLifecycleEvent)
         .where(AgentLifecycleEvent.run_id == run_id)
         .order_by(desc(AgentLifecycleEvent.recorded_at), desc(AgentLifecycleEvent.event_id))
-        .limit(200)
+        .limit(initial_event_limit)
     ).scalars().all()
     for row in reversed(initial_rows):
         yield (
@@ -48,7 +51,7 @@ def stream_run_events_ndjson(
         select(RunLogEvent)
         .where(RunLogEvent.run_id == run_id)
         .order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id))
-        .limit(500)
+        .limit(initial_log_limit)
     ).scalars().all()
     for row in reversed(initial_logs):
         yield (

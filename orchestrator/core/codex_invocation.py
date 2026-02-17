@@ -11,7 +11,7 @@ from uuid import uuid4
 from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.codex_telemetry import build_codex_log_sink
-from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
 from orchestrator.storage.db import create_session_factory
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,9 @@ class _AsyncCodexLogWriter:
         self._worker = threading.Thread(target=self._run, daemon=True, name="codex-log-writer")
         self._worker.start()
         self._dropped = 0
+        settings = get_settings()
+        self._batch_size = max(1, int(getattr(settings, "codex_log_batch_size", 50)))
+        self._batch_flush_ms = max(1, int(getattr(settings, "codex_log_batch_flush_ms", 50)))
 
     def enqueue(self, *, context: CodexInvocationContext, stream: str, message: str) -> bool:
         invocation_id = str(context.invocation_id or "").strip()
@@ -94,29 +97,47 @@ class _AsyncCodexLogWriter:
                 item = self._queue.get(timeout=0.2)
             except Empty:
                 continue
-            invocation_id = str(item.context.invocation_id or "").strip()
+            items = [item]
+            flush_deadline = time.monotonic() + (self._batch_flush_ms / 1000.0)
+            while len(items) < self._batch_size:
+                timeout = max(0.0, flush_deadline - time.monotonic())
+                if timeout <= 0:
+                    break
+                try:
+                    items.append(self._queue.get(timeout=timeout))
+                except Empty:
+                    break
+            invocation_ids = {
+                str(queued.context.invocation_id or "").strip()
+                for queued in items
+                if str(queued.context.invocation_id or "").strip()
+            }
             try:
-                _persist_codex_log_line(context=item.context, stream=item.stream, message=item.message)
+                _persist_codex_log_lines(items=items)
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
-                    "codex_log_persist_failed tenant_id=%s run_id=%s channel=%s command=%s stage=%s error=%s",
-                    item.context.tenant_id,
-                    item.context.run_id,
-                    item.context.channel,
-                    item.context.command,
-                    item.context.stage,
+                    "codex_log_persist_failed batch_size=%s invocation_count=%s error=%s",
+                    len(items),
+                    len(invocation_ids),
                     exc,
                 )
             finally:
-                if invocation_id:
-                    with self._pending_cond:
+                with self._pending_cond:
+                    for invocation_id in invocation_ids:
                         current = self._pending_counts.get(invocation_id, 0)
-                        if current <= 1:
+                        decremented = sum(
+                            1
+                            for queued in items
+                            if str(queued.context.invocation_id or "").strip() == invocation_id
+                        )
+                        remaining = current - decremented
+                        if remaining <= 0:
                             self._pending_counts.pop(invocation_id, None)
                         else:
-                            self._pending_counts[invocation_id] = current - 1
-                        self._pending_cond.notify_all()
-                self._queue.task_done()
+                            self._pending_counts[invocation_id] = remaining
+                    self._pending_cond.notify_all()
+                for _ in items:
+                    self._queue.task_done()
 
 
 _log_writer: _AsyncCodexLogWriter | None = None
@@ -226,4 +247,60 @@ def _persist_codex_log_line(*, context: CodexInvocationContext, stream: str, mes
             stream=stream,
             message=message,
         )
+        session.commit()
+
+
+def _persist_codex_log_lines(*, items: list[_QueuedLogLine]) -> None:
+    if not items:
+        return
+    settings = get_settings()
+    session_factory = create_session_factory(database_url=settings.database_url)
+    with session_factory() as session:
+        batched_events: list[dict[str, object]] = []
+        for item in items:
+            tenant_id = str(item.context.tenant_id or "").strip()
+            if not tenant_id:
+                continue
+            batched_events.append(
+                {
+                    "tenant_id": tenant_id,
+                    "project_id": item.context.project_id,
+                    "run_id": item.context.run_id,
+                    "issue_key": item.context.issue_key,
+                    "agent_id": settings.agent_id,
+                    "invocation_id": str(item.context.invocation_id or "").strip(),
+                    "channel": item.context.channel,
+                    "command": f"{item.context.command}.{item.context.stage}",
+                    "working_dir": item.context.working_dir,
+                    "stage": item.context.stage,
+                    "attempt": item.context.attempt,
+                    "stream": item.stream,
+                    "message": item.message,
+                }
+            )
+        if not batched_events:
+            return
+        if len(batched_events) == 1:
+            single = batched_events[0]
+            record_run_log_event(
+                session=session,
+                tenant_id=str(single["tenant_id"]),
+                project_id=single["project_id"] if isinstance(single["project_id"], str) else None,
+                run_id=single["run_id"] if isinstance(single["run_id"], str) else None,
+                issue_key=single["issue_key"] if isinstance(single["issue_key"], str) else None,
+                agent_id=str(single["agent_id"]),
+                invocation_id=single["invocation_id"] if isinstance(single["invocation_id"], str) else None,
+                channel=single["channel"] if isinstance(single["channel"], str) else None,
+                command=single["command"] if isinstance(single["command"], str) else None,
+                working_dir=single["working_dir"] if isinstance(single["working_dir"], str) else None,
+                stage=str(single["stage"]),
+                attempt=single["attempt"] if isinstance(single["attempt"], int) else None,
+                stream=str(single["stream"]),
+                message=str(single["message"]),
+            )
+        else:
+            record_run_log_events_batch(
+                session=session,
+                events=batched_events,
+            )
         session.commit()
