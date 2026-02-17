@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import desc, select
+from datetime import datetime
+
+from sqlalchemy import and_, desc, or_, select
 from fastapi import HTTPException, status
 
 from orchestrator.core.project_policy import resolve_effective_policy
@@ -179,16 +181,38 @@ def list_run_events(*, session, run_id: str, run_model, run_event_schema_cls, li
     ]
 
 
-def list_run_log_events(*, session, run_id: str, run_model, run_log_schema_cls, limit: int = 500):  # noqa: ANN001
+def list_run_log_events(
+    *,
+    session,
+    run_id: str,
+    run_model,
+    run_log_schema_cls,
+    limit: int = 200,
+    before_recorded_at: datetime | None = None,
+    before_event_id: str | None = None,
+):  # noqa: ANN001
     run = session.get(run_model, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-    log_rows = session.execute(
-        select(RunLogEvent)
-        .where(RunLogEvent.run_id == run_id)
-        .order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id))
-        .limit(max(1, min(limit, 2000)))
-    ).scalars().all()
+    query = select(RunLogEvent).where(RunLogEvent.run_id == run_id)
+    normalized_before_event_id = str(before_event_id or "").strip()
+    if before_recorded_at is not None:
+        if normalized_before_event_id:
+            query = query.where(
+                or_(
+                    RunLogEvent.recorded_at < before_recorded_at,
+                    and_(
+                        RunLogEvent.recorded_at == before_recorded_at,
+                        RunLogEvent.event_id < normalized_before_event_id,
+                    ),
+                )
+            )
+        else:
+            query = query.where(RunLogEvent.recorded_at < before_recorded_at)
+    query = query.order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id)).limit(
+        max(1, min(limit, 1000))
+    )
+    log_rows = session.execute(query).scalars().all()
     return [
         run_log_schema_cls(
             run_id=row.run_id,

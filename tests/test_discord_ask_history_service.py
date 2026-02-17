@@ -44,7 +44,7 @@ def test_store_and_consume_pending_ask_action_roundtrip() -> None:
     assert session.commits == 2
 
 
-def test_collect_ask_context_with_history_context_does_not_infer_scope_from_history() -> None:
+def test_collect_ask_context_with_history_context_infers_scope_from_history() -> None:
     service = DiscordAskHistoryService()
     session = _Session()
     tenant = _tenant(
@@ -63,7 +63,7 @@ def test_collect_ask_context_with_history_context_does_not_infer_scope_from_hist
     )
 
     def _collect(**kwargs):  # type: ignore[no-untyped-def]
-        assert kwargs["scoped_issue_key"] is None
+        assert kwargs["scoped_issue_key"] == "example-46"
         return None, None, [{"key": "example-46", "summary": "x", "status": "Testing"}], {"Testing": 1}
 
     result = service.collect_ask_context_with_history_context(

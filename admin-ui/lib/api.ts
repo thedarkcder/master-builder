@@ -207,6 +207,7 @@ export type RunLogEventRecord = {
   issue_key: string | null;
   project_id: string | null;
   agent_id: string;
+  working_dir: string | null;
   stage: string;
   attempt: number | null;
   stream: string;
@@ -640,11 +641,17 @@ export function listRunEvents(
 export function listRunLogs(
   credentials: Credentials,
   runId: string,
-  params: { limit?: number } = {}
+  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string } = {}
 ): Promise<RunLogEventRecord[]> {
   const query = new URLSearchParams();
   if (params.limit) {
     query.set("limit", String(params.limit));
+  }
+  if (params.beforeRecordedAt) {
+    query.set("before_recorded_at", params.beforeRecordedAt);
+  }
+  if (params.beforeEventId) {
+    query.set("before_event_id", params.beforeEventId);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return request<RunLogEventRecord[]>(

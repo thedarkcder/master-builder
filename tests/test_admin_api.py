@@ -2,7 +2,7 @@ import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -1092,6 +1092,107 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len(body), 1)
         self.assertEqual(body[0]["run_id"], "run-log-1")
         self.assertEqual(body[0]["message"], "hello from codex")
+
+    def test_list_run_logs_supports_cursor_pagination(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-log-page",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-504",
+                    issue_summary="event log page run",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="running",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                )
+            )
+            session.flush()
+            record_run_log_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-log-page",
+                issue_key="TP-504",
+                agent_id="worker-logs",
+                invocation_id="inv-run-log-page",
+                channel="worker",
+                command="workflow.dev",
+                working_dir="/tmp/repo",
+                stage="dev",
+                attempt=1,
+                stream="stdout",
+                message="line-1",
+                recorded_at=now - timedelta(seconds=2),
+            )
+            record_run_log_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-log-page",
+                issue_key="TP-504",
+                agent_id="worker-logs",
+                invocation_id="inv-run-log-page",
+                channel="worker",
+                command="workflow.dev",
+                working_dir="/tmp/repo",
+                stage="dev",
+                attempt=1,
+                stream="stdout",
+                message="line-2",
+                recorded_at=now - timedelta(seconds=1),
+            )
+            record_run_log_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-log-page",
+                issue_key="TP-504",
+                agent_id="worker-logs",
+                invocation_id="inv-run-log-page",
+                channel="worker",
+                command="workflow.dev",
+                working_dir="/tmp/repo",
+                stage="dev",
+                attempt=1,
+                stream="stdout",
+                message="line-3",
+                recorded_at=now,
+            )
+            session.commit()
+
+        first_page = self.client.get(
+            "/api/admin/runs/run-log-page/logs?limit=2",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(first_page.status_code, 200)
+        first_body = first_page.json()
+        self.assertEqual([entry["message"] for entry in first_body], ["line-3", "line-2"])
+
+        second_page = self.client.get(
+            f"/api/admin/runs/run-log-page/logs?limit=2&before_recorded_at={quote_plus(first_body[-1]['recorded_at'])}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(second_page.status_code, 200)
+        second_body = second_page.json()
+        self.assertEqual([entry["message"] for entry in second_body], ["line-1"])
 
     def test_stream_run_events_returns_ndjson_snapshot(self) -> None:
         payload = self._tenant_payload()
