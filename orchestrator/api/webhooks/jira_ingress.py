@@ -1186,14 +1186,6 @@ async def ingest_jira_webhook_event(
             context.issue_key,
             enqueue_result.run.run_id,
         )
-        required_worker_capability = pre_check.required_worker_capability
-        run_plan = dict(enqueue_result.run.plan or {})
-        run_plan["required_worker_capability"] = required_worker_capability
-        run_plan["required_worker_label"] = worker_label_for_capability(required_worker_capability)
-        enqueue_result.run.plan = run_plan
-        session.commit()
-        session.refresh(enqueue_result.run)
-
         return jira_webhook_response(
             context,
             enqueued=True,
