@@ -304,8 +304,6 @@ def build_codex_runtime(
                     "resume",
                     normalized_resume_session_id,
                     "--skip-git-repo-check",
-                    "--sandbox",
-                    settings.codex_sandbox_mode,
                     "-c",
                     f'reasoning.effort="{normalized_reasoning_effort}"',
                     "--model",
