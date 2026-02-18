@@ -185,7 +185,7 @@ export type RunRecord = {
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
-  codex_session_id: string | null;
+  dev_session_id: string | null;
   pm_session_id: string | null;
   status: string;
   last_error: string | null;

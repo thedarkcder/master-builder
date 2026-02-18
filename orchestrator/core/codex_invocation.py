@@ -272,7 +272,7 @@ def _session_column_for_context(*, context: CodexInvocationContext) -> str | Non
     if stage == _WORKFLOW_STAGE_PM:
         return "pm_session_id"
     if stage in _WORKFLOW_EXECUTION_STAGES:
-        return "codex_session_id"
+        return "dev_session_id"
     return None
 
 

@@ -160,11 +160,11 @@ class CodexInvocationTests(unittest.TestCase):
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(runtime_call["resume_session_id"], None)
-        load_mock.assert_called_with(run_id="run-1", session_column="codex_session_id")
+        load_mock.assert_called_with(run_id="run-1", session_column="dev_session_id")
         persist_mock.assert_called_with(
             run_id="run-1",
             session_id="bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
-            session_column="codex_session_id",
+            session_column="dev_session_id",
         )
 
 
