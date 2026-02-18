@@ -502,8 +502,8 @@ export default function RunDetailPage() {
     if (fromTimeline) {
       return fromTimeline;
     }
-    return run?.codex_session_id ?? null;
-  }, [invocationSessionRows, run?.codex_session_id]);
+    return run?.dev_session_id ?? null;
+  }, [invocationSessionRows, run?.dev_session_id]);
   const workflowDiagnostics = useMemo(() => {
     if (!isRecord(run?.plan)) {
       return null;
