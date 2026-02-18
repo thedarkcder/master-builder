@@ -183,7 +183,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(popen_mock.call_args.kwargs["cwd"], "/tmp/repo")
             call_args = list(popen_mock.call_args.args[0])
-            self.assertNotIn("--sandbox", call_args)
+            sandbox_idx = call_args.index("--sandbox") + 1
+            self.assertEqual(call_args[sandbox_idx], "workspace-write")
             config_idx = call_args.index("-c") + 1
             self.assertEqual(call_args[config_idx], 'reasoning.effort="medium"')
 
@@ -646,6 +647,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             self.assertEqual(output, "resume-output")
             call_args = list(popen_mock.call_args.args[0])
             self.assertEqual(call_args[:4], ["codex", "exec", "resume", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"])
+            sandbox_idx = call_args.index("--sandbox") + 1
+            self.assertEqual(call_args[sandbox_idx], "workspace-write")
             self.assertIn("--json", call_args)
             self.assertNotIn("--output-last-message", call_args)
             self.assertEqual(captured_session_ids, ["11111111-2222-3333-4444-555555555555"])
