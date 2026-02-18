@@ -856,27 +856,35 @@ export default function RunDetailPage() {
             </div>
             <div className="rounded-md border bg-muted/40 p-3">
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent final outputs</p>
-              <div className="grid gap-3 md:grid-cols-2">
+              <ul className="space-y-2 text-xs">
                 {agentOutcomes.map((outcome) => (
-                  <div key={outcome.stage} className="rounded border bg-background p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{outcome.label}</p>
+                  <li
+                    key={outcome.stage}
+                    className="rounded border bg-background p-3"
+                    style={{ borderLeft: `3px solid ${stageColor(outcome.stage)}` }}
+                  >
+                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {outcome.label} final output
+                    </p>
                     {outcome.items.length === 0 ? (
                       <p className="text-xs text-muted-foreground">{outcome.emptyText}</p>
                     ) : (
-                      <ul className="space-y-1 text-xs">
+                      <div className="space-y-1">
                         {outcome.items.map((item, idx) => (
-                          <li key={`${outcome.stage}-item-${idx}`}>- {item}</li>
+                          <p key={`${outcome.stage}-item-${idx}`} className="whitespace-pre-wrap">
+                            {item}
+                          </p>
                         ))}
-                      </ul>
+                      </div>
                     )}
                     {outcome.feedback ? (
                       <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
                         Feedback: {outcome.feedback}
                       </p>
                     ) : null}
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
               {workflowDiagnostics ? (
                 <div className="mt-3 rounded border bg-background p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Terminal diagnostics</p>
