@@ -27,6 +27,9 @@ type InvocationTelemetry = {
   duration_ms?: number;
   resumed_session?: boolean;
   codex_session_id?: string;
+  queue_wait_ms?: number;
+  created_at?: string;
+  started_at?: string;
 };
 
 type InvocationSessionRow = {
@@ -40,6 +43,17 @@ type InvocationSessionRow = {
   durationMs: number | null;
   resumedSession: boolean | null;
   codexSessionId: string | null;
+};
+
+type TimelineSegment = {
+  key: string;
+  label: string;
+  stage: string;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  color: string;
+  detail: string;
 };
 
 function isAbortLikeError(error: unknown): boolean {
@@ -93,6 +107,38 @@ function stageFromCommand(command: string | null | undefined): string {
     return value;
   }
   return value.slice(idx + 1);
+}
+
+function formatDuration(durationMs: number): string {
+  const normalized = Math.max(0, Math.floor(durationMs));
+  const totalSeconds = Math.floor(normalized / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function stageColor(stage: string): string {
+  switch (stage) {
+    case "queue_wait":
+      return "#94a3b8";
+    case "pm":
+      return "#0ea5e9";
+    case "dev":
+      return "#22c55e";
+    case "test":
+      return "#f59e0b";
+    case "review":
+      return "#ef4444";
+    default:
+      return "#64748b";
+  }
 }
 
 export default function RunDetailPage() {
@@ -349,6 +395,90 @@ export default function RunDetailPage() {
     }
     return run?.codex_session_id ?? null;
   }, [invocationSessionRows, run?.codex_session_id]);
+  const runTimeline = useMemo(() => {
+    if (!run) {
+      return null;
+    }
+    const telemetryRows = logs
+      .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
+      .slice()
+      .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+    let queueWaitMs = 0;
+    for (const entry of telemetryRows) {
+      const payload = parseTelemetryPayload(entry.message);
+      if (!payload || payload.event_kind !== "queue_wait") {
+        continue;
+      }
+      if (typeof payload.queue_wait_ms === "number" && payload.queue_wait_ms >= 0) {
+        queueWaitMs = payload.queue_wait_ms;
+      }
+    }
+    const createdMs = run.created_at ? new Date(run.created_at).getTime() : NaN;
+    const startedMs = run.started_at ? new Date(run.started_at).getTime() : NaN;
+    const finishedMs = run.finished_at ? new Date(run.finished_at).getTime() : NaN;
+    const nowMs = Date.now();
+
+    const segments: TimelineSegment[] = [];
+    if (Number.isFinite(createdMs) && Number.isFinite(startedMs) && startedMs > createdMs) {
+      const waitDurationMs = queueWaitMs > 0 ? queueWaitMs : startedMs - createdMs;
+      const queueEnd = createdMs + waitDurationMs;
+      segments.push({
+        key: "queue_wait",
+        label: "Queue Wait",
+        stage: "queue_wait",
+        startMs: createdMs,
+        endMs: Math.max(createdMs + 1, queueEnd),
+        durationMs: Math.max(1, waitDurationMs),
+        color: stageColor("queue_wait"),
+        detail: "Queued before task start",
+      });
+    }
+
+    for (const row of invocationSessionRows) {
+      if (!row.startedAt || !row.finishedAt) {
+        continue;
+      }
+      const startMs = new Date(row.startedAt).getTime();
+      const endMs = new Date(row.finishedAt).getTime();
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+        continue;
+      }
+      segments.push({
+        key: `stage-${row.invocationId}`,
+        label: row.stage.toUpperCase(),
+        stage: row.stage,
+        startMs,
+        endMs,
+        durationMs: endMs - startMs,
+        color: stageColor(row.stage),
+        detail: `${row.resumedSession ? "resumed session" : "new session"}${row.attempt !== null ? ` · attempt ${row.attempt}` : ""}`,
+      });
+    }
+
+    if (segments.length === 0) {
+      return null;
+    }
+    const minStartMs = Math.min(...segments.map((segment) => segment.startMs));
+    const maxEndMs = Math.max(
+      ...segments.map((segment) => segment.endMs),
+      Number.isFinite(finishedMs) ? finishedMs : 0,
+      nowMs
+    );
+    const totalMs = Math.max(1, maxEndMs - minStartMs);
+    const resumedCount = invocationSessionRows.filter((row) => row.resumedSession === true).length;
+    const stageMs = segments
+      .filter((segment) => segment.stage !== "queue_wait")
+      .reduce((sum, segment) => sum + segment.durationMs, 0);
+    return {
+      segments: segments.sort((a, b) => a.startMs - b.startMs),
+      minStartMs,
+      maxEndMs,
+      totalMs,
+      queueWaitMs,
+      stageMs,
+      resumedCount,
+    };
+  }, [invocationSessionRows, logs, run]);
   const codePath = useMemo(() => {
     for (let idx = logs.length - 1; idx >= 0; idx -= 1) {
       const value = logs[idx]?.working_dir?.trim();
@@ -497,6 +627,68 @@ export default function RunDetailPage() {
                     </li>
                   ))}
                 </ul>
+              )}
+            </div>
+            <div className="rounded-md border bg-muted/20 p-3">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Run timeline</p>
+              {!runTimeline ? (
+                <p className="text-xs text-muted-foreground">Timeline data will appear as soon as telemetry events are captured.</p>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid gap-2 md:grid-cols-4">
+                    <div className="rounded border bg-background p-2 text-xs">
+                      <p className="text-muted-foreground">Total window</p>
+                      <p className="font-semibold">{formatDuration(runTimeline.totalMs)}</p>
+                    </div>
+                    <div className="rounded border bg-background p-2 text-xs">
+                      <p className="text-muted-foreground">Queue wait</p>
+                      <p className="font-semibold">{formatDuration(runTimeline.queueWaitMs)}</p>
+                    </div>
+                    <div className="rounded border bg-background p-2 text-xs">
+                      <p className="text-muted-foreground">Stage runtime</p>
+                      <p className="font-semibold">{formatDuration(runTimeline.stageMs)}</p>
+                    </div>
+                    <div className="rounded border bg-background p-2 text-xs">
+                      <p className="text-muted-foreground">Resumed stages</p>
+                      <p className="font-semibold">{runTimeline.resumedCount}</p>
+                    </div>
+                  </div>
+                  <div className="rounded border bg-background p-2">
+                    <div className="relative h-10 overflow-hidden rounded bg-muted/50">
+                      {runTimeline.segments.map((segment) => {
+                        const leftPct = ((segment.startMs - runTimeline.minStartMs) / runTimeline.totalMs) * 100;
+                        const widthPct = Math.max(1, (segment.durationMs / runTimeline.totalMs) * 100);
+                        return (
+                          <div
+                            key={segment.key}
+                            className="absolute top-0 h-10 text-[10px] font-semibold text-white"
+                            style={{
+                              left: `${leftPct}%`,
+                              width: `${widthPct}%`,
+                              backgroundColor: segment.color
+                            }}
+                            title={`${segment.label}: ${formatDuration(segment.durationMs)} (${segment.detail})`}
+                          >
+                            <span className="block truncate px-1 pt-3">{segment.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <ul className="space-y-1 text-xs">
+                    {runTimeline.segments.map((segment) => (
+                      <li key={`meta-${segment.key}`} className="flex flex-wrap items-center gap-2">
+                        <span
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{ backgroundColor: segment.color }}
+                        />
+                        <span className="font-semibold">{segment.label}</span>
+                        <span className="text-muted-foreground">{formatDuration(segment.durationMs)}</span>
+                        <span className="text-muted-foreground">{segment.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
             <div className="rounded-md border bg-muted/20 p-3">
