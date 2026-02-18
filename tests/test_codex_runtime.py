@@ -183,8 +183,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(popen_mock.call_args.kwargs["cwd"], "/tmp/repo")
             call_args = list(popen_mock.call_args.args[0])
-            sandbox_idx = call_args.index("--sandbox") + 1
-            self.assertEqual(call_args[sandbox_idx], "workspace-write")
+            self.assertNotIn("--sandbox", call_args)
             config_idx = call_args.index("-c") + 1
             self.assertEqual(call_args[config_idx], 'reasoning.effort="medium"')
 
