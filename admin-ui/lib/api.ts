@@ -186,6 +186,7 @@ export type RunRecord = {
   branch: string | null;
   pr_url: string | null;
   codex_session_id: string | null;
+  pm_session_id: string | null;
   status: string;
   last_error: string | null;
   created_at: string;
