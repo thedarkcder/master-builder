@@ -19,7 +19,10 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             project_id="project-1",
         )
         effective_policy = {"max_dev_test_review_loops": 1, "allowed_commands": []}
-        settings = SimpleNamespace(project_repo_checkout_base_dir=checkout_base_dir)
+        settings = SimpleNamespace(
+            project_repo_checkout_base_dir=checkout_base_dir,
+            worker_capabilities="linux",
+        )
         return tenant, run, effective_policy, settings
 
     def test_build_workflow_request_requires_project_context(self) -> None:
@@ -71,6 +74,8 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 settings=settings,
             )
             self.assertEqual(request.execution_repo_dir, str(checkout_dir))
+            self.assertEqual(request.current_worker_capability, "linux")
+            self.assertEqual(request.available_worker_capabilities, ["linux"])
 
 
 if __name__ == "__main__":

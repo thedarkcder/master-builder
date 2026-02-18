@@ -17,6 +17,8 @@ Last test guidance: {{ last_test_guidance_json }}
 Last review approved: {{ last_review_approved }}
 Last review feedback: {{ last_review_feedback }}
 Last review summary: {{ last_review_summary_json }}
+Current worker capability: {{ current_worker_capability }}
+Available worker capabilities: {{ available_worker_capabilities_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
 Agent tool command: {{ agent_tool_command }}
 
@@ -28,9 +30,13 @@ Required actions:
 5. Decide next stage:
    - Use "dev" if code changes are still needed.
    - Use "test" only when prior dev output is sufficient and we should retest/validate.
+6. Choose execution worker capability for implementation stages (dev/test/review):
+   - Output "macos" for iOS/macOS/Xcode/Simulator execution needs.
+   - Output "linux" for backend/web/infra work that does not need macOS tooling.
 
 Output contract:
 - plan_steps: array of concrete execution steps.
 - acceptance_criteria: array of observable outcomes.
 - risks: array of explicit risks.
 - next_stage: "dev" or "test".
+- execution_worker_capability: "linux" or "macos".

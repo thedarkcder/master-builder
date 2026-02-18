@@ -508,6 +508,38 @@ class WorkflowRunnerTests(unittest.TestCase):
             ],
         )
 
+    def test_pm_selected_execution_capability_mismatch_blocks_before_dev(self) -> None:
+        agents = _FakeAgents()
+        agents.pm_results_by_attempt[1] = PmPlan(
+            plan_steps=["Plan implementation"],
+            acceptance_criteria=["Feature implemented"],
+            risks=[],
+            next_stage="dev",
+            execution_worker_capability="macos",
+        )
+        request = self._request(loops=1)
+        request = WorkflowRequest(
+            tenant_id=request.tenant_id,
+            run_id=request.run_id,
+            issue_key=request.issue_key,
+            issue_summary=request.issue_summary,
+            issue_description=request.issue_description,
+            max_dev_test_review_loops=request.max_dev_test_review_loops,
+            suggested_test_commands=request.suggested_test_commands,
+            execution_repo_dir=request.execution_repo_dir,
+            project_id=request.project_id,
+            current_worker_capability="linux",
+            available_worker_capabilities=["linux"],
+        )
+
+        result = WorkflowRunner(agents).run(request)
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "pm")
+        self.assertIn("Execution capability mismatch", result.diagnostics.message)
+        self.assertEqual(agents.calls, ["pm:1:-"])
+
     def test_placeholder_without_tracked_followup_blocks_with_draft_followup(self) -> None:
         agents = _FakeAgents()
         agents.review_results_by_attempt[1] = ReviewResult(
