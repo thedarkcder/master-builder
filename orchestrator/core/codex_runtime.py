@@ -128,7 +128,22 @@ def _extract_json_payload(content: str) -> object:
         try:
             return json.loads(candidate)
         except json.JSONDecodeError as exc:
-            raise CodexRuntimeError(f"Invalid JSON payload from Codex runtime: {exc}") from exc
+            last_line_error: json.JSONDecodeError | None = exc
+            last_dict_payload: dict | None = None
+            for line in stripped.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed_line = json.loads(line)
+                except json.JSONDecodeError as line_exc:
+                    last_line_error = line_exc
+                    continue
+                if isinstance(parsed_line, dict):
+                    last_dict_payload = parsed_line
+            if last_dict_payload is not None:
+                return last_dict_payload
+            raise CodexRuntimeError(f"Invalid JSON payload from Codex runtime: {last_line_error}") from exc
 
     raise CodexRuntimeError("Codex runtime response did not include JSON")
 
@@ -185,10 +200,16 @@ def _extract_last_message_from_json_stdout(lines: list[str]) -> str | None:
             continue
         event_type = str(payload.get("type") or "").strip().lower()
         event_payload = payload.get("payload")
+        item_payload = payload.get("item")
         if event_type == "event_msg" and isinstance(event_payload, dict):
             msg_type = str(event_payload.get("type") or "").strip().lower()
             if msg_type == "agent_message":
                 message = str(event_payload.get("message") or "").strip()
+                if message:
+                    last_message = message
+        if event_type == "item.completed" and isinstance(item_payload, dict):
+            if str(item_payload.get("type") or "").strip().lower() == "agent_message":
+                message = str(item_payload.get("text") or "").strip()
                 if message:
                     last_message = message
         if event_type != "response_item" or not isinstance(event_payload, dict):
