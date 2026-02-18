@@ -10,6 +10,7 @@ from orchestrator.core.codex_runtime import (
     CodexRuntime,
     CodexRuntimeError,
     _extract_json_payload,
+    _extract_session_id_from_json_line,
     build_codex_runtime,
 )
 
@@ -25,6 +26,20 @@ class ExtractJsonPayloadTests(unittest.TestCase):
             _extract_json_payload("```json\\n{bad}\\n```")
         with self.assertRaises(CodexRuntimeError):
             _extract_json_payload("no json here")
+
+    def test_extract_session_id_from_json_line_accepts_thread_and_session_meta(self) -> None:
+        self.assertEqual(
+            _extract_session_id_from_json_line(
+                '{"type":"thread.started","thread_id":"11111111-2222-3333-4444-555555555555"}'
+            ),
+            "11111111-2222-3333-4444-555555555555",
+        )
+        self.assertEqual(
+            _extract_session_id_from_json_line(
+                '{"type":"session_meta","payload":{"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}'
+            ),
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        )
 
 
 class CodexRuntimeTests(unittest.TestCase):
@@ -599,7 +614,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 self.stdin = _FakeStdin()
                 self.stdout = _FakePipe(
                     [
-                        '{"type":"session_meta","payload":{"id":"11111111-2222-3333-4444-555555555555"}}\n',
+                        '{"type":"thread.started","thread_id":"11111111-2222-3333-4444-555555555555"}\n',
                         '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"resume-output"}]}}\n',
                     ]
                 )
