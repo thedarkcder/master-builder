@@ -648,6 +648,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             call_args = list(popen_mock.call_args.args[0])
             self.assertEqual(call_args[:4], ["codex", "exec", "resume", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"])
             self.assertNotIn("--sandbox", call_args)
+            self.assertIn("--full-auto", call_args)
             self.assertIn("--json", call_args)
             self.assertNotIn("--output-last-message", call_args)
             self.assertEqual(captured_session_ids, ["11111111-2222-3333-4444-555555555555"])
@@ -705,6 +706,62 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 resume_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             )
             self.assertEqual(payload, {"decision_gate_required": False, "reason": "ok"})
+
+    def test_cli_resume_uses_danger_flag_for_danger_full_access(self) -> None:
+        settings = self._settings()
+        settings.codex_sandbox_mode = "danger-full-access"
+
+        class _FakePipe:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = list(lines)
+                self._index = 0
+
+            def readline(self) -> str:
+                if self._index >= len(self._lines):
+                    return ""
+                line = self._lines[self._index]
+                self._index += 1
+                return line
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe(
+                    [
+                        '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}\n',
+                    ]
+                )
+                self.stderr = _FakePipe([])
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", return_value=_FakePopen()) as popen_mock,
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            output = runtime.run_text(
+                system_prompt="s",
+                user_prompt="u",
+                resume_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            )
+            self.assertEqual(output, "ok")
+            call_args = list(popen_mock.call_args.args[0])
+            self.assertIn("--dangerously-bypass-approvals-and-sandbox", call_args)
 
 
 if __name__ == "__main__":

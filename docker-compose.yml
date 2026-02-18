@@ -58,7 +58,7 @@ services:
         uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
     volumes:
       - codex-home:/root/.codex
-      - project-repos:/tmp/master-builder-project-repos
+      - ./.workdirs:/tmp/master-builder-project-repos
         
   worker:
     build:
@@ -99,7 +99,7 @@ services:
         python -m orchestrator worker
     volumes:
       - codex-home:/root/.codex
-      - project-repos:/tmp/master-builder-project-repos
+      - ./.workdirs:/tmp/master-builder-project-repos
 
   discord-gateway:
     build:
@@ -116,12 +116,19 @@ services:
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY: ${ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY:-947102033127}
       ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS:-3}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
     command:
       - /bin/sh
       - -ceu
       - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
         python -m orchestrator discord-gateway
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
 
   admin-ui:
     build:
@@ -176,4 +183,3 @@ volumes:
   tailscale-state:
   runner-data:
   codex-home:
-  project-repos:

@@ -99,6 +99,21 @@ def process_next_queued_run(
     tenant = selection.tenant
     agent_id = resolve_agent_id_fn()
 
+    started_run = start_run_fn(
+        session,
+        run=run,
+        expected_status=run_status_queued,
+    )
+    if started_run is None:
+        logger.info(
+            "worker_skipping_run_already_claimed run_id=%s tenant_id=%s issue_key=%s",
+            run.run_id,
+            run.tenant_id,
+            run.issue_key,
+        )
+        return None
+    run = started_run
+
     emit_agent_event_fn(
         event_type="ISSUE_ASSIGNED",
         tenant_id=run.tenant_id,
@@ -170,7 +185,6 @@ def process_next_queued_run(
         tenant_policy=tenant.policy_config,
         project_overrides=project.policy_overrides,
     )
-    start_run_fn(session, run=run)
     _emit_queue_wait_metric(
         session=session,
         run=run,
