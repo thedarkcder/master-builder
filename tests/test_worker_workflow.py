@@ -356,6 +356,21 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             self.assertTrue(retry_enqueue.enqueued)
 
+    def test_process_next_queued_run_fails_and_releases_lock_on_decision_gate_exception(self) -> None:
+        run_id = self._queue_run("TP-3021")
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.worker.execution_service.apply_decision_gate",
+            side_effect=RuntimeError("decision gate parse failed"),
+        ):
+            processed = process_next_queued_run(session, _SuccessRunner())
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "failed")
+            self.assertIn("Decision Gate evaluation failed: decision gate parse failed", processed.last_error or "")
+            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3021"})
+            self.assertIsNone(lock)
+
     def test_decision_gate_notification_includes_reply_components(self) -> None:
         run_id = self._queue_run(
             "TP-399",

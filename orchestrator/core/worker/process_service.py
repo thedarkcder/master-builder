@@ -108,17 +108,31 @@ def process_next_queued_run(
         agent_id=agent_id,
     )
 
-    decision_gate_run, decision_gate_meta = apply_decision_gate_fn(
-        session=session,
-        run=run,
-        tenant=tenant,
-        settings=settings,
-        send_discord_message_fn=send_discord_message_fn,
-        send_jira_message_fn=send_jira_message_fn,
-        ask_reply_components_fn=ask_reply_components_fn,
-        blocked_status=run_status_blocked,
-        failed_status=run_status_failed,
-    )
+    try:
+        decision_gate_run, decision_gate_meta = apply_decision_gate_fn(
+            session=session,
+            run=run,
+            tenant=tenant,
+            settings=settings,
+            send_discord_message_fn=send_discord_message_fn,
+            send_jira_message_fn=send_jira_message_fn,
+            ask_reply_components_fn=ask_reply_components_fn,
+            blocked_status=run_status_blocked,
+            failed_status=run_status_failed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "worker_decision_gate_failed run_id=%s tenant_id=%s issue_key=%s error=%s",
+            run.run_id,
+            run.tenant_id,
+            run.issue_key,
+            exc,
+        )
+        return fail_guardrail_violation_fn(
+            session,
+            run=run,
+            error=f"Decision Gate evaluation failed: {exc}",
+        )
     if decision_gate_run is not None:
         if decision_gate_meta and isinstance(decision_gate_meta.get("send_result"), object):
             send_result = decision_gate_meta["send_result"]
