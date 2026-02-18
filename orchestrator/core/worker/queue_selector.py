@@ -60,7 +60,7 @@ def select_next_queued_run(
 
     for candidate in queued_runs:
         required_capability = required_worker_capability_for_run(candidate)
-        if required_capability not in allowed_capabilities:
+        if required_capability is not None and required_capability not in allowed_capabilities:
             logger.info(
                 "worker_skipping_run_due_to_capability_mismatch run_id=%s tenant_id=%s issue_key=%s required=%s available=%s",
                 candidate.run_id,
