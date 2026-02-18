@@ -20,6 +20,8 @@ class WorkflowRequest:
     suggested_test_commands: list[str] = field(default_factory=list)
     execution_repo_dir: str | None = None
     project_id: str | None = None
+    current_worker_capability: str = "linux"
+    available_worker_capabilities: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class PmPlan:
     acceptance_criteria: list[str]
     risks: list[str]
     next_stage: str = "dev"
+    execution_worker_capability: str = "linux"
 
 
 @dataclass(frozen=True)
@@ -191,6 +194,27 @@ class WorkflowRunner:
                     stage="pm",
                     message=f"PM stage blocked: {pm_blocker}",
                     attempts=attempt - 1,
+                    history=history,
+                    request=request,
+                )
+            current_worker_capability = _normalize_worker_capability(request.current_worker_capability)
+            execution_worker_capability = _normalize_worker_capability(plan.execution_worker_capability)
+            if execution_worker_capability != current_worker_capability:
+                mismatch_event = (
+                    "execution_capability_mismatch:"
+                    f"required={execution_worker_capability},"
+                    f"current={current_worker_capability}"
+                )
+                history.append({"stage": "pm", "attempt": str(attempt), "event": mismatch_event})
+                return self._failure(
+                    plan=plan,
+                    stage="pm",
+                    message=(
+                        "Execution capability mismatch: PM selected "
+                        f"{execution_worker_capability} but current worker is {current_worker_capability}. "
+                        f"Requeue on worker:{execution_worker_capability} before dev/test/review."
+                    ),
+                    attempts=attempt,
                     history=history,
                     request=request,
                 )
@@ -490,3 +514,12 @@ def _extract_first_blocker(entries: list[str | None]) -> str | None:
         if text.lower().startswith("blocked:"):
             return text
     return None
+
+
+def _normalize_worker_capability(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"mac", "darwin", "osx"}:
+        return "macos"
+    if normalized in {"linux", "macos"}:
+        return normalized
+    return "linux"
