@@ -316,8 +316,6 @@ def build_codex_runtime(
                     codex_command,
                     "exec",
                     "--skip-git-repo-check",
-                    "--sandbox",
-                    settings.codex_sandbox_mode,
                     "-c",
                     f'reasoning.effort="{normalized_reasoning_effort}"',
                     "--color",
