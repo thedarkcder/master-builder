@@ -296,6 +296,7 @@ def build_codex_runtime(
         normalized_resume_session_id = str(resume_session_id or "").strip()
         session_callback_invoked = False
         command: list[str]
+        normalized_sandbox_mode = str(settings.codex_sandbox_mode or "").strip().lower()
         with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", suffix=".txt") as output_file:
             if normalized_resume_session_id:
                 command = [
@@ -304,13 +305,21 @@ def build_codex_runtime(
                     "resume",
                     normalized_resume_session_id,
                     "--skip-git-repo-check",
-                    "-c",
-                    f'reasoning.effort="{normalized_reasoning_effort}"',
-                    "--model",
-                    settings.codex_model,
-                    "--json",
-                    "-",
                 ]
+                if normalized_sandbox_mode == "danger-full-access":
+                    command.append("--dangerously-bypass-approvals-and-sandbox")
+                elif normalized_sandbox_mode == "workspace-write":
+                    command.append("--full-auto")
+                command.extend(
+                    [
+                        "-c",
+                        f'reasoning.effort="{normalized_reasoning_effort}"',
+                        "--model",
+                        settings.codex_model,
+                        "--json",
+                        "-",
+                    ]
+                )
             else:
                 command = [
                     codex_command,

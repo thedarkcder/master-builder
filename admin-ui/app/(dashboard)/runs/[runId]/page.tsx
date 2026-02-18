@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
@@ -71,6 +71,9 @@ type ChatTimelineEntry = {
   text: string;
   kind: "message" | "reasoning" | "status" | "error";
 };
+type RunPanelTab = "overview" | "outputs" | "sessions" | "diagnostics" | "raw";
+type AgentStage = "pm" | "dev" | "test" | "review";
+const CHAT_PAGE_SIZE = 40;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -265,6 +268,10 @@ export default function RunDetailPage() {
   const [logStreamFilter, setLogStreamFilter] = useState("all");
   const [loadingOlderLogs, setLoadingOlderLogs] = useState(false);
   const [hasMoreLogs, setHasMoreLogs] = useState(false);
+  const [activePanel, setActivePanel] = useState<RunPanelTab>("overview");
+  const [chatVisibleCount, setChatVisibleCount] = useState(CHAT_PAGE_SIZE);
+  const [chatAutoScroll, setChatAutoScroll] = useState(true);
+  const chatListRef = useRef<HTMLUListElement | null>(null);
 
   const loadRun = useCallback(async () => {
     if (!credentials) {
@@ -532,10 +539,7 @@ export default function RunDetailPage() {
     };
   }, [run?.plan]);
   const agentOutcomes = useMemo(() => {
-    if (!isRecord(run?.plan)) {
-      return [];
-    }
-    const planRoot = run.plan;
+    const planRoot = isRecord(run?.plan) ? run.plan : {};
     const workflowPlan = isRecord(planRoot["plan"]) ? planRoot["plan"] : null;
     const pmItems = [
       ...toStringList(workflowPlan?.["plan_steps"]),
@@ -584,6 +588,66 @@ export default function RunDetailPage() {
       }
     ];
   }, [run?.plan, workflowDiagnostics?.history]);
+  const stageLiveSnapshots = useMemo(() => {
+    const snapshots = new Map<AgentStage, { recordedAt: string; text: string }>();
+    const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
+    const ordered = logs
+      .slice()
+      .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+    for (const entry of ordered) {
+      const stage = String(entry.stage ?? "").trim().toLowerCase() as AgentStage;
+      if (!validStages.has(stage)) {
+        continue;
+      }
+      const parsed = parseRunLogChatText(entry);
+      if (!parsed) {
+        continue;
+      }
+      if (parsed.kind !== "message" && parsed.kind !== "reasoning" && parsed.kind !== "error") {
+        continue;
+      }
+      if (!parsed.text.trim()) {
+        continue;
+      }
+      snapshots.set(stage, { recordedAt: entry.recorded_at, text: parsed.text.trim() });
+    }
+    return snapshots;
+  }, [logs]);
+  const stageProgress = useMemo(() => {
+    const stages: Record<AgentStage, { status: "not_started" | "running" | "completed"; detail: string }> = {
+      pm: { status: "not_started", detail: "not started" },
+      dev: { status: "not_started", detail: "not started" },
+      test: { status: "not_started", detail: "not started" },
+      review: { status: "not_started", detail: "not started" }
+    };
+    const timeOf = (value: string | null): number => (value ? new Date(value).getTime() : 0);
+    for (const row of invocationSessionRows) {
+      const stage = String(row.stage ?? "").trim().toLowerCase() as AgentStage;
+      if (!(stage in stages)) {
+        continue;
+      }
+      const current = stages[stage];
+      const rowRank = Math.max(timeOf(row.finishedAt), timeOf(row.startedAt));
+      const currentRank = current.detail === "not started" ? 0 : Number(current.detail.split("::")[0] || 0);
+      if (rowRank < currentRank) {
+        continue;
+      }
+      if (row.finishedAt) {
+        const duration = row.durationMs !== null ? `${formatDuration(row.durationMs)}` : "completed";
+        stages[stage] = { status: "completed", detail: `${rowRank}::completed · ${duration}` };
+      } else if (row.startedAt) {
+        const startMs = new Date(row.startedAt).getTime();
+        const runningMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
+        stages[stage] = { status: "running", detail: `${rowRank}::running · ${formatDuration(runningMs)}` };
+      }
+    }
+    for (const key of Object.keys(stages) as AgentStage[]) {
+      const rawDetail = stages[key].detail;
+      const trimmed = rawDetail.includes("::") ? rawDetail.split("::")[1] : rawDetail;
+      stages[key] = { ...stages[key], detail: trimmed };
+    }
+    return stages;
+  }, [invocationSessionRows]);
   const runTimeline = useMemo(() => {
     if (!run) {
       return null;
@@ -624,14 +688,15 @@ export default function RunDetailPage() {
     }
 
     for (const row of invocationSessionRows) {
-      if (!row.startedAt || !row.finishedAt) {
+      if (!row.startedAt) {
         continue;
       }
       const startMs = new Date(row.startedAt).getTime();
-      const endMs = new Date(row.finishedAt).getTime();
+      const endMs = row.finishedAt ? new Date(row.finishedAt).getTime() : (isActiveRun ? nowMs : NaN);
       if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
         continue;
       }
+      const inProgress = !row.finishedAt;
       segments.push({
         key: `stage-${row.invocationId}`,
         label: row.stage.toUpperCase(),
@@ -640,7 +705,7 @@ export default function RunDetailPage() {
         endMs,
         durationMs: endMs - startMs,
         color: stageColor(row.stage),
-        detail: `${row.resumedSession ? "resumed session" : "new session"}${row.attempt !== null ? ` · attempt ${row.attempt}` : ""}`,
+        detail: `${inProgress ? "in progress" : row.resumedSession ? "resumed session" : "new session"}${row.attempt !== null ? ` · attempt ${row.attempt}` : ""}`,
       });
     }
 
@@ -667,7 +732,7 @@ export default function RunDetailPage() {
       stageMs,
       resumedCount,
     };
-  }, [invocationSessionRows, logs, run]);
+  }, [invocationSessionRows, isActiveRun, logs, run]);
   const chatTimelineEntries = useMemo(() => {
     const stageUpdates = isRecord(run?.plan) && Array.isArray(run.plan["stage_updates"]) ? run.plan["stage_updates"] : [];
     const stageUpdateEntries: ChatTimelineEntry[] = stageUpdates
@@ -727,6 +792,11 @@ export default function RunDetailPage() {
       .sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime())
       .slice(-160);
   }, [logs, run?.created_at, run?.finished_at, run?.plan, run?.started_at, workflowDiagnostics?.history]);
+  const visibleChatTimelineEntries = useMemo(
+    () => chatTimelineEntries.slice(-Math.max(CHAT_PAGE_SIZE, chatVisibleCount)),
+    [chatTimelineEntries, chatVisibleCount]
+  );
+  const hasOlderChatMessages = visibleChatTimelineEntries.length < chatTimelineEntries.length;
   const codePath = useMemo(() => {
     for (let idx = logs.length - 1; idx >= 0; idx -= 1) {
       const value = logs[idx]?.working_dir?.trim();
@@ -736,6 +806,23 @@ export default function RunDetailPage() {
     }
     return null;
   }, [logs]);
+  useEffect(() => {
+    setChatVisibleCount(CHAT_PAGE_SIZE);
+    setChatAutoScroll(true);
+  }, [params.runId]);
+  useEffect(() => {
+    if (activePanel !== "overview" || !chatAutoScroll) {
+      return;
+    }
+    const listEl = chatListRef.current;
+    if (!listEl) {
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => {
+      listEl.scrollTop = listEl.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [activePanel, chatAutoScroll, visibleChatTimelineEntries.length]);
 
   return (
     <Card>
@@ -854,287 +941,340 @@ export default function RunDetailPage() {
                 <strong>Last error:</strong> {run.last_error ?? "None"}
               </p>
             </div>
-            <div className="rounded-md border bg-muted/40 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent final outputs</p>
-              <ul className="space-y-2 text-xs">
-                {agentOutcomes.map((outcome) => (
-                  <li
-                    key={outcome.stage}
-                    className="rounded border bg-background p-3"
-                    style={{ borderLeft: `3px solid ${stageColor(outcome.stage)}` }}
-                  >
+            <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/20 p-2">
+              {(["overview", "outputs", "sessions", "diagnostics", "raw"] as RunPanelTab[]).map((tab) => (
+                <Button
+                  key={tab}
+                  variant={activePanel === tab ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setActivePanel(tab)}
+                  className="capitalize"
+                >
+                  {tab}
+                </Button>
+              ))}
+            </div>
+            {activePanel === "outputs" ? (
+              <div className="rounded-md border bg-muted/40 p-3">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent final outputs</p>
+                <ul className="space-y-2 text-xs">
+                  {agentOutcomes.map((outcome) => (
+                    <li
+                      key={outcome.stage}
+                      className="rounded border bg-background p-3"
+                      style={{ borderLeft: `3px solid ${stageColor(outcome.stage)}` }}
+                    >
                     <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                       {outcome.label} final output
                     </p>
-                    {outcome.items.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">{outcome.emptyText}</p>
-                    ) : (
-                      <div className="space-y-1">
-                        {outcome.items.map((item, idx) => (
-                          <p key={`${outcome.stage}-item-${idx}`} className="whitespace-pre-wrap">
-                            {item}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                    {outcome.feedback ? (
-                      <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-                        Feedback: {outcome.feedback}
-                      </p>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-              {workflowDiagnostics ? (
-                <div className="mt-3 rounded border bg-background p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Terminal diagnostics</p>
-                  <p className="mt-1 text-xs">
-                    <strong>Stage:</strong> {workflowDiagnostics.stage || "unknown"}
-                  </p>
-                  <p className="text-xs">
-                    <strong>Message:</strong> {workflowDiagnostics.message || run?.last_error || "No diagnostics message."}
-                  </p>
-                </div>
-              ) : null}
-            </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Chat timeline</p>
-              {chatTimelineEntries.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No timeline messages captured yet.</p>
-              ) : (
-                <ul className="max-h-[360px] space-y-2 overflow-y-auto pr-1 text-xs">
-                  {chatTimelineEntries.map((entry) => (
-                    <li
-                      key={entry.key}
-                      className="rounded border bg-background p-2"
-                      style={{ borderLeft: `3px solid ${stageColor(entry.stage)}` }}
-                    >
                       <p className="mb-1 text-[11px] text-muted-foreground">
-                        {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)}
-                        {entry.attempt !== null ? ` #${entry.attempt}` : ""} · {entry.speaker}
+                        {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
                       </p>
-                      <p
-                        className={
-                          entry.kind === "error"
-                            ? "whitespace-pre-wrap text-red-700"
-                            : entry.kind === "reasoning"
-                              ? "whitespace-pre-wrap text-slate-700"
-                              : "whitespace-pre-wrap"
-                        }
-                      >
-                        {entry.text}
-                      </p>
+                      {outcome.items.length === 0 && !stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
+                        <p className="text-xs text-muted-foreground">{outcome.emptyText}</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {outcome.items.map((item, idx) => (
+                            <p key={`${outcome.stage}-item-${idx}`} className="whitespace-pre-wrap">
+                              {item}
+                            </p>
+                          ))}
+                          {outcome.items.length === 0 && stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
+                            <p className="whitespace-pre-wrap">
+                              Live snapshot ({new Date(stageLiveSnapshots.get(outcome.stage as AgentStage)!.recordedAt).toLocaleTimeString()}
+                              ): {stageLiveSnapshots.get(outcome.stage as AgentStage)!.text}
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
+                      {outcome.feedback ? (
+                        <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                          Feedback: {outcome.feedback}
+                        </p>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
-            <div className="rounded-md border bg-muted/40 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Plan JSON</p>
-              <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap text-xs">
-                {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
-              </pre>
-            </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Live stage updates</p>
-              {liveStageUpdates.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No live stage updates captured yet.</p>
-              ) : (
-                <ul className="space-y-2 text-xs">
-                  {liveStageUpdates.map((entry, idx) => (
-                    <li key={`live-stage-${idx}`} className="rounded border p-2">
-                      <p>
-                        <strong>{String(entry.stage ?? "unknown_stage")}</strong>
-                      </p>
-                      <p className="text-muted-foreground">{String(entry.recorded_at ?? "")}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Run timeline</p>
-              {!runTimeline ? (
-                <p className="text-xs text-muted-foreground">Timeline data will appear as soon as telemetry events are captured.</p>
-              ) : (
-                <div className="space-y-3">
-                  <div className="grid gap-2 md:grid-cols-4">
-                    <div className="rounded border bg-background p-2 text-xs">
-                      <p className="text-muted-foreground">Total window</p>
-                      <p className="font-semibold">{formatDuration(runTimeline.totalMs)}</p>
+              </div>
+            ) : null}
+            {activePanel === "overview" ? (
+              <>
+                <div className="rounded-md border bg-muted/20 p-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Run timeline</p>
+                  {!runTimeline ? (
+                    <p className="text-xs text-muted-foreground">Timeline data will appear as soon as telemetry events are captured.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="grid gap-2 md:grid-cols-4">
+                        <div className="rounded border bg-background p-2 text-xs">
+                          <p className="text-muted-foreground">Total window</p>
+                          <p className="font-semibold">{formatDuration(runTimeline.totalMs)}</p>
+                        </div>
+                        <div className="rounded border bg-background p-2 text-xs">
+                          <p className="text-muted-foreground">Queue wait</p>
+                          <p className="font-semibold">{formatDuration(runTimeline.queueWaitMs)}</p>
+                        </div>
+                        <div className="rounded border bg-background p-2 text-xs">
+                          <p className="text-muted-foreground">Stage runtime</p>
+                          <p className="font-semibold">{formatDuration(runTimeline.stageMs)}</p>
+                        </div>
+                        <div className="rounded border bg-background p-2 text-xs">
+                          <p className="text-muted-foreground">Resumed stages</p>
+                          <p className="font-semibold">{runTimeline.resumedCount}</p>
+                        </div>
+                      </div>
+                      <div className="rounded border bg-background p-2">
+                        <div className="relative h-10 overflow-hidden rounded bg-muted/50">
+                          {runTimeline.segments.map((segment) => {
+                            const leftPct = ((segment.startMs - runTimeline.minStartMs) / runTimeline.totalMs) * 100;
+                            const widthPct = Math.max(1, (segment.durationMs / runTimeline.totalMs) * 100);
+                            return (
+                              <div
+                                key={segment.key}
+                                className="absolute top-0 h-10 text-[10px] font-semibold text-white"
+                                style={{
+                                  left: `${leftPct}%`,
+                                  width: `${widthPct}%`,
+                                  backgroundColor: segment.color
+                                }}
+                                title={`${segment.label}: ${formatDuration(segment.durationMs)} (${segment.detail})`}
+                              >
+                                <span className="block truncate px-1 pt-3">{segment.label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
-                    <div className="rounded border bg-background p-2 text-xs">
-                      <p className="text-muted-foreground">Queue wait</p>
-                      <p className="font-semibold">{formatDuration(runTimeline.queueWaitMs)}</p>
-                    </div>
-                    <div className="rounded border bg-background p-2 text-xs">
-                      <p className="text-muted-foreground">Stage runtime</p>
-                      <p className="font-semibold">{formatDuration(runTimeline.stageMs)}</p>
-                    </div>
-                    <div className="rounded border bg-background p-2 text-xs">
-                      <p className="text-muted-foreground">Resumed stages</p>
-                      <p className="font-semibold">{runTimeline.resumedCount}</p>
-                    </div>
-                  </div>
-                  <div className="rounded border bg-background p-2">
-                    <div className="relative h-10 overflow-hidden rounded bg-muted/50">
-                      {runTimeline.segments.map((segment) => {
-                        const leftPct = ((segment.startMs - runTimeline.minStartMs) / runTimeline.totalMs) * 100;
-                        const widthPct = Math.max(1, (segment.durationMs / runTimeline.totalMs) * 100);
-                        return (
-                          <div
-                            key={segment.key}
-                            className="absolute top-0 h-10 text-[10px] font-semibold text-white"
-                            style={{
-                              left: `${leftPct}%`,
-                              width: `${widthPct}%`,
-                              backgroundColor: segment.color
+                  )}
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Chat timeline</p>
+                  {chatTimelineEntries.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No timeline messages captured yet.</p>
+                  ) : (
+                    <>
+                      <div className="mb-2 flex items-center justify-end gap-2">
+                        {hasOlderChatMessages ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setChatVisibleCount((current) => Math.min(current + CHAT_PAGE_SIZE, chatTimelineEntries.length));
+                              setChatAutoScroll(false);
                             }}
-                            title={`${segment.label}: ${formatDuration(segment.durationMs)} (${segment.detail})`}
                           >
-                            <span className="block truncate px-1 pt-3">{segment.label}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <ul className="space-y-1 text-xs">
-                    {runTimeline.segments.map((segment) => (
-                      <li key={`meta-${segment.key}`} className="flex flex-wrap items-center gap-2">
-                        <span
-                          className="inline-block h-2 w-2 rounded-full"
-                          style={{ backgroundColor: segment.color }}
-                        />
-                        <span className="font-semibold">{segment.label}</span>
-                        <span className="text-muted-foreground">{formatDuration(segment.durationMs)}</span>
-                        <span className="text-muted-foreground">{segment.detail}</span>
+                            Load older messages
+                          </Button>
+                        ) : null}
+                        {!chatAutoScroll ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setChatVisibleCount(CHAT_PAGE_SIZE);
+                              setChatAutoScroll(true);
+                            }}
+                          >
+                            Jump to latest
+                          </Button>
+                        ) : null}
+                      </div>
+                      <ul ref={chatListRef} className="max-h-[360px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {visibleChatTimelineEntries.map((entry) => (
+                        <li
+                          key={entry.key}
+                          className="rounded border bg-background p-2"
+                          style={{ borderLeft: `3px solid ${stageColor(entry.stage)}` }}
+                        >
+                          <p className="mb-1 text-[11px] text-muted-foreground">
+                            {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)}
+                            {entry.attempt !== null ? ` #${entry.attempt}` : ""} · {entry.speaker}
+                          </p>
+                          <p
+                            className={
+                              entry.kind === "error"
+                                ? "whitespace-pre-wrap text-red-700"
+                                : entry.kind === "reasoning"
+                                  ? "whitespace-pre-wrap text-slate-700"
+                                  : "whitespace-pre-wrap"
+                            }
+                          >
+                            {entry.text}
+                          </p>
+                        </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
+              </>
+            ) : null}
+            {activePanel === "sessions" ? (
+              <div className="rounded-md border bg-muted/20 p-3">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Codex session timeline
+                </p>
+                {invocationSessionRows.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
+                ) : (
+                  <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
+                    {invocationSessionRows.map((row) => (
+                      <li key={row.key} className="rounded border p-2">
+                        <p>
+                          <strong>{row.stage}</strong>
+                          {row.attempt !== null ? ` #${row.attempt}` : ""} ·{" "}
+                          <strong>
+                            {row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}
+                          </strong>
+                          {row.durationMs !== null ? ` · ${row.durationMs}ms` : ""}
+                          {row.status ? ` · ${row.status}` : ""}
+                        </p>
+                        <p className="text-muted-foreground">
+                          start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish:{" "}
+                          {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}
+                        </p>
+                        <p className="break-all text-muted-foreground">
+                          session: {row.codexSessionId ?? "n/a"} · invocation: {row.invocationId}
+                        </p>
                       </li>
                     ))}
                   </ul>
-                </div>
-              )}
-            </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Codex session timeline
-              </p>
-              {invocationSessionRows.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
-              ) : (
-                <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
-                  {invocationSessionRows.map((row) => (
-                    <li key={row.key} className="rounded border p-2">
-                      <p>
-                        <strong>{row.stage}</strong>
-                        {row.attempt !== null ? ` #${row.attempt}` : ""} ·{" "}
-                        <strong>
-                          {row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}
-                        </strong>
-                        {row.durationMs !== null ? ` · ${row.durationMs}ms` : ""}
-                        {row.status ? ` · ${row.status}` : ""}
-                      </p>
-                      <p className="text-muted-foreground">
-                        start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish:{" "}
-                        {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}
-                      </p>
-                      <p className="break-all text-muted-foreground">
-                        session: {row.codexSessionId ?? "n/a"} · invocation: {row.invocationId}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent events (live)</p>
-              {events.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No agent events captured for this run yet.</p>
-              ) : (
-                <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
-                  {events.map((event, idx) => (
-                    <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded border p-2">
-                      <p>
-                        <strong>{event.event_type}</strong> by {event.agent_id}
-                      </p>
-                      <p className="text-muted-foreground">{new Date(event.recorded_at).toLocaleString()}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent logs (live)</p>
-                <div className="flex items-center gap-2 text-xs">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void handleLoadOlderLogs()}
-                    disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}
-                  >
-                    {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older logs" : "All logs loaded"}
-                  </Button>
-                  <label className="flex items-center gap-1">
-                    Agent
-                    <select
-                      className="rounded border bg-background px-2 py-1"
-                      value={logAgentFilter}
-                      onChange={(event) => setLogAgentFilter(event.target.value)}
-                    >
-                      <option value="all">All</option>
-                      <option value="pm">pm</option>
-                      <option value="dev">dev</option>
-                      <option value="tester">tester</option>
-                      <option value="review">review</option>
-                    </select>
-                  </label>
-                  <label className="flex items-center gap-1">
-                    Stage
-                    <select
-                      className="rounded border bg-background px-2 py-1"
-                      value={logStageFilter}
-                      onChange={(event) => setLogStageFilter(event.target.value)}
-                    >
-                      <option value="all">All</option>
-                      <option value="pm">pm</option>
-                      <option value="dev">dev</option>
-                      <option value="test">test</option>
-                      <option value="review">review</option>
-                    </select>
-                  </label>
-                  <label className="flex items-center gap-1">
-                    Stream
-                    <select
-                      className="rounded border bg-background px-2 py-1"
-                      value={logStreamFilter}
-                      onChange={(event) => setLogStreamFilter(event.target.value)}
-                    >
-                      <option value="all">All</option>
-                      <option value="stdout">stdout</option>
-                      <option value="stderr">stderr</option>
-                    </select>
-                  </label>
-                </div>
+                )}
               </div>
-              {logs.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No agent logs captured for this run yet.</p>
-              ) : filteredLogs.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
-              ) : (
-                <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
-                  {filteredLogs.map((entry, idx) => (
-                    <li key={`${entry.recorded_at}-${idx}`} className="rounded border p-2">
-                      <p>
-                        <strong>{entry.agent_id}</strong> · <strong>{entry.stage}</strong>
-                        {entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}]
-                      </p>
-                      <p className="whitespace-pre-wrap">{entry.message}</p>
-                      <p className="text-muted-foreground">{new Date(entry.recorded_at).toLocaleString()}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            ) : null}
+            {activePanel === "diagnostics" ? (
+              <>
+                {workflowDiagnostics ? (
+                  <div className="rounded-md border bg-muted/40 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Terminal diagnostics</p>
+                    <p className="mt-1 text-xs">
+                      <strong>Stage:</strong> {workflowDiagnostics.stage || "unknown"}
+                    </p>
+                    <p className="text-xs">
+                      <strong>Message:</strong> {workflowDiagnostics.message || run?.last_error || "No diagnostics message."}
+                    </p>
+                  </div>
+                ) : null}
+                <div className="rounded-md border bg-muted/20 p-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Live stage updates</p>
+                  {liveStageUpdates.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No live stage updates captured yet.</p>
+                  ) : (
+                    <ul className="space-y-2 text-xs">
+                      {liveStageUpdates.map((entry, idx) => (
+                        <li key={`live-stage-${idx}`} className="rounded border p-2">
+                          <p>
+                            <strong>{String(entry.stage ?? "unknown_stage")}</strong>
+                          </p>
+                          <p className="text-muted-foreground">{String(entry.recorded_at ?? "")}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent events (live)</p>
+                  {events.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No agent events captured for this run yet.</p>
+                  ) : (
+                    <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
+                      {events.map((event, idx) => (
+                        <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded border p-2">
+                          <p>
+                            <strong>{event.event_type}</strong> by {event.agent_id}
+                          </p>
+                          <p className="text-muted-foreground">{new Date(event.recorded_at).toLocaleString()}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </>
+            ) : null}
+            {activePanel === "raw" ? (
+              <>
+                <div className="rounded-md border bg-muted/40 p-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Plan JSON</p>
+                  <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap text-xs">
+                    {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
+                  </pre>
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent logs (live)</p>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleLoadOlderLogs()}
+                        disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}
+                      >
+                        {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older logs" : "All logs loaded"}
+                      </Button>
+                      <label className="flex items-center gap-1">
+                        Agent
+                        <select
+                          className="rounded border bg-background px-2 py-1"
+                          value={logAgentFilter}
+                          onChange={(event) => setLogAgentFilter(event.target.value)}
+                        >
+                          <option value="all">All</option>
+                          <option value="pm">pm</option>
+                          <option value="dev">dev</option>
+                          <option value="tester">tester</option>
+                          <option value="review">review</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Stage
+                        <select
+                          className="rounded border bg-background px-2 py-1"
+                          value={logStageFilter}
+                          onChange={(event) => setLogStageFilter(event.target.value)}
+                        >
+                          <option value="all">All</option>
+                          <option value="pm">pm</option>
+                          <option value="dev">dev</option>
+                          <option value="test">test</option>
+                          <option value="review">review</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Stream
+                        <select
+                          className="rounded border bg-background px-2 py-1"
+                          value={logStreamFilter}
+                          onChange={(event) => setLogStreamFilter(event.target.value)}
+                        >
+                          <option value="all">All</option>
+                          <option value="stdout">stdout</option>
+                          <option value="stderr">stderr</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                  {logs.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No agent logs captured for this run yet.</p>
+                  ) : filteredLogs.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
+                  ) : (
+                    <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
+                      {filteredLogs.map((entry, idx) => (
+                        <li key={`${entry.recorded_at}-${idx}`} className="rounded border p-2">
+                          <p>
+                            <strong>{entry.agent_id}</strong> · <strong>{entry.stage}</strong>
+                            {entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}]
+                          </p>
+                          <p className="whitespace-pre-wrap">{entry.message}</p>
+                          <p className="text-muted-foreground">{new Date(entry.recorded_at).toLocaleString()}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </>
+            ) : null}
           </>
         ) : (
           <p className="text-muted-foreground">Loading run details...</p>

@@ -260,3 +260,33 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(finalized.plan["stage_updates"], [{"stage": "run_failed"}])
             lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-200"})
             self.assertIsNone(lock)
+
+    def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            run = Run(
+                run_id="run-expected-status",
+                tenant_id="tenant-a",
+                issue_key="TA-201",
+                issue_summary="claim guarded by expected status",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                last_error=None,
+                plan=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                project_id="tenant-a-default",
+            )
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+
+            started = start_run(session, run=run, expected_status="queued")
+            self.assertIsNone(started)
+            refreshed = session.get(Run, "run-expected-status")
+            assert refreshed is not None
+            self.assertEqual(refreshed.status, "running")

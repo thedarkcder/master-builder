@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import delete
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from orchestrator.core.project_routing import find_active_project_for_issue_key
@@ -26,9 +27,31 @@ def _release_run_lock(session: Session, *, run: Run) -> None:
     )
 
 
-def start_run(session: Session, *, run: Run) -> Run:
+def start_run(session: Session, *, run: Run, expected_status: str | None = None) -> Run | None:
+    started_at = datetime.now(timezone.utc)
+    if expected_status is None:
+        run.status = RUN_STATUS_RUNNING
+        run.started_at = started_at
+        session.commit()
+        session.refresh(run)
+        return run
+
+    result = session.execute(
+        update(Run)
+        .where(
+            Run.run_id == run.run_id,
+            Run.status == expected_status,
+        )
+        .values(
+            status=RUN_STATUS_RUNNING,
+            started_at=started_at,
+        )
+    )
+    if int(result.rowcount or 0) == 0:
+        session.rollback()
+        return None
     run.status = RUN_STATUS_RUNNING
-    run.started_at = datetime.now(timezone.utc)
+    run.started_at = started_at
     session.commit()
     session.refresh(run)
     return run
