@@ -143,3 +143,28 @@ def finalize_workflow_result(
     session.commit()
     session.refresh(run)
     return run
+
+
+def requeue_workflow_result_for_capability(
+    session: Session,
+    *,
+    run: Run,
+    workflow_result: WorkflowResult,
+    stage_updates: list[dict[str, str]],
+    required_worker_capability: str,
+    required_worker_label: str,
+) -> Run:
+    plan_payload = workflow_result.to_plan_payload()
+    plan_payload["stage_updates"] = stage_updates
+    plan_payload["required_worker_capability"] = required_worker_capability
+    plan_payload["required_worker_label"] = required_worker_label
+    plan_payload["requeued"] = True
+    run.plan = plan_payload
+    run.status = "queued"
+    run.last_error = None
+    run.started_at = None
+    run.finished_at = None
+    _release_run_lock(session, run=run)
+    session.commit()
+    session.refresh(run)
+    return run
