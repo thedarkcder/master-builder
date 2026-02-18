@@ -146,3 +146,28 @@ def run_failed_update(
             "Apply fix and move issue back to To Do when ready.",
         ),
     )
+
+
+def run_requeued_capability_mismatch_update(
+    *,
+    tenant_id: str,
+    issue_key: str | None,
+    run_id: str,
+    jira_url: str | None,
+    run_url: str | None = None,
+    required_worker_label: str,
+    error: str,
+) -> dict[str, str]:
+    return _build_stage_update(
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        run_id=run_id,
+        stage="run_requeued_capability_mismatch",
+        jira_url=jira_url,
+        run_url=run_url,
+        error=error,
+        next_steps=(
+            f"Waiting for {required_worker_label} to pick up this run.",
+            "No developer changes were executed on this worker.",
+        ),
+    )

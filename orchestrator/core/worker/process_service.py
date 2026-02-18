@@ -6,7 +6,11 @@ from uuid import uuid4
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_logs import record_run_log_event
-from orchestrator.core.worker_capabilities import parse_worker_capabilities
+from orchestrator.core.worker_capabilities import (
+    normalize_worker_capability,
+    parse_worker_capabilities,
+    worker_label_for_capability,
+)
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
 
 
@@ -66,8 +70,10 @@ def process_next_queued_run(
     plan_posted_update_fn,
     pr_opened_update_fn,
     run_failed_update_fn,
+    run_requeued_capability_update_fn,
     finalize_cancelled_run_fn,
     finalize_workflow_result_fn,
+    requeue_workflow_result_for_capability_fn,
     transition_issue_status_fn,
     emit_agent_event_fn,
     resolve_agent_id_fn,
@@ -269,6 +275,33 @@ def process_next_queued_run(
             agent_id=agent_id,
         )
     if not workflow_result.succeeded:
+        capability_requeue_target = _extract_capability_requeue_target(workflow_result)
+        if capability_requeue_target is not None:
+            required_worker_label = worker_label_for_capability(capability_requeue_target)
+            error_text = (
+                workflow_result.diagnostics.message
+                if workflow_result.diagnostics is not None
+                else "Execution capability mismatch"
+            )
+            notifier.append(
+                run_requeued_capability_update_fn(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    jira_url=jira_issue_url,
+                    run_url=run_dashboard_url,
+                    required_worker_label=required_worker_label,
+                    error=error_text,
+                )
+            )
+            return requeue_workflow_result_for_capability_fn(
+                session,
+                run=run,
+                workflow_result=workflow_result,
+                stage_updates=notifier.stage_updates,
+                required_worker_capability=capability_requeue_target,
+                required_worker_label=required_worker_label,
+            )
         error_text = (
             workflow_result.diagnostics.message
             if workflow_result.diagnostics is not None
@@ -339,6 +372,37 @@ def process_next_queued_run(
         workflow_result=workflow_result,
         stage_updates=notifier.stage_updates,
     )
+
+
+def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: ANN001
+    if workflow_result.succeeded:
+        return None
+    diagnostics = workflow_result.diagnostics
+    if diagnostics is None or str(diagnostics.stage or "").strip().lower() != "pm":
+        return None
+    message = str(diagnostics.message or "")
+    if "Execution capability mismatch:" not in message:
+        return None
+    plan = workflow_result.plan
+    if plan is not None:
+        plan_capability = normalize_worker_capability(plan.execution_worker_capability)
+        if plan_capability is not None:
+            return plan_capability
+    for item in diagnostics.history or []:
+        event = str(item.get("event") or "")
+        if not event.startswith("execution_capability_mismatch:"):
+            continue
+        parts = event.split(":")[-1].split(",")
+        for part in parts:
+            key, _, raw_value = part.partition("=")
+            if key.strip() != "required":
+                continue
+            parsed = normalize_worker_capability(raw_value.strip())
+            if parsed is not None:
+                return parsed
+    return None
+
+
 def _format_multiline_jira_comment(*, title: str, lines: list[str], run_id: str) -> str:
     content_lines = [str(line) for line in lines if str(line).strip()]
     if not content_lines:

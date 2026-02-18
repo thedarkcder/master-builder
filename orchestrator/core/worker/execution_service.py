@@ -21,6 +21,7 @@ from orchestrator.core.worker.run_lifecycle import (
     fail_project_repository_checkout,
     finalize_cancelled_run,
     finalize_workflow_result,
+    requeue_workflow_result_for_capability,
     resolve_project_for_run,
     start_run,
 )
@@ -29,6 +30,7 @@ from orchestrator.core.worker.stage_events import (
     plan_posted_update,
     pr_opened_update,
     run_failed_update,
+    run_requeued_capability_mismatch_update,
 )
 from orchestrator.core.worker.workflow_request_service import (
     build_workflow_request_for_run as _build_workflow_request_for_run,
@@ -150,8 +152,10 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
         plan_posted_update_fn=plan_posted_update,
         pr_opened_update_fn=pr_opened_update,
         run_failed_update_fn=run_failed_update,
+        run_requeued_capability_update_fn=run_requeued_capability_mismatch_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
+        requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability,
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
@@ -239,8 +243,10 @@ def process_next_queued_run_with_dependencies(
         plan_posted_update_fn=plan_posted_update,
         pr_opened_update_fn=pr_opened_update,
         run_failed_update_fn=run_failed_update,
+        run_requeued_capability_update_fn=run_requeued_capability_mismatch_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
+        requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability,
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
