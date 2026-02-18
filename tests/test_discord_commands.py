@@ -135,6 +135,29 @@ class DiscordCommandApiTests(unittest.TestCase):
             )
             session.commit()
 
+    def _ready_precheck_result(self) -> PreRunCheckResult:
+        return PreRunCheckResult(
+            outcome="ready_for_agent",
+            ready_label="agent:ready",
+            ready_label_present=True,
+            required_worker_capability="linux",
+            required_worker_label="worker:linux",
+            required_worker_label_present=True,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+
     def _create_project(self, *, project_id: str, jira_project_key: str, channel_id: str) -> None:
         with self.session_factory() as session:
             now = datetime.now(timezone.utc)
@@ -232,6 +255,9 @@ class DiscordCommandApiTests(unittest.TestCase):
                 status="To Do",
                 description="Objective: run command should carry Jira detail context.",
             ),
+        ), patch(
+            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -246,11 +272,55 @@ class DiscordCommandApiTests(unittest.TestCase):
             assert run is not None
             self.assertEqual(run.issue_description, "Objective: run command should carry Jira detail context.")
 
+    def test_run_precheck_includes_related_board_context(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.routes.discord._fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+            ),
+            patch(
+                "orchestrator.api.routes.discord._fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-20",
+                    summary="Do thing",
+                    status="To Do",
+                    description="Objective: run command should carry Jira detail context.",
+                    labels=["agent:ready", "worker:linux"],
+                ),
+            ),
+            patch(
+                "orchestrator.api.routes.discord._search_jira_issues_for_tenant",
+                return_value=[
+                    JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+                    JiraIssuePreview(key="TP-21", summary="Sibling ticket A", status="To Do"),
+                    JiraIssuePreview(key="TP-22", summary="Sibling ticket B", status="Testing"),
+                ],
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+                return_value=self._ready_precheck_result(),
+            ) as precheck_mock,
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!run TP-20"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        issue_description = str(precheck_mock.call_args.kwargs["issue_description"])
+        self.assertIn("agent:ready", precheck_mock.call_args.kwargs["issue_labels"])
+        self.assertIn("## Board Context (TP)", issue_description)
+        self.assertIn("TP-21", issue_description)
+        self.assertIn("TP-22", issue_description)
+
     def test_run_conflict_includes_active_run_details(self) -> None:
         self._queue_run(run_id="run-active-1", issue_key="TP-20", status="running")
         with patch(
             "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+        ), patch(
+            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -274,6 +344,9 @@ class DiscordCommandApiTests(unittest.TestCase):
                 status="To Do",
                 description="Objective: refreshed from Jira for retry.",
             ),
+        ), patch(
+            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -288,12 +361,41 @@ class DiscordCommandApiTests(unittest.TestCase):
             assert retry_run is not None
             self.assertEqual(retry_run.issue_description, "Objective: refreshed from Jira for retry.")
 
+    def test_retry_allows_in_progress_issue_status(self) -> None:
+        self._queue_run(run_id="run-failed-2", issue_key="TP-31", status="failed")
+        with patch(
+            "orchestrator.api.routes.discord._fetch_jira_issue_preview",
+            return_value=JiraIssuePreview(key="TP-31", summary="Retry thing", status="In Progress"),
+        ), patch(
+            "orchestrator.api.routes.discord._fetch_jira_issue_detail",
+            return_value=JiraIssueDetail(
+                key="TP-31",
+                summary="Retry thing",
+                status="In Progress",
+                description="Objective: refreshed from Jira for retry.",
+            ),
+        ), patch(
+            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            return_value=self._ready_precheck_result(),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!retry run-failed-2"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["data"]["issue_key"], "TP-31")
+
     def test_retry_conflict_includes_active_run_details(self) -> None:
         self._queue_run(run_id="run-failed-1", issue_key="TP-30", status="failed")
         self._queue_run(run_id="run-active-2", issue_key="TP-30", status="queued")
         with patch(
             "orchestrator.api.routes.discord._fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
+        ), patch(
+            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -330,6 +432,10 @@ class DiscordCommandApiTests(unittest.TestCase):
             "reliability_security_constraints": "Fail-closed on unknown state.",
             "out_of_scope": "Real StoreKit and Supabase integration.",
             "rollout_constraints": "No migration required.",
+            "dependencies_and_risks": [
+                "Supabase evaluate-session must be deployed",
+                "Function latency may delay second-attempt eligibility",
+            ],
             "decision_owner": "Product Owner / Founder.",
         }
 
@@ -397,6 +503,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("Objective: old", update_kwargs["description"])
         self.assertIn("## Decision Gate Clarifications", update_kwargs["description"])
         self.assertIn("How to test: Run listed scenario checks.", update_kwargs["description"])
+        self.assertIn("Dependencies / Risks: Supabase evaluate-session must be deployed", update_kwargs["description"])
 
     def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         self._queue_run(run_id="run-failed-reply-2", issue_key="TP-89", status="failed")
@@ -470,6 +577,96 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["data"]["recheck_required"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-90")
         oauth_client.update_issue_summary_and_description.assert_called_once()
+
+    def test_reply_without_retryable_run_queues_initial_run_after_clarification(self) -> None:
+        oauth_client = SimpleNamespace(
+            get_issue_detail=unittest.mock.MagicMock(
+                return_value=SimpleNamespace(
+                    summary="Old summary",
+                    description="Objective: old",
+                )
+            ),
+            update_issue_summary_and_description=unittest.mock.MagicMock(),
+        )
+        oauth_context = {
+            "connection": SimpleNamespace(cloud_id="cloud-1"),
+            "access_token": "tok-1",
+            "client": oauth_client,
+        }
+        runtime = unittest.mock.MagicMock()
+        runtime.run_json.return_value = {
+            "summary": "Updated summary",
+            "objective": "Clear onboarding objective.",
+            "scope": "Splash to onboarding to demo flow.",
+            "acceptance_criteria": "Flow and guards verified.",
+            "how_to_test": "Run listed scenario checks.",
+            "nfr_intent": "MVP-first, scale-aware.",
+        }
+        ready_result = PreRunCheckResult(
+            outcome="ready_for_agent",
+            ready_label="agent:ready",
+            ready_label_present=True,
+            required_worker_capability="linux",
+            required_worker_label="worker:linux",
+            required_worker_label_present=True,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        queued_run = SimpleNamespace(run_id="run-new-1", issue_key="TP-91")
+        enqueue_result = SimpleNamespace(enqueued=True, run=queued_run, reason=None)
+
+        with (
+            patch("orchestrator.api.routes.discord._tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.routes.discord.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+                side_effect=[ready_result, ready_result],
+            ),
+            patch(
+                "orchestrator.api.routes.discord._fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(key="TP-91", summary="Run after reply", status="To Do"),
+            ),
+            patch(
+                "orchestrator.api.routes.discord._fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-91",
+                    summary="Run after reply",
+                    status="To Do",
+                    description="Objective: refreshed for run.",
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.enqueue_run",
+                return_value=enqueue_result,
+            ) as enqueue_mock,
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!reply TP-91 objective details",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["command"], "run")
+        self.assertEqual(response.json()["data"]["issue_key"], "TP-91")
+        self.assertEqual(response.json()["data"]["run_id"], "run-new-1")
+        oauth_client.update_issue_summary_and_description.assert_called_once()
+        enqueue_mock.assert_called_once()
 
     def test_link_rejects_issue_outside_mapped_project_scope(self) -> None:
         self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
