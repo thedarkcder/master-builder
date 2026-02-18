@@ -254,6 +254,7 @@ class RunRead(BaseModel):
     branch: str | None
     pr_url: str | None
     codex_session_id: str | None = None
+    pm_session_id: str | None = None
     status: str
     last_error: str | None
     plan: dict | None

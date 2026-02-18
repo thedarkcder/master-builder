@@ -20,6 +20,8 @@ from orchestrator.storage.models import Run
 
 logger = logging.getLogger(__name__)
 _ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
+_WORKFLOW_STAGE_PM = "pm"
+_WORKFLOW_EXECUTION_STAGES = {"dev", "test", "review"}
 
 
 @dataclass(frozen=True)
@@ -262,9 +264,22 @@ def _emit_invocation_event(
         )
 
 
-def _load_run_codex_session_id(*, run_id: str | None) -> str | None:
+def _session_column_for_context(*, context: CodexInvocationContext) -> str | None:
+    command = str(context.command or "").strip().lower()
+    stage = str(context.stage or "").strip().lower()
+    if command != "workflow":
+        return None
+    if stage == _WORKFLOW_STAGE_PM:
+        return "pm_session_id"
+    if stage in _WORKFLOW_EXECUTION_STAGES:
+        return "codex_session_id"
+    return None
+
+
+def _load_run_codex_session_id(*, run_id: str | None, session_column: str | None) -> str | None:
     normalized_run_id = str(run_id or "").strip()
-    if not normalized_run_id:
+    normalized_column = str(session_column or "").strip()
+    if not normalized_run_id or not normalized_column:
         return None
     settings = get_settings()
     session_factory = create_session_factory(database_url=settings.database_url)
@@ -273,17 +288,23 @@ def _load_run_codex_session_id(*, run_id: str | None) -> str | None:
             run = session.get(Run, normalized_run_id)
             if run is None:
                 return None
-            candidate = str(run.codex_session_id or "").strip()
+            candidate = str(getattr(run, normalized_column, "") or "").strip()
             return candidate or None
     except Exception as exc:  # noqa: BLE001
-        logger.debug("codex_run_session_load_skipped run_id=%s error=%s", normalized_run_id, exc)
+        logger.debug(
+            "codex_run_session_load_skipped run_id=%s session_column=%s error=%s",
+            normalized_run_id,
+            normalized_column,
+            exc,
+        )
         return None
 
 
-def _persist_run_codex_session_id(*, run_id: str | None, session_id: str | None) -> None:
+def _persist_run_codex_session_id(*, run_id: str | None, session_id: str | None, session_column: str | None) -> None:
     normalized_run_id = str(run_id or "").strip()
     normalized_session_id = str(session_id or "").strip()
-    if not normalized_run_id or not normalized_session_id:
+    normalized_column = str(session_column or "").strip()
+    if not normalized_run_id or not normalized_session_id or not normalized_column:
         return
     settings = get_settings()
     session_factory = create_session_factory(database_url=settings.database_url)
@@ -292,14 +313,15 @@ def _persist_run_codex_session_id(*, run_id: str | None, session_id: str | None)
             run = session.get(Run, normalized_run_id)
             if run is None:
                 return
-            if str(run.codex_session_id or "").strip() == normalized_session_id:
+            if str(getattr(run, normalized_column, "") or "").strip() == normalized_session_id:
                 return
-            run.codex_session_id = normalized_session_id
+            setattr(run, normalized_column, normalized_session_id)
             session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.debug(
-            "codex_run_session_persist_skipped run_id=%s session_id=%s error=%s",
+            "codex_run_session_persist_skipped run_id=%s session_column=%s session_id=%s error=%s",
             normalized_run_id,
+            normalized_column,
             normalized_session_id,
             exc,
         )
@@ -371,8 +393,9 @@ def invoke_codex_json(
         "issue_description_chars": max(0, int(context.issue_description_chars or 0)),
     }
     context_metrics = _collect_context_injection_metrics(working_dir=context.working_dir)
+    session_column = _session_column_for_context(context=context)
     explicit_session_id = str(context.codex_session_id or "").strip() or None
-    run_session_id = _load_run_codex_session_id(run_id=context.run_id)
+    run_session_id = _load_run_codex_session_id(run_id=context.run_id, session_column=session_column)
     resume_session_id = explicit_session_id or run_session_id
     invocation_started_monotonic = time.monotonic()
     invocation_context = CodexInvocationContext(
@@ -426,6 +449,7 @@ def invoke_codex_json(
                 context=invocation_context,
                 sink_state=sink_state,
                 session_id=session_id,
+                session_column=session_column,
             ),
         )
         return payload
@@ -466,12 +490,22 @@ def invoke_codex_json(
             )
 
 
-def _capture_session_id(*, context: CodexInvocationContext, sink_state: dict[str, int | bool | str], session_id: str) -> None:
+def _capture_session_id(
+    *,
+    context: CodexInvocationContext,
+    sink_state: dict[str, int | bool | str],
+    session_id: str,
+    session_column: str | None,
+) -> None:
     normalized_session_id = str(session_id or "").strip()
     if not normalized_session_id:
         return
     sink_state["codex_session_id"] = normalized_session_id
-    _persist_run_codex_session_id(run_id=context.run_id, session_id=normalized_session_id)
+    _persist_run_codex_session_id(
+        run_id=context.run_id,
+        session_id=normalized_session_id,
+        session_column=session_column,
+    )
 
 
 def _combined_log_sink(
