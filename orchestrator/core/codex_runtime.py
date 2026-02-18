@@ -159,12 +159,13 @@ def _extract_session_id_from_json_line(line: str) -> str | None:
     if not isinstance(payload, dict):
         return None
     event_type = str(payload.get("type") or "").strip().lower()
-    if event_type != "session_meta":
-        return None
-    event_payload = payload.get("payload")
-    if not isinstance(event_payload, dict):
-        return None
-    session_id = str(event_payload.get("id") or "").strip()
+    session_id = ""
+    if event_type == "session_meta":
+        event_payload = payload.get("payload")
+        if isinstance(event_payload, dict):
+            session_id = str(event_payload.get("id") or "").strip()
+    elif event_type in {"thread.started", "thread.resumed"}:
+        session_id = str(payload.get("thread_id") or "").strip()
     if not _UUID_PATTERN.match(session_id):
         return None
     return session_id
