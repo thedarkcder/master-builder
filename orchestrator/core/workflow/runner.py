@@ -260,20 +260,30 @@ class WorkflowRunner:
                     request=request,
                 )
 
-            try:
-                test_result = self._agents.test(request, plan, dev_result, attempt)
-            except Exception as exc:  # pragma: no cover - exercised via tests
+            if route_to_test and last_test_result is not None and last_test_result.passed:
+                test_result = last_test_result
                 history.append(
-                    {"stage": "test", "attempt": str(attempt), "event": f"exception:{exc}"}
+                    {
+                        "stage": "test",
+                        "attempt": str(attempt),
+                        "event": "reused_prior_test_result:unchanged_dev_context",
+                    }
                 )
-                return self._failure(
-                    plan=plan,
-                    stage="test",
-                    message=f"Test stage failed: {exc}",
-                    attempts=attempt,
-                    history=history,
-                    request=request,
-                )
+            else:
+                try:
+                    test_result = self._agents.test(request, plan, dev_result, attempt)
+                except Exception as exc:  # pragma: no cover - exercised via tests
+                    history.append(
+                        {"stage": "test", "attempt": str(attempt), "event": f"exception:{exc}"}
+                    )
+                    return self._failure(
+                        plan=plan,
+                        stage="test",
+                        message=f"Test stage failed: {exc}",
+                        attempts=attempt,
+                        history=history,
+                        request=request,
+                    )
             last_test_result = test_result
             test_blocker = _extract_first_blocker([test_result.feedback, *test_result.guidance])
             if test_blocker is not None:
