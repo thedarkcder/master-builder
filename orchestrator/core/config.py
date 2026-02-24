@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "errors_only"
     codex_db_log_sampling_interval: int = 100
+    codex_persist_turn_completed_usage: bool = True
     codex_raw_log_path: str = "/tmp/orchestrator-codex.ndjson"
     codex_max_output_tokens: int = 1800
     codex_hang_detection_quiet_seconds: int = 300
