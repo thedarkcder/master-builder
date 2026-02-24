@@ -508,6 +508,36 @@ class WorkflowRunnerTests(unittest.TestCase):
             ],
         )
 
+    def test_pm_route_to_test_reuses_prior_passed_test_result(self) -> None:
+        agents = _FakeAgents()
+        agents.review_results_by_attempt[1] = ReviewResult(
+            approved=False,
+            summary=["Docs need updates"],
+            feedback="docs clarification required",
+            pr_url=None,
+        )
+        agents.pm_results_by_attempt[2] = PmPlan(
+            plan_steps=["Re-run review only"],
+            acceptance_criteria=["review approved"],
+            risks=[],
+            next_stage="test",
+        )
+
+        result = WorkflowRunner(agents).run(self._request(loops=2))
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(
+            agents.calls,
+            [
+                "pm:1:-",
+                "dev:1:-",
+                "test:1",
+                "review:1",
+                "pm:2:docs clarification required",
+                "review:2",
+            ],
+        )
+
     def test_pm_selected_execution_capability_mismatch_blocks_before_dev(self) -> None:
         agents = _FakeAgents()
         agents.pm_results_by_attempt[1] = PmPlan(
