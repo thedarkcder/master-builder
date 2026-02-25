@@ -11,6 +11,7 @@ from orchestrator.core.codex_runtime import (
     CodexRuntimeError,
     _extract_json_payload,
     _extract_session_id_from_json_line,
+    _extract_usage_from_json_stdout,
     build_codex_runtime,
 )
 
@@ -45,6 +46,18 @@ class ExtractJsonPayloadTests(unittest.TestCase):
                 '{"type":"session_meta","payload":{"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}}'
             ),
             "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        )
+
+    def test_extract_usage_from_json_stdout_detects_prompt_and_completion_tokens(self) -> None:
+        usage = _extract_usage_from_json_stdout(
+            [
+                '{"type":"response.started"}\n',
+                '{"type":"response.completed","payload":{"usage":{"input_tokens":101,"output_tokens":33,"total_tokens":134}}}\n',
+            ]
+        )
+        self.assertEqual(
+            usage,
+            {"prompt_tokens": 101, "completion_tokens": 33, "total_tokens": 134},
         )
 
 
@@ -85,6 +98,43 @@ class CodexRuntimeTests(unittest.TestCase):
         )
         with self.assertRaises(CodexRuntimeError):
             non_dict_runtime.run_json(system_prompt="s", user_prompt="u")
+
+    def test_run_json_forwards_usage_callback(self) -> None:
+        captured_usage: dict[str, int] = {}
+
+        def _request(  # noqa: ANN001
+            _system_prompt,
+            _user_prompt,
+            _working_dir,
+            _on_log_line,
+            _reasoning_effort,
+            _resume_session_id,
+            _on_session_id,
+            on_usage,
+        ) -> str:
+            if on_usage is not None:
+                on_usage(
+                    {
+                        "prompt_tokens": 12,
+                        "completion_tokens": 5,
+                        "total_tokens": 17,
+                    }
+                )
+            return '{"ok": true}'
+
+        runtime = CodexRuntime(
+            model="m",
+            max_output_tokens=1000,
+            command="override",
+            _request=_request,
+        )
+        payload = runtime.run_json(
+            system_prompt="sys",
+            user_prompt="usr",
+            on_usage=lambda usage: captured_usage.update(usage),
+        )
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(captured_usage, {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17})
 
 
 class BuildCodexRuntimeTests(unittest.TestCase):

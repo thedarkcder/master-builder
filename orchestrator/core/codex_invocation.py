@@ -14,6 +14,7 @@ from uuid import uuid4
 from orchestrator.core.config import get_settings
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.codex_telemetry import build_codex_log_sink
+from orchestrator.core.run_logs import extract_turn_completed_usage
 from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run
@@ -22,6 +23,13 @@ logger = logging.getLogger(__name__)
 _ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
 _WORKFLOW_STAGE_PM = "pm"
 _WORKFLOW_EXECUTION_STAGES = {"dev", "test", "review"}
+_JSON_PARSE_ERROR_MARKERS = (
+    "json",
+    "not include json",
+    "invalid json payload",
+    "expecting value",
+    "empty response",
+)
 
 
 @dataclass(frozen=True)
@@ -370,7 +378,7 @@ def _should_persist_db_line(
 ) -> bool:
     if stream == "system":
         return True
-    if persist_turn_completed_usage and _extract_turn_completed_usage(message) is not None:
+    if persist_turn_completed_usage and extract_turn_completed_usage(message) is not None:
         return True
     if _is_error_like(message):
         return True
@@ -393,6 +401,7 @@ def invoke_codex_json(
     system_prompt: str,
     user_prompt: str,
     extra_on_log_line: Callable[[str, str], None] | None = None,
+    require_json: bool = True,
 ) -> dict:
     invocation_id = context.invocation_id or uuid4().hex
     prompt_metrics = {
@@ -447,6 +456,7 @@ def invoke_codex_json(
     )
     payload: dict | None = None
     failure_reason: str | None = None
+    failure_payload_preview: str | None = None
     try:
         payload = runtime.run_json(
             system_prompt=system_prompt,
@@ -473,9 +483,22 @@ def invoke_codex_json(
         )
         return payload
     except Exception as exc:  # noqa: BLE001
+        if hasattr(exc, "payload_preview") and isinstance(exc.payload_preview, str):
+            failure_payload_preview = exc.payload_preview
         failure_reason = str(exc)
-        if "empty response" in str(exc).lower():
+        failure_reason_lower = failure_reason.lower()
+        if "empty response" in failure_reason_lower:
             sink_state["no_assistant_output_detected"] = True
+        if (
+            not require_json
+            and any(marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS)
+        ):
+            return {
+                "_raw_response": failure_payload_preview or "",
+                "_parse_error": failure_reason,
+                "_stage": context.stage,
+                "_command": context.command,
+            }
         raise
     finally:
         _get_log_writer().flush_invocation(invocation_id=invocation_id)
@@ -494,6 +517,7 @@ def invoke_codex_json(
                 "codex_session_id": str(sink_state.get("codex_session_id") or ""),
                 "output_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
                 "error": failure_reason or "",
+                "failure_payload_preview": failure_payload_preview,
                 "actual_prompt_tokens": usage_state.get("prompt_tokens"),
                 "actual_completion_tokens": usage_state.get("completion_tokens"),
                 "actual_total_tokens": usage_state.get("total_tokens"),
@@ -541,53 +565,6 @@ def _capture_usage_metrics(*, usage_state: dict[str, int | None], usage: dict[st
             usage_state[key] = value
 
 
-def _extract_turn_completed_usage(message: str) -> dict[str, int] | None:
-    try:
-        payload = json.loads(str(message or "").strip())
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    if str(payload.get("type") or "").strip().lower() != "turn.completed":
-        return None
-    usage_payload = payload.get("usage")
-    if not isinstance(usage_payload, dict):
-        return None
-
-    prompt_tokens = _coerce_non_negative_int(usage_payload.get("input_tokens"))
-    completion_tokens = _coerce_non_negative_int(usage_payload.get("output_tokens"))
-    total_tokens = _coerce_non_negative_int(usage_payload.get("total_tokens"))
-    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
-        total_tokens = prompt_tokens + completion_tokens
-    if prompt_tokens is None and completion_tokens is None and total_tokens is None:
-        return None
-    usage: dict[str, int] = {}
-    if prompt_tokens is not None:
-        usage["prompt_tokens"] = prompt_tokens
-    if completion_tokens is not None:
-        usage["completion_tokens"] = completion_tokens
-    if total_tokens is not None:
-        usage["total_tokens"] = total_tokens
-    return usage
-
-
-def _coerce_non_negative_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, str):
-        candidate = value.strip()
-        if not candidate:
-            return None
-        try:
-            parsed = int(candidate, 10)
-        except ValueError:
-            return None
-        return parsed if parsed >= 0 else None
-    return None
-
-
 def _combined_log_sink(
     *,
     context: CodexInvocationContext,
@@ -607,7 +584,14 @@ def _combined_log_sink(
     def _sink(stream: str, message: str) -> None:
         telemetry_sink(stream, message)
         message_text = str(message or "")
-        usage_from_line = _extract_turn_completed_usage(message_text)
+        parsed_usage = extract_turn_completed_usage(message_text)
+        usage_from_line: dict[str, int] | None = None
+        if parsed_usage is not None:
+            usage_from_line = {
+                "prompt_tokens": parsed_usage.input_tokens,
+                "completion_tokens": parsed_usage.output_tokens,
+                "total_tokens": parsed_usage.input_tokens + parsed_usage.output_tokens,
+            }
         if usage_from_line is not None:
             _capture_usage_metrics(usage_state=usage_state, usage=usage_from_line)
         line_counter = int(sink_state.get("raw_lines_written", 0)) + 1

@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.gateway_runtime import run_discord_gateway
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.runs import enqueue_run, resolve_precheck_outcome_for_enqueue
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Run, Tenant
@@ -81,6 +81,9 @@ def _handle_run(*, tenant_id: str, issue_key: str) -> int:
             project_id=None,
             issue_key=issue_key,
             repo_url=None,
+            precheck_outcome=resolve_precheck_outcome_for_enqueue(
+                precheck_outcome="ready_for_agent"
+            ),
         )
         print(
             json.dumps(

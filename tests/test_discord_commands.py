@@ -482,7 +482,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                         clarification_questions=(),
                     ),
                 ),
-            ),
+            ) as precheck_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -504,6 +504,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("## Decision Gate Clarifications", update_kwargs["description"])
         self.assertIn("How to test: Run listed scenario checks.", update_kwargs["description"])
         self.assertIn("Dependencies / Risks: Supabase evaluate-session must be deployed", update_kwargs["description"])
+        precheck_mock.assert_called_once()
 
     def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         self._queue_run(run_id="run-failed-reply-2", issue_key="TP-89", status="failed")
@@ -631,8 +632,8 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.routes.discord.build_codex_runtime", return_value=runtime),
             patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
-                side_effect=[ready_result, ready_result],
-            ),
+                return_value=ready_result,
+            ) as precheck_mock,
             patch(
                 "orchestrator.api.routes.discord._fetch_jira_issue_preview",
                 return_value=JiraIssuePreview(key="TP-91", summary="Run after reply", status="To Do"),
@@ -667,6 +668,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["data"]["run_id"], "run-new-1")
         oauth_client.update_issue_summary_and_description.assert_called_once()
         enqueue_mock.assert_called_once()
+        precheck_mock.assert_called_once()
 
     def test_link_rejects_issue_outside_mapped_project_scope(self) -> None:
         self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")

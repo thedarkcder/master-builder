@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from uuid import uuid4
@@ -17,6 +18,23 @@ from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
 logger = logging.getLogger(__name__)
+ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
+ISSUE_KEY_IN_TEXT_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+
+
+def _resolve_issue_key_hint(*, command_text: str, command_params: dict[str, str] | None) -> str | None:
+    if isinstance(command_params, dict):
+        candidate = str(command_params.get("issue_key") or "").strip().upper()
+        if ISSUE_KEY_PATTERN.fullmatch(candidate):
+            return candidate
+    normalized_command_text = str(command_text or "").strip().upper()
+    match = ISSUE_KEY_IN_TEXT_PATTERN.search(normalized_command_text)
+    if match is None:
+        return None
+    candidate = match.group(0)
+    if ISSUE_KEY_PATTERN.fullmatch(candidate):
+        return candidate
+    return None
 
 
 class DiscordWebhookFollowupService:
@@ -76,6 +94,10 @@ class DiscordWebhookFollowupService:
                         content = f"<@{user_id}> Command failed: tenant is unavailable."
                     else:
                         initial_thread_attempted = False
+                        issue_key: str | None = _resolve_issue_key_hint(
+                            command_text=command_text,
+                            command_params=command_params,
+                        )
                         try:
                             command_response = self._execute_command_ingress(
                                 tenant_id=tenant_id,
@@ -117,6 +139,9 @@ class DiscordWebhookFollowupService:
                                     user_id=user_id,
                                     command_response=command_response,
                                 )
+                                raw_issue_key = str(data.get("issue_key") or "").strip().upper()
+                                if ISSUE_KEY_PATTERN.fullmatch(raw_issue_key):
+                                    issue_key = raw_issue_key
                                 if command_response.command == "reply" and bool(data.get("recheck_required")):
                                     components = self._ask_reply_components()
                                 if command_response.command == "ask" and not reply_to_message_id:
@@ -130,6 +155,7 @@ class DiscordWebhookFollowupService:
                                             user_id=user_id,
                                             content=content,
                                             components=components,
+                                            issue_key=issue_key,
                                         )
                                         sent_to_thread = True
                                     except (DiscordApiError, RuntimeError, ValueError) as exc:
@@ -238,6 +264,7 @@ class DiscordWebhookFollowupService:
                                     user_id=user_id,
                                     content=content,
                                     components=components,
+                                    issue_key=issue_key,
                                 )
                                 sent_to_thread = True
                             except (DiscordApiError, RuntimeError, ValueError) as exc:

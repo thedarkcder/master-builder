@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from urllib.error import HTTPError
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 
@@ -53,6 +54,8 @@ class DiscordApiClient:
                     "This is an egress/IP or client-fingerprint block, not a bot-token validation failure."
                 ) from exc
             raise DiscordApiError(f"Discord API request failed ({exc.code}): {error_body}") from exc
+        except URLError as exc:
+            raise DiscordApiError(f"Discord API request failed (network): {exc}") from exc
 
         if not raw_body:
             return {}

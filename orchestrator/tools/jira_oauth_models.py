@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime
 from typing import Any
 
@@ -43,6 +44,7 @@ class JiraIssueDetail:
     summary: str
     status: str
     description: str
+    labels: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

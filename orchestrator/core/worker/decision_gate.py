@@ -6,10 +6,10 @@ from sqlalchemy import delete
 
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.runs import is_ready_for_agent_precheck, mark_run_terminal
+from orchestrator.storage.models import RunLock
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker.stage_events import decision_gate_required_update
-from orchestrator.storage.models import RunLock
 
 
 def apply_decision_gate(
@@ -25,6 +25,9 @@ def apply_decision_gate(
     blocked_status: str,
     failed_status: str,
 ) -> tuple[object | None, dict | None]:
+    if is_ready_for_agent_precheck(getattr(run, "plan", None)):
+        return None, None
+
     try:
         decision_gate = evaluate_decision_gate_fn(
             tenant_id=run.tenant_id,
