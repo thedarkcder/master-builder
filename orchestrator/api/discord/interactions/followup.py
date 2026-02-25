@@ -394,6 +394,7 @@ def _send_discord_ask_response_with_thread(
     channel_id: str,
     user_id: str,
     content: str,
+    components: list[dict] | None = None,
 ) -> None:  # noqa: ANN001
     token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
@@ -414,14 +415,14 @@ def _send_discord_ask_response_with_thread(
         client.post_message(
             channel_id=channel_id,
             content=content,
-            components=_ask_reply_components(),
+            components=components or _ask_reply_components(),
         )
         return
 
     posted = client.post_message(
         channel_id=channel_id,
         content=content,
-        components=_ask_reply_components(),
+        components=components or _ask_reply_components(),
     )
     posted_message_id = str(posted.get("id") or "").strip()
     if not posted_message_id:

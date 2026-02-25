@@ -1,9 +1,48 @@
 from __future__ import annotations
 
+import json
+from uuid import uuid4
+
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.worker_capabilities import parse_worker_capabilities
+from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.worker_capabilities import (
+    normalize_worker_capability,
+    parse_worker_capabilities,
+    worker_label_for_capability,
+)
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
+
+
+def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: str) -> None:  # noqa: ANN001
+    if run.started_at is None or run.created_at is None:
+        return
+    wait_ms = max(0, int((run.started_at - run.created_at).total_seconds() * 1000))
+    record_run_log_event(
+        session=session,
+        tenant_id=run.tenant_id,
+        project_id=project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
+        invocation_id=uuid4().hex,
+        channel="worker",
+        command="workflow.queue_wait",
+        working_dir=None,
+        stage="telemetry",
+        attempt=None,
+        stream="system",
+        message=json.dumps(
+            {
+                "event_kind": "queue_wait",
+                "queue_wait_ms": wait_ms,
+                "created_at": run.created_at.isoformat(),
+                "started_at": run.started_at.isoformat(),
+            },
+            sort_keys=True,
+        ),
+    )
+    session.commit()
 
 
 def process_next_queued_run(
@@ -31,8 +70,10 @@ def process_next_queued_run(
     plan_posted_update_fn,
     pr_opened_update_fn,
     run_failed_update_fn,
+    run_requeued_capability_update_fn,
     finalize_cancelled_run_fn,
     finalize_workflow_result_fn,
+    requeue_workflow_result_for_capability_fn,
     transition_issue_status_fn,
     emit_agent_event_fn,
     resolve_agent_id_fn,
@@ -58,6 +99,21 @@ def process_next_queued_run(
     tenant = selection.tenant
     agent_id = resolve_agent_id_fn()
 
+    started_run = start_run_fn(
+        session,
+        run=run,
+        expected_status=run_status_queued,
+    )
+    if started_run is None:
+        logger.info(
+            "worker_skipping_run_already_claimed run_id=%s tenant_id=%s issue_key=%s",
+            run.run_id,
+            run.tenant_id,
+            run.issue_key,
+        )
+        return None
+    run = started_run
+
     emit_agent_event_fn(
         event_type="ISSUE_ASSIGNED",
         tenant_id=run.tenant_id,
@@ -67,17 +123,31 @@ def process_next_queued_run(
         agent_id=agent_id,
     )
 
-    decision_gate_run, decision_gate_meta = apply_decision_gate_fn(
-        session=session,
-        run=run,
-        tenant=tenant,
-        settings=settings,
-        send_discord_message_fn=send_discord_message_fn,
-        send_jira_message_fn=send_jira_message_fn,
-        ask_reply_components_fn=ask_reply_components_fn,
-        blocked_status=run_status_blocked,
-        failed_status=run_status_failed,
-    )
+    try:
+        decision_gate_run, decision_gate_meta = apply_decision_gate_fn(
+            session=session,
+            run=run,
+            tenant=tenant,
+            settings=settings,
+            send_discord_message_fn=send_discord_message_fn,
+            send_jira_message_fn=send_jira_message_fn,
+            ask_reply_components_fn=ask_reply_components_fn,
+            blocked_status=run_status_blocked,
+            failed_status=run_status_failed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "worker_decision_gate_failed run_id=%s tenant_id=%s issue_key=%s error=%s",
+            run.run_id,
+            run.tenant_id,
+            run.issue_key,
+            exc,
+        )
+        return fail_guardrail_violation_fn(
+            session,
+            run=run,
+            error=f"Decision Gate evaluation failed: {exc}",
+        )
     if decision_gate_run is not None:
         if decision_gate_meta and isinstance(decision_gate_meta.get("send_result"), object):
             send_result = decision_gate_meta["send_result"]
@@ -115,7 +185,12 @@ def process_next_queued_run(
         tenant_policy=tenant.policy_config,
         project_overrides=project.policy_overrides,
     )
-    start_run_fn(session, run=run)
+    _emit_queue_wait_metric(
+        session=session,
+        run=run,
+        project_id=project.project_id,
+        agent_id=agent_id,
+    )
     if bool(effective_policy.get("allow_jira_transitions")):
         transition_issue_status_fn(
             session=session,
@@ -228,6 +303,33 @@ def process_next_queued_run(
             agent_id=agent_id,
         )
     if not workflow_result.succeeded:
+        capability_requeue_target = _extract_capability_requeue_target(workflow_result)
+        if capability_requeue_target is not None:
+            required_worker_label = worker_label_for_capability(capability_requeue_target)
+            error_text = (
+                workflow_result.diagnostics.message
+                if workflow_result.diagnostics is not None
+                else "Execution capability mismatch"
+            )
+            notifier.append(
+                run_requeued_capability_update_fn(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    jira_url=jira_issue_url,
+                    run_url=run_dashboard_url,
+                    required_worker_label=required_worker_label,
+                    error=error_text,
+                )
+            )
+            return requeue_workflow_result_for_capability_fn(
+                session,
+                run=run,
+                workflow_result=workflow_result,
+                stage_updates=notifier.stage_updates,
+                required_worker_capability=capability_requeue_target,
+                required_worker_label=required_worker_label,
+            )
         error_text = (
             workflow_result.diagnostics.message
             if workflow_result.diagnostics is not None
@@ -298,6 +400,37 @@ def process_next_queued_run(
         workflow_result=workflow_result,
         stage_updates=notifier.stage_updates,
     )
+
+
+def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: ANN001
+    if workflow_result.succeeded:
+        return None
+    diagnostics = workflow_result.diagnostics
+    if diagnostics is None or str(diagnostics.stage or "").strip().lower() != "pm":
+        return None
+    message = str(diagnostics.message or "")
+    if "Execution capability mismatch:" not in message:
+        return None
+    plan = workflow_result.plan
+    if plan is not None:
+        plan_capability = normalize_worker_capability(plan.execution_worker_capability)
+        if plan_capability is not None:
+            return plan_capability
+    for item in diagnostics.history or []:
+        event = str(item.get("event") or "")
+        if not event.startswith("execution_capability_mismatch:"):
+            continue
+        parts = event.split(":")[-1].split(",")
+        for part in parts:
+            key, _, raw_value = part.partition("=")
+            if key.strip() != "required":
+                continue
+            parsed = normalize_worker_capability(raw_value.strip())
+            if parsed is not None:
+                return parsed
+    return None
+
+
 def _format_multiline_jira_comment(*, title: str, lines: list[str], run_id: str) -> str:
     content_lines = [str(line) for line in lines if str(line).strip()]
     if not content_lines:

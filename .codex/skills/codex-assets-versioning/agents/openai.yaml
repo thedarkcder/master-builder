@@ -1,4 +1,0 @@
-interface:
-  display_name: "Codex Assets Versioning"
-  short_description: "Bump codex assets version and dependency pin."
-  default_prompt: "Use $codex-assets-versioning to bump codex assets version and sync dependency pins when packaged .codex assets change."

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.worker.queue_selector import coerce_positive_int
+from orchestrator.core.worker_capabilities import parse_worker_capabilities
 from orchestrator.core.workflow.runner import WorkflowRequest
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.project_repo_checkout import project_repo_dir
@@ -40,6 +41,10 @@ def build_workflow_request_for_run(
     else:
         issue_description = issue_description.strip()
     execution_repo_dir = _resolve_execution_repo_dir(settings=settings, tenant=tenant, project=project)
+    available_worker_capabilities = sorted(
+        parse_worker_capabilities(getattr(settings, "worker_capabilities", ""))
+    )
+    current_worker_capability = available_worker_capabilities[0] if available_worker_capabilities else "linux"
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
@@ -51,6 +56,8 @@ def build_workflow_request_for_run(
         max_dev_test_review_loops=max_loops,
         suggested_test_commands=suggested_test_commands,
         execution_repo_dir=execution_repo_dir,
+        current_worker_capability=current_worker_capability,
+        available_worker_capabilities=available_worker_capabilities,
     )
 
 

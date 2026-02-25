@@ -68,6 +68,7 @@ class DiscordReplyTransport:
         channel_id: str,
         user_id: str,
         content: str,
+        components: list[dict] | None = None,
     ) -> None:
         self._send_ask_with_thread(
             session=session,
@@ -76,6 +77,7 @@ class DiscordReplyTransport:
             channel_id=channel_id,
             user_id=user_id,
             content=content,
+            components=components,
         )
 
     def send_seed_with_thread(

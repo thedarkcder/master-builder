@@ -23,6 +23,8 @@ from orchestrator.storage.models import Run, Tenant
 
 DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
 DECISION_GATE_BLOCK_END = "<!-- decision-gate-clarifications:end -->"
+PRECHECK_BOARD_BLOCK_START = "<!-- precheck-board-context:start -->"
+PRECHECK_BOARD_BLOCK_END = "<!-- precheck-board-context:end -->"
 
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
@@ -89,6 +91,92 @@ def _upsert_decision_gate_clarifications_block(*, current_description: str, bloc
     return f"{current}\n\n{block}"
 
 
+def _upsert_block(*, current_description: str, block: str, start_marker: str, end_marker: str) -> str:
+    current = str(current_description or "").strip()
+    if not current:
+        return block
+    start_idx = current.find(start_marker)
+    end_idx = current.find(end_marker)
+    if start_idx >= 0 and end_idx > start_idx:
+        end_of_marker = end_idx + len(end_marker)
+        prefix = current[:start_idx].rstrip()
+        suffix = current[end_of_marker:].lstrip()
+        if prefix and suffix:
+            return f"{prefix}\n\n{block}\n\n{suffix}"
+        if prefix:
+            return f"{prefix}\n\n{block}"
+        if suffix:
+            return f"{block}\n\n{suffix}"
+        return block
+    return f"{current}\n\n{block}"
+
+
+def _build_board_context_block(
+    *,
+    issue_key: str,
+    project_key: str,
+    issues: list[Any],
+) -> str:
+    status_counts: dict[str, int] = {}
+    lines: list[str] = []
+    for issue in issues:
+        key = str(getattr(issue, "key", "") or "").strip().upper()
+        if not key or key == issue_key:
+            continue
+        summary = str(getattr(issue, "summary", "") or "").strip()
+        status_name = str(getattr(issue, "status", "") or "").strip() or "Unknown"
+        status_counts[status_name] = status_counts.get(status_name, 0) + 1
+        lines.append(f"- {key} [{status_name}] {summary}")
+        if len(lines) >= 12:
+            break
+    if not lines:
+        return ""
+    counts = ", ".join(f"{name}={count}" for name, count in sorted(status_counts.items(), key=lambda item: item[0].lower()))
+    block_lines = [
+        PRECHECK_BOARD_BLOCK_START,
+        f"## Board Context ({project_key})",
+        "Recent related tickets in this project:",
+        *lines,
+        f"Status counts: {counts}",
+        PRECHECK_BOARD_BLOCK_END,
+    ]
+    return "\n".join(block_lines)
+
+
+def _build_precheck_description(
+    *,
+    issue_description: str | None,
+    issue_key: str,
+    project_key: str,
+    search_issues_for_tenant: Callable[..., Any],
+    session: Session,
+    tenant: Tenant,
+) -> str | None:
+    jql = f'project = "{project_key}" ORDER BY updated DESC'
+    try:
+        issues = search_issues_for_tenant(
+            session=session,
+            tenant=tenant,
+            jql=jql,
+            max_results=20,
+        )
+    except HTTPException:
+        return issue_description
+    block = _build_board_context_block(
+        issue_key=issue_key,
+        project_key=project_key,
+        issues=list(issues or []),
+    )
+    if not block:
+        return issue_description
+    return _upsert_block(
+        current_description=str(issue_description or ""),
+        block=block,
+        start_marker=PRECHECK_BOARD_BLOCK_START,
+        end_marker=PRECHECK_BOARD_BLOCK_END,
+    )
+
+
 def _plan_decision_gate_jira_update(
     *,
     runtime,  # noqa: ANN001
@@ -98,6 +186,13 @@ def _plan_decision_gate_jira_update(
     current_description: str,
     reply_text: str,
 ) -> tuple[str, str]:
+    def _normalize_dependencies_and_risks(value: object) -> str:
+        if isinstance(value, list):
+            normalized = [str(item).strip() for item in value if str(item).strip()]
+            return "; ".join(normalized)
+        text = str(value or "").strip()
+        return text
+
     payload = invoke_codex_json(
         runtime=runtime,
         context=invocation_context,
@@ -105,7 +200,8 @@ def _plan_decision_gate_jira_update(
             "You extract Decision Gate clarification fields from a user reply. "
             "Return strict JSON only with keys: "
             "summary, objective, scope, acceptance_criteria, how_to_test, nfr_intent, "
-            "reliability_security_constraints, out_of_scope, rollout_constraints, decision_owner. "
+            "reliability_security_constraints, out_of_scope, rollout_constraints, decision_owner, "
+            "dependencies_and_risks. "
             "Do not rewrite the full ticket body."
         ),
         user_prompt=(
@@ -136,6 +232,9 @@ def _plan_decision_gate_jira_update(
     out_of_scope = str(payload.get("out_of_scope") or "").strip() or "Not specified."
     rollout_constraints = str(payload.get("rollout_constraints") or "").strip() or "Not specified."
     decision_owner = str(payload.get("decision_owner") or "").strip() or "Not specified."
+    dependencies_and_risks = _normalize_dependencies_and_risks(
+        payload.get("dependencies_and_risks")
+    ) or "Not specified."
     clarification_block = "\n".join(
         [
             DECISION_GATE_BLOCK_START,
@@ -148,6 +247,7 @@ def _plan_decision_gate_jira_update(
             f"Mandatory reliability/security constraints: {reliability_security}",
             f"Explicitly out of scope: {out_of_scope}",
             f"Rollout/migration constraints: {rollout_constraints}",
+            f"Dependencies / Risks: {dependencies_and_risks}",
             f"Decision owner: {decision_owner}",
             DECISION_GATE_BLOCK_END,
         ]
@@ -178,6 +278,7 @@ def dispatch_run_control_command(
     evaluate_decision_gate: Callable[..., Any],
     ensure_issue_is_executable: Callable[..., Any],
     resolve_codex_working_dir: Callable[..., str],
+    search_issues_for_tenant: Callable[..., Any],
 ) -> DiscordCommandResponse | None:
     if command_name == "run":
         if len(arguments) != 1:
@@ -194,22 +295,39 @@ def dispatch_run_control_command(
                 detail=f"Issue {issue_key} is outside the mapped project scope",
             )
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
-        ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
+        ensure_issue_is_executable(
+            issue_status=issue_preview.status,
+            tenant=tenant,
+            extra_executable_statuses=("In Progress",),
+        )
         issue_description: str | None = None
+        issue_labels: list[str] | None = None
         try:
             issue_detail = fetch_issue_detail(session=session, tenant=tenant, issue_key=issue_key)
             refreshed_description = str(getattr(issue_detail, "description", "") or "").strip()
             if refreshed_description:
                 issue_description = refreshed_description
+            labels_raw = getattr(issue_detail, "labels", None)
+            if isinstance(labels_raw, list):
+                issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()]
         except HTTPException:
             issue_description = None
+            issue_labels = None
+        precheck_description = _build_precheck_description(
+            issue_description=issue_description,
+            issue_key=issue_key,
+            project_key=project.jira_project_key,
+            search_issues_for_tenant=search_issues_for_tenant,
+            session=session,
+            tenant=tenant,
+        )
         pre_check = evaluate_pre_run_check(
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
             issue_key=issue_key,
             issue_summary=issue_preview.summary,
-            issue_description=issue_description,
-            issue_labels=None,
+            issue_description=precheck_description,
+            issue_labels=issue_labels,
             ready_label=(tenant.jira_config or {}).get("ready_label"),
         )
         if pre_check.decision_gate_triggered:
@@ -315,15 +433,24 @@ def dispatch_run_control_command(
                 detail=f"Run {run.run_id} is {run.status}; only failed/blocked/cancelled runs can be retried",
             )
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=run.issue_key)
-        ensure_issue_is_executable(issue_status=issue_preview.status, tenant=tenant)
+        ensure_issue_is_executable(
+            issue_status=issue_preview.status,
+            tenant=tenant,
+            extra_executable_statuses=("In Progress",),
+        )
         issue_description = run.issue_description
+        issue_labels: list[str] | None = None
         try:
             issue_detail = fetch_issue_detail(session=session, tenant=tenant, issue_key=run.issue_key)
             refreshed_description = str(getattr(issue_detail, "description", "") or "").strip()
             if refreshed_description:
                 issue_description = refreshed_description
+            labels_raw = getattr(issue_detail, "labels", None)
+            if isinstance(labels_raw, list):
+                issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()]
         except HTTPException:
             issue_description = run.issue_description
+            issue_labels = None
         project = resolve_project_for_issue(
             session=session,
             tenant=tenant,
@@ -334,13 +461,21 @@ def dispatch_run_control_command(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Issue {run.issue_key} is outside the mapped project scope",
             )
+        precheck_description = _build_precheck_description(
+            issue_description=issue_description,
+            issue_key=run.issue_key,
+            project_key=project.jira_project_key,
+            search_issues_for_tenant=search_issues_for_tenant,
+            session=session,
+            tenant=tenant,
+        )
         pre_check = evaluate_pre_run_check(
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
             issue_key=run.issue_key,
             issue_summary=issue_preview.summary,
-            issue_description=issue_description,
-            issue_labels=None,
+            issue_description=precheck_description,
+            issue_labels=issue_labels,
             ready_label=(tenant.jira_config or {}).get("ready_label"),
         )
         if pre_check.decision_gate_triggered:
@@ -431,14 +566,9 @@ def dispatch_run_control_command(
             .order_by(Run.created_at.desc())
             .limit(1)
         ).scalar_one_or_none()
-        if run is None:
-            return DiscordCommandResponse(
-                ok=True,
-                command=command_name,
-                message=f"No retryable run was found for `{issue_key}`.",
-                data={"issue_key": issue_key},
-            )
+        has_retryable_run = run is not None
         settings = settings_factory()
+        issue_labels: list[str] | None = None
         try:
             oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
             oauth_client = _oauth_context_value(oauth, "client")
@@ -488,19 +618,29 @@ def dispatch_run_control_command(
                 summary=updated_summary,
                 description=updated_description,
             )
+            labels_raw = getattr(issue_detail, "labels", None)
+            issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()] if isinstance(labels_raw, list) else None
         except (HTTPException, CodexRuntimeError, RuntimeError, ValueError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Failed to update Jira context for `{issue_key}`: {exc}",
             ) from exc
 
+        precheck_description = _build_precheck_description(
+            issue_description=updated_description,
+            issue_key=issue_key,
+            project_key=project.jira_project_key,
+            search_issues_for_tenant=search_issues_for_tenant,
+            session=session,
+            tenant=tenant,
+        )
         pre_check = evaluate_pre_run_check(
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
             issue_key=issue_key,
             issue_summary=updated_summary,
-            issue_description=updated_description,
-            issue_labels=None,
+            issue_description=precheck_description,
+            issue_labels=issue_labels,
             ready_label=None,
         )
         if pre_check.decision_gate_triggered:
@@ -548,12 +688,35 @@ def dispatch_run_control_command(
                 },
             )
 
+        if has_retryable_run:
+            return dispatch_run_control_command(
+                session=session,
+                tenant=tenant,
+                tenant_id=tenant_id,
+                payload=payload,
+                command_name="retry",
+                arguments=[issue_key],
+                scope=scope,
+                retryable_statuses=retryable_statuses,
+                resolve_project_for_issue=resolve_project_for_issue,
+                fetch_issue_preview=fetch_issue_preview,
+                fetch_issue_detail=fetch_issue_detail,
+                settings_factory=settings_factory,
+                build_codex_runtime=build_codex_runtime,
+                tenant_jira_oauth_context=tenant_jira_oauth_context,
+                evaluate_decision_gate=evaluate_decision_gate,
+                ensure_issue_is_executable=ensure_issue_is_executable,
+                resolve_codex_working_dir=resolve_codex_working_dir,
+                search_issues_for_tenant=search_issues_for_tenant,
+            )
+
+        # Pre-run clarification path: no retryable run exists yet, so queue initial run.
         return dispatch_run_control_command(
             session=session,
             tenant=tenant,
             tenant_id=tenant_id,
             payload=payload,
-            command_name="retry",
+            command_name="run",
             arguments=[issue_key],
             scope=scope,
             retryable_statuses=retryable_statuses,
@@ -566,6 +729,7 @@ def dispatch_run_control_command(
             evaluate_decision_gate=evaluate_decision_gate,
             ensure_issue_is_executable=ensure_issue_is_executable,
             resolve_codex_working_dir=resolve_codex_working_dir,
+            search_issues_for_tenant=search_issues_for_tenant,
         )
 
     return None

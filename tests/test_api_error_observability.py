@@ -19,8 +19,6 @@ class ApiErrorObservabilityTests(unittest.TestCase):
             patch("orchestrator.api.main.run_migrations"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.api.main.DiscordGatewayListener.start"),
-            patch("orchestrator.api.main.DiscordGatewayListener.stop"),
             patch("orchestrator.api.main.logger.exception") as exception_log,
             patch("orchestrator.api.main.emit_hard_error") as hard_error,
             TestClient(app, raise_server_exceptions=False) as client,
@@ -43,8 +41,6 @@ class ApiErrorObservabilityTests(unittest.TestCase):
             patch("orchestrator.api.main.run_migrations"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.api.main.DiscordGatewayListener.start"),
-            patch("orchestrator.api.main.DiscordGatewayListener.stop"),
             patch("orchestrator.api.main.logger.error") as error_log,
             TestClient(app, raise_server_exceptions=False) as client,
         ):
@@ -69,8 +65,6 @@ class ApiErrorObservabilityTests(unittest.TestCase):
             patch("orchestrator.api.main.run_migrations"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.api.main.DiscordGatewayListener.start"),
-            patch("orchestrator.api.main.DiscordGatewayListener.stop"),
             TestClient(app, raise_server_exceptions=False) as client,
         ):
             response = client.get("/_test/http-401")
@@ -85,8 +79,6 @@ class ApiErrorObservabilityTests(unittest.TestCase):
             patch("orchestrator.api.main.run_migrations"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.api.main.DiscordGatewayListener.start"),
-            patch("orchestrator.api.main.DiscordGatewayListener.stop"),
             patch("orchestrator.api.main.request_logger.info") as info_log,
             TestClient(app, raise_server_exceptions=False) as client,
         ):

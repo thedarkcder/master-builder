@@ -20,6 +20,8 @@ class WorkflowRequest:
     suggested_test_commands: list[str] = field(default_factory=list)
     execution_repo_dir: str | None = None
     project_id: str | None = None
+    current_worker_capability: str = "linux"
+    available_worker_capabilities: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class PmPlan:
     acceptance_criteria: list[str]
     risks: list[str]
     next_stage: str = "dev"
+    execution_worker_capability: str = "linux"
 
 
 @dataclass(frozen=True)
@@ -194,6 +197,27 @@ class WorkflowRunner:
                     history=history,
                     request=request,
                 )
+            current_worker_capability = _normalize_worker_capability(request.current_worker_capability)
+            execution_worker_capability = _normalize_worker_capability(plan.execution_worker_capability)
+            if execution_worker_capability != current_worker_capability:
+                mismatch_event = (
+                    "execution_capability_mismatch:"
+                    f"required={execution_worker_capability},"
+                    f"current={current_worker_capability}"
+                )
+                history.append({"stage": "pm", "attempt": str(attempt), "event": mismatch_event})
+                return self._failure(
+                    plan=plan,
+                    stage="pm",
+                    message=(
+                        "Execution capability mismatch: PM selected "
+                        f"{execution_worker_capability} but current worker is {current_worker_capability}. "
+                        f"Requeue on worker:{execution_worker_capability} before dev/test/review."
+                    ),
+                    attempts=attempt,
+                    history=history,
+                    request=request,
+                )
 
             desired_next_stage = str(plan.next_stage or "dev").strip().lower()
             route_to_test = desired_next_stage == "test" and last_dev_result is not None
@@ -314,14 +338,20 @@ class WorkflowRunner:
             review_blocker = _extract_first_blocker([review_result.feedback, *review_result.summary])
             if review_blocker is not None:
                 history.append({"stage": "review", "attempt": str(attempt), "event": review_blocker})
-                return self._failure(
-                    plan=plan,
-                    stage="review",
-                    message=f"Review stage blocked: {review_blocker}",
-                    attempts=attempt,
-                    history=history,
-                    request=request,
-                )
+                feedback = review_blocker
+                if attempt >= max_attempts:
+                    return self._failure(
+                        plan=plan,
+                        stage="review",
+                        message="Max workflow attempts reached after review blockers",
+                        attempts=attempt,
+                        history=history,
+                        request=request,
+                        dev_rationale=last_dev_result.change_summary if last_dev_result else None,
+                        review_summary=review_result.summary,
+                        review_feedback=review_result.feedback,
+                    )
+                continue
 
             if not review_result.approved:
                 feedback = review_result.feedback or "Review requested changes"
@@ -366,10 +396,18 @@ class WorkflowRunner:
                 review_result=review_result,
                 pr_url=pr_url,
                 attempts=attempt,
+                terminal=attempt >= max_attempts,
                 history=history,
             )
             if placeholder_failure is not None:
-                return placeholder_failure
+                if attempt >= max_attempts:
+                    return placeholder_failure
+                feedback = (
+                    placeholder_failure.diagnostics.message
+                    if placeholder_failure.diagnostics is not None
+                    else "Placeholder policy feedback"
+                )
+                continue
 
             return WorkflowResult(
                 succeeded=True,
@@ -451,6 +489,7 @@ class WorkflowRunner:
         review_result: ReviewResult,
         pr_url: str,
         attempts: int,
+        terminal: bool,
         history: list[dict[str, str]],
     ) -> WorkflowResult | None:
         return evaluate_placeholder_policy(
@@ -460,6 +499,7 @@ class WorkflowRunner:
             review_result=review_result,
             pr_url=pr_url,
             attempts=attempts,
+            terminal=terminal,
             history=history,
             failure_factory=self._failure,
         )
@@ -474,3 +514,12 @@ def _extract_first_blocker(entries: list[str | None]) -> str | None:
         if text.lower().startswith("blocked:"):
             return text
     return None
+
+
+def _normalize_worker_capability(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"mac", "darwin", "osx"}:
+        return "macos"
+    if normalized in {"linux", "macos"}:
+        return normalized
+    return "linux"

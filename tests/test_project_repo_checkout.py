@@ -47,6 +47,9 @@ def test_ensure_project_checkout_clones_when_repo_missing() -> None:
         assert calls[1][0][:3] == ("remote", "set-url", "origin")
         assert (repo_dir / "AGENTS.md").exists()
         assert (repo_dir / ".codex").is_dir()
+        assert (repo_dir / ".gitignore").exists()
+        gitignore_content = (repo_dir / ".gitignore").read_text(encoding="utf-8")
+        assert "Seeded by Master Builder" in gitignore_content
         exclude_lines = (repo_dir / ".git" / "info" / "exclude").read_text(encoding="utf-8")
         assert "AGENTS.md" in exclude_lines
         assert ".codex/" in exclude_lines
@@ -138,3 +141,23 @@ def test_collect_local_repo_context_reads_existing_repo_metadata() -> None:
     assert context.current_branch == "staging"
     assert context.head_sha == "abc123"
     assert context.issue_related_commits == ["abc123 TP-123: work done"]
+
+
+def test_ensure_project_checkout_preserves_existing_gitignore() -> None:
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    with TemporaryDirectory() as tmpdir:
+        repo_dir = Path(tmpdir) / "tenant-a" / "project-1" / "repo"
+        (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+        (repo_dir / ".gitignore").write_text("custom-ignore\n", encoding="utf-8")
+
+        with patch("orchestrator.tools.project_repo_checkout._run_git") as run_git_mock:
+            resolved = ensure_project_checkout(
+                base_dir=tmpdir,
+                tenant_id="tenant-a",
+                project=project,
+                github_installation_token="token-123",
+            )
+
+        assert resolved == repo_dir
+        assert (repo_dir / ".gitignore").read_text(encoding="utf-8") == "custom-ignore\n"
+        run_git_mock.assert_not_called()

@@ -289,3 +289,39 @@ def test_repo_read_allows_mutating_git_command_for_dev_stage() -> None:
 
     assert payload == {"ok": True, "exit_code": 0, "stdout": "", "stderr": ""}
     run_mock.assert_called_once()
+
+
+def test_repo_read_rejects_git_push_for_dev_stage() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "dev"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.agent_tools.subprocess.run") as run_mock:
+            with pytest.raises(PermissionError, match="use github.push_branch"):
+                execute_agent_tool(
+                    session=None,  # type: ignore[arg-type]
+                    settings=None,
+                    tenant_id="example",
+                    project_id="example-default",
+                    run_id="run-1",
+                    issue_key="MAB-1",
+                    stage="dev",
+                    tool_name="repo.read",
+                    tool_args={"command": "git push -u origin jira/MAB-1-test"},
+                )
+    run_mock.assert_not_called()

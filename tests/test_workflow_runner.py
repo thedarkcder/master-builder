@@ -415,7 +415,7 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertTrue(result.succeeded)
         self.assertEqual(feedback_events, [(1, "assertion mismatch in onboarding flow")])
 
-    def test_blocked_review_result_fails_immediately_without_retry(self) -> None:
+    def test_blocked_review_result_retries_dev_with_blocker_feedback(self) -> None:
         agents = _FakeAgents()
         agents.review_results_by_attempt[1] = ReviewResult(
             approved=False,
@@ -425,13 +425,38 @@ class WorkflowRunnerTests(unittest.TestCase):
         )
         result = WorkflowRunner(agents).run(self._request(loops=2))
 
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(
+            agents.calls,
+            [
+                "pm:1:-",
+                "dev:1:-",
+                "test:1",
+                "review:1",
+                "pm:2:Blocked: policy conflict requires decision gate",
+                "dev:2:Blocked: policy conflict requires decision gate",
+                "test:2",
+                "review:2",
+            ],
+        )
+
+    def test_blocked_review_result_fails_at_max_attempt(self) -> None:
+        agents = _FakeAgents()
+        agents.review_results_by_attempt[1] = ReviewResult(
+            approved=False,
+            summary=["Blocked: policy conflict requires decision gate"],
+            feedback=None,
+            pr_url=None,
+        )
+        result = WorkflowRunner(agents).run(self._request(loops=1))
+
         self.assertFalse(result.succeeded)
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "review")
-        self.assertIn("Review stage blocked", result.diagnostics.message)
         self.assertEqual(
-            agents.calls,
-            ["pm:1:-", "dev:1:-", "test:1", "review:1"],
+            result.diagnostics.message,
+            "Max workflow attempts reached after review blockers",
         )
 
     def test_runner_does_not_apply_gtd_preflight_gate(self) -> None:
@@ -483,6 +508,38 @@ class WorkflowRunnerTests(unittest.TestCase):
             ],
         )
 
+    def test_pm_selected_execution_capability_mismatch_blocks_before_dev(self) -> None:
+        agents = _FakeAgents()
+        agents.pm_results_by_attempt[1] = PmPlan(
+            plan_steps=["Plan implementation"],
+            acceptance_criteria=["Feature implemented"],
+            risks=[],
+            next_stage="dev",
+            execution_worker_capability="macos",
+        )
+        request = self._request(loops=1)
+        request = WorkflowRequest(
+            tenant_id=request.tenant_id,
+            run_id=request.run_id,
+            issue_key=request.issue_key,
+            issue_summary=request.issue_summary,
+            issue_description=request.issue_description,
+            max_dev_test_review_loops=request.max_dev_test_review_loops,
+            suggested_test_commands=request.suggested_test_commands,
+            execution_repo_dir=request.execution_repo_dir,
+            project_id=request.project_id,
+            current_worker_capability="linux",
+            available_worker_capabilities=["linux"],
+        )
+
+        result = WorkflowRunner(agents).run(request)
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "pm")
+        self.assertIn("Execution capability mismatch", result.diagnostics.message)
+        self.assertEqual(agents.calls, ["pm:1:-"])
+
     def test_placeholder_without_tracked_followup_blocks_with_draft_followup(self) -> None:
         agents = _FakeAgents()
         agents.review_results_by_attempt[1] = ReviewResult(
@@ -522,3 +579,41 @@ class WorkflowRunnerTests(unittest.TestCase):
         self.assertEqual(result.diagnostics.stage, "review")
         self.assertIn("tracked follow-up issue(s) present", result.diagnostics.message)
         self.assertIsNone(result.follow_up_issue)
+
+    def test_placeholder_without_tracked_followup_retries_before_terminal(self) -> None:
+        agents = _FakeAgents()
+        agents.review_results_by_attempt[1] = ReviewResult(
+            approved=True,
+            summary=["TODO: finish webhook validation for orchestrator/api/routes/webhook.py"],
+            feedback=None,
+            pr_url=None,
+        )
+        agents.review_results_by_attempt[2] = ReviewResult(
+            approved=True,
+            summary=["TODO: finish webhook validation for orchestrator/api/routes/webhook.py"],
+            feedback=None,
+            pr_url=None,
+        )
+
+        result = WorkflowRunner(agents).run(self._request(loops=2))
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "review")
+        self.assertEqual(
+            result.diagnostics.message,
+            "Placeholder content detected without tracked follow-up issue. Created backlog follow-up draft and blocked the run.",
+        )
+        self.assertEqual(
+            agents.calls,
+            [
+                "pm:1:-",
+                "dev:1:-",
+                "test:1",
+                "review:1",
+                "pm:2:Placeholder content detected without tracked follow-up issue. Remove placeholders or cite a tracked issue key in review context.",
+                "dev:2:Placeholder content detected without tracked follow-up issue. Remove placeholders or cite a tracked issue key in review context.",
+                "test:2",
+                "review:2",
+            ],
+        )
