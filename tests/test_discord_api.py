@@ -4,6 +4,7 @@ import json
 import unittest
 from io import BytesIO
 from urllib.error import HTTPError
+from urllib.error import URLError
 from unittest.mock import patch
 
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError, DiscordTextChannel
@@ -72,6 +73,12 @@ class DiscordApiClientTests(unittest.TestCase):
         )
         with patch("orchestrator.tools.discord_api.urlopen", side_effect=error):
             with self.assertRaisesRegex(DiscordApiError, "401"):
+                client._request_json(method="GET", path="/test")
+
+    def test_request_json_handles_network_url_error(self) -> None:
+        client = DiscordApiClient(bot_token="token")
+        with patch("orchestrator.tools.discord_api.urlopen", side_effect=URLError("[Errno 8] nodename nor servname provided")):
+            with self.assertRaisesRegex(DiscordApiError, "network"):
                 client._request_json(method="GET", path="/test")
 
     def test_list_text_channels_filters_and_normalizes(self) -> None:

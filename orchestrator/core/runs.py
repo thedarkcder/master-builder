@@ -38,6 +38,41 @@ class EnqueueRunResult:
     run: Run
 
 
+def _normalize_precheck_outcome(raw_outcome: object | None) -> str | None:
+    if not isinstance(raw_outcome, str):
+        return None
+    normalized_outcome = raw_outcome.strip()
+    return normalized_outcome if normalized_outcome else None
+
+
+def resolve_precheck_outcome_from_plan(plan: object | None) -> str | None:
+    if not isinstance(plan, dict):
+        return None
+    pre_check_payload = plan.get("pre_check")
+    if not isinstance(pre_check_payload, dict):
+        return None
+    raw_outcome = pre_check_payload.get("outcome")
+    if not isinstance(raw_outcome, str):
+        return None
+    normalized_outcome = raw_outcome.strip()
+    return normalized_outcome if normalized_outcome else None
+
+
+def resolve_precheck_outcome_for_enqueue(
+    *,
+    precheck_outcome: str | None,
+    precheck_source_plan: object | None = None,
+) -> str | None:
+    normalized_outcome = _normalize_precheck_outcome(precheck_outcome)
+    if normalized_outcome is not None:
+        return normalized_outcome
+    return resolve_precheck_outcome_from_plan(precheck_source_plan)
+
+
+def is_ready_for_agent_precheck(plan: object | None) -> bool:
+    return (resolve_precheck_outcome_from_plan(plan) or "").casefold() == "ready_for_agent"
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -107,6 +142,8 @@ def enqueue_run(
     issue_description: str | None = None,
     repo_url: str | None = None,
     delivery_id: str | None = None,
+    precheck_outcome: str | None = None,
+    precheck_source_plan: object | None = None,
     max_concurrent_runs: int | None = None,
 ) -> EnqueueRunResult:
     if delivery_id:
@@ -142,6 +179,10 @@ def enqueue_run(
             )
 
     now = _now()
+    normalized_precheck_outcome = resolve_precheck_outcome_for_enqueue(
+        precheck_outcome=precheck_outcome,
+        precheck_source_plan=precheck_source_plan,
+    )
     run = Run(
         run_id=str(uuid4()),
         tenant_id=tenant_id,
@@ -152,9 +193,11 @@ def enqueue_run(
         repo_url=repo_url,
         branch=None,
         pr_url=None,
+        plan=None
+        if normalized_precheck_outcome is None
+        else {"pre_check": {"outcome": normalized_precheck_outcome}},
         status=RUN_STATUS_QUEUED,
         last_error=None,
-        plan=None,
         created_at=now,
         started_at=None,
         finished_at=None,

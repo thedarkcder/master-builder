@@ -6,8 +6,7 @@ from sqlalchemy import and_, desc, or_, select
 from fastapi import HTTPException, status
 
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import RunStateTransitionError, cancel_run
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.runs import RunStateTransitionError, cancel_run, enqueue_run
 from orchestrator.core.communications.enqueue_reason_contract import format_enqueue_conflict_detail
 from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent
 
@@ -128,6 +127,7 @@ def rerun_run(
         issue_description=source_run.issue_description,
         repo_url=project.github_repository,
         delivery_id=None,
+        precheck_source_plan=source_run.plan,
         max_concurrent_runs=effective_policy.get("max_concurrent_runs"),
     )
     if not enqueue_result.enqueued:

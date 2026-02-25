@@ -107,7 +107,7 @@ class JiraOAuthIssueService:
         if not normalized_issue:
             raise JiraOAuthError("Missing issue id/key for issue detail fetch")
 
-        query = urlencode({"fields": "summary,status,description"})
+        query = urlencode({"fields": "summary,status,description,labels"})
         payload = self._get_json(
             url=(
                 f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
@@ -136,11 +136,16 @@ class JiraOAuthIssueService:
                 status_name = status_raw.strip()
 
         description = _adf_to_plain_text(fields.get("description")).strip()
+        labels_raw = fields.get("labels")
+        labels: list[str] = []
+        if isinstance(labels_raw, list):
+            labels = [str(label).strip() for label in labels_raw if str(label).strip()]
         return JiraIssueDetail(
             key=key,
             summary=summary,
             status=status_name,
             description=description,
+            labels=labels,
         )
 
     def create_issues_bulk(

@@ -31,6 +31,11 @@ from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
+from orchestrator.core.discord.thread_context import (
+    get_thread_issue_key,
+    normalize_issue_key,
+    put_thread_issue_key,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -202,9 +207,9 @@ def _decision_gate_issue_for_thread(*, session: Session, channel_id: str) -> tup
     )
     if project is None:
         return None
-    raw_map = (project.discord_config or {}).get("decision_gate_thread_issue_by_channel_id")
-    issue_map = raw_map if isinstance(raw_map, dict) else {}
-    issue_key = str(issue_map.get(normalized_channel_id) or "").strip().upper()
+    issue_key = get_thread_issue_key(discord_config=project.discord_config, channel_id=normalized_channel_id)
+    if not issue_key:
+        issue_key = get_thread_issue_key(discord_config=tenant.discord_config, channel_id=normalized_channel_id)
     if not issue_key or ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
         return None
     return tenant.tenant_id, issue_key
@@ -395,6 +400,7 @@ def _send_discord_ask_response_with_thread(
     user_id: str,
     content: str,
     components: list[dict] | None = None,
+    issue_key: str | None = None,
 ) -> None:  # noqa: ANN001
     token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
@@ -411,7 +417,34 @@ def _send_discord_ask_response_with_thread(
         session=session,
         tenant_id=tenant.tenant_id,
     )
+    normalized_issue_key = normalize_issue_key(issue_key)
+
+    def _persist_tenant_thread_issue_binding(*, thread_channel_id: str) -> None:
+        if not normalized_issue_key:
+            return
+        tenant.discord_config = put_thread_issue_key(
+            discord_config=tenant.discord_config,
+            channel_id=thread_channel_id,
+            issue_key=normalized_issue_key,
+        )
+        tenant.updated_at = datetime.now(timezone.utc)
+
+    def _persist_thread_issue_binding(*, project: Project | None, thread_channel_id: str) -> None:
+        if project is None or not normalized_issue_key:
+            return
+        project.discord_config = put_thread_issue_key(
+            discord_config=project.discord_config,
+            channel_id=thread_channel_id,
+            issue_key=normalized_issue_key,
+        )
+        project.updated_at = datetime.now(timezone.utc)
+
     if channel_id in ask_thread_channel_ids:
+        project = _resolve_project_for_channel(session=session, tenant=tenant, channel_id=channel_id)
+        _persist_thread_issue_binding(project=project, thread_channel_id=channel_id)
+        _persist_tenant_thread_issue_binding(thread_channel_id=channel_id)
+        if normalized_issue_key:
+            session.commit()
         client.post_message(
             channel_id=channel_id,
             content=content,
@@ -449,7 +482,17 @@ def _send_discord_ask_response_with_thread(
         project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
         project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
         project.discord_config = project_discord_config
+        _persist_thread_issue_binding(project=project, thread_channel_id=thread_channel_id)
         project.updated_at = datetime.now(timezone.utc)
+    elif normalized_issue_key:
+        # Preserve per-thread issue context when a channel is not project-scoped yet.
+        logger.info(
+            "discord_ask_thread_issue_binding_skipped tenant_id=%s thread_channel_id=%s issue_key=%s reason=project_not_resolved",
+            tenant.tenant_id,
+            thread_channel_id,
+            normalized_issue_key,
+        )
+    _persist_tenant_thread_issue_binding(thread_channel_id=thread_channel_id)
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
     client.post_message(

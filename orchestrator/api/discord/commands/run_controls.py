@@ -18,7 +18,7 @@ from orchestrator.core.communications.enqueue_reason_contract import (
 )
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import cancel_run, enqueue_run
+from orchestrator.core.runs import cancel_run, enqueue_run, resolve_precheck_outcome_for_enqueue
 from orchestrator.storage.models import Run, Tenant
 
 DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
@@ -363,6 +363,9 @@ def dispatch_run_control_command(
             issue_description=issue_description,
             repo_url=project.github_repository,
             delivery_id=None,
+            precheck_outcome=resolve_precheck_outcome_for_enqueue(
+                precheck_outcome=pre_check.outcome
+            ),
             max_concurrent_runs=resolve_effective_policy(
                 tenant_policy=tenant.policy_config,
                 project_overrides=project.policy_overrides,
@@ -511,6 +514,9 @@ def dispatch_run_control_command(
             issue_description=issue_description,
             repo_url=project.github_repository,
             delivery_id=None,
+            precheck_outcome=resolve_precheck_outcome_for_enqueue(
+                precheck_outcome=pre_check.outcome
+            ),
             max_concurrent_runs=resolve_effective_policy(
                 tenant_policy=tenant.policy_config,
                 project_overrides=project.policy_overrides,
@@ -641,7 +647,7 @@ def dispatch_run_control_command(
             issue_summary=updated_summary,
             issue_description=precheck_description,
             issue_labels=issue_labels,
-            ready_label=None,
+            ready_label=(tenant.jira_config or {}).get("ready_label"),
         )
         if pre_check.decision_gate_triggered:
             return DiscordCommandResponse(

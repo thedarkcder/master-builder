@@ -69,6 +69,21 @@ class _FakeEvent:
 
 
 class DiscordGatewayRuntimeTests(unittest.TestCase):
+    def test_run_discord_gateway_registers_command_executor_before_loop(self) -> None:
+        settings = SimpleNamespace(log_level="INFO")
+        with (
+            patch("orchestrator.core.discord.gateway_runtime.get_settings", return_value=settings),
+            patch("orchestrator.core.discord.gateway_runtime.configure_logging"),
+            patch("orchestrator.core.discord.gateway_runtime.register_discord_command_executor") as register_mock,
+            patch("orchestrator.core.discord.gateway_runtime._run_gateway_leader_loop") as run_loop_mock,
+        ):
+            from orchestrator.core.discord.gateway_runtime import run_discord_gateway
+
+            run_discord_gateway()
+
+        register_mock.assert_called_once_with()
+        run_loop_mock.assert_called_once_with(settings=settings)
+
     def test_try_acquire_leader_lock_true_when_pg_returns_true(self) -> None:
         cursor = _CursorCtx((True,))
         conn = _Connection(cursor)
