@@ -221,6 +221,7 @@ def _extract_json_payload(content: str) -> object:
         if not candidates:
             candidates = [stripped[start : end + 1]]
         last_line_error: json.JSONDecodeError | None = None
+        parsed_objects: list[dict[str, object]] = []
         for candidate in candidates:
             try:
                 parsed = json.loads(candidate)
@@ -228,9 +229,12 @@ def _extract_json_payload(content: str) -> object:
                 last_line_error = exc
                 continue
             if isinstance(parsed, dict):
-                return parsed
+                parsed_objects.append(parsed)
             if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
-                return parsed[0]
+                parsed_objects.append(parsed[0])
+        if parsed_objects:
+            return parsed_objects[-1]
+        parsed_line_objects: list[dict[str, object]] = []
         for line in stripped.splitlines():
             line = line.strip()
             if not line:
@@ -241,9 +245,11 @@ def _extract_json_payload(content: str) -> object:
                 last_line_error = line_exc
                 continue
             if isinstance(parsed_line, dict):
-                return parsed_line
+                parsed_line_objects.append(parsed_line)
             if isinstance(parsed_line, list) and len(parsed_line) == 1 and isinstance(parsed_line[0], dict):
-                return parsed_line[0]
+                parsed_line_objects.append(parsed_line[0])
+        if parsed_line_objects:
+            return parsed_line_objects[-1]
         raise CodexRuntimeError(f"Invalid JSON payload from Codex runtime: {last_line_error}") from last_line_error
 
     raise CodexRuntimeError("Codex runtime response did not include JSON")

@@ -34,6 +34,12 @@ class ExtractJsonPayloadTests(unittest.TestCase):
         )
         self.assertEqual(payload, {"decision_gate_required": False, "reason": "ok"})
 
+    def test_extract_json_payload_prefers_terminal_json_object(self) -> None:
+        payload = _extract_json_payload(
+            '{"type":"turn.started"}{"decision_gate_required":false,"reason":"ok"}'
+        )
+        self.assertEqual(payload, {"decision_gate_required": False, "reason": "ok"})
+
     def test_extract_session_id_from_json_line_accepts_thread_and_session_meta(self) -> None:
         self.assertEqual(
             _extract_session_id_from_json_line(
