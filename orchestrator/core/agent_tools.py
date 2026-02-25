@@ -77,6 +77,9 @@ _READ_ONLY_GIT_SUBCOMMANDS = {
     "describe",
     "tag",
 }
+_DEV_STAGE_BLOCKED_GIT_SUBCOMMANDS = {
+    "push",
+}
 
 
 @dataclass(frozen=True)
@@ -207,10 +210,17 @@ def _enforce_repo_command_for_stage(*, stage: str, command: str) -> None:
     if not tokens:
         raise PermissionError("repo.read command must not be empty")
 
-    if str(stage).strip().lower() == "dev":
+    normalized_stage = str(stage).strip().lower()
+    executable = tokens[0]
+    if normalized_stage == "dev":
+        if executable == "git" and len(tokens) >= 2:
+            subcommand = tokens[1]
+            if subcommand in _DEV_STAGE_BLOCKED_GIT_SUBCOMMANDS:
+                raise PermissionError(
+                    "repo.read does not allow 'git push' in dev; use github.push_branch"
+                )
         return
 
-    executable = tokens[0]
     if executable == "git":
         if len(tokens) < 2:
             raise PermissionError("repo.read git command must include a read-only subcommand")

@@ -253,6 +253,8 @@ class RunRead(BaseModel):
     repo_url: str | None
     branch: str | None
     pr_url: str | None
+    dev_session_id: str | None = None
+    pm_session_id: str | None = None
     status: str
     last_error: str | None
     plan: dict | None

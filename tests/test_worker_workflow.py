@@ -66,6 +66,38 @@ class _FailureRunner:
         )
 
 
+class _CapabilityMismatchRunner:
+    def run(self, request):  # noqa: ANN001
+        return WorkflowResult(
+            succeeded=False,
+            plan=PmPlan(
+                plan_steps=["Plan implementation"],
+                acceptance_criteria=["Feature implemented"],
+                risks=["Requires macOS worker"],
+                execution_worker_capability="macos",
+            ),
+            pr_url=None,
+            summary=[],
+            test_guidance=[],
+            attempts=1,
+            diagnostics=WorkflowDiagnostics(
+                stage="pm",
+                message=(
+                    "Execution capability mismatch: PM selected macos but current worker is linux. "
+                    "Requeue on worker:macos before dev/test/review."
+                ),
+                attempts=1,
+                history=[
+                    {
+                        "stage": "pm",
+                        "attempt": "1",
+                        "event": "execution_capability_mismatch:required=macos,current=linux",
+                    }
+                ],
+            ),
+        )
+
+
 class WorkerWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
@@ -261,6 +293,34 @@ class WorkerWorkflowTests(unittest.TestCase):
         self.assertIn("TASK_FAILED", event_types)
         self.assertIn("TEST_FAILED", event_types)
 
+    def test_process_next_queued_run_requeues_when_pm_requires_different_worker_capability(self) -> None:
+        run_id = self._queue_run("TP-3020")
+
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, _CapabilityMismatchRunner())
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "queued")
+            self.assertIsNone(processed.last_error)
+            self.assertIsNone(processed.started_at)
+            self.assertIsNone(processed.finished_at)
+            self.assertIsInstance(processed.plan, dict)
+            self.assertEqual(processed.plan["required_worker_capability"], "macos")
+            self.assertEqual(processed.plan["required_worker_label"], "worker:macos")
+            self.assertTrue(processed.plan["requeued"])
+            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(
+                [entry["stage"] for entry in stage_updates],
+                ["lock_acquired", "plan_posted", "run_requeued_capability_mismatch"],
+            )
+            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3020"})
+            self.assertIsNone(lock)
+
+        events, _ = agent_observability_tracker.snapshot()
+        event_types = [event.event_type for event in events]
+        self.assertIn("TASK_STARTED", event_types)
+        self.assertNotIn("TASK_FAILED", event_types)
+
     def test_process_next_queued_run_blocks_when_decision_gate_is_required(self) -> None:
         run_id = self._queue_run(
             "TP-302",
@@ -295,6 +355,21 @@ class WorkerWorkflowTests(unittest.TestCase):
                 repo_url="https://github.com/example/repo",
             )
             self.assertTrue(retry_enqueue.enqueued)
+
+    def test_process_next_queued_run_fails_and_releases_lock_on_decision_gate_exception(self) -> None:
+        run_id = self._queue_run("TP-3021")
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.worker.execution_service.apply_decision_gate",
+            side_effect=RuntimeError("decision gate parse failed"),
+        ):
+            processed = process_next_queued_run(session, _SuccessRunner())
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "failed")
+            self.assertIn("Decision Gate evaluation failed: decision gate parse failed", processed.last_error or "")
+            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3021"})
+            self.assertIsNone(lock)
 
     def test_decision_gate_notification_includes_reply_components(self) -> None:
         run_id = self._queue_run(

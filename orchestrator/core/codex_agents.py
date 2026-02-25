@@ -7,6 +7,7 @@ from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_co
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.agent_tools import allowed_tools_for_stage
+from orchestrator.core.worker_capabilities import normalize_worker_capability
 from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
@@ -69,6 +70,8 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 run_id=request.run_id,
                 attempt=attempt,
+                reasoning_effort="medium",
+                issue_description_chars=len(request.issue_description or ""),
             ),
             system_prompt=render_prompt("workflow/pm_system.j2"),
             user_prompt=render_prompt(
@@ -101,6 +104,8 @@ class CodexWorkflowAgents:
                     else "none"
                 ),
                 last_review_summary_json=json.dumps(last_review_result.summary if last_review_result else []),
+                current_worker_capability=request.current_worker_capability,
+                available_worker_capabilities_json=json.dumps(request.available_worker_capabilities),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("pm"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -116,6 +121,11 @@ class CodexWorkflowAgents:
         next_stage = str(payload.get("next_stage") or "dev").strip().lower()
         if next_stage not in {"dev", "test"}:
             next_stage = "dev"
+        execution_worker_capability = (
+            normalize_worker_capability(payload.get("execution_worker_capability"))
+            or normalize_worker_capability(request.current_worker_capability)
+            or "linux"
+        )
         return PmPlan(
             plan_steps=_string_list(payload.get("plan_steps"), fallback=["Analyze scope", "Implement", "Validate"]),
             acceptance_criteria=_string_list(
@@ -124,6 +134,7 @@ class CodexWorkflowAgents:
             ),
             risks=_string_list(payload.get("risks"), fallback=[]),
             next_stage=next_stage,
+            execution_worker_capability=execution_worker_capability,
         )
 
     def dev(
@@ -145,6 +156,8 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 run_id=request.run_id,
                 attempt=attempt,
+                reasoning_effort="medium",
+                issue_description_chars=len(request.issue_description or ""),
             ),
             system_prompt=render_prompt("workflow/dev_system.j2"),
             user_prompt=render_prompt(
@@ -202,6 +215,8 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 run_id=request.run_id,
                 attempt=attempt,
+                reasoning_effort="medium",
+                issue_description_chars=len(request.issue_description or ""),
             ),
             system_prompt=render_prompt("workflow/test_system.j2"),
             user_prompt=render_prompt(
@@ -256,6 +271,8 @@ class CodexWorkflowAgents:
                 issue_key=request.issue_key,
                 run_id=request.run_id,
                 attempt=attempt,
+                reasoning_effort="medium",
+                issue_description_chars=len(request.issue_description or ""),
             ),
             system_prompt=render_prompt("workflow/review_system.j2"),
             user_prompt=render_prompt(

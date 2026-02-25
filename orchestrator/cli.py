@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
 from orchestrator.core.config import get_settings
+from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.runs import enqueue_run
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
@@ -30,6 +31,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("worker", help="Run background worker loop")
+    subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("migrate", help="Apply DB migrations")
 
     run_parser = subparsers.add_parser("run", help="Queue a manual run for a tenant issue")
@@ -196,6 +198,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "worker":
         worker_main()
+        return 0
+
+    if args.command == "discord-gateway":
+        run_discord_gateway()
         return 0
 
     if args.command == "migrate":

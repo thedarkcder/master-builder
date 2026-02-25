@@ -100,6 +100,8 @@ class Run(Base):
     repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    dev_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    pm_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)

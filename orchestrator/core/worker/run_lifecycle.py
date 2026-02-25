@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import delete
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.workflow.runner import WorkflowResult
 from orchestrator.storage.models import Project, Run, RunLock
+from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
@@ -26,9 +28,31 @@ def _release_run_lock(session: Session, *, run: Run) -> None:
     )
 
 
-def start_run(session: Session, *, run: Run) -> Run:
+def start_run(session: Session, *, run: Run, expected_status: str | None = None) -> Run | None:
+    started_at = datetime.now(timezone.utc)
+    if expected_status is None:
+        run.status = RUN_STATUS_RUNNING
+        run.started_at = started_at
+        session.commit()
+        session.refresh(run)
+        return run
+
+    result = session.execute(
+        update(Run)
+        .where(
+            Run.run_id == run.run_id,
+            Run.status == expected_status,
+        )
+        .values(
+            status=RUN_STATUS_RUNNING,
+            started_at=started_at,
+        )
+    )
+    if int(result.rowcount or 0) == 0:
+        session.rollback()
+        return None
     run.status = RUN_STATUS_RUNNING
-    run.started_at = datetime.now(timezone.utc)
+    run.started_at = started_at
     session.commit()
     session.refresh(run)
     return run
@@ -139,6 +163,38 @@ def finalize_workflow_result(
         else:
             run.last_error = "Workflow failed without diagnostics"
 
+    _release_run_lock(session, run=run)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def requeue_workflow_result_for_capability(
+    session: Session,
+    *,
+    run: Run,
+    workflow_result: WorkflowResult,
+    stage_updates: list[dict[str, str]],
+    required_worker_capability: str,
+    required_worker_label: str,
+) -> Run:
+    plan_payload = workflow_result.to_plan_payload()
+    plan_payload["stage_updates"] = stage_updates
+    plan_payload["required_worker_capability"] = required_worker_capability
+    plan_payload["required_worker_label"] = required_worker_label
+    plan_payload["requeued"] = True
+    run.plan = plan_payload
+    run.status = "queued"
+    run.last_error = None
+    run.started_at = None
+    run.finished_at = None
+    notify_run_enqueued(
+        session,
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+    )
     _release_run_lock(session, run=run)
     session.commit()
     session.refresh(run)

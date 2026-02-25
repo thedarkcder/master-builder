@@ -12,3 +12,4 @@ dist/
 coverage.xml
 .cloudflared/*.json
 !.cloudflared/config.yml
+.workdirs/
