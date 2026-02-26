@@ -155,7 +155,8 @@ def extract_turn_completed_usage(message: str) -> ParsedTurnUsage | None:
         if fallback_total is None:
             return None
         normalized_input = 0
-        normalized_output = 0
+        # Provider omitted token split; preserve aggregate usage in one bucket.
+        normalized_output = fallback_total
     if normalized_cached is None:
         normalized_cached = 0
 

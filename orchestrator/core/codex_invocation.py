@@ -12,7 +12,7 @@ from typing import Callable
 from uuid import uuid4
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.codex_runtime import CodexRuntime
+from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.codex_telemetry import build_codex_log_sink
 from orchestrator.core.run_logs import extract_turn_completed_usage
 from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
@@ -24,9 +24,9 @@ _ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
 _WORKFLOW_STAGE_PM = "pm"
 _WORKFLOW_EXECUTION_STAGES = {"dev", "test", "review"}
 _JSON_PARSE_ERROR_MARKERS = (
-    "json",
     "not include json",
     "invalid json payload",
+    "did not return a json object",
     "expecting value",
     "empty response",
 )
@@ -394,6 +394,13 @@ def _enqueue_codex_log_line(*, context: CodexInvocationContext, stream: str, mes
     writer.enqueue(context=context, stream=stream, message=message)
 
 
+def _is_recoverable_json_parse_failure(exc: Exception) -> bool:
+    if not isinstance(exc, CodexRuntimeError):
+        return False
+    failure_reason_lower = str(exc).lower()
+    return any(marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS)
+
+
 def invoke_codex_json(
     *,
     runtime: CodexRuntime,
@@ -489,10 +496,7 @@ def invoke_codex_json(
         failure_reason_lower = failure_reason.lower()
         if "empty response" in failure_reason_lower:
             sink_state["no_assistant_output_detected"] = True
-        if (
-            not require_json
-            and any(marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS)
-        ):
+        if not require_json and _is_recoverable_json_parse_failure(exc):
             return {
                 "_raw_response": failure_payload_preview or "",
                 "_parse_error": failure_reason,
