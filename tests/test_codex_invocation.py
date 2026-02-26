@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
-from orchestrator.core.codex_runtime import CodexRuntime
+from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 
 
 class CodexInvocationTests(unittest.TestCase):
@@ -378,6 +378,73 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(finished_payload["actual_completion_tokens"], 9)
         self.assertEqual(finished_payload["actual_total_tokens"], 50)
         self.assertEqual(finished_payload["actual_usage_observed"], True)
+
+    def test_invoke_codex_json_non_json_fallback_only_for_parse_failures(self) -> None:
+        class _Runtime:
+            def run_json(self, **_kwargs):  # noqa: ANN003
+                raise CodexRuntimeError(
+                    "Invalid JSON payload from Codex runtime: Expecting value",
+                    payload_preview="not-json",
+                )
+
+        context = CodexInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="dev",
+            working_dir=".",
+            run_id="run-1",
+        )
+
+        class _Writer:
+            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
+                _ = invocation_id
+                return None
+
+        with patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()):
+            payload = invoke_codex_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                require_json=False,
+            )
+
+        self.assertEqual(payload["_raw_response"], "not-json")
+        self.assertIn("invalid json payload", payload["_parse_error"].lower())
+
+    def test_invoke_codex_json_non_json_fallback_does_not_swallow_runtime_failures(self) -> None:
+        class _Runtime:
+            def run_json(self, **_kwargs):  # noqa: ANN003
+                raise CodexRuntimeError("Codex CLI command failed with exit code 2: unknown option --json")
+
+        context = CodexInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="dev",
+            working_dir=".",
+            run_id="run-1",
+        )
+
+        class _Writer:
+            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
+                _ = invocation_id
+                return None
+
+        with (
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            self.assertRaises(CodexRuntimeError),
+        ):
+            invoke_codex_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                require_json=False,
+            )
 
 
 if __name__ == "__main__":
