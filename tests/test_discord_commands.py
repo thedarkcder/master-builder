@@ -504,7 +504,13 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("## Decision Gate Clarifications", update_kwargs["description"])
         self.assertIn("How to test: Run listed scenario checks.", update_kwargs["description"])
         self.assertIn("Dependencies / Risks: Supabase evaluate-session must be deployed", update_kwargs["description"])
-        precheck_mock.assert_called_once()
+        self.assertEqual(precheck_mock.call_count, 2)
+        first_call = precheck_mock.call_args_list[0].kwargs
+        second_call = precheck_mock.call_args_list[1].kwargs
+        self.assertEqual(first_call["issue_key"], "TP-88")
+        self.assertEqual(first_call["issue_summary"], "Old summary | DG clarified")
+        self.assertEqual(second_call["issue_key"], "TP-88")
+        self.assertEqual(second_call["issue_summary"], "Retry from reply")
 
     def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         self._queue_run(run_id="run-failed-reply-2", issue_key="TP-89", status="failed")
@@ -668,7 +674,13 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["data"]["run_id"], "run-new-1")
         oauth_client.update_issue_summary_and_description.assert_called_once()
         enqueue_mock.assert_called_once()
-        precheck_mock.assert_called_once()
+        self.assertEqual(precheck_mock.call_count, 2)
+        first_call = precheck_mock.call_args_list[0].kwargs
+        second_call = precheck_mock.call_args_list[1].kwargs
+        self.assertEqual(first_call["issue_key"], "TP-91")
+        self.assertEqual(first_call["issue_summary"], "Old summary | DG clarified")
+        self.assertEqual(second_call["issue_key"], "TP-91")
+        self.assertEqual(second_call["issue_summary"], "Run after reply")
 
     def test_link_rejects_issue_outside_mapped_project_scope(self) -> None:
         self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
