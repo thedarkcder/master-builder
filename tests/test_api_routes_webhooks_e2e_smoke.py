@@ -595,6 +595,28 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 json={"value": "abc"},
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/token-stage-diagnostics"): RouteScenario(
+                path="/api/admin/tenants/route25/token-stage-diagnostics?project_id=route25-default",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/token-stage-diagnostics-compare"): RouteScenario(
+                path="/api/admin/tenants/route25/token-stage-diagnostics-compare?project_ids=route25-default",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/token-overview"): RouteScenario(
+                path="/api/admin/tenants/route25/token-overview?project_id=route25-default",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/runs/{run_id}/token-timeline"): RouteScenario(
+                path="/api/admin/tenants/route25/runs/run-e2e/token-timeline",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/token-compare"): RouteScenario(
+                path="/api/admin/tenants/route25/token-compare?project_id=route25-default",
+                auth=admin,
+                json={"run_ids": ["run-e2e", "run-missing"], "align_by": "turn_sequence"},
+                expected_statuses=(404,),
+            ),
             ("POST", "/api/admin/tenants/{tenant_id}/test-github"): RouteScenario(
                 path="/api/admin/tenants/route25/test-github",
                 auth=admin,

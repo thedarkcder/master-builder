@@ -9,16 +9,20 @@ import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TokenStackedBarChart } from "@/components/charts";
 import {
   cancelRun,
   getRun,
+  getTokenTimeline,
   listRunEvents,
   listRunLogs,
   rerunRun,
   streamRunEvents,
   type RunEventRecord,
   type RunLogEventRecord,
-  type RunRecord
+  type RunRecord,
+  type TokenTimelineRecord
 } from "@/lib/api";
 
 type InvocationTelemetry = {
@@ -71,7 +75,7 @@ type ChatTimelineEntry = {
   text: string;
   kind: "message" | "reasoning" | "status" | "error";
 };
-type RunPanelTab = "overview" | "outputs" | "sessions" | "diagnostics" | "raw";
+type RunPanelTab = "overview" | "outputs" | "sessions" | "diagnostics" | "raw" | "token";
 type AgentStage = "pm" | "dev" | "test" | "review";
 const CHAT_PAGE_SIZE = 40;
 
@@ -152,6 +156,17 @@ function formatDuration(durationMs: number): string {
     return `${minutes}m ${seconds}s`;
   }
   return `${seconds}s`;
+}
+
+function formatTokenCount(value: number): string {
+  const normalized = Math.max(0, Math.floor(value));
+  if (normalized >= 1000_000) {
+    return `${(normalized / 1000_000).toFixed(2)}m`;
+  }
+  if (normalized >= 1000) {
+    return `${(normalized / 1000).toFixed(1)}k`;
+  }
+  return String(normalized);
 }
 
 function stageColor(stage: string): string {
@@ -263,6 +278,9 @@ export default function RunDetailPage() {
   const [rerunBusy, setRerunBusy] = useState(false);
   const [forceRerunBusy, setForceRerunBusy] = useState(false);
   const [statusLine, setStatusLine] = useState("");
+  const [tokenTimeline, setTokenTimeline] = useState<TokenTimelineRecord | null>(null);
+  const [tokenTimelineBusy, setTokenTimelineBusy] = useState(false);
+  const [tokenTimelineError, setTokenTimelineError] = useState("");
   const [logAgentFilter, setLogAgentFilter] = useState("all");
   const [logStageFilter, setLogStageFilter] = useState("all");
   const [logStreamFilter, setLogStreamFilter] = useState("all");
@@ -278,21 +296,35 @@ export default function RunDetailPage() {
       return;
     }
     setBusy(true);
+    setTokenTimelineBusy(true);
+    setTokenTimelineError("");
     try {
-      const [payload, runEvents, runLogs] = await Promise.all([
+      const [runPayload, runEvents, runLogs] = await Promise.all([
         getRun(credentials, params.runId),
         listRunEvents(credentials, params.runId, { limit: 200 }),
         listRunLogs(credentials, params.runId, { limit: 200 })
       ]);
-      setRun(payload);
+      let timeline: TokenTimelineRecord | null = null;
+      try {
+        timeline = await getTokenTimeline(credentials, params.runId, {
+          tenantId: runPayload.tenant_id,
+          include_retries: true
+        });
+      } catch (error) {
+        setTokenTimelineError(`Failed to load token timeline: ${(error as Error).message}`);
+      }
+      setRun(runPayload);
       setEvents(runEvents);
       setLogs(runLogs);
+      setTokenTimeline(timeline);
       setHasMoreLogs(runLogs.length >= 200);
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load run: ${(error as Error).message}`);
+      setTokenTimelineError(`Failed to load token timeline: ${(error as Error).message}`);
     } finally {
       setBusy(false);
+      setTokenTimelineBusy(false);
     }
   }, [credentials, params.runId]);
 
@@ -373,7 +405,7 @@ export default function RunDetailPage() {
     try {
       const nextRun = await rerunRun(credentials, run.run_id);
       setStatusLine(`Queued rerun ${nextRun.run_id} for ${nextRun.issue_key}.`);
-      window.location.href = `/runs/${encodeURIComponent(nextRun.run_id)}`;
+      window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
     } catch (error) {
       setStatusLine(`Failed to rerun: ${(error as Error).message}`);
     } finally {
@@ -390,7 +422,7 @@ export default function RunDetailPage() {
       const cancelled = await cancelRun(credentials, run.run_id);
       const nextRun = await rerunRun(credentials, cancelled.run_id);
       setStatusLine(`Force-cancelled ${cancelled.run_id} and queued rerun ${nextRun.run_id}.`);
-      window.location.href = `/runs/${encodeURIComponent(nextRun.run_id)}`;
+      window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
     } catch (error) {
       setStatusLine(`Failed to force rerun: ${(error as Error).message}`);
     } finally {
@@ -451,6 +483,31 @@ export default function RunDetailPage() {
         return agentMatch && stageMatch && streamMatch;
       }),
     [logs, logAgentFilter, logStageFilter, logStreamFilter]
+  );
+  const tokenTimelineChartData = useMemo(
+    () =>
+      (tokenTimeline?.turns ?? []).map((turn, index) => ({
+        turnOrder: index + 1,
+        turnLabel: String(index + 1),
+        input_tokens: turn.input_tokens,
+        cached_input_tokens: turn.cached_input_tokens,
+        output_tokens: turn.output_tokens,
+        uncached_input_tokens: Math.max(0, turn.input_tokens - turn.cached_input_tokens),
+        delta_input: turn.delta_input,
+        delta_uncached: turn.delta_uncached,
+        delta_output: turn.delta_output,
+        stage: turn.stage,
+      })),
+    [tokenTimeline?.turns]
+  );
+  const tokenTurnRows = useMemo(
+    () =>
+      (tokenTimeline?.turns ?? []).map((turn, index) => ({
+        ...turn,
+        turnOrder: index + 1,
+        uncached_input_tokens: Math.max(0, turn.input_tokens - turn.cached_input_tokens),
+      })),
+    [tokenTimeline?.turns]
   );
   const invocationSessionRows = useMemo(() => {
     const telemetryRows = logs
@@ -736,7 +793,7 @@ export default function RunDetailPage() {
   const chatTimelineEntries = useMemo(() => {
     const stageUpdates = isRecord(run?.plan) && Array.isArray(run.plan["stage_updates"]) ? run.plan["stage_updates"] : [];
     const stageUpdateEntries: ChatTimelineEntry[] = stageUpdates
-      .map((entry, idx) => {
+      .map((entry, idx): ChatTimelineEntry | null => {
         if (!isRecord(entry)) {
           return null;
         }
@@ -756,12 +813,12 @@ export default function RunDetailPage() {
           kind: "status"
         } satisfies ChatTimelineEntry;
       })
-      .filter((entry): entry is ChatTimelineEntry => Boolean(entry));
+      .filter((entry): entry is ChatTimelineEntry => entry !== null);
 
     const logEntries = logs
       .slice()
       .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime())
-      .map((entry, idx) => {
+      .map((entry, idx): ChatTimelineEntry | null => {
         const parsed = parseRunLogChatText(entry);
         if (!parsed) {
           return null;
@@ -776,7 +833,7 @@ export default function RunDetailPage() {
           kind: parsed.kind
         } satisfies ChatTimelineEntry;
       })
-      .filter((entry): entry is ChatTimelineEntry => Boolean(entry));
+      .filter((entry): entry is ChatTimelineEntry => entry !== null);
 
     const diagnosticsEntries: ChatTimelineEntry[] = (workflowDiagnostics?.history ?? []).map((entry, idx) => ({
       key: `diag-${idx}`,
@@ -789,8 +846,17 @@ export default function RunDetailPage() {
     }));
 
     return [...logEntries, ...diagnosticsEntries, ...stageUpdateEntries]
-      .sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime())
-      .slice(-160);
+      .map((entry, index) => ({ entry, index }))
+      .sort((a, b) => {
+        const tsDiff = new Date(a.entry.recordedAt).getTime() - new Date(b.entry.recordedAt).getTime();
+        if (tsDiff !== 0) {
+          return tsDiff;
+        }
+        // Keep arrival/build order for same-timestamp entries so new events append.
+        return a.index - b.index;
+      })
+      .slice(-160)
+      .map((wrapped) => wrapped.entry);
   }, [logs, run?.created_at, run?.finished_at, run?.plan, run?.started_at, workflowDiagnostics?.history]);
   const visibleChatTimelineEntries = useMemo(
     () => chatTimelineEntries.slice(-Math.max(CHAT_PAGE_SIZE, chatVisibleCount)),
@@ -942,7 +1008,7 @@ export default function RunDetailPage() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/20 p-2">
-              {(["overview", "outputs", "sessions", "diagnostics", "raw"] as RunPanelTab[]).map((tab) => (
+              {(["overview", "outputs", "sessions", "diagnostics", "raw", "token"] as RunPanelTab[]).map((tab) => (
                 <Button
                   key={tab}
                   variant={activePanel === tab ? "default" : "outline"}
@@ -995,6 +1061,160 @@ export default function RunDetailPage() {
                     </li>
                   ))}
                 </ul>
+              </div>
+            ) : null}
+            {activePanel === "token" ? (
+              <div className="space-y-3">
+                {tokenTimelineBusy ? <p className="text-sm text-muted-foreground">Loading token timeline...</p> : null}
+                {tokenTimelineBusy ? null : tokenTimelineError ? (
+                  <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {tokenTimelineError}
+                  </p>
+                ) : null}
+                {tokenTimelineBusy || !tokenTimeline ? null : (
+                  <>
+                    <div className="grid gap-2 md:grid-cols-4">
+                      <div className="rounded border bg-muted/20 p-2">
+                        <p className="text-[11px] uppercase text-muted-foreground">Total Input</p>
+                        <p className="text-base font-semibold">{formatTokenCount(tokenTimeline.totals.input)}</p>
+                      </div>
+                      <div className="rounded border bg-muted/20 p-2">
+                        <p className="text-[11px] uppercase text-muted-foreground">Uncached Input</p>
+                        <p className="text-base font-semibold">{formatTokenCount(tokenTimeline.totals.uncached_input)}</p>
+                      </div>
+                      <div className="rounded border bg-muted/20 p-2">
+                        <p className="text-[11px] uppercase text-muted-foreground">Output</p>
+                        <p className="text-base font-semibold">{formatTokenCount(tokenTimeline.totals.output)}</p>
+                      </div>
+                      <div className="rounded border bg-muted/20 p-2">
+                        <p className="text-[11px] uppercase text-muted-foreground">Cache Ratio</p>
+                        <p className="text-base font-semibold">{(tokenTimeline.totals.cache_ratio * 100).toFixed(1)}%</p>
+                      </div>
+                      <div className="rounded border bg-muted/20 p-2">
+                        <p className="text-[11px] uppercase text-muted-foreground">Total I/O</p>
+                        <p className="text-base font-semibold">{formatTokenCount(tokenTimeline.totals.total_io)}</p>
+                      </div>
+                      <div className="rounded border bg-muted/20 p-2">
+                        <p className="text-[11px] uppercase text-muted-foreground">Avg Runtime</p>
+                        <p className="text-base font-semibold">{formatDuration(tokenTimeline.totals.avg_runtime_ms)} (avg)</p>
+                      </div>
+                      <div className="rounded border bg-muted/20 p-2">
+                        <p className="text-[11px] uppercase text-muted-foreground">P95 Runtime</p>
+                        <p className="text-base font-semibold">{formatDuration(tokenTimeline.totals.p95_runtime_ms)} (p95)</p>
+                      </div>
+                      <div className="rounded border bg-muted/20 p-2">
+                        <p className="text-[11px] uppercase text-muted-foreground">Turn Count</p>
+                        <p className="text-base font-semibold">{tokenTimeline.turns.length}</p>
+                      </div>
+                    </div>
+                    <div className="rounded-md border bg-muted/20 p-3">
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token lane by turn</p>
+                      <TokenStackedBarChart
+                        data={tokenTimelineChartData}
+                        xAxisKey="turnLabel"
+                        bars={[
+                          {
+                            key: "cached_input_tokens",
+                            label: "Cached input",
+                            color: "#0ea5e9",
+                            stackId: "tokenInput"
+                          },
+                          {
+                            key: "uncached_input_tokens",
+                            label: "Uncached input",
+                            color: "#f59e0b",
+                            stackId: "tokenInput"
+                          },
+                          {
+                            key: "output_tokens",
+                            label: "Output",
+                            color: "#ef4444",
+                            stackId: "tokenOutput"
+                          }
+                        ]}
+                      />
+                    </div>
+                    <div className="rounded-md border bg-muted/20 p-3">
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Per-turn token breakdown
+                      </p>
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Turn</TableHead>
+                              <TableHead>Stage</TableHead>
+                              <TableHead className="text-right">Attempt</TableHead>
+                              <TableHead className="text-right">Input</TableHead>
+                              <TableHead className="text-right">Cached</TableHead>
+                              <TableHead className="text-right">Output</TableHead>
+                              <TableHead className="text-right">Δ Input</TableHead>
+                              <TableHead className="text-right">Δ Uncached</TableHead>
+                              <TableHead className="text-right">Runtime</TableHead>
+                              <TableHead>Growth Flags</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {tokenTurnRows.map((turn) => (
+                              <TableRow
+                                key={turn.turn_id}
+                                className={turn.is_growth_spike ? "border-l-4 border-l-amber-500" : undefined}
+                              >
+                                <TableCell>{turn.turnOrder}</TableCell>
+                                <TableCell className="whitespace-nowrap">{turn.stage.toUpperCase()}</TableCell>
+                                <TableCell className="text-right">{turn.attempt === null ? "-" : turn.attempt}</TableCell>
+                                <TableCell className="text-right">
+                                  <div>{formatTokenCount(turn.input_tokens)}</div>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <div>{formatTokenCount(turn.cached_input_tokens)}</div>
+                                  <div className="text-[11px] text-muted-foreground">
+                                    uncached {formatTokenCount(turn.uncached_input_tokens)}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right">{formatTokenCount(turn.output_tokens)}</TableCell>
+                                <TableCell className="text-right">
+                                  <div>{formatTokenCount(turn.delta_input)}</div>
+                                  <div className="text-[11px] text-muted-foreground">vs prev</div>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <div>{formatTokenCount(turn.delta_uncached)}</div>
+                                  <div className="text-[11px] text-muted-foreground">vs prev</div>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {turn.runtime_ms === null ? "n/a" : formatDuration(turn.runtime_ms)}
+                                </TableCell>
+                                <TableCell>
+                                  {turn.is_growth_spike ? (
+                                    <div className="space-y-1">
+                                      {turn.spike_reason.map((reason) => (
+                                        <span
+                                          key={reason}
+                                          className="mr-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800"
+                                        >
+                                          {reason.replace(/_/g, " ")}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-muted-foreground">None</span>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                            {tokenTurnRows.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={10} className="text-center text-muted-foreground">
+                                  No token turns captured yet.
+                                </TableCell>
+                              </TableRow>
+                            ) : null}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ) : null}
             {activePanel === "overview" ? (

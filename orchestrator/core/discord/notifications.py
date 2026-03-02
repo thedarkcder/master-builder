@@ -12,6 +12,7 @@ from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
+from orchestrator.core.discord.thread_context import put_thread_issue_key
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
@@ -106,10 +107,11 @@ def send_tenant_discord_message(
                 if event == "decision_gate_required":
                     matched_issue_key = ISSUE_KEY_PATTERN.search(safe_thread_name)
                     if matched_issue_key is not None:
-                        raw_map = project_discord_config.get("decision_gate_thread_issue_by_channel_id")
-                        issue_map = dict(raw_map) if isinstance(raw_map, dict) else {}
-                        issue_map[thread_channel_id] = matched_issue_key.group(0).upper()
-                        project_discord_config["decision_gate_thread_issue_by_channel_id"] = dict(list(issue_map.items())[-500:])
+                        project_discord_config = put_thread_issue_key(
+                            discord_config=project_discord_config,
+                            channel_id=thread_channel_id,
+                            issue_key=matched_issue_key.group(0).upper(),
+                        )
                 project.discord_config = project_discord_config
                 project.updated_at = datetime.now(timezone.utc)
                 tenant.updated_at = datetime.now(timezone.utc)

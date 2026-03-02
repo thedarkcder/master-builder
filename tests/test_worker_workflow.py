@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
     agent_observability_tracker,
@@ -23,11 +24,41 @@ from orchestrator.worker import process_next_queued_run
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
 
+def _evaluate_decision_gate_test_stub(
+    *,
+    issue_summary: str | None = None,
+    issue_description: str | None = None,
+    **_: object,
+) -> DecisionGateResult:
+    summary = (issue_summary or "").lower()
+    description = (issue_description or "").lower()
+    if "unclear requirements" in summary or "tbd:" in description:
+        return DecisionGateResult(
+            triggered=True,
+            reason="Decision Gate required.",
+            missing_sections=("Objective", "Scope"),
+            questions=(
+                "What is the objective?",
+                "What is in scope?",
+            ),
+            recommendation="Decision required before build",
+            tags=("[NEEDS-PM]",),
+        )
+    return DecisionGateResult(
+        triggered=False,
+        reason="Decision Gate not required",
+        missing_sections=(),
+        questions=(),
+        recommendation="Proceed",
+        tags=(),
+    )
+
+
 class _SuccessRunner:
     def __init__(self) -> None:
         self.last_request = None
 
-    def run(self, request):  # noqa: ANN001
+    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
         self.last_request = request
         return WorkflowResult(
             succeeded=True,
@@ -45,7 +76,7 @@ class _SuccessRunner:
 
 
 class _FailureRunner:
-    def run(self, request):  # noqa: ANN001
+    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
         return WorkflowResult(
             succeeded=False,
             plan=PmPlan(
@@ -67,7 +98,7 @@ class _FailureRunner:
 
 
 class _CapabilityMismatchRunner:
-    def run(self, request):  # noqa: ANN001
+    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
         return WorkflowResult(
             succeeded=False,
             plan=PmPlan(
@@ -115,6 +146,11 @@ class WorkerWorkflowTests(unittest.TestCase):
             "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
         )
         self.checkout_mock = self.checkout_patcher.start()
+        self.decision_gate_patcher = patch(
+            "orchestrator.core.worker.execution_service.evaluate_decision_gate",
+            new=_evaluate_decision_gate_test_stub,
+        )
+        self.decision_gate_patcher.start()
         self._create_tenant()
         self._seed_checked_out_repo()
 
@@ -122,6 +158,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         self.checkout_patcher.stop()
         self.temp_dir.cleanup()
         os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
+        self.decision_gate_patcher.stop()
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
@@ -328,7 +365,20 @@ class WorkerWorkflowTests(unittest.TestCase):
             issue_description="TBD: need to decide later?",
         )
 
-        with self.session_factory() as session:
+        with (
+            patch(
+                "orchestrator.core.worker.execution_service.evaluate_decision_gate",
+                return_value=DecisionGateResult(
+                    triggered=True,
+                    reason="Ambiguous requirements and unclear dependencies",
+                    missing_sections=(),
+                    questions=("What is the acceptance criteria?",),
+                    recommendation="Add clarification questions in Jira and clarify scope.",
+                    tags=("gtd",),
+                ),
+            ),
+            self.session_factory() as session,
+        ):
             processed = process_next_queued_run(session, _SuccessRunner())
             self.assertIsNotNone(processed)
             self.assertEqual(processed.run_id, run_id)
