@@ -344,7 +344,7 @@ class CodexWorkflowAgents:
             value=payload.get("approved"),
             raw_response=raw_response,
             true_markers=("approved", "pass", "acceptable", "looks good", "go"),
-            false_markers=("rejected", "reject", "request changes", "not approved", "blocked", "not"),
+            false_markers=("rejected", "reject", "request changes", "not approved", "blocked", "do not approve"),
         )
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
@@ -424,9 +424,35 @@ def _extract_next_stage(value: str) -> str | None:
 
 def _extract_worker_capability(value: str) -> str | None:
     lowered = str(value or "").lower()
-    if "linux" in lowered:
+    selected_match = re.search(
+        r"\b(?:selected|required|target(?:ed)?|requested|planned)\s+(linux|macos|mac)\b",
+        lowered,
+    )
+    if selected_match:
+        normalized = normalize_worker_capability(selected_match.group(1))
+        if normalized:
+            return normalized
+
+    worker_label_match = re.search(r"\bworker:(linux|macos|mac)\b", lowered)
+    if worker_label_match:
+        normalized = normalize_worker_capability(worker_label_match.group(1))
+        if normalized:
+            return normalized
+
+    has_linux = "linux" in lowered
+    has_macos = "macos" in lowered or bool(re.search(r"\bmac\b", lowered))
+    if has_linux and has_macos:
+        current_match = re.search(r"\bcurrent worker(?:\s+is|\s*:)?\s*(linux|macos|mac)\b", lowered)
+        if current_match:
+            current = normalize_worker_capability(current_match.group(1))
+            if current == "linux":
+                return "macos"
+            if current == "macos":
+                return "linux"
+        return None
+    if has_linux:
         return "linux"
-    if "macos" in lowered or re.search(r"\bmac\b", lowered):
+    if has_macos:
         return "macos"
     return None
 
