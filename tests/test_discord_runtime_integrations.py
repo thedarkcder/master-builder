@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
-from orchestrator.core.discord.gateway_listener import DiscordGatewayListener, _project_seed_followup_thread_ids
+from orchestrator.core.discord.gateway_listener import (
+    DiscordGatewayListener,
+    _decision_gate_issue_for_thread,
+    _project_seed_followup_thread_ids,
+)
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -117,6 +121,24 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         client_cls.assert_not_called()
+
+    def test_decision_gate_issue_for_thread_falls_back_to_tenant_mapping(self) -> None:
+        session = MagicMock()
+        project = SimpleNamespace(discord_config={})
+        tenant = SimpleNamespace(
+            discord_config={
+                "thread_issue_by_channel_id": {
+                    "thread-1": "gp-80",
+                }
+            }
+        )
+        session.execute.return_value.scalars.return_value.all.return_value = [project]
+        session.get.return_value = tenant
+
+        self.assertEqual(
+            _decision_gate_issue_for_thread(session=session, tenant_id="example", channel_id="thread-1"),
+            "GP-80",
+        )
 
     def test_handle_message_create_http_exception_and_internal_exception(self) -> None:
         listener, session = self._listener()
@@ -280,6 +302,51 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!reply")
         self.assertEqual(payload.command_params["issue_key"], "GP-80")
         self.assertEqual(payload.command_params["reply_text"], "Objective and acceptance details")
+        client_cls.return_value.post_message.assert_called_once()
+
+    def test_handle_message_create_routes_to_reply_using_real_thread_issue_mapping(self) -> None:
+        listener, session = self._listener()
+        tenant_for_channel = SimpleNamespace(tenant_id="example")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant_for_channel)
+        command_response = SimpleNamespace(command="reply", message="ok", data={})
+
+        mapped_tenant = SimpleNamespace(
+            discord_config={
+                "thread_issue_by_channel_id": {
+                    "thread-99": "gp-114",
+                }
+            }
+        )
+        project_without_mapping = SimpleNamespace(discord_config={})
+        session.execute.return_value.scalars.return_value.all.return_value = [project_without_mapping]
+        session.get.return_value = mapped_tenant
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+        ):
+            listener._handle_message_create(
+                {
+                    "id": "m-2",
+                    "author": {"id": "u1"},
+                    "channel_id": "thread-99",
+                    "content": "Dependencies: AVFoundation permissions and device latency",
+                    "attachments": [],
+                },
+                bot_token="token",
+            )
+
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "!reply")
+        self.assertEqual(payload.command_params["issue_key"], "GP-114")
+        self.assertEqual(
+            payload.command_params["reply_text"],
+            "Dependencies: AVFoundation permissions and device latency",
+        )
         client_cls.return_value.post_message.assert_called_once()
 
     def test_handle_message_create_non_seed_command_keeps_original_and_limits_attachments(self) -> None:

@@ -32,7 +32,13 @@ from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED, RUN_STATUS_FAILED, enqueue_run
+from orchestrator.core.runs import (
+    RUN_STATUS_BLOCKED,
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_FAILED,
+    enqueue_run,
+    resolve_precheck_outcome_for_enqueue,
+)
 from orchestrator.api.discord.shared.state import normalize_status_name, remove_issue_key_from_seed_followups
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.core.worker_capabilities import worker_label_for_capability
@@ -1151,6 +1157,9 @@ async def ingest_jira_webhook_event(
             issue_description=resolved_issue_description,
             repo_url=context.project.github_repository,
             delivery_id=context.delivery_id,
+            precheck_outcome=resolve_precheck_outcome_for_enqueue(
+                precheck_outcome=pre_check.outcome
+            ),
             max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
         )
         if not enqueue_result.enqueued:

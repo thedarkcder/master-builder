@@ -9,6 +9,7 @@ def ensure_issue_is_executable(
     issue_status: str,
     tenant: Tenant,
     normalize_status_name_fn,
+    extra_executable_statuses: list[str] | tuple[str, ...] | None = None,
 ) -> None:  # noqa: ANN001
     executable_statuses = ["To Do"]
     configured_ready_statuses = tenant.jira_config.get("ready_statuses")
@@ -16,6 +17,12 @@ def ensure_issue_is_executable(
         executable_statuses.extend(
             status_name.strip()
             for status_name in (str(value) for value in configured_ready_statuses)
+            if status_name.strip()
+        )
+    if extra_executable_statuses:
+        executable_statuses.extend(
+            status_name.strip()
+            for status_name in (str(value) for value in extra_executable_statuses)
             if status_name.strip()
         )
     normalized_executable_statuses = {normalize_status_name_fn(value) for value in executable_statuses}

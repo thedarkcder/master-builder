@@ -26,6 +26,7 @@ from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
+from orchestrator.core.discord.thread_context import get_thread_issue_key
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -112,11 +113,15 @@ def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str)
         )
     ).scalars().all()
     for project in projects:
-        raw_map = (project.discord_config or {}).get("decision_gate_thread_issue_by_channel_id")
-        issue_map = raw_map if isinstance(raw_map, dict) else {}
-        issue_key = str(issue_map.get(normalized_channel_id) or "").strip().upper()
+        issue_key = get_thread_issue_key(discord_config=project.discord_config, channel_id=normalized_channel_id)
         if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
             return issue_key
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        return None
+    issue_key = get_thread_issue_key(discord_config=tenant.discord_config, channel_id=normalized_channel_id)
+    if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
+        return issue_key
     return None
 
 

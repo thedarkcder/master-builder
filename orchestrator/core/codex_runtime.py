@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from orchestrator.core.config import Settings
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _STDERR_ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
 _URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
 _UUID_PATTERN = re.compile(
@@ -25,7 +26,58 @@ if TYPE_CHECKING:
 
 
 class CodexRuntimeError(RuntimeError):
-    pass
+    def __init__(self, message: str, payload_preview: str | None = None):
+        super().__init__(message)
+        self.payload_preview = payload_preview
+
+
+def _shorten_preview(value: str, *, max_len: int = 2048) -> str:
+    normalized = value if isinstance(value, str) else ""
+    if len(normalized) <= max_len:
+        return normalized
+    head = max_len // 2
+    tail = max(0, max_len - head - 5)
+    return f"{normalized[:head]} ... {normalized[-tail:]}"
+
+
+def _json_balanced_object_candidates(content: str) -> list[str]:
+    candidates: list[str] = []
+    text = content or ""
+    index = 0
+    while True:
+        start = text.find("{", index)
+        if start < 0:
+            break
+        depth = 0
+        in_string = False
+        escape_next = False
+        end = -1
+        for cursor in range(start, len(text)):
+            char = text[cursor]
+            if in_string:
+                if escape_next:
+                    escape_next = False
+                elif char == "\\":
+                    escape_next = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+                continue
+            if char == "{":
+                depth += 1
+                continue
+            if char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = cursor
+                    break
+        if end < 0:
+            break
+        candidates.append(text[start : end + 1])
+        index = end + 1
+    return candidates
 
 
 def _extract_first_url(content: str) -> str | None:
@@ -49,6 +101,7 @@ class CodexRuntime:
             str | None,
             str | None,
             Callable[[str], None] | None,
+            Callable[[dict[str, int]], None] | None,
         ],
         str,
     ]
@@ -63,6 +116,7 @@ class CodexRuntime:
         reasoning_effort: str | None = None,
         resume_session_id: str | None = None,
         on_session_id: Callable[[str], None] | None = None,
+        on_usage: Callable[[dict[str, int]], None] | None = None,
     ) -> str:
         try:
             output = self._request(
@@ -73,9 +127,21 @@ class CodexRuntime:
                 reasoning_effort,
                 resume_session_id,
                 on_session_id,
+                on_usage,
             ).strip()
         except TypeError:
-            output = self._request(system_prompt, user_prompt, working_dir, on_log_line).strip()  # type: ignore[misc]
+            try:
+                output = self._request(  # type: ignore[misc]
+                    system_prompt,
+                    user_prompt,
+                    working_dir,
+                    on_log_line,
+                    reasoning_effort,
+                    resume_session_id,
+                    on_session_id,
+                ).strip()
+            except TypeError:
+                output = self._request(system_prompt, user_prompt, working_dir, on_log_line).strip()  # type: ignore[misc]
         if not output:
             raise CodexRuntimeError("Codex runtime returned an empty response")
         return output
@@ -90,6 +156,7 @@ class CodexRuntime:
         reasoning_effort: str | None = None,
         resume_session_id: str | None = None,
         on_session_id: Callable[[str], None] | None = None,
+        on_usage: Callable[[dict[str, int]], None] | None = None,
     ) -> dict:
         output = self.run_text(
             system_prompt=system_prompt,
@@ -99,20 +166,46 @@ class CodexRuntime:
             reasoning_effort=reasoning_effort,
             resume_session_id=resume_session_id,
             on_session_id=on_session_id,
+            on_usage=on_usage,
         )
-        payload = _extract_json_payload(output)
+        try:
+            payload = _extract_json_payload(output)
+        except CodexRuntimeError as exc:
+            preview = _shorten_preview(output, max_len=12000)
+            raise CodexRuntimeError(
+                f"{exc}", payload_preview=preview
+            ) from exc
         if not isinstance(payload, dict):
-            raise CodexRuntimeError("Codex runtime did not return a JSON object")
+            raise CodexRuntimeError(
+                "Codex runtime did not return a JSON object",
+                payload_preview=_shorten_preview(output, max_len=12000),
+            )
         return payload
 
 
 
 def _extract_json_payload(content: str) -> object:
-    stripped = content.strip()
+    if not isinstance(content, str):
+        raise CodexRuntimeError("Codex runtime response was not a string")
+
+    raw = content.replace("\ufeff", "").replace("\x00", "").strip()
+    stripped = _ANSI_ESCAPE_PATTERN.sub("", raw).strip()
+    if not stripped:
+        raise CodexRuntimeError("Codex runtime response did not include JSON")
+
     try:
         return json.loads(stripped)
     except json.JSONDecodeError:
         pass
+
+    # Normalize model output that adds explanatory text before JSON blocks.
+    first_object_char = -1
+    for marker in ("{", "["):
+        location = stripped.find(marker)
+        if location >= 0 and (first_object_char < 0 or location < first_object_char):
+            first_object_char = location
+    if first_object_char > 0:
+        stripped = stripped[first_object_char:]
 
     code_match = _JSON_BLOCK_PATTERN.search(stripped)
     if code_match:
@@ -124,26 +217,40 @@ def _extract_json_payload(content: str) -> object:
     start = stripped.find("{")
     end = stripped.rfind("}")
     if start >= 0 and end > start:
-        candidate = stripped[start : end + 1]
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError as exc:
-            last_line_error: json.JSONDecodeError | None = exc
-            last_dict_payload: dict | None = None
-            for line in stripped.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    parsed_line = json.loads(line)
-                except json.JSONDecodeError as line_exc:
-                    last_line_error = line_exc
-                    continue
-                if isinstance(parsed_line, dict):
-                    last_dict_payload = parsed_line
-            if last_dict_payload is not None:
-                return last_dict_payload
-            raise CodexRuntimeError(f"Invalid JSON payload from Codex runtime: {last_line_error}") from exc
+        candidates = _json_balanced_object_candidates(stripped)
+        if not candidates:
+            candidates = [stripped[start : end + 1]]
+        last_line_error: json.JSONDecodeError | None = None
+        parsed_objects: list[dict[str, object]] = []
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError as exc:
+                last_line_error = exc
+                continue
+            if isinstance(parsed, dict):
+                parsed_objects.append(parsed)
+            if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+                parsed_objects.append(parsed[0])
+        if parsed_objects:
+            return parsed_objects[-1]
+        parsed_line_objects: list[dict[str, object]] = []
+        for line in stripped.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed_line = json.loads(line)
+            except json.JSONDecodeError as line_exc:
+                last_line_error = line_exc
+                continue
+            if isinstance(parsed_line, dict):
+                parsed_line_objects.append(parsed_line)
+            if isinstance(parsed_line, list) and len(parsed_line) == 1 and isinstance(parsed_line[0], dict):
+                parsed_line_objects.append(parsed_line[0])
+        if parsed_line_objects:
+            return parsed_line_objects[-1]
+        raise CodexRuntimeError(f"Invalid JSON payload from Codex runtime: {last_line_error}") from last_line_error
 
     raise CodexRuntimeError("Codex runtime response did not include JSON")
 
@@ -232,6 +339,81 @@ def _extract_last_message_from_json_stdout(lines: list[str]) -> str | None:
     return last_message
 
 
+def _coerce_token_count(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        candidate = int(value)
+        return candidate if candidate >= 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            candidate = int(text)
+        except ValueError:
+            return None
+        return candidate if candidate >= 0 else None
+    return None
+
+
+def _extract_token_usage_from_dict(payload: dict[str, object]) -> dict[str, int] | None:
+    prompt_tokens = _coerce_token_count(payload.get("prompt_tokens"))
+    completion_tokens = _coerce_token_count(payload.get("completion_tokens"))
+    total_tokens = _coerce_token_count(payload.get("total_tokens"))
+    if prompt_tokens is None:
+        prompt_tokens = _coerce_token_count(payload.get("input_tokens"))
+    if completion_tokens is None:
+        completion_tokens = _coerce_token_count(payload.get("output_tokens"))
+    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+        total_tokens = prompt_tokens + completion_tokens
+    if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+        return None
+    usage: dict[str, int] = {}
+    if prompt_tokens is not None:
+        usage["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        usage["completion_tokens"] = completion_tokens
+    if total_tokens is not None:
+        usage["total_tokens"] = total_tokens
+    return usage
+
+
+def _extract_usage_from_json_stdout(lines: list[str]) -> dict[str, int] | None:
+    best_usage: dict[str, int] | None = None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        stack: list[object] = [payload]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                usage = _extract_token_usage_from_dict(current)
+                if usage is not None:
+                    if best_usage is None:
+                        best_usage = usage
+                    else:
+                        best_total = best_usage.get("total_tokens")
+                        usage_total = usage.get("total_tokens")
+                        if usage_total is not None and (best_total is None or usage_total >= best_total):
+                            best_usage = usage
+                        elif best_total is None and len(usage) >= len(best_usage):
+                            best_usage = usage
+                stack.extend(current.values())
+            elif isinstance(current, list):
+                stack.extend(current)
+    return best_usage
+
+
 def build_codex_runtime(
     *,
     session: Session | None = None,
@@ -247,12 +429,14 @@ def build_codex_runtime(
             reasoning_effort: str | None,
             resume_session_id: str | None,
             on_session_id: Callable[[str], None] | None,
+            on_usage: Callable[[dict[str, int]], None] | None,
         ) -> str:
             _ = on_log_line
             _ = working_dir
             _ = reasoning_effort
             _ = resume_session_id
             _ = on_session_id
+            _ = on_usage
             try:
                 return request_override(system_prompt, user_prompt, working_dir)
             except TypeError:
@@ -281,10 +465,12 @@ def build_codex_runtime(
         reasoning_effort: str | None,
         resume_session_id: str | None,
         on_session_id: Callable[[str], None] | None,
+        on_usage: Callable[[dict[str, int]], None] | None,
     ) -> str:
         combined_prompt = (
             "You are the Codex orchestration runtime. "
             "Follow the system instructions exactly and return only the required output.\n\n"
+            "IMPORTANT: When parsing a JSON payload is expected, respond with a single JSON object only.\n\n"
             f"## System instructions\n{system_prompt}\n\n"
             f"## User request\n{user_prompt}"
         )
@@ -458,6 +644,13 @@ def build_codex_runtime(
                     f"Codex CLI command failed (exit={returncode}): {stderr or 'no stderr'}"
                 )
             output_file.seek(0)
+            usage = _extract_usage_from_json_stdout(stdout_lines)
+            if usage is not None and on_usage is not None:
+                try:
+                    on_usage(usage)
+                except Exception:  # noqa: BLE001
+                    if on_log_line is not None:
+                        on_log_line("system", "codex_usage_callback_failed")
             if not normalized_resume_session_id:
                 output = output_file.read().strip()
                 if output:

@@ -152,7 +152,10 @@ export default function TenantRunsPage() {
             {runs.map((run) => (
               <TableRow key={run.run_id}>
                 <TableCell className="font-medium">
-                  <Link className="text-primary hover:underline" href={`/runs/${encodeURIComponent(run.run_id)}`}>
+                  <Link
+                    className="text-primary hover:underline"
+                    href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
+                  >
                     {run.issue_summary?.trim() || run.issue_key || run.run_id}
                   </Link>
                   <p className="text-xs text-muted-foreground">{run.run_id}</p>

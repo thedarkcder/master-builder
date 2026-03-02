@@ -10,6 +10,7 @@ from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.workflow.runner import WorkflowResult
 from orchestrator.storage.models import Project, Run, RunLock
+from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
@@ -187,6 +188,13 @@ def requeue_workflow_result_for_capability(
     run.last_error = None
     run.started_at = None
     run.finished_at = None
+    notify_run_enqueued(
+        session,
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+    )
     _release_run_lock(session, run=run)
     session.commit()
     session.refresh(run)

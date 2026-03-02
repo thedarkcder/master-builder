@@ -210,11 +210,17 @@ def _collect_project_repo_context_for_issue(
     }
 
 
-def _ensure_issue_is_executable(*, issue_status: str, tenant: Tenant) -> None:
+def _ensure_issue_is_executable(
+    *,
+    issue_status: str,
+    tenant: Tenant,
+    extra_executable_statuses: list[str] | tuple[str, ...] | None = None,
+) -> None:
     _ensure_issue_is_executable_impl(
         issue_status=issue_status,
         tenant=tenant,
         normalize_status_name_fn=_normalize_status_name,
+        extra_executable_statuses=extra_executable_statuses,
     )
 
 
@@ -834,6 +840,7 @@ def execute_tenant_command_ingress(
         evaluate_decision_gate_fn=evaluate_decision_gate,
         ensure_issue_is_executable_fn=_ensure_issue_is_executable,
         resolve_codex_working_dir_fn=_resolve_codex_working_dir,
+        search_issues_for_tenant_fn=_search_jira_issues_for_tenant,
     )
     return _execute_tenant_command_ingress(
         tenant_id=tenant_id,

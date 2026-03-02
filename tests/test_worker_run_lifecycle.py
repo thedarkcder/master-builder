@@ -2,6 +2,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from orchestrator.core.runs import enqueue_run
 from orchestrator.core.worker.run_lifecycle import (
@@ -10,6 +11,7 @@ from orchestrator.core.worker.run_lifecycle import (
     fail_missing_project_mapping,
     fail_project_repository_checkout,
     finalize_workflow_result,
+    requeue_workflow_result_for_capability,
     resolve_project_for_run,
     start_run,
 )
@@ -290,3 +292,81 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             refreshed = session.get(Run, "run-expected-status")
             assert refreshed is not None
             self.assertEqual(refreshed.status, "running")
+
+    def test_requeue_workflow_result_for_capability_notifies_queue_listener(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            run = Run(
+                run_id="run-capability-requeue",
+                tenant_id="tenant-a",
+                issue_key="TA-202",
+                issue_summary="capability requeue",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                last_error="old error",
+                plan=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                project_id="tenant-a-default",
+            )
+            session.add(run)
+            session.add(
+                RunLock(
+                    tenant_id="tenant-a",
+                    issue_key="TA-202",
+                    run_id="run-capability-requeue",
+                    locked_at=now,
+                )
+            )
+            session.commit()
+            session.refresh(run)
+
+            workflow_result = WorkflowResult(
+                succeeded=False,
+                plan=PmPlan(
+                    plan_steps=["retry on required capability"],
+                    acceptance_criteria=["run is queued for a compatible worker"],
+                    risks=[],
+                ),
+                pr_url=None,
+                summary=[],
+                test_guidance=[],
+                attempts=1,
+                diagnostics=WorkflowDiagnostics(
+                    stage="dev",
+                    message="Execution capability mismatch: PM selected macos but current worker is linux.",
+                    attempts=1,
+                    history=[],
+                ),
+            )
+
+            with patch("orchestrator.core.worker.run_lifecycle.notify_run_enqueued") as notify_mock:
+                requeued = requeue_workflow_result_for_capability(
+                    session,
+                    run=run,
+                    workflow_result=workflow_result,
+                    stage_updates=[{"stage": "run_requeued_capability_mismatch"}],
+                    required_worker_capability="macos",
+                    required_worker_label="macos",
+                )
+
+            self.assertEqual(requeued.status, "queued")
+            self.assertIsNone(requeued.last_error)
+            self.assertIsNone(requeued.started_at)
+            self.assertIsNone(requeued.finished_at)
+            self.assertEqual(requeued.plan["required_worker_capability"], "macos")
+            self.assertEqual(requeued.plan["required_worker_label"], "macos")
+            self.assertTrue(requeued.plan["requeued"])
+            notify_mock.assert_called_once_with(
+                session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-capability-requeue",
+                issue_key="TA-202",
+            )
+            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-202"})
+            self.assertIsNone(lock)
