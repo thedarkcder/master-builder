@@ -192,7 +192,7 @@ def compare_run_tokens(
             row.attempt,
         )
         prev = chain_prev.get(chain_key)
-        delta_input_raw, delta_uncached_raw, delta_output_raw = _build_delta(
+        delta_input_raw, delta_uncached_raw, _ = _build_delta(
             prev=prev,
             current=(input_tokens, cached_input_tokens, output_tokens),
         )
@@ -200,7 +200,6 @@ def compare_run_tokens(
 
         delta_input = _coalesce_delta(row.delta_input, delta_input_raw)
         delta_uncached = _coalesce_delta(row.delta_uncached, delta_uncached_raw)
-        delta_output = _coalesce_delta(row.delta_output, delta_output_raw)
 
         run_total = totals_by_run[run_id]
         run_total["input"] += input_tokens
