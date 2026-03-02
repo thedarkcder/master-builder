@@ -1,9 +1,6 @@
 name: Release Train Close
 
 on:
-  schedule:
-    - cron: "0 * * * *"
-
   release:
     types:
       - published
@@ -154,6 +151,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
         run: |
           set -euo pipefail
 
@@ -175,16 +173,25 @@ jobs:
             release_range="${previous_release_tag}..origin/main"
           fi
 
-          release_commit_count="$(git rev-list --count "${release_range}")"
-          if [ "${release_commit_count}" = "0" ]; then
-            echo "No commits found in release range (${release_range}); skipping GitHub release creation."
-            exit 0
-          fi
-
+          mapfile -t release_issue_keys < <(sed '/^[[:space:]]*$/d' /tmp/release_issue_keys.txt)
           mapfile -t release_commit_subjects < <(git log --first-parent --pretty=format:'%s' "${release_range}" | sed '/^[[:space:]]*$/d')
 
           release_notes_file="$(mktemp)"
           {
+            echo "## Release Train Issues"
+            if [ "${#release_issue_keys[@]}" -gt 0 ]; then
+              for issue_key in "${release_issue_keys[@]}"; do
+                if [ -n "${JIRA_BASE_URL:-}" ]; then
+                  jira_base_url="${JIRA_BASE_URL%/}"
+                  echo "- [${issue_key}](${jira_base_url}/browse/${issue_key})"
+                else
+                  echo "- ${issue_key}"
+                fi
+              done
+            else
+              echo "- No release-train Jira issues were detected for ${RELEASE_VERSION}."
+            fi
+            echo
             echo "## What's Changed"
             if [ "${#release_commit_subjects[@]}" -gt 0 ]; then
               for subject in "${release_commit_subjects[@]}"; do
