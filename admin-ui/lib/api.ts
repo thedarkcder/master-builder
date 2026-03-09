@@ -816,7 +816,7 @@ export function listProjectKnowledgeAssets(
 ): Promise<ProjectKnowledgeAssetRecord[]> {
   return request<ProjectKnowledgeAssetRecord[]>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets`
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets`
   );
 }
 
@@ -828,7 +828,7 @@ export function createProjectKnowledgeAsset(
 ): Promise<ProjectKnowledgeAssetRecord> {
   return request<ProjectKnowledgeAssetRecord>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets`,
     {
       method: "POST",
       body: JSON.stringify(payload)
@@ -844,7 +844,7 @@ export async function deleteProjectKnowledgeAsset(
 ): Promise<void> {
   await request<void>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets/${encodeURIComponent(assetId)}`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets/${encodeURIComponent(assetId)}`,
     {
       method: "DELETE"
     }
@@ -858,7 +858,7 @@ export function syncProjectKnowledgeFromJira(
 ): Promise<ProjectKnowledgeSyncResult> {
   return request<ProjectKnowledgeSyncResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets/sync-jira`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/sync-jira`,
     {
       method: "POST"
     }

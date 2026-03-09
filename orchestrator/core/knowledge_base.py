@@ -553,6 +553,9 @@ def build_knowledge_prompt_context(
 ) -> KnowledgePromptContext:
     if not tenant_id:
         return KnowledgePromptContext(text="", citations=[])
+    # KB prompt injection must remain project-scoped; never fall back to tenant-wide retrieval.
+    if not project_id:
+        return KnowledgePromptContext(text="", citations=[])
     normalized_query = str(query or "").strip()
     if not normalized_query:
         return KnowledgePromptContext(text="", citations=[])
@@ -561,9 +564,8 @@ def build_knowledge_prompt_context(
 
     filters = [
         KnowledgeChunk.tenant_id == tenant_id,
+        KnowledgeChunk.project_id == project_id,
     ]
-    if project_id:
-        filters.append(KnowledgeChunk.project_id == project_id)
     rows = session.execute(
         select(KnowledgeChunk, KnowledgeAsset)
         .join(KnowledgeAsset, KnowledgeAsset.asset_id == KnowledgeChunk.asset_id)
