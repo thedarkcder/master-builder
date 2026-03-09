@@ -27,6 +27,7 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
         "orchestrator.api.routes.admin_observability",
         "orchestrator.api.routes.admin_runs",
         "orchestrator.api.routes.admin_secrets",
+        "orchestrator.api.routes.admin_tenants",
         "orchestrator.api.routes.admin_tokens",
         "orchestrator.api.routes.discord",
         "orchestrator.api.routes.runs",

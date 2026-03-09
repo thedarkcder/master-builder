@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
-from orchestrator.api.routes.admin import _resolve_project_discord_channel_name
+from orchestrator.api.admin.project_normalization import resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
@@ -662,7 +662,7 @@ class AdminApiTests(unittest.TestCase):
         project_id = default_project["project_id"]
 
         with patch(
-            "orchestrator.api.routes.admin._resolve_project_discord_channel_binding",
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             return_value={"channel_id": "discord-channel-proj-1", "notify_events": []},
         ) as provision_mock:
             response = self.client.put(
@@ -716,7 +716,7 @@ class AdminApiTests(unittest.TestCase):
             session.commit()
 
         with patch(
-            "orchestrator.api.routes.admin._resolve_project_discord_channel_binding",
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
         ):
             response = self.client.put(
@@ -769,7 +769,7 @@ class AdminApiTests(unittest.TestCase):
             updated_at=now,
         )
         settings = SimpleNamespace(discord_channel_name_template="team-core")
-        channel_name = _resolve_project_discord_channel_name(settings=settings, tenant=tenant, project=project)
+        channel_name = resolve_project_discord_channel_name(settings=settings, tenant=tenant, project=project)
         self.assertEqual(channel_name, "team-core-master-builder-api")
 
     def test_list_runs_supports_project_filter(self) -> None:
