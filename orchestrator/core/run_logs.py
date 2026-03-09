@@ -244,7 +244,14 @@ def materialize_token_usage_from_log_message(
 ) -> bool:
     if not run_log_row.run_id:
         return False
-    if str(run_log_row.stage or "").strip().lower() not in {"pm", "dev", "test", "review"}:
+    if str(run_log_row.stage or "").strip().lower() not in {
+        "pm",
+        "dev",
+        "test",
+        "review",
+        "orchestrated_run",
+        "one_shot",
+    }:
         return False
     parsed = extract_turn_completed_usage(run_log_row.message)
     if parsed is None:

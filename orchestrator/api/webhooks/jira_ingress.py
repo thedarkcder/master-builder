@@ -31,8 +31,11 @@ from orchestrator.api.webhooks.contracts import (
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_engine import IngressDecision, evaluate_ingress_precheck
+from orchestrator.core.knowledge_base import resolve_missing_slots_from_knowledge
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.label_action_service import apply_issue_label_actions
+from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
+from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
@@ -52,6 +55,8 @@ logger = logging.getLogger(__name__)
 execute_jira_comment_command = execute_tenant_jira_comment_command
 TODO_STATUS = "to do"
 DECISION_GATE_COOLDOWN = timedelta(minutes=10)
+KNOWLEDGE_AUTOFILL_BLOCK_START = "<!-- knowledge-autofill:start -->"
+KNOWLEDGE_AUTOFILL_BLOCK_END = "<!-- knowledge-autofill:end -->"
 
 
 def _utcnow() -> datetime:
@@ -146,6 +151,73 @@ def _resolve_ready_label_for_tenant(tenant: Tenant) -> str | None:
     if not ready_label:
         return None
     return ready_label
+
+
+def _upsert_block(*, current_description: str, block: str, start_marker: str, end_marker: str) -> str:
+    current = str(current_description or "").strip()
+    if not current:
+        return block
+    start_idx = current.find(start_marker)
+    end_idx = current.find(end_marker)
+    if start_idx >= 0 and end_idx > start_idx:
+        end_of_marker = end_idx + len(end_marker)
+        prefix = current[:start_idx].rstrip()
+        suffix = current[end_of_marker:].lstrip()
+        if prefix and suffix:
+            return f"{prefix}\n\n{block}\n\n{suffix}"
+        if prefix:
+            return f"{prefix}\n\n{block}"
+        if suffix:
+            return f"{block}\n\n{suffix}"
+        return block
+    return f"{current}\n\n{block}"
+
+
+def _slot_display_name(slot_name: str) -> str:
+    mapping = {
+        "objective": "Objective",
+        "scope": "Scope",
+        "acceptance_criteria": "Acceptance Criteria",
+        "how_to_test": "How to test",
+        "nfr_intent": "NFR intent (MVP vs scale-ready)",
+        "reliability_security_constraints": "Mandatory reliability/security constraints",
+        "out_of_scope": "Explicitly out of scope",
+        "rollout_constraints": "Rollout/migration constraints",
+        "decision_owner": "Decision owner",
+        "dependencies_and_risks": "Dependencies / Risks",
+    }
+    return mapping.get(slot_name, slot_name.replace("_", " ").title())
+
+
+def _build_knowledge_autofill_block(*, slot_answers: dict[str, object]) -> str:
+    lines = [
+        KNOWLEDGE_AUTOFILL_BLOCK_START,
+        "## Knowledge Base Auto-Resolved Clarifications",
+    ]
+    for slot_name in sorted(slot_answers.keys()):
+        value = slot_answers.get(slot_name)
+        if value is None:
+            continue
+        slot_value = str(getattr(value, "slot_value", "") or "").strip()
+        if not slot_value:
+            continue
+        citation = getattr(value, "citation", {}) if value is not None else {}
+        citation_title = str(citation.get("title") or "").strip()
+        citation_asset_id = str(citation.get("asset_id") or "").strip()
+        citation_ts = str(citation.get("source_timestamp") or "").strip()
+        confidence = float(getattr(value, "confidence", 0.0) or 0.0)
+        if citation_title or citation_asset_id or citation_ts:
+            citation_parts = []
+            if citation_title:
+                citation_parts.append(citation_title)
+            if citation_asset_id:
+                citation_parts.append(f"asset:{citation_asset_id}")
+            if citation_ts:
+                citation_parts.append(f"dated:{citation_ts}")
+            slot_value = f"{slot_value} (source: {', '.join(citation_parts)}; confidence={confidence:.2f})"
+        lines.append(f"{_slot_display_name(slot_name)}: {slot_value}")
+    lines.append(KNOWLEDGE_AUTOFILL_BLOCK_END)
+    return "\n".join(lines)
 
 
 def _build_backlog_pre_run_check(context: JiraWebhookContext) -> dict[str, object]:
@@ -291,7 +363,101 @@ def _evaluate_precheck_decision_with_labels(
             context.issue_key,
             ",".join(applied_labels),
         )
-    return decision.with_applied_labels(applied_labels), applied_labels
+    resolved_decision = decision.with_applied_labels(applied_labels)
+    pre_check = resolved_decision.pre_check
+    if (
+        pre_check is not None
+        and resolved_decision.block_reason in {"decision_gate_required", "gtd_required"}
+        and context.project is not None
+    ):
+        effective_policy = resolve_effective_policy(
+            tenant_policy=context.tenant.policy_config or {},
+            project_overrides=context.project.policy_overrides or {},
+        )
+        knowledge_enabled = bool(effective_policy.get("knowledge_base_enabled", True))
+        knowledge_mode = str(effective_policy.get("knowledge_auto_answer_mode") or "").strip().lower()
+        if knowledge_mode not in {"safe", "balanced", "aggressive"}:
+            knowledge_mode = "aggressive"
+        missing_slots = precheck_missing_slots(pre_check)
+        if knowledge_enabled and missing_slots:
+            slot_answers = resolve_missing_slots_from_knowledge(
+                session=session,
+                tenant_id=context.tenant_id,
+                project_id=context.project.project_id,
+                missing_slots=missing_slots,
+                mode=knowledge_mode,
+            )
+            if slot_answers:
+                try:
+                    oauth = tenant_jira_oauth_context(session=session, tenant=context.tenant, settings=settings)
+                    oauth_client = getattr(oauth, "client", None)
+                    oauth_connection = getattr(oauth, "connection", None)
+                    oauth_access_token = getattr(oauth, "access_token", None)
+                    cloud_id = getattr(oauth_connection, "cloud_id", None)
+                    if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
+                        raise RuntimeError("Tenant Jira OAuth context is incomplete")
+                    next_description = _upsert_block(
+                        current_description=str(
+                            context.issue_description if issue_description is None else issue_description or ""
+                        ),
+                        block=_build_knowledge_autofill_block(slot_answers=slot_answers),
+                        start_marker=KNOWLEDGE_AUTOFILL_BLOCK_START,
+                        end_marker=KNOWLEDGE_AUTOFILL_BLOCK_END,
+                    )
+                    oauth_client.update_issue_summary_and_description(
+                        access_token=oauth_access_token,
+                        cloud_id=str(cloud_id),
+                        issue_id_or_key=context.issue_key,
+                        summary=str(context.issue_summary or context.issue_key),
+                        description=next_description,
+                    )
+                    context.issue_description = next_description
+                    reevaluated_decision = evaluate_ingress_precheck(
+                        source="jira_webhook",
+                        tenant_id=context.tenant_id,
+                        project_id=context.project.project_id if context.project is not None else None,
+                        issue_key=context.issue_key,
+                        issue_summary=context.issue_summary,
+                        issue_description=next_description,
+                        issue_labels=context.issue_labels,
+                        ready_label=_resolve_ready_label_for_tenant(context.tenant),
+                        evaluate_pre_run_check_fn=evaluate_pre_run_check,
+                    )
+                    if reevaluated_decision.pre_check is not None:
+                        reapply_result = apply_issue_label_actions(
+                            session=session,
+                            tenant=context.tenant,
+                            project_policy_overrides=context.project.policy_overrides if context.project is not None else {},
+                            issue_key=context.issue_key,
+                            existing_labels=context.issue_labels,
+                            actions=reevaluated_decision.label_actions,
+                            settings=settings,
+                            tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+                            oauth_context=oauth,
+                            logger=logger,
+                        )
+                        re_applied = list(reapply_result.applied_labels)
+                        if re_applied:
+                            context.issue_labels = [*context.issue_labels, *re_applied]
+                            applied_labels = [*applied_labels, *re_applied]
+                        resolved_decision = reevaluated_decision.with_applied_labels(re_applied)
+                        logger.info(
+                            "jira_webhook_knowledge_autofill_applied request_id=%s tenant_id=%s issue_key=%s classification=%s resolved_slots=%s",
+                            context.request_id,
+                            context.tenant_id,
+                            context.issue_key,
+                            precheck_classification(resolved_decision.pre_check),
+                            ",".join(sorted(slot_answers.keys())),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "jira_webhook_knowledge_autofill_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
+                        context.request_id,
+                        context.tenant_id,
+                        context.issue_key,
+                        exc,
+                    )
+    return resolved_decision, applied_labels
 
 
 @dataclass

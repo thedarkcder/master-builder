@@ -295,7 +295,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             assert run is not None
             self.assertEqual(run.issue_description, "Objective: run command should carry Jira detail context.")
 
-    def test_run_precheck_includes_related_board_context(self) -> None:
+    def test_run_precheck_uses_canonical_issue_description_without_board_context(self) -> None:
         with (
             patch(
                 "orchestrator.api.routes.discord._fetch_jira_issue_preview",
@@ -332,9 +332,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         issue_description = str(precheck_mock.call_args.kwargs["issue_description"])
         self.assertIn("agent:ready", precheck_mock.call_args.kwargs["issue_labels"])
-        self.assertIn("## Board Context (TP)", issue_description)
-        self.assertIn("TP-21", issue_description)
-        self.assertIn("TP-22", issue_description)
+        self.assertEqual(issue_description, "Objective: run command should carry Jira detail context.")
 
     def test_run_applies_ready_label_when_precheck_reports_missing(self) -> None:
         oauth_client = SimpleNamespace(add_issue_labels=unittest.mock.MagicMock())
