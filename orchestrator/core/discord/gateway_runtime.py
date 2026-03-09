@@ -4,6 +4,7 @@ import logging
 import signal
 import threading
 
+from orchestrator.api.routes.discord import register_discord_command_executor
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
 from orchestrator.core.logging import configure_logging
@@ -42,6 +43,7 @@ def _leader_lock_healthcheck(*, conn) -> bool:  # noqa: ANN001
 def run_discord_gateway() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    register_discord_command_executor()
     _run_gateway_leader_loop(settings=settings)
 
 

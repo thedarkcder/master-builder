@@ -7,6 +7,7 @@ import type { ComponentType } from "react";
 import {
   Activity,
   Bell,
+  BarChart3,
   Building2,
   FolderKanban,
   KeyRound,
@@ -194,6 +195,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           label: "Notifications",
           icon: Bell,
           matchPrefix: `/tenants/${tenantId}/edit/notifications`
+        },
+        {
+          href: `/tenants/${tenantId}/analytics/token-overview`,
+          label: "Token Analytics",
+          icon: BarChart3,
+          matchPrefix: `/tenants/${tenantId}/analytics`
         }
       ]
     : [];

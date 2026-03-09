@@ -15,6 +15,7 @@ from orchestrator.tools.github_app import (
     InstallationRepository,
     PullRequestDetails,
     PullRequestFileChange,
+    PullRequestInlineCommentDraft,
     PullRequestResult,
     PullRequestSummary,
     WorkflowCheckSuite,
@@ -494,6 +495,9 @@ class GitHubAppClientTests(unittest.TestCase):
                 "number": 12,
                 "html_url": "https://github.com/example/repo/pull/12",
                 "head": {"sha": "abc123sha"},
+                "base": {"ref": "main"},
+                "title": "MAB-12: Update",
+                "state": "open",
             },
         ]
 
@@ -512,6 +516,9 @@ class GitHubAppClientTests(unittest.TestCase):
                 number=12,
                 html_url="https://github.com/example/repo/pull/12",
                 head_sha="abc123sha",
+                title="MAB-12: Update",
+                state="open",
+                base_ref="main",
             ),
         )
 
@@ -791,3 +798,60 @@ class GitHubAppClientTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(GitHubApiError, "response was not a list"):
                 client.list_open_pull_requests(repo_full_name="example/repo")
+
+    def test_create_and_update_issue_comment(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            side_effect=[
+                {"id": 1001, "body": "first", "created_at": "2026-03-04T10:00:00Z", "user": {"login": "bot"}},
+                {"id": 1001, "body": "second", "created_at": "2026-03-04T10:01:00Z", "user": {"login": "bot"}},
+            ],
+        ) as request_json:
+            created = client.create_pull_request_issue_comment(
+                repo_full_name="example/repo",
+                pr_number=10,
+                body="first",
+            )
+            updated = client.update_issue_comment(
+                repo_full_name="example/repo",
+                comment_id=1001,
+                body="second",
+            )
+
+        self.assertEqual(created.comment_id, 1001)
+        self.assertEqual(created.body, "first")
+        self.assertEqual(updated.body, "second")
+        self.assertEqual(request_json.call_count, 2)
+
+    def test_submit_pull_request_review_and_merge(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            side_effect=[
+                {"id": 9001, "state": "COMMENTED"},
+                {"merged": True, "message": "Pull Request successfully merged", "sha": "abc123"},
+            ],
+        ) as request_json:
+            review = client.submit_pull_request_review(
+                repo_full_name="example/repo",
+                pr_number=10,
+                commit_id="abc123",
+                body="Codex inline findings",
+                comments=[PullRequestInlineCommentDraft(path="src/main.py", line=42, body="Fix this.")],
+            )
+            merge_result = client.merge_pull_request(
+                repo_full_name="example/repo",
+                pr_number=10,
+                head_sha="abc123",
+            )
+
+        self.assertEqual(review.review_id, 9001)
+        self.assertEqual(review.state, "COMMENTED")
+        self.assertTrue(merge_result.merged)
+        self.assertEqual(merge_result.sha, "abc123")
+        self.assertEqual(request_json.call_count, 2)

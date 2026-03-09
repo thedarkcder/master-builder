@@ -186,7 +186,7 @@ def _source_changes_present(changed_files) -> bool:  # noqa: ANN001
         filename = str(getattr(change, "filename", "")).strip().lower()
         if not filename:
             continue
-        if "/tests/" in filename or filename.startswith("tests/") or "__tests__/" in filename:
+        if _is_test_path(filename):
             continue
         if filename.endswith((".md", ".txt", ".json", ".yaml", ".yml")):
             continue
@@ -200,10 +200,42 @@ def _test_changes_present(changed_files) -> bool:  # noqa: ANN001
         filename = str(getattr(change, "filename", "")).strip().lower()
         if not filename:
             continue
-        if filename.startswith("tests/") or "/tests/" in filename or "__tests__/" in filename:
+        if _is_test_path(filename):
             return True
-        if filename.startswith("test_") or "/test_" in filename:
-            return True
-        if filename.endswith(("_test.py", ".test.js", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", ".spec.js")):
-            return True
+    return False
+
+
+def _is_test_path(filename: str) -> bool:
+    if (
+        filename.startswith("tests/")
+        or "/tests/" in filename
+        or "__tests__/" in filename
+        or filename.startswith("src/test/")
+        or "/src/test/" in filename
+        or filename.startswith("src/androidtest/")
+        or "/src/androidtest/" in filename
+        or filename.startswith("src/integrationtest/")
+        or "/src/integrationtest/" in filename
+    ):
+        return True
+    if filename.startswith("test_") or "/test_" in filename:
+        return True
+    if filename.endswith(
+        (
+            "_test.py",
+            ".test.js",
+            ".test.ts",
+            ".test.tsx",
+            ".spec.ts",
+            ".spec.tsx",
+            ".spec.js",
+            "test.java",
+            "tests.java",
+            "spec.java",
+            "test.kt",
+            "tests.kt",
+            "spec.kt",
+        )
+    ):
+        return True
     return False

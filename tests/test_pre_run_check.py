@@ -1,29 +1,36 @@
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.precheck_policy import PrecheckPolicyResult
 from unittest.mock import patch
+
+
+def _policy_result(*, decision_gate: DecisionGateResult, gtd: GoodToDoValidationResult) -> PrecheckPolicyResult:
+    return PrecheckPolicyResult(
+        decision_gate=decision_gate,
+        gtd=gtd,
+    )
 
 
 def test_pre_run_check_ready_for_agent_when_label_present_and_gate_clear() -> None:
     with (
         patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_decision_gate",
-            return_value=DecisionGateResult(
-                triggered=False,
-                reason="Decision Gate not required",
-                missing_sections=(),
-                questions=(),
-                recommendation="Proceed",
-                tags=(),
-            ),
-        ),
-        patch(
-            "orchestrator.core.pre_run_check.validate_good_to_do",
-            return_value=GoodToDoValidationResult(
-                valid=True,
-                missing_criteria=(),
-                clarification_questions=(),
+            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            return_value=_policy_result(
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
             ),
         ),
     ):
@@ -45,22 +52,21 @@ def test_pre_run_check_missing_ready_label_when_gate_clear() -> None:
     with (
         patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_decision_gate",
-            return_value=DecisionGateResult(
-                triggered=False,
-                reason="Decision Gate not required",
-                missing_sections=(),
-                questions=(),
-                recommendation="Proceed",
-                tags=(),
-            ),
-        ),
-        patch(
-            "orchestrator.core.pre_run_check.validate_good_to_do",
-            return_value=GoodToDoValidationResult(
-                valid=True,
-                missing_criteria=(),
-                clarification_questions=(),
+            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            return_value=_policy_result(
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
             ),
         ),
     ):
@@ -80,22 +86,21 @@ def test_pre_run_check_decision_gate_required_takes_priority() -> None:
     with (
         patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_decision_gate",
-            return_value=DecisionGateResult(
-                triggered=True,
-                reason="Missing GTD sections: Objective",
-                missing_sections=("Objective",),
-                questions=("What is objective?",),
-                recommendation="Decision required before build",
-                tags=("[NEEDS-PM]",),
-            ),
-        ),
-        patch(
-            "orchestrator.core.pre_run_check.validate_good_to_do",
-            return_value=GoodToDoValidationResult(
-                valid=True,
-                missing_criteria=(),
-                clarification_questions=(),
+            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            return_value=_policy_result(
+                decision_gate=DecisionGateResult(
+                    triggered=True,
+                    reason="Missing GTD sections: Objective",
+                    missing_sections=("Objective",),
+                    questions=("What is objective?",),
+                    recommendation="Decision required before build",
+                    tags=("[NEEDS-PM]",),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
             ),
         ),
     ):
@@ -113,22 +118,21 @@ def test_pre_run_check_infers_macos_worker_requirement() -> None:
     with (
         patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="macos"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_decision_gate",
-            return_value=DecisionGateResult(
-                triggered=False,
-                reason="Decision Gate not required",
-                missing_sections=(),
-                questions=(),
-                recommendation="Proceed",
-                tags=(),
-            ),
-        ),
-        patch(
-            "orchestrator.core.pre_run_check.validate_good_to_do",
-            return_value=GoodToDoValidationResult(
-                valid=True,
-                missing_criteria=(),
-                clarification_questions=(),
+            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            return_value=_policy_result(
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
             ),
         ),
     ):
@@ -147,22 +151,21 @@ def test_pre_run_check_requires_gtd_before_ready_for_agent() -> None:
     with (
         patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
         patch(
-            "orchestrator.core.pre_run_check.evaluate_decision_gate",
-            return_value=DecisionGateResult(
-                triggered=False,
-                reason="Decision Gate not required",
-                missing_sections=(),
-                questions=(),
-                recommendation="Proceed",
-                tags=(),
-            ),
-        ),
-        patch(
-            "orchestrator.core.pre_run_check.validate_good_to_do",
-            return_value=GoodToDoValidationResult(
-                valid=False,
-                missing_criteria=("Dependencies and risks identified",),
-                clarification_questions=("Which dependencies or risks may impact delivery?",),
+            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
+            return_value=_policy_result(
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=False,
+                    missing_criteria=("Dependencies and risks identified",),
+                    clarification_questions=("Which dependencies or risks may impact delivery?",),
+                ),
             ),
         ),
     ):

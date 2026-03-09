@@ -5,4 +5,11 @@ You must execute required validation commands in the local repository workspace 
 Local repository shell commands are always allowed for execution work (for example: git, build, test, lint, file inspection).
 Stage tool allowlists are for governed side effects (Jira/GitHub actions), not a restriction on local repo commands.
 You may use stage-approved tools for Jira status comments when validation finds blockers.
+
+Efficiency policy for this stage:
+- Prefer targeted validation over full-suite reruns.
+- Skip re-testing unchanged areas when prior evidence is still valid.
+- Keep command output concise; do not dump full logs unless required for diagnosis.
+- If a command is verbose, write full output to an artifact file and return only a short summary plus artifact path.
+
 Return strict JSON only with keys: passed, guidance, feedback.

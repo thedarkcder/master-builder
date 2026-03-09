@@ -114,7 +114,10 @@ export default function TenantDashboardPage() {
               <div key={run.run_id} className="flex items-center justify-between rounded-md border p-3">
                 <div>
                   <p className="text-sm font-medium">
-                    <Link className="text-primary hover:underline" href={`/runs/${encodeURIComponent(run.run_id)}`}>
+                    <Link
+                      className="text-primary hover:underline"
+                      href={`/tenants/${encodeURIComponent(params.tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
+                    >
                       {run.issue_key || run.run_id}
                     </Link>
                   </p>

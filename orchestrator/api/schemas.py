@@ -43,7 +43,9 @@ class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
     allow_label_mutations: bool = True
+    allow_auto_merge: bool = False
     max_dev_test_review_loops: int = 2
+    max_pr_auto_remediation_loops: int = 5
     max_concurrent_runs: int = 2
     allowed_commands: list[str] = Field(default_factory=list)
     require_agents_md: bool = False
@@ -445,3 +447,215 @@ class AdminLoginResponse(BaseModel):
 
 class AdminIdentityResponse(BaseModel):
     username: str
+
+
+class TokenTimelineTurnRead(BaseModel):
+    turn_id: str
+    invocation_id: str
+    stage: str
+    attempt: int | None
+    recorded_at: datetime
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    delta_input: int
+    delta_uncached: int
+    delta_output: int
+    runtime_ms: int | None
+    is_growth_spike: bool
+    spike_reason: list[str] = Field(default_factory=list)
+
+
+class TokenTimelineTotalsRead(BaseModel):
+    input: int
+    uncached_input: int
+    output: int
+    cached_input: int
+    cache_ratio: float
+    total_io: int
+    avg_runtime_ms: float
+    p95_runtime_ms: float
+
+
+class TokenTimelineRead(BaseModel):
+    run_id: str
+    issue_key: str
+    model: str | None
+    status: str
+    totals: TokenTimelineTotalsRead
+    turns: list[TokenTimelineTurnRead]
+
+
+class TokenOverviewKpiRead(BaseModel):
+    total_input: int
+    total_uncached_input: int
+    total_output: int
+    total_io: int
+    cache_ratio: float
+    avg_runtime_ms: float
+    p95_runtime_ms: float
+    avg_io_per_run: float
+    p95_io_per_run: float
+    retest_waste_score: float
+
+
+class TokenOverviewSeriesByDayRead(BaseModel):
+    day: str
+    total_input: int
+    total_uncached_input: int
+    total_output: int
+    total_io: int
+    delta_input: int
+    delta_uncached: int
+    delta_output: int
+    delta_total_io: int
+    avg_runtime_ms: float
+    p95_runtime_ms: float
+    run_count: int
+
+
+class TokenOverviewTopRunRead(BaseModel):
+    run_id: str
+    issue_key: str
+    tenant_id: str
+    project_id: str | None
+    status: str
+    input: int
+    uncached_input: int
+    output: int
+    total_io: int
+    delta_total_io: int
+    cache_ratio: float
+
+
+class TokenAlertRead(BaseModel):
+    rule: str
+    severity: str = "warning"
+    run_id: str
+    turn_id: str | None = None
+    stage: str | None = None
+    attempt: int | None = None
+    value: float | int | None = None
+    threshold: float | int | None = None
+    message: str
+
+
+class TokenOverviewRead(BaseModel):
+    kpis: TokenOverviewKpiRead
+    series_by_day: list[TokenOverviewSeriesByDayRead]
+    top_costly_runs: list[TokenOverviewTopRunRead]
+    alerts: list[TokenAlertRead] = Field(default_factory=list)
+
+
+class TokenCompareRunTotalsRead(BaseModel):
+    input: int
+    uncached_input: int
+    output: int
+    cached_input: int
+    total_io: int
+    cache_ratio: float
+
+
+class TokenCompareStageTotalsRead(BaseModel):
+    stage: str
+    input: int
+    uncached_input: int
+    output: int
+    total_io: int
+
+
+class TokenCompareRunRead(BaseModel):
+    run_id: str
+    issue_key: str
+    status: str | None
+    totals: TokenCompareRunTotalsRead
+    stage_totals: list[TokenCompareStageTotalsRead]
+
+
+class TokenCompareWaterfallStepRead(BaseModel):
+    run_id: str
+    turn_order: int
+    turn_id: str
+    recorded_at: datetime
+    stage: str
+    attempt: int | None
+    delta_input: int
+    uncached_delta: int
+    output_tokens: int
+    delta_reason: list[str] = Field(default_factory=list)
+
+
+class TokenCompareRead(BaseModel):
+    runs: list[TokenCompareRunRead]
+    align_axis: list[int]
+    waterfall: list[TokenCompareWaterfallStepRead]
+
+
+class TokenCompareRequest(BaseModel):
+    run_ids: list[str]
+    align_by: str = "turn_sequence"
+
+
+class TokenStageDiagnosticRead(BaseModel):
+    stage: str
+    avg_delta: float
+    avg_uncached_delta: float
+    retry_impact_index: float
+    run_count: int
+
+
+class TokenStageHeatmapCellRead(BaseModel):
+    stage: str
+    attempt: int
+    avg_delta: float
+    avg_uncached_delta: float
+    sample_count: int
+
+
+class TokenHeavyCommandRead(BaseModel):
+    command_signature: str
+    stage: str
+    spike_count: int
+    avg_delta: float
+    avg_uncached_delta: float
+
+
+class TokenScatterPointRead(BaseModel):
+    run_id: str
+    issue_key: str
+    stage: str
+    attempt: int | None
+    runtime_ms: int | None
+    token_delta: int
+    recorded_at: datetime
+
+
+class TokenIssueStageUsageRead(BaseModel):
+    issue_key: str
+    stage: str
+    input: int
+    uncached_input: int
+    output: int
+    total_io: int
+    delta_total_io: int
+    run_count: int
+
+
+class TokenStageDiagnosticsRead(BaseModel):
+    stages: list[TokenStageDiagnosticRead]
+    heavy_commands: list[TokenHeavyCommandRead]
+    scatter_points: list[TokenScatterPointRead]
+    heatmap: list[TokenStageHeatmapCellRead] = Field(default_factory=list)
+    retest_waste_score: float = 0.0
+    issue_stage_totals: list[TokenIssueStageUsageRead] = Field(default_factory=list)
+
+
+class TokenProjectStageDiagnosticsRead(BaseModel):
+    project_id: str
+    project_name: str | None
+    stages: list[TokenStageDiagnosticRead]
+    retest_waste_score: float = 0.0
+
+
+class TokenStageDiagnosticsCompareRead(BaseModel):
+    projects: list[TokenProjectStageDiagnosticsRead]
