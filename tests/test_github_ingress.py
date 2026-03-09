@@ -38,6 +38,13 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             "enqueue_pr_remediation_if_needed": MagicMock(return_value=None),
             "resolve_scoped_secret_ref": MagicMock(return_value="secret"),
             "_validate_github_webhook_signature": MagicMock(),
+            "upsert_sticky_review_comment": MagicMock(return_value=SimpleNamespace(action="updated", comment_id=1)),
+            "publish_inline_review_batch": MagicMock(
+                return_value=SimpleNamespace(submitted=False, review_id=None, inline_count=0)
+            ),
+            "resolve_effective_policy": MagicMock(
+                return_value={"allow_auto_merge": False, "max_pr_auto_remediation_loops": 5}
+            ),
         }
         base_patches.update(overrides)
 
@@ -224,6 +231,33 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 202)
         validate.assert_called_once()
+
+    async def test_fail_closed_when_findings_evaluation_errors(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+        )
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="Need review")
+
+        response = await self._call(
+            payload={"action": "synchronize"},
+            headers={"X-GitHub-Event": "pull_request"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            evaluate_pr_review_findings=MagicMock(side_effect=RuntimeError("codex failed")),
+            resolve_effective_policy=MagicMock(
+                return_value={"allow_auto_merge": True, "max_pr_auto_remediation_loops": 5}
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"findings_evaluated":false', body)
+        self.assertIn('"green":false', body)
+        github_client.merge_pull_request.assert_not_called()
 
         validate = MagicMock()
         response = await self._call(
