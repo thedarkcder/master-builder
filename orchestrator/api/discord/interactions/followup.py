@@ -15,16 +15,19 @@ from sqlalchemy.orm import Session
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.ask.context import consume_pending_ask_action
 from orchestrator.api.discord.interactions.parser import _parse_discord_interaction_command
+from orchestrator.api.discord.interactions.followup_runtime import (
+    build_followup_service,
+    resolve_tenant_id_for_followup,
+    run_async_blocking,
+)
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
 )
-from orchestrator.api.discord.shared.reply_transport import DiscordReplyTransport
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.platform_secret_service import (
@@ -44,6 +47,20 @@ logger = logging.getLogger(__name__)
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 execute_discord_ingress_command = execute_tenant_discord_ingress_command
+
+
+def _discord_api_client(*, session: Session, settings) -> DiscordApiClient:  # noqa: ANN001
+    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
+    if not token_ref:
+        raise RuntimeError("Discord bot token secret ref is not configured")
+    bot_token = resolve_platform_secret_ref(
+        session,
+        secret_ref=token_ref,
+        encryption_key=settings.secrets_encryption_key,
+    )
+    if not bot_token:
+        raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
+    return DiscordApiClient(bot_token=bot_token)
 
 
 def _tenant_discord_channel_ids(*, tenant: Tenant, project_channel_ids: set[str]) -> set[str]:
@@ -289,17 +306,7 @@ def _send_discord_thread_followup(
     content: str,
     components: list[dict] | None = None,
 ) -> None:  # noqa: ANN001
-    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
-    if not token_ref:
-        raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_platform_secret_ref(
-        session,
-        secret_ref=token_ref,
-        encryption_key=settings.secrets_encryption_key,
-    )
-    if not bot_token:
-        raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
-    client = DiscordApiClient(bot_token=bot_token)
+    client = _discord_api_client(session=session, settings=settings)
     ask_thread_ids = _project_ask_thread_channel_ids_for_tenant(
         session=session,
         tenant_id=tenant.tenant_id,
@@ -402,17 +409,7 @@ def _send_discord_ask_response_with_thread(
     components: list[dict] | None = None,
     issue_key: str | None = None,
 ) -> None:  # noqa: ANN001
-    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
-    if not token_ref:
-        raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_platform_secret_ref(
-        session,
-        secret_ref=token_ref,
-        encryption_key=settings.secrets_encryption_key,
-    )
-    if not bot_token:
-        raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
-    client = DiscordApiClient(bot_token=bot_token)
+    client = _discord_api_client(session=session, settings=settings)
     ask_thread_channel_ids = _project_ask_thread_channel_ids_for_tenant(
         session=session,
         tenant_id=tenant.tenant_id,
@@ -512,18 +509,7 @@ def _send_discord_seed_followup_with_thread(
     request_id: str,
     questions: list[str],
 ) -> None:  # noqa: ANN001
-    token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
-    if not token_ref:
-        raise RuntimeError("Discord bot token secret ref is not configured")
-    bot_token = resolve_platform_secret_ref(
-        session,
-        secret_ref=token_ref,
-        encryption_key=settings.secrets_encryption_key,
-    )
-    if not bot_token:
-        raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
-
-    client = DiscordApiClient(bot_token=bot_token)
+    client = _discord_api_client(session=session, settings=settings)
     seed_thread_channel_ids = _project_seed_followup_thread_channel_ids_for_tenant(
         session=session,
         tenant_id=tenant.tenant_id,
@@ -750,12 +736,13 @@ def _run_discord_command_followup_blocking(
     command_params: dict[str, str] | None = None,
     attachments: list[dict[str, str]] | None = None,
 ) -> None:
-    resolved_tenant_id = str(tenant_id or "").strip()
-    if not resolved_tenant_id:
-        session_factory = create_session_factory()
-        with session_factory() as session:
-            tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
-            resolved_tenant_id = tenant.tenant_id if tenant is not None else ""
+    session_factory = create_session_factory()
+    resolved_tenant_id = resolve_tenant_id_for_followup(
+        session_factory=session_factory,
+        resolve_tenant_for_channel_fn=resolve_tenant_for_discord_channel,
+        tenant_id=tenant_id,
+        channel_id=channel_id,
+    )
     if not resolved_tenant_id:
         _send_discord_interaction_followup(
             application_id=application_id,
@@ -767,24 +754,22 @@ def _run_discord_command_followup_blocking(
         )
         return
 
-    service = DiscordWebhookFollowupService(
-        session_factory=create_session_factory(),
+    service = build_followup_service(
+        session_factory=session_factory,
         settings_factory=get_settings,
         execute_command_ingress=execute_discord_ingress_command,
         command_request_factory=DiscordCommandRequest,
         build_command_followup_message=_build_command_followup_message,
         ask_confirmation_components=_ask_confirmation_components,
         ask_reply_components=_ask_reply_components,
-        reply_transport=DiscordReplyTransport(
-            send_interaction_followup=_send_discord_interaction_followup,
-            send_thread_reply=_send_discord_thread_followup,
-            send_ask_with_thread=_send_discord_ask_response_with_thread,
-            send_seed_with_thread=_send_discord_seed_followup_with_thread,
-        ),
+        send_interaction_followup=_send_discord_interaction_followup,
+        send_thread_reply=_send_discord_thread_followup,
+        send_ask_with_thread=_send_discord_ask_response_with_thread,
+        send_seed_with_thread=_send_discord_seed_followup_with_thread,
         consume_pending_ask_action=consume_pending_ask_action,
     )
-    asyncio.run(
-        service.run_discord_command_followup(
+    run_async_blocking(
+        lambda: service.run_discord_command_followup(
             tenant_id=resolved_tenant_id,
             user_id=user_id,
             channel_id=channel_id,
@@ -830,12 +815,13 @@ def _run_discord_ask_confirmation_followup_blocking(
     application_id: str,
     interaction_token: str,
 ) -> None:
-    resolved_tenant_id = str(tenant_id or "").strip()
-    if not resolved_tenant_id:
-        session_factory = create_session_factory()
-        with session_factory() as session:
-            tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
-            resolved_tenant_id = tenant.tenant_id if tenant is not None else ""
+    session_factory = create_session_factory()
+    resolved_tenant_id = resolve_tenant_id_for_followup(
+        session_factory=session_factory,
+        resolve_tenant_for_channel_fn=resolve_tenant_for_discord_channel,
+        tenant_id=tenant_id,
+        channel_id=channel_id,
+    )
     if not resolved_tenant_id:
         _send_discord_interaction_followup(
             application_id=application_id,
@@ -845,24 +831,22 @@ def _run_discord_ask_confirmation_followup_blocking(
         )
         return
 
-    service = DiscordWebhookFollowupService(
-        session_factory=create_session_factory(),
+    service = build_followup_service(
+        session_factory=session_factory,
         settings_factory=get_settings,
         execute_command_ingress=execute_discord_ingress_command,
         command_request_factory=DiscordCommandRequest,
         build_command_followup_message=_build_command_followup_message,
         ask_confirmation_components=_ask_confirmation_components,
         ask_reply_components=_ask_reply_components,
-        reply_transport=DiscordReplyTransport(
-            send_interaction_followup=_send_discord_interaction_followup,
-            send_thread_reply=_send_discord_thread_followup,
-            send_ask_with_thread=_send_discord_ask_response_with_thread,
-            send_seed_with_thread=_send_discord_seed_followup_with_thread,
-        ),
+        send_interaction_followup=_send_discord_interaction_followup,
+        send_thread_reply=_send_discord_thread_followup,
+        send_ask_with_thread=_send_discord_ask_response_with_thread,
+        send_seed_with_thread=_send_discord_seed_followup_with_thread,
         consume_pending_ask_action=consume_pending_ask_action,
     )
-    asyncio.run(
-        service.run_discord_ask_confirmation_followup(
+    run_async_blocking(
+        lambda: service.run_discord_ask_confirmation_followup(
             tenant_id=resolved_tenant_id,
             user_id=user_id,
             channel_id=channel_id,
