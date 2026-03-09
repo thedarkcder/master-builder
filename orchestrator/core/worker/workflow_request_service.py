@@ -45,6 +45,10 @@ def build_workflow_request_for_run(
         parse_worker_capabilities(getattr(settings, "worker_capabilities", ""))
     )
     current_worker_capability = available_worker_capabilities[0] if available_worker_capabilities else "linux"
+    base_branch = _normalize_branch(project.environment.get("default_branch") if project is not None else None) or "main"
+    integration_branch = _normalize_branch(run.branch) or f"feature/{run.issue_key}"
+    trigger_context = _extract_trigger_context(run.plan)
+    pr_number = _extract_pr_number(trigger_context)
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
@@ -58,6 +62,11 @@ def build_workflow_request_for_run(
         execution_repo_dir=execution_repo_dir,
         current_worker_capability=current_worker_capability,
         available_worker_capabilities=available_worker_capabilities,
+        base_branch=base_branch,
+        integration_branch=integration_branch,
+        pr_target_branch=base_branch,
+        pr_number=pr_number,
+        trigger_context=trigger_context,
     )
 
 
@@ -75,3 +84,28 @@ def _resolve_execution_repo_dir(*, settings, tenant: Tenant, project: Project | 
             f"(tenant_id={tenant.tenant_id}, project_id={project.project_id}, repo_dir={repo_dir})"
         )
     return str(repo_dir)
+
+
+def _normalize_branch(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _extract_trigger_context(plan: object) -> dict | None:
+    if not isinstance(plan, dict):
+        return None
+    trigger_context = plan.get("trigger_context")
+    if isinstance(trigger_context, dict):
+        return trigger_context
+    return None
+
+
+def _extract_pr_number(trigger_context: dict | None) -> int | None:
+    if not isinstance(trigger_context, dict):
+        return None
+    value = trigger_context.get("pr_number")
+    if isinstance(value, int) and value > 0:
+        return value
+    return None

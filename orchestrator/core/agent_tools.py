@@ -49,6 +49,22 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "github.open_pr",
         "repo.read",
     },
+    "orchestrator": {
+        "jira.get_issue",
+        "jira.comment",
+        "jira.transition",
+        "github.create_branch",
+        "github.commit_all",
+        "github.push_branch",
+        "github.open_pr",
+        "github.get_pr_details",
+        "github.list_pr_files",
+        "github.list_pr_reviews",
+        "github.list_pr_review_comments",
+        "github.list_pr_issue_comments",
+        "github.list_check_suites",
+        "repo.read",
+    },
 }
 
 _READ_ONLY_SHELL_OPERATOR_PATTERN = re.compile(r"[|;&><`]|(?:\$\()")
@@ -390,6 +406,112 @@ def _execute_github_tool(
             body=body,
         )
         return {"pr_number": result.number, "pr_url": result.html_url}
+
+    if tool_name == "github.get_pr_details":
+        pr_number = int(args.get("pr_number") or 0)
+        if pr_number <= 0:
+            raise ValueError("github.get_pr_details requires numeric 'pr_number'")
+        detail = github_client.get_pull_request_details(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+        )
+        return {
+            "number": detail.number,
+            "html_url": detail.html_url,
+            "head_sha": detail.head_sha,
+            "body": detail.body,
+            "title": detail.title,
+            "state": detail.state,
+            "head_ref": detail.head_ref,
+            "base_ref": detail.base_ref,
+        }
+
+    if tool_name == "github.list_pr_files":
+        pr_number = int(args.get("pr_number") or 0)
+        if pr_number <= 0:
+            raise ValueError("github.list_pr_files requires numeric 'pr_number'")
+        items = github_client.list_pull_request_files(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+        )
+        return {
+            "files": [{"filename": item.filename, "patch": item.patch} for item in items],
+        }
+
+    if tool_name == "github.list_pr_reviews":
+        pr_number = int(args.get("pr_number") or 0)
+        if pr_number <= 0:
+            raise ValueError("github.list_pr_reviews requires numeric 'pr_number'")
+        items = github_client.list_pull_request_reviews(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+        )
+        return {
+            "reviews": [
+                {
+                    "id": item.review_id,
+                    "state": item.state,
+                    "body": item.body,
+                    "submitted_at": item.submitted_at,
+                    "user_login": item.user_login,
+                }
+                for item in items
+            ]
+        }
+
+    if tool_name == "github.list_pr_review_comments":
+        pr_number = int(args.get("pr_number") or 0)
+        if pr_number <= 0:
+            raise ValueError("github.list_pr_review_comments requires numeric 'pr_number'")
+        items = github_client.list_pull_request_review_comments(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+        )
+        return {
+            "comments": [
+                {
+                    "id": item.comment_id,
+                    "body": item.body,
+                    "path": item.path,
+                    "line": item.line,
+                    "state": item.state,
+                    "user_login": item.user_login,
+                }
+                for item in items
+            ]
+        }
+
+    if tool_name == "github.list_pr_issue_comments":
+        pr_number = int(args.get("pr_number") or 0)
+        if pr_number <= 0:
+            raise ValueError("github.list_pr_issue_comments requires numeric 'pr_number'")
+        items = github_client.list_pull_request_issue_comments(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+        )
+        return {
+            "comments": [
+                {
+                    "id": item.comment_id,
+                    "body": item.body,
+                    "created_at": item.created_at,
+                    "user_login": item.user_login,
+                }
+                for item in items
+            ]
+        }
+
+    if tool_name == "github.list_check_suites":
+        ref = str(args.get("ref") or "").strip()
+        if not ref:
+            raise ValueError("github.list_check_suites requires non-empty 'ref'")
+        items = github_client.list_check_suites(repo_full_name=repo_full_name, ref=ref)
+        return {
+            "checks": [
+                {"name": item.name, "status": item.status, "conclusion": item.conclusion}
+                for item in items
+            ]
+        }
 
     raise ValueError(f"Unsupported GitHub tool '{tool_name}'")
 
