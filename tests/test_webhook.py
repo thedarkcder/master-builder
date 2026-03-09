@@ -1088,11 +1088,11 @@ class JiraWebhookTests(unittest.TestCase):
         }
         with (
             patch(
-                "orchestrator.api.routes.discord._search_jira_issues_for_tenant",
+                "orchestrator.api.discord.ingress.executor._search_jira_issues_for_tenant",
                 return_value=[JiraIssuePreview(key="TP-905", summary="Investigate", status="To Do")],
             ),
-            patch("orchestrator.api.routes.discord.build_codex_runtime"),
-            patch("orchestrator.api.routes.discord.answer_board_question_with_codex", return_value="Jira ask response"),
+            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime"),
+            patch("orchestrator.api.discord.ingress.executor.answer_board_question_with_codex", return_value="Jira ask response"),
             patch("orchestrator.api.webhooks.jira_ingress.post_jira_comment", return_value=(True, None)) as post_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)

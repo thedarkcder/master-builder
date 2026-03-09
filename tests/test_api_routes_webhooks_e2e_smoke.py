@@ -141,7 +141,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.discord.execute_tenant_command_ingress",
+                "orchestrator.api.discord.ingress.executor.execute_tenant_command_ingress",
                 return_value=DiscordCommandResponse(ok=True, command="ask", message="ok", data=None),
             )
         )

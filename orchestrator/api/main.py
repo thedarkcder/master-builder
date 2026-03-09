@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from orchestrator.api.discord.ingress.executor import register_discord_command_executor
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
 from orchestrator.api.routes.admin_discord_allowlist import (
     router as admin_discord_allowlist_router,
@@ -22,10 +23,7 @@ from orchestrator.api.routes.admin_runs import router as admin_runs_router
 from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
 from orchestrator.api.routes.admin_tenants import router as admin_tenants_router
 from orchestrator.api.routes.admin_tokens import router as admin_tokens_router
-from orchestrator.api.routes.discord import (
-    register_discord_command_executor,
-    router as discord_router,
-)
+from orchestrator.api.routes.discord import router as discord_router
 from orchestrator.api.routes.runs import router as runs_router
 from orchestrator.api.routes.webhook import router as webhook_router
 from orchestrator.api.routes.webhook_discord import router as webhook_discord_router
