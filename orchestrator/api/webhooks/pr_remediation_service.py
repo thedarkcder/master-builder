@@ -173,7 +173,7 @@ def enqueue_pr_remediation_if_needed(
     run.plan = {
         **existing_plan,
         "trigger_context": trigger_context,
-        "orchestration_mode": "one_shot_subagents",
+        "orchestration_mode": "orchestrated_subagents",
     }
     session.commit()
     session.refresh(run)

@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Check, Copy, RefreshCcw } from "lucide-react";
+import { ArrowLeft, Check, CheckCircle2, Circle, Copy, RefreshCcw, XCircle } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getJiraWebhookDiagnostics,
   getTenant,
@@ -35,7 +35,7 @@ export default function TenantWebhooksPage() {
   const params = useParams<{ tenantId: string }>();
   const tenantId = params.tenantId;
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [statusLine, setStatusLine] = useState("Copy expected values and compare with your provider config.");
+  const [statusLine, setStatusLine] = useState("");
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [diagnostics, setDiagnostics] = useState<JiraWebhookDiagnosticsRecord | null>(null);
   const [jiraHealth, setJiraHealth] = useState<HealthStatus | null>(null);
@@ -44,74 +44,69 @@ export default function TenantWebhooksPage() {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
   const apiBaseUrl = (credentials?.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/$/, "");
-  const docs: WebhookDoc[] = useMemo(() => [
-    {
-      key: "jira",
-      name: "Jira Webhook URL",
-      description: "Use this URL in Jira webhook settings.",
-      url: `${apiBaseUrl}/jira/webhook/${tenantId}`
-    },
-    {
-      key: "github",
-      name: "GitHub Webhook URL",
-      description: "Use this URL for GitHub App/repo webhook events.",
-      url: `${apiBaseUrl}/github/webhook`
-    },
-    {
-      key: "discord",
-      name: "Discord Interactions URL",
-      description: "Set this in Discord Developer Portal > Interactions Endpoint URL.",
-      url: `${apiBaseUrl}/discord/interactions`
-    }
-  ], [apiBaseUrl, tenantId]);
+  const docs: WebhookDoc[] = useMemo(
+    () => [
+      {
+        key: "jira",
+        name: "Jira Webhook URL",
+        description: "Use this URL in Jira webhook settings.",
+        url: `${apiBaseUrl}/jira/webhook/${tenantId}`
+      },
+      {
+        key: "github",
+        name: "GitHub Webhook URL",
+        description: "Use this URL for GitHub App/repo webhook events.",
+        url: `${apiBaseUrl}/github/webhook`
+      },
+      {
+        key: "discord",
+        name: "Discord Interactions URL",
+        description: "Set this in Discord Developer Portal › Interactions Endpoint URL.",
+        url: `${apiBaseUrl}/discord/interactions`
+      }
+    ],
+    [apiBaseUrl, tenantId]
+  );
 
-  const jiraExpectedJql = tenant?.jira.ready_jql?.trim() || `project in (${(tenant?.jira.project_keys || []).join(", ")})`;
-  const jiraExpectedEvents = "issue_created, issue_updated, issue_deleted, comment_created, comment_updated";
-  const githubExpectedEvents = "pull_request, pull_request_review, pull_request_review_comment, check_suite, check_run";
+  const jiraExpectedJql =
+    tenant?.jira.ready_jql?.trim() || `project in (${(tenant?.jira.project_keys || []).join(", ")})`;
+  const jiraExpectedEvents =
+    "issue_created, issue_updated, issue_deleted, comment_created, comment_updated";
+  const githubExpectedEvents =
+    "pull_request, pull_request_review, pull_request_review_comment, check_suite, check_run";
 
   const refreshDiagnostics = useCallback(async () => {
-    if (!credentials) {
-      return;
-    }
+    if (!credentials) return;
     setLoading(true);
-    setStatusLine("Refreshing webhook diagnostics and integration health checks...");
+    setStatusLine("Refreshing...");
     try {
-      const [tenantResult, diagnosticsResult, jiraHealthResult, githubHealthResult] = await Promise.allSettled([
-        getTenant(credentials, tenantId),
-        getJiraWebhookDiagnostics(credentials, tenantId),
-        testJira(credentials, tenantId),
-        testGithub(credentials, tenantId)
-      ]);
-
-      if (tenantResult.status === "fulfilled") {
-        setTenant(tenantResult.value);
-      }
-      if (diagnosticsResult.status === "fulfilled") {
-        setDiagnostics(diagnosticsResult.value);
-      }
-      if (jiraHealthResult.status === "fulfilled") {
-        setJiraHealth(jiraHealthResult.value);
-      } else {
-        setJiraHealth({ ok: false, details: jiraHealthResult.reason instanceof Error ? jiraHealthResult.reason.message : "Jira health check failed" });
-      }
-      if (githubHealthResult.status === "fulfilled") {
-        setGithubHealth(githubHealthResult.value);
-      } else {
-        setGithubHealth({ ok: false, details: githubHealthResult.reason instanceof Error ? githubHealthResult.reason.message : "GitHub health check failed" });
-      }
-
-      const failedSections: string[] = [];
-      if (tenantResult.status !== "fulfilled") failedSections.push("tenant config");
-      if (diagnosticsResult.status !== "fulfilled") failedSections.push("jira diagnostics");
-      if (jiraHealthResult.status !== "fulfilled") failedSections.push("jira health");
-      if (githubHealthResult.status !== "fulfilled") failedSections.push("github health");
-
+      const [tenantResult, diagnosticsResult, jiraHealthResult, githubHealthResult] =
+        await Promise.allSettled([
+          getTenant(credentials, tenantId),
+          getJiraWebhookDiagnostics(credentials, tenantId),
+          testJira(credentials, tenantId),
+          testGithub(credentials, tenantId)
+        ]);
+      if (tenantResult.status === "fulfilled") setTenant(tenantResult.value);
+      if (diagnosticsResult.status === "fulfilled") setDiagnostics(diagnosticsResult.value);
+      setJiraHealth(
+        jiraHealthResult.status === "fulfilled"
+          ? jiraHealthResult.value
+          : { ok: false, details: jiraHealthResult.reason instanceof Error ? jiraHealthResult.reason.message : "Jira health check failed" }
+      );
+      setGithubHealth(
+        githubHealthResult.status === "fulfilled"
+          ? githubHealthResult.value
+          : { ok: false, details: githubHealthResult.reason instanceof Error ? githubHealthResult.reason.message : "GitHub health check failed" }
+      );
       setLastRefreshedAt(new Date().toISOString());
-      if (failedSections.length > 0) {
-        setStatusLine(`Refresh completed with warnings: failed to load ${failedSections.join(", ")}.`);
-      } else {
-        setStatusLine("Diagnostics refreshed.");
-      }
+      const failed = [
+        tenantResult.status !== "fulfilled" ? "tenant config" : null,
+        diagnosticsResult.status !== "fulfilled" ? "jira diagnostics" : null,
+        jiraHealthResult.status !== "fulfilled" ? "jira health" : null,
+        githubHealthResult.status !== "fulfilled" ? "github health" : null
+      ].filter(Boolean);
+      setStatusLine(failed.length > 0 ? `Completed with warnings: ${failed.join(", ")} failed.` : "Diagnostics refreshed.");
     } catch (error) {
       setStatusLine(`Refresh failed: ${(error as Error).message}`);
     } finally {
@@ -124,9 +119,7 @@ export default function TenantWebhooksPage() {
       await navigator.clipboard.writeText(url);
       setCopiedKey(key);
       setStatusLine(`Copied: ${url}`);
-      window.setTimeout(() => {
-        setCopiedKey((current) => (current === key ? null : current));
-      }, 1200);
+      window.setTimeout(() => setCopiedKey((c) => (c === key ? null : c)), 1200);
     } catch (error) {
       setStatusLine(`Copy failed: ${(error as Error).message}`);
     }
@@ -136,120 +129,205 @@ export default function TenantWebhooksPage() {
     void refreshDiagnostics();
   }, [refreshDiagnostics]);
 
+  const checklist = [
+    {
+      done: Boolean(jiraHealth?.ok),
+      label: `Jira health check passed`
+    },
+    {
+      done: Boolean(githubHealth?.ok),
+      label: `GitHub health check passed`
+    },
+    {
+      done: Boolean(diagnostics?.recent_delivery_ok),
+      label: `Recent Jira webhook delivery detected`
+    },
+    {
+      done: !diagnostics?.last_error,
+      label: "No webhook delivery errors"
+    }
+  ];
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <CardTitle>Tenant Webhooks: {tenantId}</CardTitle>
-            <CardDescription>Verification checklist and expected provider configuration.</CardDescription>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" type="button" onClick={() => void refreshDiagnostics()} disabled={loading}>
-              <RefreshCcw className="mr-2 h-4 w-4" />
-              {loading ? "Refreshing" : "Refresh"}
-            </Button>
-            <Button variant="outline" asChild>
-              <Link href={`/tenants/${encodeURIComponent(tenantId)}/edit`}>
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back To Tenant
-              </Link>
-            </Button>
-          </div>
+    <div className="space-y-6">
+      {/* Page header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">Webhooks</h1>
+          <p className="text-sm text-muted-foreground">
+            Integration health and expected provider configuration.
+            {lastRefreshedAt ? ` Last refreshed ${new Date(lastRefreshedAt).toLocaleString()}.` : ""}
+          </p>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-foreground">
-          {statusLine}
-          {lastRefreshedAt ? ` Last refreshed: ${new Date(lastRefreshedAt).toLocaleString()}.` : ""}
-        </p>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => void refreshDiagnostics()} disabled={loading}>
+            <RefreshCcw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            {loading ? "Refreshing" : "Refresh"}
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/tenants/${encodeURIComponent(tenantId)}/edit/integrations`}>
+              <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
+              Settings
+            </Link>
+          </Button>
+        </div>
+      </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-md border p-3 text-sm">
-            <p className="font-medium">Jira health</p>
-            <p className={jiraHealth?.ok ? "text-emerald-700" : "text-amber-700"}>
-              {jiraHealth ? (jiraHealth.ok ? "Healthy" : "Needs attention") : "Checking..."}
-            </p>
-            <p className="text-xs text-muted-foreground">{jiraHealth?.details || "Running health check..."}</p>
-          </div>
-          <div className="rounded-md border p-3 text-sm">
-            <p className="font-medium">GitHub health</p>
-            <p className={githubHealth?.ok ? "text-emerald-700" : "text-amber-700"}>
-              {githubHealth ? (githubHealth.ok ? "Healthy" : "Needs attention") : "Checking..."}
-            </p>
-            <p className="text-xs text-muted-foreground">{githubHealth?.details || "Running health check..."}</p>
-          </div>
-          <div className="rounded-md border p-3 text-sm">
-            <p className="font-medium">Recent Jira delivery</p>
-            <p className={diagnostics?.recent_delivery_ok ? "text-emerald-700" : "text-amber-700"}>
-              {diagnostics ? (diagnostics.recent_delivery_ok ? "Recent delivery detected" : "No recent delivery") : "Checking..."}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {diagnostics?.last_received_at
+      {statusLine ? (
+        <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
+      ) : null}
+
+      {/* Health status cards */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        {[
+          {
+            title: "Jira",
+            health: jiraHealth,
+            detail: jiraHealth?.details || "Checking..."
+          },
+          {
+            title: "GitHub",
+            health: githubHealth,
+            detail: githubHealth?.details || "Checking..."
+          },
+          {
+            title: "Recent Jira Delivery",
+            health: diagnostics
+              ? { ok: diagnostics.recent_delivery_ok, details: diagnostics.last_issue_key ? `Last issue: ${diagnostics.last_issue_key}` : "No delivery yet" }
+              : null,
+            detail: diagnostics
+              ? diagnostics.recent_delivery_ok
                 ? `Last issue: ${diagnostics.last_issue_key || "n/a"}`
-                : "Trigger a Jira status change and refresh."}
-            </p>
-          </div>
-        </div>
+                : "Trigger a Jira status change and refresh."
+              : "Checking..."
+          }
+        ].map((item) => {
+          const ok = item.health?.ok;
+          const Icon = ok ? CheckCircle2 : XCircle;
+          return (
+            <Card key={item.title}>
+              <CardContent className="flex items-start gap-3 p-4">
+                <Icon className={`h-5 w-5 flex-shrink-0 mt-0.5 ${ok ? "text-success" : ok === undefined ? "text-muted-foreground" : "text-warning"}`} />
+                <div>
+                  <p className="font-medium text-sm">{item.title}</p>
+                  <p className={`text-sm ${ok ? "text-success" : ok === undefined ? "text-muted-foreground" : "text-warning"}`}>
+                    {item.health ? (ok ? "Healthy" : "Needs attention") : "Checking..."}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{item.detail}</p>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
 
-        <div className="space-y-3">
+      {/* Webhook URLs */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Webhook URLs</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
           {docs.map((doc) => (
             <div
               key={doc.key}
-              className="grid gap-2 rounded-md border p-3 md:grid-cols-[220px_1fr_auto] md:items-center"
+              className="grid gap-2 rounded-lg border p-3 md:grid-cols-[200px_1fr_auto] md:items-center"
             >
               <div>
                 <p className="text-sm font-medium">{doc.name}</p>
                 <p className="text-xs text-muted-foreground">{doc.description}</p>
               </div>
-              <code className="block overflow-x-auto rounded bg-muted/60 px-2 py-1 text-xs">{doc.url}</code>
-              <Button type="button" variant="outline" size="sm" onClick={() => void copyWebhook(doc.key, doc.url)}>
+              <code className="block overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs">{doc.url}</code>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => void copyWebhook(doc.key, doc.url)}
+              >
                 {copiedKey === doc.key ? (
                   <>
-                    <Check className="mr-2 h-4 w-4" />
+                    <Check className="mr-1.5 h-3.5 w-3.5 text-success" />
                     Copied
                   </>
                 ) : (
                   <>
-                    <Copy className="mr-2 h-4 w-4" />
+                    <Copy className="mr-1.5 h-3.5 w-3.5" />
                     Copy
                   </>
                 )}
               </Button>
             </div>
           ))}
-        </div>
+        </CardContent>
+      </Card>
 
-        <div className="space-y-3 rounded-md border p-3">
-          <p className="text-sm font-medium">Expected Jira webhook configuration</p>
-          <div className="space-y-1 text-xs text-muted-foreground">
-            <p>Events: {jiraExpectedEvents}</p>
-            <p>Ready JQL: {jiraExpectedJql}</p>
-            <p>Managed webhook IDs: {diagnostics?.managed_webhook_ids?.length ? diagnostics.managed_webhook_ids.join(", ") : "none"}</p>
-            <p>Last delivery ID: {diagnostics?.last_delivery_id || "none"}</p>
-            <p>Last error: {diagnostics?.last_error || "none"}</p>
-          </div>
-        </div>
+      {/* Config cards */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Expected Jira Configuration</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-xs text-muted-foreground">
+            <p><span className="font-medium text-foreground">Events</span> {jiraExpectedEvents}</p>
+            <p><span className="font-medium text-foreground">Ready JQL</span> {jiraExpectedJql}</p>
+            <p>
+              <span className="font-medium text-foreground">Managed webhook IDs</span>{" "}
+              {diagnostics?.managed_webhook_ids?.length ? diagnostics.managed_webhook_ids.join(", ") : "none"}
+            </p>
+            <p><span className="font-medium text-foreground">Last delivery ID</span> {diagnostics?.last_delivery_id || "none"}</p>
+            {diagnostics?.last_error ? (
+              <p className="rounded border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-destructive">
+                <span className="font-medium">Last error</span> {diagnostics.last_error}
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
 
-        <div className="space-y-3 rounded-md border p-3">
-          <p className="text-sm font-medium">Expected GitHub webhook configuration</p>
-          <div className="space-y-1 text-xs text-muted-foreground">
-            <p>Events: {githubExpectedEvents}</p>
-            <p>Installation ID: {tenant?.github.installation_id || "not connected"}</p>
-          </div>
-        </div>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Expected GitHub Configuration</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-xs text-muted-foreground">
+            <p><span className="font-medium text-foreground">Events</span> {githubExpectedEvents}</p>
+            <p>
+              <span className="font-medium text-foreground">Installation ID</span>{" "}
+              {tenant?.github.installation_id || "not connected"}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
 
-        <div className="space-y-2 rounded-md border p-3">
-          <p className="text-sm font-medium">Verification checklist</p>
-          <ol className="list-decimal space-y-1 pl-4 text-xs text-muted-foreground">
-            <li>Copy the Jira webhook URL above and confirm Jira points to that exact value.</li>
-            <li>Confirm Jira events include: {jiraExpectedEvents}.</li>
-            <li>Confirm GitHub webhook URL and events include: {githubExpectedEvents}.</li>
-            <li>Trigger a Jira status change to a ready status and refresh this page.</li>
-            <li>Verify recent delivery is detected and no webhook error is present.</li>
-          </ol>
-        </div>
-      </CardContent>
-    </Card>
+      {/* Verification checklist */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Verification Checklist</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul className="space-y-2">
+            {checklist.map((item) => {
+              const Icon = item.done ? CheckCircle2 : Circle;
+              return (
+                <li key={item.label} className="flex items-center gap-2.5 text-sm">
+                  <Icon className={`h-4 w-4 flex-shrink-0 ${item.done ? "text-success" : "text-muted-foreground/50"}`} />
+                  <span className={item.done ? "text-foreground" : "text-muted-foreground"}>{item.label}</span>
+                </li>
+              );
+            })}
+            <li className="flex items-center gap-2.5 text-sm">
+              <Circle className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
+              <span className="text-muted-foreground">
+                Copy the Jira webhook URL above and confirm Jira points to that exact value.
+              </span>
+            </li>
+            <li className="flex items-center gap-2.5 text-sm">
+              <Circle className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
+              <span className="text-muted-foreground">
+                Trigger a Jira status change to a ready status and refresh to verify delivery.
+              </span>
+            </li>
+          </ul>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 WORKER_CHECKOUT_DIR="${ROOT_DIR}/.workdirs"
 mkdir -p "${WORKER_CHECKOUT_DIR}"
+DOCKER_SERVICES=(postgres api worker discord-gateway tailscale)
+DOCKER_WAIT_TIMEOUT_SECONDS="${DOCKER_WAIT_TIMEOUT_SECONDS:-300}"
+DOCKER_WAIT_INTERVAL_SECONDS="${DOCKER_WAIT_INTERVAL_SECONDS:-3}"
 
 if [[ -f ".env" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -22,7 +25,63 @@ if [[ -f ".env" ]]; then
   done < .env
 fi
 
-docker compose up --build -d postgres api worker discord-gateway tailscale
+docker compose up --build -d "${DOCKER_SERVICES[@]}"
+
+wait_for_docker_services_ready() {
+  local timeout_seconds="$1"
+  local poll_seconds="$2"
+  local start_ts
+  start_ts="$(date +%s)"
+
+  while true; do
+    local all_ready="true"
+    for service in "${DOCKER_SERVICES[@]}"; do
+      local container_id
+      container_id="$(docker compose ps -q "$service" | head -n 1)"
+      if [[ -z "$container_id" ]]; then
+        all_ready="false"
+        continue
+      fi
+
+      local inspect_output state_status health_status
+      inspect_output="$(docker inspect --format '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null || true)"
+      state_status="${inspect_output%%|*}"
+      health_status="${inspect_output##*|}"
+
+      if [[ "$state_status" == "exited" || "$state_status" == "dead" ]]; then
+        echo "Service '$service' container is not running (state=${state_status})."
+        docker compose ps "$service"
+        return 1
+      fi
+
+      if [[ "$health_status" != "none" ]]; then
+        if [[ "$health_status" != "healthy" ]]; then
+          all_ready="false"
+        fi
+      elif [[ "$state_status" != "running" ]]; then
+        all_ready="false"
+      fi
+    done
+
+    if [[ "$all_ready" == "true" ]]; then
+      echo "Docker services ready."
+      return 0
+    fi
+
+    local now_ts elapsed
+    now_ts="$(date +%s)"
+    elapsed="$((now_ts - start_ts))"
+    if (( elapsed >= timeout_seconds )); then
+      echo "Timed out waiting for Docker services readiness (${timeout_seconds}s)."
+      docker compose ps
+      return 1
+    fi
+    sleep "$poll_seconds"
+  done
+}
+
+echo "Waiting for Docker services to become healthy/ready..."
+wait_for_docker_services_ready "${DOCKER_WAIT_TIMEOUT_SECONDS}" "${DOCKER_WAIT_INTERVAL_SECONDS}"
 
 export ORCHESTRATOR_DATABASE_URL="${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator}"
 export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"

@@ -551,6 +551,31 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "is_archived": False,
                 },
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets",
+                auth=admin,
+                json={
+                    "title": "E2E Knowledge Note",
+                    "source_type": "manual",
+                    "mime_type": "text/plain",
+                    "text_content": "Objective: Validate knowledge base route coverage.",
+                },
+                expected_statuses=(201,),
+            ),
+            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets/asset-missing",
+                auth=admin,
+                expected_statuses=(204, 404),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sync-jira"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/sync-jira",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 502),
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord/allowlist-requests"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/discord/allowlist-requests",
                 auth=admin,

@@ -45,9 +45,11 @@ def build_workflow_request_for_run(
         parse_worker_capabilities(getattr(settings, "worker_capabilities", ""))
     )
     current_worker_capability = available_worker_capabilities[0] if available_worker_capabilities else "linux"
-    base_branch = _normalize_branch(project.environment.get("default_branch") if project is not None else None) or "main"
-    integration_branch = _normalize_branch(run.branch) or f"feature/{run.issue_key}"
-    trigger_context = _extract_trigger_context(run.plan)
+    project_environment = getattr(project, "environment", {}) if project is not None else {}
+    default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
+    base_branch = _normalize_branch(default_branch) or "main"
+    integration_branch = _normalize_branch(getattr(run, "branch", None)) or f"feature/{run.issue_key}"
+    trigger_context = _extract_trigger_context(getattr(run, "plan", None))
     pr_number = _extract_pr_number(trigger_context)
 
     return WorkflowRequest(
