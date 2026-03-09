@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from orchestrator.api.routes.admin import router as admin_router
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
 from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_router
+from orchestrator.api.routes.admin_observability import router as admin_observability_router
 from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
 from orchestrator.api.routes.admin_tokens import router as admin_tokens_router
 from orchestrator.api.routes.discord import (
@@ -179,6 +180,7 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_router)
     app.include_router(admin_knowledge_router)
+    app.include_router(admin_observability_router)
     app.include_router(admin_auth_router)
     app.include_router(admin_secrets_router)
     app.include_router(admin_tokens_router)
