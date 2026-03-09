@@ -135,7 +135,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin._resolve_project_discord_channel_binding",
+                "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
                 side_effect=lambda **kwargs: dict(kwargs.get("discord_config") or {}),
             )
         )

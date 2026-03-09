@@ -2,19 +2,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.admin.schema_mappers import (
-    project_to_schema as _project_to_schema,
-    tenant_to_schema as _tenant_to_schema,
-)
-from orchestrator.api.admin.project_service import AdminProjectService
-from orchestrator.api.admin.config_helpers import (
-    validate_codex_assets_for_tenant_init as _validate_codex_assets_for_tenant_init_core,
-)
 from orchestrator.api.admin.discord_allowlist_helpers import (
     notify_discord_allowlist_approved as _notify_discord_allowlist_approved_core,
 )
@@ -43,33 +35,15 @@ from orchestrator.api.admin.release_bootstrap_service import (
     list_tenant_repo_bootstrap_states as _list_tenant_repo_bootstrap_states_impl,
     run_release_bootstrap as _run_release_bootstrap_impl,
 )
-from orchestrator.api.admin.tenant_project_routes_service import (
-    create_project as _create_project_route_impl,
-    create_tenant as _create_tenant_route_impl,
-    delete_tenant as _delete_tenant_route_impl,
-    get_project as _get_project_route_impl,
-    get_tenant as _get_tenant_route_impl,
-    list_projects as _list_projects_route_impl,
-    list_tenants as _list_tenants_route_impl,
-    set_tenant_archive_state as _set_tenant_archive_state_route_impl,
-    update_project as _update_project_route_impl,
-    update_tenant as _update_tenant_route_impl,
-)
 from orchestrator.api.admin.route_helpers import (
-    allocate_tenant_id as _allocate_tenant_id,
     cleanup_conflicting_jira_webhook_url as _cleanup_conflicting_jira_webhook_url,
     cleanup_unmanaged_jira_webhooks_for_connection as _cleanup_unmanaged_jira_webhooks_for_connection,
-    discover_project_run_board_id as _discover_project_run_board_id_impl,
-    ensure_default_project_for_tenant as _ensure_default_project_for_tenant,
-    ensure_project_repository_checkout as _ensure_project_repository_checkout,
     jira_oauth_client as _jira_oauth_client_impl,
     jira_webhook_action_status_code as _jira_webhook_action_status_code,
     parse_discord_allowlist_requests as _parse_discord_allowlist_requests,
     refresh_jira_connection_tokens as _refresh_jira_connection_tokens_impl,
     remove_managed_webhook_id_from_tenants as _remove_managed_webhook_id_from_tenants,
-    sync_tenant_jira_project_keys as _sync_tenant_jira_project_keys,
     with_managed_github_refs as _with_managed_github_refs,
-    with_preserved_jira_system_fields as _with_preserved_jira_system_fields,
 )
 from orchestrator.api.admin.jira_connect_flow import (
     build_jira_connect_start as _build_jira_connect_start_impl,
@@ -96,27 +70,9 @@ from orchestrator.api.admin.tenant_actions import (
 from orchestrator.api.admin.ready_preview import (
     preview_tenant_ready_gate as _preview_tenant_ready_gate_impl,
 )
-from orchestrator.api.admin.tenant_crud import (
-    create_tenant as _create_tenant_impl,
-    delete_tenant as _delete_tenant_impl,
-    get_tenant_or_404 as _get_tenant_or_404_impl,
-    set_tenant_archive_state as _set_tenant_archive_state_impl,
-    update_tenant as _update_tenant_impl,
-)
 from orchestrator.api.admin.integration_checks import (
     test_github_connection as _test_github_connection_impl,
     test_jira_connection as _test_jira_connection_impl,
-)
-from orchestrator.api.admin.project_normalization import (
-    normalize_project_discord_config as _normalize_project_discord_config,
-    normalize_project_key as _normalize_project_key,
-    normalize_project_repo as _normalize_project_repo,
-    normalize_string_map as _normalize_string_map,
-    resolve_project_discord_channel_name as _resolve_project_discord_channel_name,  # noqa: F401
-    with_preserved_discord_system_fields as _with_preserved_discord_system_fields,
-)
-from orchestrator.api.admin.tenant_project_helpers import (
-    resolve_project_discord_channel_binding as _resolve_project_discord_channel_binding_impl,
 )
 from orchestrator.api.schemas import (
     DiscordAllowlistApprovalResult,
@@ -127,19 +83,12 @@ from orchestrator.api.schemas import (
     JiraConnectStart,
     JiraWebhookActionResult,
     JiraWebhookDiagnosticsRead,
-    ReadyGatePreviewRead,
     JiraProjectRead,
-    ProjectCreate,
-    ProjectRead,
-    ProjectUpdate,
+    ReadyGatePreviewRead,
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
-    TenantCreate,
-    TenantRead,
-    TenantUpdate,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.project_policy import normalize_project_policy_overrides
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.security import require_admin
@@ -160,14 +109,6 @@ JIRA_WEBHOOK_EVENTS = [
 ]
 RELEASE_BOOTSTRAP_REQUIRED_STATUSES = ("Ready to Release", "Done")
 
-
-def _validate_codex_assets_for_tenant_init() -> None:
-    _validate_codex_assets_for_tenant_init_core(
-        settings=get_settings(),
-        module_file=__file__,
-    )
-
-
 def _notify_discord_allowlist_approved(
     *,
     session: Session,
@@ -182,55 +123,6 @@ def _notify_discord_allowlist_approved(
         user_id=user_id,
         resolve_secret_ref_fn=resolve_platform_secret_ref,
         discord_client_factory=DiscordApiClient,
-    )
-
-
-def _resolve_project_discord_channel_binding(
-    *,
-    session: Session,
-    settings,  # noqa: ANN001
-    tenant: Tenant,
-    project,
-    discord_config: dict,
-) -> dict:
-    return _resolve_project_discord_channel_binding_impl(
-        session=session,
-        settings=settings,
-        tenant=tenant,
-        project=project,
-        discord_config=discord_config,
-        resolve_project_discord_channel_name_fn=_resolve_project_discord_channel_name,
-    )
-
-
-def _admin_project_service() -> AdminProjectService:
-    def _resolve_project_run_board_id(
-        *,
-        session: Session,
-        tenant: Tenant,
-        jira_project_key: str,
-        settings,  # noqa: ANN001
-    ) -> int | None:
-        return _discover_project_run_board_id_impl(
-            session=session,
-            tenant=tenant,
-            jira_project_key=jira_project_key,
-            settings=settings,
-        )
-
-    return AdminProjectService(
-        normalize_project_repo=_normalize_project_repo,
-        normalize_project_key=_normalize_project_key,
-        normalize_project_policy_overrides=normalize_project_policy_overrides,
-        normalize_string_map=_normalize_string_map,
-        normalize_project_discord_config=_normalize_project_discord_config,
-        with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
-        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
-        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
-        ensure_project_repository_checkout=_ensure_project_repository_checkout,
-        resolve_project_run_board_id=_resolve_project_run_board_id,
-        project_to_schema=_project_to_schema,
-        settings_factory=get_settings,
     )
 def _jira_oauth_client(
     *,
@@ -492,178 +384,6 @@ def preview_tenant_ready_gate(
         refresh_jira_connection_tokens_fn=_refresh_jira_connection_tokens,
         jira_oauth_client_fn=_jira_oauth_client,
     )
-
-
-@router.get("/tenants", response_model=list[TenantRead])
-def list_tenants(
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> list[TenantRead]:
-    return _list_tenants_route_impl(
-        session=session,
-        tenant_model=Tenant,
-        tenant_to_schema_fn=_tenant_to_schema,
-    )
-
-
-@router.post("/tenants", response_model=TenantRead, status_code=status.HTTP_201_CREATED)
-def create_tenant(
-    payload: TenantCreate,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantRead:
-    return _create_tenant_route_impl(
-        session=session,
-        payload=payload,
-        validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
-        create_tenant_fn=_create_tenant_impl,
-        allocate_tenant_id_fn=_allocate_tenant_id,
-        with_preserved_jira_system_fields_fn=_with_preserved_jira_system_fields,
-        with_managed_github_refs_fn=_with_managed_github_refs,
-        with_preserved_discord_system_fields_fn=_with_preserved_discord_system_fields,
-        ensure_default_project_for_tenant_fn=_ensure_default_project_for_tenant,
-        sync_tenant_jira_project_keys_fn=_sync_tenant_jira_project_keys,
-        tenant_to_schema_fn=_tenant_to_schema,
-    )
-
-
-@router.get("/tenants/{tenant_id}", response_model=TenantRead)
-def get_tenant(
-    tenant_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantRead:
-    return _get_tenant_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        get_tenant_or_404_fn=_get_tenant_or_404_impl,
-        tenant_to_schema_fn=_tenant_to_schema,
-    )
-
-
-@router.put("/tenants/{tenant_id}", response_model=TenantRead)
-def update_tenant(
-    tenant_id: str,
-    payload: TenantUpdate,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantRead:
-    return _update_tenant_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        payload=payload,
-        validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
-        update_tenant_fn=_update_tenant_impl,
-        with_preserved_jira_system_fields_fn=_with_preserved_jira_system_fields,
-        with_managed_github_refs_fn=_with_managed_github_refs,
-        with_preserved_discord_system_fields_fn=_with_preserved_discord_system_fields,
-        ensure_default_project_for_tenant_fn=_ensure_default_project_for_tenant,
-        sync_tenant_jira_project_keys_fn=_sync_tenant_jira_project_keys,
-        tenant_to_schema_fn=_tenant_to_schema,
-    )
-
-
-@router.delete("/tenants/{tenant_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_tenant(
-    tenant_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> Response:
-    return _delete_tenant_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        delete_tenant_fn=_delete_tenant_impl,
-    )
-
-
-@router.post("/tenants/{tenant_id}/archive", response_model=TenantRead)
-def archive_tenant(
-    tenant_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantRead:
-    return _set_tenant_archive_state_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        is_enabled=False,
-        set_tenant_archive_state_fn=_set_tenant_archive_state_impl,
-        tenant_to_schema_fn=_tenant_to_schema,
-    )
-
-
-@router.post("/tenants/{tenant_id}/unarchive", response_model=TenantRead)
-def unarchive_tenant(
-    tenant_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantRead:
-    return _set_tenant_archive_state_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        is_enabled=True,
-        set_tenant_archive_state_fn=_set_tenant_archive_state_impl,
-        tenant_to_schema_fn=_tenant_to_schema,
-    )
-
-
-@router.get("/tenants/{tenant_id}/projects", response_model=list[ProjectRead])
-def list_projects(
-    tenant_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> list[ProjectRead]:
-    return _list_projects_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        admin_project_service_factory=_admin_project_service,
-    )  # type: ignore[return-value]
-
-
-@router.post("/tenants/{tenant_id}/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
-def create_project(
-    tenant_id: str,
-    payload: ProjectCreate,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ProjectRead:
-    return _create_project_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        payload=payload,
-        admin_project_service_factory=_admin_project_service,
-    )  # type: ignore[return-value]
-
-
-@router.get("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
-def get_project(
-    tenant_id: str,
-    project_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ProjectRead:
-    return _get_project_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        admin_project_service_factory=_admin_project_service,
-    )  # type: ignore[return-value]
-
-
-@router.put("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
-def update_project(
-    tenant_id: str,
-    project_id: str,
-    payload: ProjectUpdate,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ProjectRead:
-    return _update_project_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        payload=payload,
-        admin_project_service_factory=_admin_project_service,
-    )  # type: ignore[return-value]
 
 
 @router.post("/tenants/{tenant_id}/test-jira", response_model=IntegrationTestResult)

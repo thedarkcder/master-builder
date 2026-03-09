@@ -53,7 +53,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)
         self._project_checkout_patcher = patch(
-            "orchestrator.api.routes.admin._ensure_project_repository_checkout",
+            "orchestrator.api.admin.route_helpers.ensure_project_repository_checkout",
             return_value=None,
         )
         self._project_checkout_patcher.start()
