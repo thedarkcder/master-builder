@@ -254,6 +254,12 @@ def process_next_queued_run(
         )
 
     workflow_result = runner.run(workflow_request, test_feedback_hook=_emit_test_feedback)
+    _emit_orchestrated_trace_logs(
+        session=session,
+        run=run,
+        workflow_result=workflow_result,
+        agent_id=agent_id,
+    )
     _emit_detailed_jira_feedback(
         session=session,
         tenant=tenant,
@@ -429,6 +435,135 @@ def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: 
             if parsed is not None:
                 return parsed
     return None
+
+
+def _normalize_terminal_status(status: str) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in {"completed", "approved", "succeeded", "success"}:
+        return "succeeded"
+    if normalized in {"needs_changes", "failed", "failure"}:
+        return "failed"
+    if normalized == "blocked":
+        return "blocked"
+    return "succeeded"
+
+
+def _emit_orchestrated_trace_logs(
+    *,
+    session,
+    run,
+    workflow_result,
+    agent_id: str,
+) -> None:  # noqa: ANN001
+    stage_trace = list(getattr(workflow_result, "orchestration_stage_trace", []) or [])
+    workstream_trace = list(getattr(workflow_result, "orchestration_workstream_trace", []) or [])
+    if not stage_trace and not workstream_trace:
+        return
+
+    for index, item in enumerate(stage_trace):
+        if not isinstance(item, dict):
+            continue
+        stage = str(item.get("stage") or "").strip().lower()
+        if stage not in {"pm", "dev", "test", "review"}:
+            continue
+        attempt = int(item["attempt"]) if isinstance(item.get("attempt"), int) else 1
+        invocation_id = str(item.get("invocation_id") or f"orchestrated-stage-{run.run_id}-{stage}-{index}").strip()
+        status = str(item.get("status") or "").strip().lower()
+        summary = str(item.get("summary") or "").strip()
+        started_payload: dict[str, object] = {
+            "event_kind": "stage_invocation_started",
+            "status": "started",
+            "source": "orchestrated_run_trace",
+            "virtual_stage": stage,
+            "trace_index": index,
+        }
+        if summary:
+            started_payload["summary"] = summary
+        record_run_log_event(
+            session=session,
+            tenant_id=run.tenant_id,
+            project_id=run.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
+            invocation_id=invocation_id,
+            channel="worker",
+            command=f"workflow.{stage}",
+            working_dir=None,
+            stage="telemetry",
+            attempt=attempt,
+            stream="system",
+            message=json.dumps(started_payload, sort_keys=True),
+        )
+        finished_payload: dict[str, object] = {
+            "event_kind": "stage_invocation_finished",
+            "status": _normalize_terminal_status(status),
+            "source": "orchestrated_run_trace",
+            "virtual_stage": stage,
+            "trace_index": index,
+        }
+        duration_ms = item.get("duration_ms")
+        if isinstance(duration_ms, int):
+            finished_payload["duration_ms"] = max(0, duration_ms)
+        if summary:
+            finished_payload["summary"] = summary
+        record_run_log_event(
+            session=session,
+            tenant_id=run.tenant_id,
+            project_id=run.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
+            invocation_id=invocation_id,
+            channel="worker",
+            command=f"workflow.{stage}",
+            working_dir=None,
+            stage="telemetry",
+            attempt=attempt,
+            stream="system",
+            message=json.dumps(finished_payload, sort_keys=True),
+        )
+
+    for index, item in enumerate(workstream_trace):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        stage = str(item.get("stage") or "dev").strip().lower() or "dev"
+        if stage not in {"pm", "dev", "test", "review"}:
+            stage = "dev"
+        status = str(item.get("status") or "completed").strip().lower() or "completed"
+        workstream_payload: dict[str, object] = {
+            "event_kind": "orchestrated_workstream_event",
+            "source": "orchestrated_run_trace",
+            "trace_index": index,
+            "name": name,
+            "stage": stage,
+            "status": status,
+        }
+        summary = str(item.get("summary") or "").strip()
+        if summary:
+            workstream_payload["summary"] = summary
+        branch = str(item.get("branch") or "").strip()
+        if branch:
+            workstream_payload["branch"] = branch
+        record_run_log_event(
+            session=session,
+            tenant_id=run.tenant_id,
+            project_id=run.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
+            invocation_id=f"orchestrated-workstream-{run.run_id}-{index}",
+            channel="worker",
+            command=f"workflow.{stage}",
+            working_dir=None,
+            stage="telemetry",
+            attempt=1,
+            stream="system",
+            message=json.dumps(workstream_payload, sort_keys=True),
+        )
 
 
 def _format_multiline_jira_comment(*, title: str, lines: list[str], run_id: str) -> str:

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.core.codex_runtime import CodexRuntime
-from orchestrator.core.workflow.one_shot_runner import OneShotWorkflowExecutor
+from orchestrator.core.workflow.orchestrated_run_runner import OrchestratedRunWorkflowExecutor
 from orchestrator.core.workflow.runner import WorkflowRequest
 
 
@@ -24,20 +24,20 @@ class OneShotRunnerTests(unittest.TestCase):
             execution_repo_dir="/tmp/test-repo",
         )
 
-    def _executor(self) -> OneShotWorkflowExecutor:
+    def _executor(self) -> OrchestratedRunWorkflowExecutor:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
             command="override",
             _request=_RuntimeNoop(),
         )
-        return OneShotWorkflowExecutor(runtime=runtime)
+        return OrchestratedRunWorkflowExecutor(runtime=runtime)
 
     def test_approved_payload_returns_success(self) -> None:
         with (
-            patch("orchestrator.core.workflow.one_shot_runner.render_prompt", side_effect=lambda name, **_: name),
+            patch("orchestrator.core.workflow.orchestrated_run_runner.render_prompt", side_effect=lambda name, **_: name),
             patch(
-                "orchestrator.core.workflow.one_shot_runner.invoke_codex_json",
+                "orchestrator.core.workflow.orchestrated_run_runner.invoke_codex_json",
                 return_value={
                     "status": "approved",
                     "summary": ["done"],
@@ -53,9 +53,9 @@ class OneShotRunnerTests(unittest.TestCase):
 
     def test_needs_changes_returns_failure(self) -> None:
         with (
-            patch("orchestrator.core.workflow.one_shot_runner.render_prompt", side_effect=lambda name, **_: name),
+            patch("orchestrator.core.workflow.orchestrated_run_runner.render_prompt", side_effect=lambda name, **_: name),
             patch(
-                "orchestrator.core.workflow.one_shot_runner.invoke_codex_json",
+                "orchestrator.core.workflow.orchestrated_run_runner.invoke_codex_json",
                 return_value={
                     "status": "needs_changes",
                     "summary": ["changes requested"],
