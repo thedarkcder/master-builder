@@ -692,10 +692,13 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         service = MagicMock()
         service.run_discord_command_followup = AsyncMock()
         service.run_discord_ask_confirmation_followup = AsyncMock()
-        service_cls = MagicMock(return_value=service)
+        build_service_mock = MagicMock(return_value=service)
 
         async def _run() -> None:
-            with patch("orchestrator.api.discord.interactions.followup.DiscordWebhookFollowupService", service_cls):
+            with patch(
+                "orchestrator.api.discord.interactions.followup.build_followup_service",
+                build_service_mock,
+            ):
                 await _run_discord_command_followup(
                     tenant_id="t1",
                     user_id="u1",
@@ -776,12 +779,18 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         service = MagicMock()
         service.run_discord_command_followup = AsyncMock()
         service.run_discord_ask_confirmation_followup = AsyncMock()
-        service_cls = MagicMock(return_value=service)
+        build_service_mock = MagicMock(return_value=service)
 
         with (
             patch("orchestrator.api.discord.interactions.followup.create_session_factory") as session_factory_mock,
-            patch("orchestrator.api.discord.interactions.followup.resolve_tenant_for_discord_channel", return_value=SimpleNamespace(tenant_id="t1")),
-            patch("orchestrator.api.discord.interactions.followup.DiscordWebhookFollowupService", service_cls),
+            patch(
+                "orchestrator.api.discord.interactions.followup.resolve_tenant_id_for_followup",
+                return_value="t1",
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.followup.build_followup_service",
+                build_service_mock,
+            ),
         ):
             session_factory_mock.return_value.return_value = nullcontext(MagicMock())
             asyncio.run(

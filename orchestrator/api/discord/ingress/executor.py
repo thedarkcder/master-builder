@@ -655,17 +655,8 @@ def _resolve_codex_working_dir(
     )
 
 
-def execute_tenant_command_ingress(
-    tenant_id: str,
-    payload: DiscordCommandRequest,
-    session: Session,
-    *,
-    defer_seed_issues: bool = False,
-    require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
-    ingress_source: Literal["discord", "jira_comment"] = "discord",
-) -> DiscordCommandResponse:
-    deps = build_discord_ingress_dependencies(
+def _build_ingress_dependencies():
+    return build_discord_ingress_dependencies(
         issue_key_pattern=ISSUE_KEY_PATTERN,
         retryable_statuses=RETRYABLE_STATUSES,
         get_tenant_fn=lambda db, current_tenant_id: db.get(Tenant, current_tenant_id),
@@ -708,6 +699,18 @@ def execute_tenant_command_ingress(
         ensure_issue_is_executable_fn=_ensure_issue_is_executable,
         resolve_codex_working_dir_fn=_resolve_codex_working_dir,
     )
+
+
+def execute_tenant_command_ingress(
+    tenant_id: str,
+    payload: DiscordCommandRequest,
+    session: Session,
+    *,
+    defer_seed_issues: bool = False,
+    require_ask_confirmation: bool = False,
+    allow_plain_ask: bool = False,
+    ingress_source: Literal["discord", "jira_comment"] = "discord",
+) -> DiscordCommandResponse:
     return _execute_tenant_command_ingress(
         tenant_id=tenant_id,
         payload=payload,
@@ -716,7 +719,7 @@ def execute_tenant_command_ingress(
         require_ask_confirmation=require_ask_confirmation,
         allow_plain_ask=allow_plain_ask,
         ingress_source=ingress_source,
-        deps=deps,
+        deps=_build_ingress_dependencies(),
     )
 
 
