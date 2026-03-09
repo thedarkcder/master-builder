@@ -8,6 +8,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
+from orchestrator.api.webhooks.pr_review_comment_service import (
+    publish_inline_review_batch,
+    upsert_sticky_review_comment,
+)
+from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
 from orchestrator.api.webhooks.contracts import (
     extract_delivery_id as _extract_delivery_id,
     extract_installation_id as _extract_installation_id,
@@ -20,6 +25,8 @@ from orchestrator.api.webhooks.contracts import (
     validate_github_webhook_signature as _validate_github_webhook_signature,
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
+from orchestrator.core.pr_review_findings import PrReviewFindingsResult, evaluate_pr_review_findings
+from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.reviewer import ReviewAgentGate
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
@@ -250,14 +257,28 @@ async def ingest_github_webhook_event(
             },
         )
 
+    effective_policy = resolve_effective_policy(
+        tenant_policy=getattr(tenant, "policy_config", {}) or {},
+        project_overrides=getattr(project, "policy_overrides", {}) or {},
+    )
+    allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
+    max_pr_auto_remediation_loops = _coerce_positive_int(
+        effective_policy.get("max_pr_auto_remediation_loops"),
+        default=5,
+    )
+
     signals: list[dict[str, object]] = []
+    remediation: list[dict[str, object]] = []
+    review_comments: list[dict[str, object]] = []
+    inline_reviews: list[dict[str, object]] = []
+    merge_results: list[dict[str, object]] = []
     for pr_number, _review_summary_present in pr_targets:
         try:
             signal = reviewer_gate.evaluate_pr(
                 repo_full_name=repo_full_name,
                 pr_number=pr_number,
             )
-        except (GitHubApiError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "github_webhook_review_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
                 request_id,
@@ -274,6 +295,119 @@ async def ingest_github_webhook_event(
             )
             continue
 
+        pr_details = None
+        checks = []
+        changed_files = []
+        findings_result = PrReviewFindingsResult(state="review_failed", summary=signal.message, findings=())
+        try:
+            candidate_pr_details = github_client.get_pull_request_details(
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+            )
+            if _valid_pr_details(candidate_pr_details):
+                pr_details = candidate_pr_details
+                checks = github_client.list_check_suites(
+                    repo_full_name=repo_full_name,
+                    ref=pr_details.head_sha,
+                )
+                changed_files = github_client.list_pull_request_files(
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                )
+                findings_result = evaluate_pr_review_findings(
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    pr_title=pr_details.title,
+                    pr_body=pr_details.body,
+                    workflow_checks=checks,
+                    changed_files=changed_files,
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "github_webhook_findings_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                request_id,
+                tenant.tenant_id,
+                pr_number,
+                exc,
+            )
+
+        try:
+            sticky_result = upsert_sticky_review_comment(
+                github_client=github_client,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                signal=signal,
+                findings_result=findings_result,
+                event=github_event,
+                action=normalized_action,
+            )
+            review_comments.append(
+                {
+                    "pr_number": pr_number,
+                    "action": sticky_result.action,
+                    "comment_id": _coerce_int_or_none(sticky_result.comment_id),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "github_webhook_review_comment_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                request_id,
+                tenant.tenant_id,
+                pr_number,
+                exc,
+            )
+            review_comments.append(
+                {
+                    "pr_number": pr_number,
+                    "action": "failed",
+                    "error": str(exc),
+                }
+            )
+
+        if pr_details is not None:
+            changed_paths = {
+                str(change.filename or "").strip()
+                for change in changed_files
+                if str(change.filename or "").strip()
+            }
+            try:
+                inline_result = publish_inline_review_batch(
+                    github_client=github_client,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    head_sha=pr_details.head_sha,
+                    findings=findings_result.findings,
+                    changed_paths=changed_paths,
+                )
+                inline_reviews.append(
+                    {
+                        "pr_number": pr_number,
+                        "submitted": inline_result.submitted,
+                        "review_id": inline_result.review_id,
+                        "inline_count": inline_result.inline_count,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "github_webhook_inline_review_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                    request_id,
+                    tenant.tenant_id,
+                    pr_number,
+                    exc,
+                )
+                inline_reviews.append(
+                    {
+                        "pr_number": pr_number,
+                        "submitted": False,
+                        "error": str(exc),
+                    }
+                )
+
+        green = bool(signal.ready) and not findings_result.findings
         signals.append(
             {
                 "pr_number": pr_number,
@@ -281,10 +415,55 @@ async def ingest_github_webhook_event(
                 "gate": signal.ready,
                 "status": signal.state,
                 "summary": signal.message,
+                "findings_count": len(findings_result.findings),
+                "green": green,
             }
         )
 
-        if signal.ready:
+        if green and pr_details is not None:
+            if allow_auto_merge:
+                try:
+                    merge_result = github_client.merge_pull_request(
+                        repo_full_name=repo_full_name,
+                        pr_number=pr_number,
+                        head_sha=pr_details.head_sha,
+                    )
+                    merge_results.append(
+                        {
+                            "pr_number": pr_number,
+                            "attempted": True,
+                            "merged": merge_result.merged,
+                            "sha": merge_result.sha,
+                            "message": merge_result.message,
+                        }
+                    )
+                except (GitHubApiError, ValueError) as exc:
+                    logger.warning(
+                        "github_webhook_auto_merge_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                        request_id,
+                        tenant.tenant_id,
+                        pr_number,
+                        exc,
+                    )
+                    merge_results.append(
+                        {
+                            "pr_number": pr_number,
+                            "attempted": True,
+                            "merged": False,
+                            "error": str(exc),
+                        }
+                    )
+            else:
+                send_tenant_discord_message(
+                    session,
+                    tenant_id=tenant.tenant_id,
+                    event="pr_review_gate",
+                    message=f"PR #{pr_number} is merge-ready. Required checks passed and Codex findings are clear.",
+                    issue_key=None,
+                    run_id=None,
+                    project_id=project.project_id,
+                )
+        elif green:
             send_tenant_discord_message(
                 session,
                 tenant_id=tenant.tenant_id,
@@ -293,6 +472,46 @@ async def ingest_github_webhook_event(
                 issue_key=None,
                 run_id=None,
                 project_id=project.project_id,
+            )
+        try:
+            remediation_result = None
+            if not green:
+                remediation_result = enqueue_pr_remediation_if_needed(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    github_client=github_client,
+                    event=github_event,
+                    action=normalized_action,
+                    payload=payload,
+                    pr_number=pr_number,
+                    repo_full_name=repo_full_name,
+                    max_attempts_per_head=max_pr_auto_remediation_loops,
+                )
+        except (GitHubApiError, ValueError) as exc:
+            logger.warning(
+                "github_webhook_remediation_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                request_id,
+                tenant.tenant_id,
+                pr_number,
+                exc,
+            )
+            remediation.append(
+                {
+                    "pr_number": pr_number,
+                    "enqueued": False,
+                    "error": str(exc),
+                }
+            )
+            continue
+        if remediation_result is not None:
+            remediation.append(
+                {
+                    "pr_number": pr_number,
+                    "enqueued": remediation_result.enqueued,
+                    "reason": remediation_result.reason,
+                    "run_id": remediation_result.run.run_id,
+                }
             )
 
     return JSONResponse(
@@ -307,5 +526,34 @@ async def ingest_github_webhook_event(
             "accepted": True,
             "repository": repo_full_name,
             "signals": signals,
+            "review_comments": review_comments,
+            "inline_reviews": inline_reviews,
+            "auto_merge": {
+                "enabled": allow_auto_merge,
+                "results": merge_results,
+            },
+            "remediation": remediation,
         },
     )
+
+
+def _coerce_positive_int(value: object | None, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def _coerce_int_or_none(value: object | None) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _valid_pr_details(details: object) -> bool:
+    head_sha = getattr(details, "head_sha", None)
+    title = getattr(details, "title", None)
+    return isinstance(head_sha, str) and bool(head_sha.strip()) and isinstance(title, str) and bool(title.strip())

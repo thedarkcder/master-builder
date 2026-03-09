@@ -18,7 +18,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "allow_jira_transitions": True,
                 "allow_pr_creation": False,
                 "allow_label_mutations": "nope",
+                "allow_auto_merge": True,
                 "max_dev_test_review_loops": 0,
+                "max_pr_auto_remediation_loops": 0,
                 "max_concurrent_runs": "bad",
                 "allowed_commands": [" run ", "", "  ", "retry"],
                 "require_agents_md": True,
@@ -27,8 +29,10 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         )
         self.assertEqual(normalized["allow_jira_transitions"], True)
         self.assertEqual(normalized["allow_pr_creation"], False)
+        self.assertEqual(normalized["allow_auto_merge"], True)
         self.assertNotIn("allow_label_mutations", normalized)
         self.assertEqual(normalized["max_dev_test_review_loops"], 1)
+        self.assertEqual(normalized["max_pr_auto_remediation_loops"], 1)
         self.assertNotIn("max_concurrent_runs", normalized)
         self.assertEqual(normalized["allowed_commands"], ["run", "retry"])
         self.assertEqual(normalized["require_agents_md"], True)
@@ -39,21 +43,27 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "allow_jira_transitions": True,
                 "allow_pr_creation": True,
                 "allow_label_mutations": True,
+                "allow_auto_merge": True,
                 "max_dev_test_review_loops": 10,
+                "max_pr_auto_remediation_loops": 5,
                 "max_concurrent_runs": 8,
                 "allowed_commands": ["run", "retry"],
                 "require_agents_md": False,
             },
             project_overrides={
                 "allow_pr_creation": False,
+                "allow_auto_merge": False,
                 "max_dev_test_review_loops": 999,
+                "max_pr_auto_remediation_loops": 999,
                 "max_concurrent_runs": 3,
                 "allowed_commands": ["retry", "cancel"],
                 "require_agents_md": True,
             },
         )
         self.assertEqual(effective["allow_pr_creation"], False)
+        self.assertEqual(effective["allow_auto_merge"], False)
         self.assertEqual(effective["max_dev_test_review_loops"], 10)
+        self.assertEqual(effective["max_pr_auto_remediation_loops"], 5)
         self.assertEqual(effective["max_concurrent_runs"], 3)
         self.assertEqual(effective["allowed_commands"], ["retry"])
         self.assertEqual(effective["require_agents_md"], True)
