@@ -197,6 +197,28 @@ class ReviewerGateTests(unittest.TestCase):
         )
         self.assertNotEqual(signal.state, "missing_test_coverage")
 
+    def test_reviewer_accepts_src_test_java_coverage(self) -> None:
+        gate = self._gate(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="src/main/java/com/example/Service.java", patch="+ change"),
+                    PullRequestFileChange(
+                        filename="src/test/java/com/example/ServiceTest.java",
+                        patch="+ test",
+                    ),
+                ],
+            )
+        )
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=17,
+        )
+        self.assertNotEqual(signal.state, "missing_test_coverage")
+
 
 def _stub_readiness_evaluator(  # noqa: ANN001
     *,
