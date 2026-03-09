@@ -256,6 +256,96 @@ def _persist_precheck_questions_block(
     return next_description
 
 
+def _queue_run_from_issue_context(
+    *,
+    session: Session,
+    tenant: Tenant,
+    tenant_id: str,
+    project: Any,  # noqa: ANN401
+    source: DecisionSource,
+    issue_key: str,
+    issue_summary: str | None,
+    issue_description: str | None,
+    issue_labels: list[str] | None,
+    settings_factory: Callable[[], Any],
+    tenant_jira_oauth_context: Callable[..., Any],
+    conflict_prefix: str,
+    success_message: str,
+) -> DiscordCommandResponse:
+    decision_result = _evaluate_precheck_decision_with_labels(
+        session=session,
+        tenant=tenant,
+        project=project,
+        source=source,
+        issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+        issue_labels=issue_labels,
+        settings_factory=settings_factory,
+        tenant_jira_oauth_context=tenant_jira_oauth_context,
+    )
+    precheck_decision = decision_result.decision
+    gate_block = resolve_run_gate_block(decision_result=decision_result)
+    if gate_block is not None and gate_block.reason == "policy_eval_failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=enqueue_reason_guidance("policy_eval_failed"),
+        )
+    if gate_block is not None and gate_block.reason == "decision_gate_required":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_decision_gate_remaining_questions_message(
+                issue_key=issue_key,
+                reason=str(gate_block.decision_gate_reason or "").strip(),
+                questions=list(gate_block.decision_gate_questions),
+            ),
+        )
+    if gate_block is not None and gate_block.reason == "gtd_required":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_gtd_missing_message(
+                issue_key=issue_key,
+                missing_criteria=gate_block.gtd_missing_criteria,
+                questions=gate_block.gtd_questions,
+            ),
+        )
+    if gate_block is not None and gate_block.reason == "missing_ready_label":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{enqueue_reason_guidance('missing_ready_label')} ({str(gate_block.ready_label or '').strip()})",
+        )
+    enqueue_result = enqueue_issue_run_with_precheck(
+        session,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+        issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+        repo_url=project.github_repository,
+        delivery_id=None,
+        precheck_outcome=precheck_decision.pre_check.outcome if precheck_decision.pre_check is not None else None,
+        max_concurrent_runs=resolve_effective_policy(
+            tenant_policy=tenant.policy_config,
+            project_overrides=project.policy_overrides,
+        ).get("max_concurrent_runs"),
+    )
+    if not enqueue_result.enqueued:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=format_enqueue_conflict_detail(
+                prefix=conflict_prefix,
+                enqueue_reason=str(enqueue_result.reason),
+                enqueue_run_obj=enqueue_result.run,
+            ),
+        )
+    return DiscordCommandResponse(
+        ok=True,
+        command="retry" if source == "discord_retry" else "run",
+        message=success_message.format(run_id=enqueue_result.run.run_id, issue_key=issue_key),
+        data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
+    )
+
+
 def _locked_decision_gate_reason(*, classification: str, decision_gate: Any | None) -> str | None:
     if classification not in {"decision_gate", "both"}:
         return None
@@ -396,9 +486,10 @@ def dispatch_run_control_command(
         except HTTPException:
             issue_description = None
             issue_labels = None
-        decision_result = _evaluate_precheck_decision_with_labels(
+        return _queue_run_from_issue_context(
             session=session,
             tenant=tenant,
+            tenant_id=tenant_id,
             project=project,
             source="discord_run",
             issue_key=issue_key,
@@ -407,66 +498,8 @@ def dispatch_run_control_command(
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
-        )
-        precheck_decision = decision_result.decision
-        gate_block = resolve_run_gate_block(decision_result=decision_result)
-        if gate_block is not None and gate_block.reason == "policy_eval_failed":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=enqueue_reason_guidance("policy_eval_failed"),
-            )
-        if gate_block is not None and gate_block.reason == "decision_gate_required":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_decision_gate_remaining_questions_message(
-                    issue_key=issue_key,
-                    reason=str(gate_block.decision_gate_reason or "").strip(),
-                    questions=list(gate_block.decision_gate_questions),
-                ),
-            )
-        if gate_block is not None and gate_block.reason == "gtd_required":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_gtd_missing_message(
-                    issue_key=issue_key,
-                    missing_criteria=gate_block.gtd_missing_criteria,
-                    questions=gate_block.gtd_questions,
-                ),
-            )
-        if gate_block is not None and gate_block.reason == "missing_ready_label":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"{enqueue_reason_guidance('missing_ready_label')} ({str(gate_block.ready_label or '').strip()})",
-            )
-        enqueue_result = enqueue_issue_run_with_precheck(
-            session,
-            tenant_id=tenant_id,
-            project_id=project.project_id,
-            issue_key=issue_key,
-            issue_summary=issue_preview.summary,
-            issue_description=issue_description,
-            repo_url=project.github_repository,
-            delivery_id=None,
-            precheck_outcome=precheck_decision.pre_check.outcome if precheck_decision.pre_check is not None else None,
-            max_concurrent_runs=resolve_effective_policy(
-                tenant_policy=tenant.policy_config,
-                project_overrides=project.policy_overrides,
-            ).get("max_concurrent_runs"),
-        )
-        if not enqueue_result.enqueued:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=format_enqueue_conflict_detail(
-                    prefix="Run could not be queued",
-                    enqueue_reason=str(enqueue_result.reason),
-                    enqueue_run_obj=enqueue_result.run,
-                ),
-            )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Queued run {enqueue_result.run.run_id} for {issue_key}",
-            data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
+            conflict_prefix="Run could not be queued",
+            success_message="Queued run {run_id} for {issue_key}",
         )
 
     if command_name == "cancel":
@@ -546,9 +579,10 @@ def dispatch_run_control_command(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Issue {run.issue_key} is outside the mapped project scope",
             )
-        decision_result = _evaluate_precheck_decision_with_labels(
+        return _queue_run_from_issue_context(
             session=session,
             tenant=tenant,
+            tenant_id=tenant_id,
             project=project,
             source="discord_retry",
             issue_key=run.issue_key,
@@ -557,66 +591,8 @@ def dispatch_run_control_command(
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
-        )
-        precheck_decision = decision_result.decision
-        gate_block = resolve_run_gate_block(decision_result=decision_result)
-        if gate_block is not None and gate_block.reason == "policy_eval_failed":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=enqueue_reason_guidance("policy_eval_failed"),
-            )
-        if gate_block is not None and gate_block.reason == "decision_gate_required":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_decision_gate_remaining_questions_message(
-                    issue_key=run.issue_key,
-                    reason=str(gate_block.decision_gate_reason or "").strip(),
-                    questions=list(gate_block.decision_gate_questions),
-                ),
-            )
-        if gate_block is not None and gate_block.reason == "gtd_required":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_gtd_missing_message(
-                    issue_key=run.issue_key,
-                    missing_criteria=gate_block.gtd_missing_criteria,
-                    questions=gate_block.gtd_questions,
-                ),
-            )
-        if gate_block is not None and gate_block.reason == "missing_ready_label":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"{enqueue_reason_guidance('missing_ready_label')} ({str(gate_block.ready_label or '').strip()})",
-            )
-        enqueue_result = enqueue_issue_run_with_precheck(
-            session,
-            tenant_id=tenant_id,
-            project_id=project.project_id,
-            issue_key=run.issue_key,
-            issue_summary=issue_preview.summary,
-            issue_description=issue_description,
-            repo_url=project.github_repository,
-            delivery_id=None,
-            precheck_outcome=precheck_decision.pre_check.outcome if precheck_decision.pre_check is not None else None,
-            max_concurrent_runs=resolve_effective_policy(
-                tenant_policy=tenant.policy_config,
-                project_overrides=project.policy_overrides,
-            ).get("max_concurrent_runs"),
-        )
-        if not enqueue_result.enqueued:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=format_enqueue_conflict_detail(
-                    prefix="Retry could not be queued",
-                    enqueue_reason=str(enqueue_result.reason),
-                    enqueue_run_obj=enqueue_result.run,
-                ),
-            )
-        return DiscordCommandResponse(
-            ok=True,
-            command=command_name,
-            message=f"Queued retry run {enqueue_result.run.run_id} for {run.issue_key}",
-            data={"run_id": enqueue_result.run.run_id, "issue_key": run.issue_key},
+            conflict_prefix="Retry could not be queued",
+            success_message="Queued retry run {run_id} for {issue_key}",
         )
 
     if command_name == "reply":
@@ -839,44 +815,30 @@ def dispatch_run_control_command(
                 exc,
             )
 
-        if has_retryable_run:
-            return dispatch_run_control_command(
-                session=session,
-                tenant=tenant,
-                tenant_id=tenant_id,
-                payload=payload,
-                command_name="retry",
-                arguments=[issue_key],
-                scope=scope,
-                retryable_statuses=retryable_statuses,
-                resolve_project_for_issue=resolve_project_for_issue,
-                fetch_issue_preview=fetch_issue_preview,
-                fetch_issue_detail=fetch_issue_detail,
-                settings_factory=settings_factory,
-                build_codex_runtime=build_codex_runtime,
-                tenant_jira_oauth_context=tenant_jira_oauth_context,
-                ensure_issue_is_executable=ensure_issue_is_executable,
-                resolve_codex_working_dir=resolve_codex_working_dir,
-            )
-
-        # Pre-run clarification path: no retryable run exists yet, so queue initial run.
-        return dispatch_run_control_command(
+        issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
+        ensure_issue_is_executable(
+            issue_status=issue_preview.status,
+            tenant=tenant,
+            extra_executable_statuses=("In Progress",),
+        )
+        return _queue_run_from_issue_context(
             session=session,
             tenant=tenant,
             tenant_id=tenant_id,
-            payload=payload,
-            command_name="run",
-            arguments=[issue_key],
-            scope=scope,
-            retryable_statuses=retryable_statuses,
-            resolve_project_for_issue=resolve_project_for_issue,
-            fetch_issue_preview=fetch_issue_preview,
-            fetch_issue_detail=fetch_issue_detail,
+            project=project,
+            source="discord_retry" if has_retryable_run else "discord_run",
+            issue_key=issue_key,
+            issue_summary=issue_preview.summary,
+            issue_description=updated_description,
+            issue_labels=issue_labels,
             settings_factory=settings_factory,
-            build_codex_runtime=build_codex_runtime,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
-            ensure_issue_is_executable=ensure_issue_is_executable,
-            resolve_codex_working_dir=resolve_codex_working_dir,
+            conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",
+            success_message=(
+                "Queued retry run {run_id} for {issue_key}"
+                if has_retryable_run
+                else "Queued run {run_id} for {issue_key}"
+            ),
         )
 
     return None
