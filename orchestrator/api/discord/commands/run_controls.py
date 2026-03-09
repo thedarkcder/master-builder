@@ -39,8 +39,6 @@ logger = logging.getLogger(__name__)
 
 DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
 DECISION_GATE_BLOCK_END = "<!-- decision-gate-clarifications:end -->"
-KNOWLEDGE_AUTOFILL_BLOCK_START = "<!-- knowledge-autofill:start -->"
-KNOWLEDGE_AUTOFILL_BLOCK_END = "<!-- knowledge-autofill:end -->"
 
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
@@ -141,74 +139,6 @@ def _upsert_decision_gate_clarifications_block(*, current_description: str, bloc
             return f"{block}\n\n{suffix}"
         return block
     return f"{current}\n\n{block}"
-
-
-def _upsert_block(*, current_description: str, block: str, start_marker: str, end_marker: str) -> str:
-    current = str(current_description or "").strip()
-    if not current:
-        return block
-    start_idx = current.find(start_marker)
-    end_idx = current.find(end_marker)
-    if start_idx >= 0 and end_idx > start_idx:
-        end_of_marker = end_idx + len(end_marker)
-        prefix = current[:start_idx].rstrip()
-        suffix = current[end_of_marker:].lstrip()
-        if prefix and suffix:
-            return f"{prefix}\n\n{block}\n\n{suffix}"
-        if prefix:
-            return f"{prefix}\n\n{block}"
-        if suffix:
-            return f"{block}\n\n{suffix}"
-        return block
-    return f"{current}\n\n{block}"
-
-
-def _slot_display_name(slot_name: str) -> str:
-    mapping = {
-        "objective": "Objective",
-        "scope": "Scope",
-        "acceptance_criteria": "Acceptance Criteria",
-        "how_to_test": "How to test",
-        "nfr_intent": "NFR intent (MVP vs scale-ready)",
-        "reliability_security_constraints": "Mandatory reliability/security constraints",
-        "out_of_scope": "Explicitly out of scope",
-        "rollout_constraints": "Rollout/migration constraints",
-        "decision_owner": "Decision owner",
-        "dependencies_and_risks": "Dependencies / Risks",
-    }
-    return mapping.get(slot_name, slot_name.replace("_", " ").title())
-
-
-def _build_knowledge_autofill_block(*, slot_answers: dict[str, object]) -> str:
-    lines = [
-        KNOWLEDGE_AUTOFILL_BLOCK_START,
-        "## Knowledge Base Auto-Resolved Clarifications",
-    ]
-    for slot_name in sorted(slot_answers.keys()):
-        value = slot_answers.get(slot_name)
-        if value is None:
-            continue
-        slot_value = str(getattr(value, "slot_value", "") or "").strip()
-        citation = getattr(value, "citation", {}) if value is not None else {}
-        citation_title = str(citation.get("title") or "").strip()
-        citation_asset_id = str(citation.get("asset_id") or "").strip()
-        citation_ts = str(citation.get("source_timestamp") or "").strip()
-        confidence = float(getattr(value, "confidence", 0.0) or 0.0)
-        if not slot_value:
-            continue
-        if citation_title or citation_asset_id or citation_ts:
-            citation_parts = []
-            if citation_title:
-                citation_parts.append(citation_title)
-            if citation_asset_id:
-                citation_parts.append(f"asset:{citation_asset_id}")
-            if citation_ts:
-                citation_parts.append(f"dated:{citation_ts}")
-            slot_value = f"{slot_value} (source: {', '.join(citation_parts)}; confidence={confidence:.2f})"
-        lines.append(f"{_slot_display_name(slot_name)}: {slot_value}")
-    lines.append(KNOWLEDGE_AUTOFILL_BLOCK_END)
-    return "\n".join(lines)
-
 
 def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides: dict) -> tuple[bool, str]:
     effective_policy = resolve_effective_policy(
