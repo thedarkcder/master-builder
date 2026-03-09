@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.precheck_question_lock import parse_locked_precheck_questions
 from orchestrator.core.precheck_policy import evaluate_precheck_policy
 from orchestrator.core.worker_capabilities import (
     infer_required_worker_capability,
@@ -143,6 +144,14 @@ def evaluate_pre_run_check(
     )
     decision_gate = precheck_policy.decision_gate
     gtd = precheck_policy.gtd
+    locked_questions = parse_locked_precheck_questions(issue_description=issue_description)
+    if decision_gate.triggered:
+        if locked_questions.decision_gate_reason:
+            decision_gate = replace(decision_gate, reason=locked_questions.decision_gate_reason)
+        if locked_questions.decision_gate_questions:
+            decision_gate = replace(decision_gate, questions=locked_questions.decision_gate_questions)
+    if not gtd.valid and locked_questions.gtd_questions:
+        gtd = replace(gtd, clarification_questions=locked_questions.gtd_questions)
 
     if decision_gate.triggered:
         outcome = "decision_gate_required"
