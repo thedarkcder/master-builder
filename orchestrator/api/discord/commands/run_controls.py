@@ -31,7 +31,8 @@ from orchestrator.core.precheck_question_lock import (
     upsert_precheck_questions_block,
 )
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import cancel_run, enqueue_run, resolve_precheck_outcome_for_enqueue
+from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck, resolve_run_gate_block
+from orchestrator.core.runs import cancel_run
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
@@ -408,37 +409,36 @@ def dispatch_run_control_command(
             tenant_jira_oauth_context=tenant_jira_oauth_context,
         )
         precheck_decision = decision_result.decision
-        if precheck_decision.pre_check is None:
+        gate_block = resolve_run_gate_block(decision_result=decision_result)
+        if gate_block is not None and gate_block.reason == "policy_eval_failed":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=enqueue_reason_guidance("policy_eval_failed"),
             )
-        pre_check = precheck_decision.pre_check
-        if pre_check.decision_gate_triggered:
+        if gate_block is not None and gate_block.reason == "decision_gate_required":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_decision_gate_remaining_questions_message(
                     issue_key=issue_key,
-                    reason=str(pre_check.decision_gate.reason or "").strip(),
-                    questions=[question.strip() for question in pre_check.decision_gate.questions if question.strip()],
+                    reason=str(gate_block.decision_gate_reason or "").strip(),
+                    questions=list(gate_block.decision_gate_questions),
                 ),
             )
-        if not pre_check.gtd_valid:
+        if gate_block is not None and gate_block.reason == "gtd_required":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_gtd_missing_message(
                     issue_key=issue_key,
-                    missing_criteria=pre_check.gtd_missing_criteria,
-                    questions=pre_check.gtd_clarification_questions,
+                    missing_criteria=gate_block.gtd_missing_criteria,
+                    questions=gate_block.gtd_questions,
                 ),
             )
-        if precheck_decision.block_reason == "missing_ready_label":
-            ready_label = str(pre_check.ready_label or "").strip()
+        if gate_block is not None and gate_block.reason == "missing_ready_label":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})",
+                detail=f"{enqueue_reason_guidance('missing_ready_label')} ({str(gate_block.ready_label or '').strip()})",
             )
-        enqueue_result = enqueue_run(
+        enqueue_result = enqueue_issue_run_with_precheck(
             session,
             tenant_id=tenant_id,
             project_id=project.project_id,
@@ -447,9 +447,7 @@ def dispatch_run_control_command(
             issue_description=issue_description,
             repo_url=project.github_repository,
             delivery_id=None,
-            precheck_outcome=resolve_precheck_outcome_for_enqueue(
-                precheck_outcome=pre_check.outcome
-            ),
+            precheck_outcome=precheck_decision.pre_check.outcome if precheck_decision.pre_check is not None else None,
             max_concurrent_runs=resolve_effective_policy(
                 tenant_policy=tenant.policy_config,
                 project_overrides=project.policy_overrides,
@@ -561,37 +559,36 @@ def dispatch_run_control_command(
             tenant_jira_oauth_context=tenant_jira_oauth_context,
         )
         precheck_decision = decision_result.decision
-        if precheck_decision.pre_check is None:
+        gate_block = resolve_run_gate_block(decision_result=decision_result)
+        if gate_block is not None and gate_block.reason == "policy_eval_failed":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=enqueue_reason_guidance("policy_eval_failed"),
             )
-        pre_check = precheck_decision.pre_check
-        if pre_check.decision_gate_triggered:
+        if gate_block is not None and gate_block.reason == "decision_gate_required":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_decision_gate_remaining_questions_message(
                     issue_key=run.issue_key,
-                    reason=str(pre_check.decision_gate.reason or "").strip(),
-                    questions=[question.strip() for question in pre_check.decision_gate.questions if question.strip()],
+                    reason=str(gate_block.decision_gate_reason or "").strip(),
+                    questions=list(gate_block.decision_gate_questions),
                 ),
             )
-        if not pre_check.gtd_valid:
+        if gate_block is not None and gate_block.reason == "gtd_required":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_gtd_missing_message(
                     issue_key=run.issue_key,
-                    missing_criteria=pre_check.gtd_missing_criteria,
-                    questions=pre_check.gtd_clarification_questions,
+                    missing_criteria=gate_block.gtd_missing_criteria,
+                    questions=gate_block.gtd_questions,
                 ),
             )
-        if precheck_decision.block_reason == "missing_ready_label":
-            ready_label = str(pre_check.ready_label or "").strip()
+        if gate_block is not None and gate_block.reason == "missing_ready_label":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})",
+                detail=f"{enqueue_reason_guidance('missing_ready_label')} ({str(gate_block.ready_label or '').strip()})",
             )
-        enqueue_result = enqueue_run(
+        enqueue_result = enqueue_issue_run_with_precheck(
             session,
             tenant_id=tenant_id,
             project_id=project.project_id,
@@ -600,9 +597,7 @@ def dispatch_run_control_command(
             issue_description=issue_description,
             repo_url=project.github_repository,
             delivery_id=None,
-            precheck_outcome=resolve_precheck_outcome_for_enqueue(
-                precheck_outcome=pre_check.outcome
-            ),
+            precheck_outcome=precheck_decision.pre_check.outcome if precheck_decision.pre_check is not None else None,
             max_concurrent_runs=resolve_effective_policy(
                 tenant_policy=tenant.policy_config,
                 project_overrides=project.policy_overrides,

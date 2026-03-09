@@ -36,12 +36,11 @@ from orchestrator.core.decision_engine import (
     evaluate_decision_event,
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
+from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck, resolve_run_gate_block
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
     RUN_STATUS_FAILED,
-    enqueue_run,
-    resolve_precheck_outcome_for_enqueue,
 )
 from orchestrator.api.discord.shared.state import normalize_status_name, remove_issue_key_from_seed_followups
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
@@ -1105,7 +1104,8 @@ async def ingest_jira_webhook_event(
             issue_description=resolved_issue_description,
         )
         precheck_decision = decision_result.decision
-        if precheck_decision.pre_check is None:
+        gate_block = resolve_run_gate_block(decision_result=decision_result)
+        if gate_block is not None and gate_block.reason == "policy_eval_failed":
             logger.warning(
                 "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=policy_eval_failed error=%s",
                 request_id,
@@ -1128,26 +1128,25 @@ async def ingest_jira_webhook_event(
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
             )
-        pre_check = precheck_decision.pre_check
-        if precheck_decision.block_reason in {"decision_gate_required", "gtd_required", "missing_ready_label"}:
+        if gate_block is not None:
             logger.info(
                 "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s",
                 request_id,
                 tenant_id,
                 context.issue_key,
-                precheck_decision.block_reason,
+                gate_block.reason,
             )
             _notify_jira_enqueue_skipped(
                 context=context,
                 session=session,
                 settings=settings,
-                reason=precheck_decision.block_reason,
+                reason=gate_block.reason,
                 extra_detail=(
-                    f"decision_gate_reason={pre_check.decision_gate_reason}"
-                    if precheck_decision.block_reason == "decision_gate_required"
+                    f"decision_gate_reason={gate_block.decision_gate_reason}"
+                    if gate_block.reason == "decision_gate_required"
                     else (
-                        "missing_gtd=" + ", ".join(pre_check.gtd_missing_criteria)
-                        if precheck_decision.block_reason == "gtd_required"
+                        "missing_gtd=" + ", ".join(gate_block.gtd_missing_criteria)
+                        if gate_block.reason == "gtd_required"
                         else None
                     )
                 ),
@@ -1155,17 +1154,17 @@ async def ingest_jira_webhook_event(
             return jira_webhook_response(
                 context,
                 enqueued=False,
-                reason=precheck_decision.block_reason,
-                guidance=enqueue_reason_guidance(precheck_decision.block_reason),
+                reason=gate_block.reason,
+                guidance=gate_block.guidance,
                 trigger_reason=trigger_reason,
                 webhook_event=context.webhook_event,
-                decision_gate_reason=pre_check.decision_gate_reason if precheck_decision.block_reason == "decision_gate_required" else None,
-                gtd_missing_criteria=list(pre_check.gtd_missing_criteria) if precheck_decision.block_reason == "gtd_required" else None,
-                gtd_questions=list(pre_check.gtd_clarification_questions) if precheck_decision.block_reason == "gtd_required" else None,
-                ready_label=_resolve_ready_label_for_tenant(context.tenant) if precheck_decision.block_reason == "missing_ready_label" else None,
+                decision_gate_reason=gate_block.decision_gate_reason if gate_block.reason == "decision_gate_required" else None,
+                gtd_missing_criteria=list(gate_block.gtd_missing_criteria) if gate_block.reason == "gtd_required" else None,
+                gtd_questions=list(gate_block.gtd_questions) if gate_block.reason == "gtd_required" else None,
+                ready_label=_resolve_ready_label_for_tenant(context.tenant) if gate_block.reason == "missing_ready_label" else None,
             )
 
-        enqueue_result = enqueue_run(
+        enqueue_result = enqueue_issue_run_with_precheck(
             session,
             tenant_id=tenant_id,
             project_id=context.project.project_id,
@@ -1174,9 +1173,7 @@ async def ingest_jira_webhook_event(
             issue_description=resolved_issue_description,
             repo_url=context.project.github_repository,
             delivery_id=context.delivery_id,
-            precheck_outcome=resolve_precheck_outcome_for_enqueue(
-                precheck_outcome=pre_check.outcome
-            ),
+            precheck_outcome=precheck_decision.pre_check.outcome if precheck_decision.pre_check is not None else None,
             max_concurrent_runs=tenant.policy_config.get("max_concurrent_runs"),
         )
         if not enqueue_result.enqueued:
