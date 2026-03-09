@@ -299,6 +299,7 @@ async def ingest_github_webhook_event(
         checks = []
         changed_files = []
         findings_result = PrReviewFindingsResult(state="review_failed", summary=signal.message, findings=())
+        findings_evaluated = False
         try:
             candidate_pr_details = github_client.get_pull_request_details(
                 repo_full_name=repo_full_name,
@@ -324,6 +325,7 @@ async def ingest_github_webhook_event(
                     tenant_id=tenant.tenant_id,
                     project_id=project.project_id,
                 )
+                findings_evaluated = True
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "github_webhook_findings_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
@@ -407,7 +409,7 @@ async def ingest_github_webhook_event(
                     }
                 )
 
-        green = bool(signal.ready) and not findings_result.findings
+        green = bool(signal.ready) and findings_evaluated and not findings_result.findings
         signals.append(
             {
                 "pr_number": pr_number,
@@ -415,6 +417,7 @@ async def ingest_github_webhook_event(
                 "gate": signal.ready,
                 "status": signal.state,
                 "summary": signal.message,
+                "findings_evaluated": findings_evaluated,
                 "findings_count": len(findings_result.findings),
                 "green": green,
             }
@@ -463,12 +466,17 @@ async def ingest_github_webhook_event(
                     run_id=None,
                     project_id=project.project_id,
                 )
-        elif green:
+        elif signal.ready:
             send_tenant_discord_message(
                 session,
                 tenant_id=tenant.tenant_id,
                 event="pr_review_gate",
-                message=signal.message,
+                message=(
+                    signal.message
+                    if findings_evaluated
+                    else f"PR #{pr_number} review gate passed, but findings evaluation is pending/failed. "
+                    "Auto-merge is blocked until findings evaluate successfully."
+                ),
                 issue_key=None,
                 run_id=None,
                 project_id=project.project_id,
