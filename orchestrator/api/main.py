@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from orchestrator.api.routes.admin import router as admin_router
+from orchestrator.api.routes.admin_integrations import router as admin_integrations_router
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
 from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_router
 from orchestrator.api.routes.admin_observability import router as admin_observability_router
@@ -180,7 +180,7 @@ def create_app() -> FastAPI:
             headers=exc.headers,
         )
 
-    app.include_router(admin_router)
+    app.include_router(admin_integrations_router)
     app.include_router(admin_knowledge_router)
     app.include_router(admin_observability_router)
     app.include_router(admin_runs_router)
