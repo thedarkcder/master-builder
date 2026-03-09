@@ -192,8 +192,9 @@ export function TenantProjectDetailsPage() {
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <div>
             <CardTitle>{project?.name ?? params.projectId}</CardTitle>
@@ -220,8 +221,8 @@ export function TenantProjectDetailsPage() {
             </Button>
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
         {statusLine ? <p className="rounded-md border px-3 py-2 text-muted-foreground">{statusLine}</p> : null}
         {project ? (
           <>
@@ -282,11 +283,6 @@ export function TenantProjectDetailsPage() {
                 {project.is_archived ? "Unarchive" : "Archive"}
               </Button>
             </div>
-            <ProjectKnowledgeBaseSection
-              credentials={credentials}
-              tenantId={params.tenantId}
-              projectId={params.projectId}
-            />
             <div className="space-y-2 border-t pt-4">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Project runs</p>
               <div className="grid gap-2 md:grid-cols-3">
@@ -445,7 +441,15 @@ export function TenantProjectDetailsPage() {
         ) : (
           <p className="text-muted-foreground">Loading project details...</p>
         )}
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+      {project ? (
+        <ProjectKnowledgeBaseSection
+          credentials={credentials}
+          tenantId={params.tenantId}
+          projectId={params.projectId}
+        />
+      ) : null}
+    </div>
   );
 }
