@@ -26,6 +26,11 @@ from orchestrator.core.precheck_decision import (
     precheck_classification,
     precheck_missing_slots,
 )
+from orchestrator.core.precheck_question_lock import (
+    build_precheck_questions_block,
+    remove_precheck_questions_block,
+    upsert_precheck_questions_block,
+)
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import cancel_run, enqueue_run, resolve_precheck_outcome_for_enqueue
 from orchestrator.storage.models import Run, Tenant
@@ -273,6 +278,40 @@ def _build_precheck_description(
     _ = (issue_key, project_key, search_issues_for_tenant, session, tenant)
     # Keep precheck deterministic against canonical ticket content.
     return issue_description
+
+
+def _persist_precheck_questions_block(
+    *,
+    oauth_client,  # noqa: ANN001
+    oauth_access_token: str,
+    cloud_id: str,
+    issue_key: str,
+    issue_summary: str,
+    current_description: str,
+    decision_gate_reason: str | None,
+    decision_gate_questions: list[str],
+    gtd_questions: list[str],
+) -> str:
+    block = build_precheck_questions_block(
+        decision_gate_reason=decision_gate_reason,
+        decision_gate_questions=decision_gate_questions,
+        gtd_questions=gtd_questions,
+    )
+    next_description = (
+        upsert_precheck_questions_block(current_description=current_description, block=block)
+        if block
+        else remove_precheck_questions_block(current_description=current_description)
+    )
+    if next_description.strip() == str(current_description or "").strip():
+        return current_description
+    oauth_client.update_issue_summary_and_description(
+        access_token=oauth_access_token,
+        cloud_id=cloud_id,
+        issue_id_or_key=issue_key,
+        summary=issue_summary,
+        description=next_description,
+    )
+    return next_description
 
 
 def _plan_decision_gate_jira_update(
@@ -865,6 +904,25 @@ def dispatch_run_control_command(
                 for item in getattr(pre_check, "gtd_missing_criteria", ())
                 if str(item).strip()
             ]
+            try:
+                updated_description = _persist_precheck_questions_block(
+                    oauth_client=oauth_client,
+                    oauth_access_token=str(oauth_access_token),
+                    cloud_id=str(cloud_id),
+                    issue_key=issue_key,
+                    issue_summary=updated_summary,
+                    current_description=str(updated_description or ""),
+                    decision_gate_reason=str(getattr(decision_gate, "reason", "") or "").strip() or None,
+                    decision_gate_questions=decision_gate_questions,
+                    gtd_questions=gtd_questions,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "discord_reply_precheck_questions_persist_failed tenant_id=%s issue_key=%s error=%s",
+                    tenant.tenant_id,
+                    issue_key,
+                    exc,
+                )
             message, generated_questions = build_precheck_message(
                 runtime=runtime,
                 invocation_context=CodexInvocationContext(
@@ -899,6 +957,26 @@ def dispatch_run_control_command(
                     "auto_resolved_slots": auto_resolved_slots,
                     "knowledge_mode": knowledge_mode if knowledge_enabled else None,
                 },
+            )
+
+        try:
+            updated_description = _persist_precheck_questions_block(
+                oauth_client=oauth_client,
+                oauth_access_token=str(oauth_access_token),
+                cloud_id=str(cloud_id),
+                issue_key=issue_key,
+                issue_summary=updated_summary,
+                current_description=str(updated_description or ""),
+                decision_gate_reason=None,
+                decision_gate_questions=[],
+                gtd_questions=[],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "discord_reply_precheck_questions_cleanup_failed tenant_id=%s issue_key=%s error=%s",
+                tenant.tenant_id,
+                issue_key,
+                exc,
             )
 
         if has_retryable_run:

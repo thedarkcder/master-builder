@@ -655,7 +655,10 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["data"]["recheck_required"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-90")
         self.assertEqual(response.json()["data"]["questions"], ["Objective?", "How to test?"])
-        oauth_client.update_issue_summary_and_description.assert_called_once()
+        self.assertGreaterEqual(oauth_client.update_issue_summary_and_description.call_count, 2)
+        latest_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
+        self.assertIn("<!-- precheck-questions:start -->", latest_description)
+        self.assertIn("[decision_gate] Objective?", latest_description)
         dispatch_mock.assert_not_called()
         preview_mock.assert_not_called()
 
