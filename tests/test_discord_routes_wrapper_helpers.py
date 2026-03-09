@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from orchestrator.api.routes import discord as discord_route
+from orchestrator.api.discord.ingress import executor as discord_route
 
 
 class DiscordRouteWrapperHelperTests(unittest.TestCase):

@@ -11,9 +11,7 @@ ORCHESTRATOR_ROOT = ROOT / "orchestrator"
 # Explicit allowlist for intentionally permitted route coupling.
 # The test fails on any new coupling or stale expectation drift.
 LEGACY_ROUTE_IMPORT_ALLOWLIST = {
-    "orchestrator/core/discord/gateway_runtime.py": {
-        "orchestrator.api.routes.discord",
-    },
+    "orchestrator/core/discord/gateway_runtime.py": set(),
     "orchestrator/api/routes/discord.py": set(),
     "orchestrator/api/routes/webhook.py": set(),
     "orchestrator/api/routes/webhook_discord_interactions.py": set(),

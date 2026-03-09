@@ -4,7 +4,7 @@ import logging
 import signal
 import threading
 
-from orchestrator.api.routes.discord import register_discord_command_executor
+from orchestrator.api.discord.ingress.executor import register_discord_command_executor
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
 from orchestrator.core.logging import configure_logging
