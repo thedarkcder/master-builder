@@ -21,10 +21,14 @@ LEGACY_ROUTE_IMPORT_ALLOWLIST = {
 }
 NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/main.py": {
-        "orchestrator.api.routes.admin_integrations",
         "orchestrator.api.routes.admin_auth",
+        "orchestrator.api.routes.admin_discord_allowlist",
+        "orchestrator.api.routes.admin_github",
+        "orchestrator.api.routes.admin_jira",
         "orchestrator.api.routes.admin_knowledge",
         "orchestrator.api.routes.admin_observability",
+        "orchestrator.api.routes.admin_ready",
+        "orchestrator.api.routes.admin_release",
         "orchestrator.api.routes.admin_runs",
         "orchestrator.api.routes.admin_secrets",
         "orchestrator.api.routes.admin_tenants",
