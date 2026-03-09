@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
 from orchestrator.api.webhooks.pr_review_comment_service import (
     publish_inline_review_batch,
+    upsert_sticky_remediation_comment,
     upsert_sticky_review_comment,
 )
 from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
@@ -25,6 +26,7 @@ from orchestrator.api.webhooks.contracts import (
     validate_github_webhook_signature as _validate_github_webhook_signature,
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
+from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.pr_review_findings import PrReviewFindingsResult, evaluate_pr_review_findings
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.reviewer import ReviewAgentGate
@@ -269,6 +271,7 @@ async def ingest_github_webhook_event(
 
     signals: list[dict[str, object]] = []
     remediation: list[dict[str, object]] = []
+    remediation_comments: list[dict[str, object]] = []
     review_comments: list[dict[str, object]] = []
     inline_reviews: list[dict[str, object]] = []
     merge_results: list[dict[str, object]] = []
@@ -494,6 +497,7 @@ async def ingest_github_webhook_event(
                     payload=payload,
                     pr_number=pr_number,
                     repo_full_name=repo_full_name,
+                    settings=settings,
                     max_attempts_per_head=max_pr_auto_remediation_loops,
                 )
         except (GitHubApiError, ValueError) as exc:
@@ -512,13 +516,61 @@ async def ingest_github_webhook_event(
                 }
             )
             continue
-        if remediation_result is not None:
+        if remediation_result is not None and remediation_result.triggered:
+            issue_url = tenant_jira_issue_url(
+                session=session,
+                tenant=tenant,
+                issue_key=remediation_result.issue_key,
+            )
+            remediation_run_id = remediation_result.run.run_id if remediation_result.run is not None else None
+            try:
+                remediation_comment_result = upsert_sticky_remediation_comment(
+                    github_client=github_client,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key=remediation_result.issue_key,
+                    issue_url=issue_url,
+                    issue_created=remediation_result.issue_created,
+                    enqueued=remediation_result.enqueued,
+                    reason=remediation_result.reason,
+                    run_id=remediation_run_id,
+                    head_sha=remediation_result.head_sha,
+                    event=github_event,
+                    action=normalized_action,
+                )
+                remediation_comments.append(
+                    {
+                        "pr_number": pr_number,
+                        "action": remediation_comment_result.action,
+                        "comment_id": _coerce_int_or_none(remediation_comment_result.comment_id),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "github_webhook_remediation_comment_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                    request_id,
+                    tenant.tenant_id,
+                    pr_number,
+                    exc,
+                )
+                remediation_comments.append(
+                    {
+                        "pr_number": pr_number,
+                        "action": "failed",
+                        "error": str(exc),
+                    }
+                )
             remediation.append(
                 {
                     "pr_number": pr_number,
                     "enqueued": remediation_result.enqueued,
                     "reason": remediation_result.reason,
-                    "run_id": remediation_result.run.run_id,
+                    "run_id": remediation_run_id,
+                    "issue_key": remediation_result.issue_key,
+                    "issue_url": issue_url,
+                    "issue_created": remediation_result.issue_created,
                 }
             )
 
@@ -541,6 +593,7 @@ async def ingest_github_webhook_event(
                 "results": merge_results,
             },
             "remediation": remediation,
+            "remediation_comments": remediation_comments,
         },
     )
 
