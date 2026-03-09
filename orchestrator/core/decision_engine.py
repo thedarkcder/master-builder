@@ -16,6 +16,7 @@ from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_co
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
 from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
 from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
@@ -108,6 +109,9 @@ class WorkerDecision:
     allowed: bool
     decision_gate: DecisionGateResult | None
     configuration_error: str | None
+    block_reason: str | None = None
+    classification: str | None = None
+    pre_check: PreRunCheckResult | None = None
 
 
 def evaluate_ingress_precheck(
@@ -213,10 +217,116 @@ def evaluate_worker_decision(
     run_id: str | None,
     issue_summary: str | None,
     issue_description: str | None,
-    evaluate_decision_gate_fn: Callable[..., DecisionGateResult],
+    session: Session | None = None,
+    tenant: Tenant | None = None,
+    issue_labels: list[str] | None = None,
+    evaluate_pre_run_check_fn: Callable[..., PreRunCheckResult] = evaluate_pre_run_check,
+    evaluate_decision_gate_fn: Callable[..., DecisionGateResult] | None = None,
 ) -> WorkerDecision:
     if is_ready_for_agent_precheck(run_plan):
         return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
+
+    if session is not None and issue_key:
+        existing_case = _existing_case_for_issue(session=session, tenant_id=str(tenant_id or ""), issue_key=issue_key)
+        if existing_case is not None:
+            classification = str(existing_case.classification or "").strip() or "clear"
+            cycle = _active_cycle(session=session, case=existing_case)
+            snapshot = (
+                existing_case.metadata_json.get("result_snapshot")
+                if isinstance(existing_case.metadata_json, dict)
+                and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
+                else {}
+            )
+            decision = _decision_from_snapshot(
+                snapshot=snapshot,
+                source=str(existing_case.last_source or "worker_execution"),
+                classification=classification,
+                cycle=cycle,
+                case=existing_case,
+            )
+            if decision.policy_error:
+                return WorkerDecision(
+                    allowed=False,
+                    decision_gate=None,
+                    configuration_error=str(decision.policy_error),
+                    block_reason=decision.block_reason,
+                    classification=classification,
+                    pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+                )
+            blocking_gate = _worker_blocking_gate(
+                pre_check=decision.pre_check,
+                classification=classification,
+                block_reason=decision.block_reason,
+            )
+            if blocking_gate is not None:
+                return WorkerDecision(
+                    allowed=False,
+                    decision_gate=blocking_gate,
+                    configuration_error=None,
+                    block_reason=decision.block_reason,
+                    classification=classification,
+                    pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+                )
+            return WorkerDecision(
+                allowed=True,
+                decision_gate=None,
+                configuration_error=None,
+                block_reason=decision.block_reason,
+                classification=classification,
+                pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+            )
+
+    if tenant is not None:
+        decision = evaluate_ingress_precheck(
+            source="worker_execution",
+            tenant_id=tenant_id,
+            project_id=project_id,
+            issue_key=issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            issue_labels=issue_labels,
+            ready_label=(tenant.jira_config or {}).get("ready_label"),
+            evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
+        )
+        classification = precheck_classification(decision.pre_check) if decision.pre_check is not None else "clear"
+        if decision.policy_error:
+            return WorkerDecision(
+                allowed=False,
+                decision_gate=None,
+                configuration_error=str(decision.policy_error),
+                block_reason=decision.block_reason,
+                classification=classification,
+                pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+            )
+        blocking_gate = _worker_blocking_gate(
+            pre_check=decision.pre_check,
+            classification=classification,
+            block_reason=decision.block_reason,
+        )
+        if blocking_gate is not None:
+            return WorkerDecision(
+                allowed=False,
+                decision_gate=blocking_gate,
+                configuration_error=None,
+                block_reason=decision.block_reason,
+                classification=classification,
+                pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+            )
+        return WorkerDecision(
+            allowed=True,
+            decision_gate=None,
+            configuration_error=None,
+            block_reason=decision.block_reason,
+            classification=classification,
+            pre_check=decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None,
+        )
+
+    if evaluate_decision_gate_fn is None:
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=None,
+            configuration_error="Decision Gate configuration error: missing worker decision evaluator",
+        )
     try:
         decision_gate = evaluate_decision_gate_fn(
             tenant_id=tenant_id,
@@ -234,8 +344,19 @@ def evaluate_worker_decision(
         )
 
     if decision_gate.triggered:
-        return WorkerDecision(allowed=False, decision_gate=decision_gate, configuration_error=None)
-    return WorkerDecision(allowed=True, decision_gate=decision_gate, configuration_error=None)
+        return WorkerDecision(
+            allowed=False,
+            decision_gate=decision_gate,
+            configuration_error=None,
+            block_reason="decision_gate_required",
+            classification="decision_gate",
+        )
+    return WorkerDecision(
+        allowed=True,
+        decision_gate=decision_gate,
+        configuration_error=None,
+        classification="clear",
+    )
 
 
 def _blocking_reason_for_precheck(pre_check: object) -> str | None:
@@ -300,7 +421,11 @@ def evaluate_decision_event(
             DecisionEvent.idempotency_key == idempotency_key,
         )
     ).scalar_one_or_none()
-    duplicate_event = existing_event is not None
+    if existing_event is not None:
+        return _decision_result_for_duplicate_event(
+            session=session,
+            existing_event=existing_event,
+        )
 
     initial = _evaluate_with_labels(
         session=session,
@@ -320,13 +445,14 @@ def evaluate_decision_event(
     issue_labels = initial.issue_labels
     issue_description = event.issue_description
     missing_slots = precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else []
-    auto_resolved_slots: list[str] = []
+    existing_case = _existing_case_for_issue(session=session, tenant_id=tenant.tenant_id, issue_key=event.issue_key)
+    persisted_slot_answers = _slot_resolutions_from_case(case=existing_case)
+    auto_resolved_answers: dict[str, SlotResolution] = {}
 
     if (
         decision.pre_check is not None
         and decision.block_reason in {"decision_gate_required", "gtd_required"}
         and project is not None
-        and not duplicate_event
     ):
         slot_answers = _resolve_slots_before_block(
             session=session,
@@ -337,9 +463,10 @@ def evaluate_decision_event(
             issue_description=issue_description,
             missing_slots=missing_slots,
             settings=settings,
+            persisted_slot_answers=persisted_slot_answers,
         )
         if slot_answers:
-            auto_resolved_slots = sorted(slot_answers.keys())
+            auto_resolved_answers = dict(slot_answers)
             issue_description = _append_auto_resolved_block(
                 issue_description=issue_description,
                 slot_answers=slot_answers,
@@ -374,10 +501,15 @@ def evaluate_decision_event(
         issue_description=issue_description,
         decision=decision,
         classification=classification,
-        auto_resolved_slots=auto_resolved_slots,
-        duplicate_event=duplicate_event,
-        publish_jira_comment_fn=publish_jira_comment_fn,
+        auto_resolved_answers=auto_resolved_answers,
     )
+    if publish_jira_comment_fn is not None and outbox_effect_ids:
+        _publish_decision_effects(
+            session=session,
+            effect_ids=outbox_effect_ids,
+            publish_jira_comment_fn=publish_jira_comment_fn,
+            occurred_at=occurred_at,
+        )
 
     if decision.pre_check is not None and cycle is not None and cycle.status == "open":
         pre_check_with_cycle = _apply_frozen_cycle_to_precheck(
@@ -399,12 +531,12 @@ def evaluate_decision_event(
         issue_labels=issue_labels,
         classification=classification,
         missing_slots=missing_slots,
-        auto_resolved_slots=auto_resolved_slots,
+        auto_resolved_slots=sorted(auto_resolved_answers.keys()),
         case_id=case.case_id,
         case_state=case.state,
         cycle_id=cycle.cycle_id if cycle is not None else None,
         outbox_effect_ids=outbox_effect_ids,
-        duplicate_event=duplicate_event,
+        duplicate_event=False,
     )
 
 
@@ -412,6 +544,215 @@ def evaluate_decision_event(
 class _EvaluationResult:
     decision: IngressDecision
     issue_labels: list[str]
+
+
+def _decision_result_for_duplicate_event(
+    *,
+    session: Session,
+    existing_event: DecisionEvent,
+) -> DecisionEngineResult:
+    payload = existing_event.payload_json if isinstance(existing_event.payload_json, dict) else {}
+    snapshot = payload.get("result_snapshot") if isinstance(payload.get("result_snapshot"), dict) else {}
+    issue_labels = [
+        str(label).strip()
+        for label in snapshot.get("issue_labels", payload.get("issue_labels", []))
+        if str(label).strip()
+    ]
+    classification = str(snapshot.get("classification") or "").strip() or "clear"
+    missing_slots = _string_tuple(snapshot.get("missing_slots"))
+    auto_resolved_slots = _string_tuple(snapshot.get("auto_resolved_slots"))
+
+    case = session.get(DecisionCase, existing_event.case_id)
+    if case is None:
+        raise RuntimeError(f"Decision event {existing_event.event_id} references missing case {existing_event.case_id}")
+    cycle = session.get(DecisionCycle, existing_event.cycle_id) if existing_event.cycle_id else None
+    decision = _decision_from_snapshot(
+        snapshot=snapshot,
+        source=str(existing_event.source or "jira_webhook"),
+        classification=classification,
+        cycle=cycle,
+        case=case,
+    )
+    outbox_effect_ids = tuple(
+        str(effect.effect_id)
+        for effect in session.execute(
+            select(DecisionEffectOutbox).where(
+                DecisionEffectOutbox.case_id == case.case_id,
+                DecisionEffectOutbox.cycle_id == (cycle.cycle_id if cycle is not None else None),
+            )
+        ).scalars()
+    )
+    return DecisionEngineResult(
+        decision=decision,
+        issue_labels=issue_labels,
+        classification=classification,
+        missing_slots=list(missing_slots),
+        auto_resolved_slots=list(auto_resolved_slots),
+        case_id=case.case_id,
+        case_state=case.state,
+        cycle_id=cycle.cycle_id if cycle is not None else None,
+        outbox_effect_ids=outbox_effect_ids,
+        duplicate_event=True,
+    )
+
+
+def _decision_from_snapshot(
+    *,
+    snapshot: dict[str, Any],
+    source: str,
+    classification: str,
+    cycle: DecisionCycle | None,
+    case: DecisionCase,
+) -> IngressDecision:
+    pre_check = _deserialize_precheck_result(snapshot.get("pre_check"))
+    if pre_check is not None and cycle is not None and cycle.status == "open":
+        pre_check = _apply_frozen_cycle_to_precheck(
+            pre_check=pre_check,
+            cycle=cycle,
+            classification=classification,
+        )
+    return IngressDecision(
+        source=source,  # type: ignore[arg-type]
+        pre_check=pre_check,
+        block_reason=str(snapshot.get("block_reason") or case.blocked_reason or "").strip() or None,
+        guidance=str(snapshot.get("guidance") or "").strip() or None,
+        policy_error=str(snapshot.get("policy_error") or "").strip() or None,
+        label_actions=(),
+    )
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+def _worker_blocking_gate(
+    *,
+    pre_check: object | None,
+    classification: str,
+    block_reason: str | None,
+) -> DecisionGateResult | None:
+    if not isinstance(pre_check, PreRunCheckResult):
+        return None
+    if classification in {"decision_gate", "both"} and pre_check.decision_gate.triggered:
+        return pre_check.decision_gate
+    if classification not in {"gtd", "both"}:
+        return None
+    questions = tuple(
+        str(question).strip()
+        for question in pre_check.gtd.clarification_questions
+        if str(question).strip()
+    )
+    missing = tuple(
+        str(item).strip()
+        for item in pre_check.gtd.missing_criteria
+        if str(item).strip()
+    )
+    reason = _decision_reason(pre_check=pre_check, classification=classification) or (
+        "Good To Do details are incomplete" if block_reason == "gtd_required" else "Clarification required"
+    )
+    return DecisionGateResult(
+        triggered=True,
+        reason=reason,
+        missing_sections=missing,
+        questions=questions,
+        recommendation="Clarification required before execution.",
+        tags=(),
+    )
+
+
+def _serialize_result_snapshot(
+    *,
+    decision: IngressDecision,
+    classification: str,
+    issue_labels: list[str],
+    missing_slots: list[str],
+    auto_resolved_slots: list[str],
+) -> dict[str, object]:
+    return {
+        "classification": classification,
+        "issue_labels": [str(label).strip() for label in issue_labels if str(label).strip()],
+        "missing_slots": [str(slot).strip() for slot in missing_slots if str(slot).strip()],
+        "auto_resolved_slots": [str(slot).strip() for slot in auto_resolved_slots if str(slot).strip()],
+        "block_reason": decision.block_reason,
+        "guidance": decision.guidance,
+        "policy_error": decision.policy_error,
+        "pre_check": _serialize_precheck_result(decision.pre_check),
+    }
+
+
+def _serialize_precheck_result(pre_check: object | None) -> dict[str, object] | None:
+    if not isinstance(pre_check, PreRunCheckResult):
+        return None
+    return {
+        "outcome": pre_check.outcome,
+        "ready_label": pre_check.ready_label,
+        "ready_label_present": pre_check.ready_label_present,
+        "required_worker_capability": pre_check.required_worker_capability,
+        "required_worker_label": pre_check.required_worker_label,
+        "required_worker_label_present": pre_check.required_worker_label_present,
+        "decision_gate": {
+            "triggered": pre_check.decision_gate.triggered,
+            "reason": pre_check.decision_gate.reason,
+            "missing_sections": list(pre_check.decision_gate.missing_sections),
+            "questions": list(pre_check.decision_gate.questions),
+            "recommendation": pre_check.decision_gate.recommendation,
+            "tags": list(pre_check.decision_gate.tags),
+        },
+        "gtd": {
+            "valid": pre_check.gtd.valid,
+            "missing_criteria": list(pre_check.gtd.missing_criteria),
+            "clarification_questions": list(pre_check.gtd.clarification_questions),
+        },
+    }
+
+
+def _deserialize_precheck_result(value: object) -> PreRunCheckResult | None:
+    if not isinstance(value, dict):
+        return None
+    decision_gate_payload = value.get("decision_gate")
+    gtd_payload = value.get("gtd")
+    if not isinstance(decision_gate_payload, dict) or not isinstance(gtd_payload, dict):
+        return None
+    return PreRunCheckResult(
+        outcome=str(value.get("outcome") or "").strip(),
+        ready_label=str(value.get("ready_label") or "").strip() or None,
+        ready_label_present=bool(value.get("ready_label_present", False)),
+        required_worker_capability=str(value.get("required_worker_capability") or "").strip(),
+        required_worker_label=str(value.get("required_worker_label") or "").strip(),
+        required_worker_label_present=bool(value.get("required_worker_label_present", False)),
+        decision_gate=DecisionGateResult(
+            triggered=bool(decision_gate_payload.get("triggered")),
+            reason=str(decision_gate_payload.get("reason") or "").strip(),
+            missing_sections=_string_tuple(decision_gate_payload.get("missing_sections")),
+            questions=_string_tuple(decision_gate_payload.get("questions")),
+            recommendation=str(decision_gate_payload.get("recommendation") or "").strip(),
+            tags=_string_tuple(decision_gate_payload.get("tags")),
+        ),
+        gtd=GoodToDoValidationResult(
+            valid=bool(gtd_payload.get("valid")),
+            missing_criteria=_string_tuple(gtd_payload.get("missing_criteria")),
+            clarification_questions=_string_tuple(gtd_payload.get("clarification_questions")),
+        ),
+    )
+
+
+def _deserialize_slot_resolution(*, slot_name: str, value: object) -> SlotResolution | None:
+    if not isinstance(value, dict):
+        return None
+    slot_value = str(value.get("slot_value") or "").strip()
+    if not slot_value:
+        return None
+    citation = value.get("citation")
+    return SlotResolution(
+        slot_name=slot_name,
+        slot_value=slot_value,
+        source_timestamp=value.get("source_timestamp"),
+        confidence=float(value.get("confidence") or 0.0),
+        citation=dict(citation) if isinstance(citation, dict) else {},
+        inferred=bool(value.get("inferred", False)),
+    )
 
 
 def _evaluate_with_labels(
@@ -478,6 +819,7 @@ def _resolve_slots_before_block(
     issue_description: str | None,
     missing_slots: list[str],
     settings,  # noqa: ANN001
+    persisted_slot_answers: dict[str, SlotResolution],
 ) -> dict[str, SlotResolution]:
     effective_policy = resolve_effective_policy(
         tenant_policy=tenant.policy_config or {},
@@ -488,16 +830,19 @@ def _resolve_slots_before_block(
     if mode not in {"safe", "balanced", "aggressive"}:
         mode = "aggressive"
 
-    resolved: dict[str, SlotResolution] = {}
-    if knowledge_enabled and missing_slots:
-        resolved = resolve_missing_slots_from_knowledge(
+    resolved: dict[str, SlotResolution] = {
+        slot_name: answer for slot_name, answer in persisted_slot_answers.items() if slot_name in missing_slots
+    }
+    remaining = [slot for slot in missing_slots if slot not in resolved]
+    if knowledge_enabled and remaining:
+        kb_answers = resolve_missing_slots_from_knowledge(
             session=session,
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
-            missing_slots=missing_slots,
+            missing_slots=remaining,
             mode=mode,
         )
-
+        resolved.update(kb_answers)
     remaining = [slot for slot in missing_slots if slot not in resolved]
     if not remaining:
         return resolved
@@ -704,9 +1049,7 @@ def _persist_decision_state(
     issue_description: str | None,
     decision: IngressDecision,
     classification: str,
-    auto_resolved_slots: list[str],
-    duplicate_event: bool,
-    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None,
+    auto_resolved_answers: dict[str, SlotResolution],
 ) -> tuple[DecisionCase, DecisionCycle | None, tuple[str, ...]]:
     case = _load_or_create_case(
         session=session,
@@ -733,6 +1076,19 @@ def _persist_decision_state(
             and str(active_cycle.classification or "") == classification
         ):
             cycle = active_cycle
+            current_question_ids = {
+                str(item.get("id") or "").strip()
+                for item in question_set
+                if str(item.get("id") or "").strip()
+            }
+            if current_question_ids:
+                cycle.unresolved_question_ids_json = [
+                    question_id
+                    for question_id in cycle.unresolved_question_ids_json
+                    if question_id in current_question_ids
+                ]
+            cycle.reason = cycle.reason or reason
+            cycle.updated_at = occurred_at
         else:
             if active_cycle is not None and active_cycle.status == "open":
                 active_cycle.status = "closed"
@@ -792,63 +1148,87 @@ def _persist_decision_state(
         else None
     )
     case.ready_label_present = bool(getattr(pre_check, "ready_label_present", False)) if pre_check is not None else False
-    case.metadata_json = {
-        "auto_resolved_slots": auto_resolved_slots,
-        "duplicate_event": duplicate_event,
-    }
+    case.metadata_json = _merge_case_metadata(
+        existing_metadata=case.metadata_json,
+        auto_resolved_answers=auto_resolved_answers,
+        classification=classification,
+        issue_labels=issue_labels,
+        decision=decision,
+    )
     case.updated_at = occurred_at
 
     outbox_effect_ids: list[str] = []
-    if not duplicate_event:
-        event_row = DecisionEvent(
-            event_id=uuid4().hex,
-            idempotency_key=idempotency_key,
-            case_id=case.case_id,
-            cycle_id=cycle.cycle_id if cycle is not None else None,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id if project is not None else None,
-            issue_key=event.issue_key,
-            source=event.source,
-            event_type=str(event.event_type or "").strip() or "unspecified",
-            payload_json={
-                "issue_summary": str(event.issue_summary or "").strip(),
-                "issue_labels": issue_labels,
-            },
-            outcome_state=case_state,
-            created_at=occurred_at,
-        )
-        session.add(event_row)
+    event_row = DecisionEvent(
+        event_id=uuid4().hex,
+        idempotency_key=idempotency_key,
+        case_id=case.case_id,
+        cycle_id=cycle.cycle_id if cycle is not None else None,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id if project is not None else None,
+        issue_key=event.issue_key,
+        source=event.source,
+        event_type=str(event.event_type or "").strip() or "unspecified",
+        payload_json={
+            "issue_summary": str(event.issue_summary or "").strip(),
+            "issue_labels": issue_labels,
+            "result_snapshot": _serialize_result_snapshot(
+                decision=decision,
+                classification=classification,
+                issue_labels=issue_labels,
+                missing_slots=precheck_missing_slots(pre_check) if pre_check is not None else [],
+                auto_resolved_slots=sorted(auto_resolved_answers.keys()),
+            ),
+        },
+        outcome_state=case_state,
+        created_at=occurred_at,
+    )
+    session.add(event_row)
 
-        if cycle is not None and cycle.status == "open":
-            effect = _enqueue_or_get_effect(
-                session=session,
-                case=case,
-                cycle=cycle,
-                effect_type="jira_comment",
-                dedupe_key=f"jira-comment:{tenant.tenant_id}:{event.issue_key}:{cycle.cycle_id}",
-                payload={
-                    "comment": _build_cycle_comment(case=case, cycle=cycle),
-                },
-                now=occurred_at,
-            )
-            outbox_effect_ids.append(effect.effect_id)
-            if publish_jira_comment_fn is not None and effect.status == "pending":
-                posted, error = publish_jira_comment_fn(str(effect.payload_json.get("comment") or ""))
-                if posted:
-                    effect.status = "sent"
-                    effect.sent_at = occurred_at
-                    effect.updated_at = occurred_at
-                else:
-                    effect.status = "failed"
-                    effect.attempt_count += 1
-                    effect.last_error = error
-                    effect.updated_at = occurred_at
+    if cycle is not None and cycle.status == "open":
+        effect = _enqueue_or_get_effect(
+            session=session,
+            case=case,
+            cycle=cycle,
+            effect_type="jira_comment",
+            dedupe_key=f"jira-comment:{tenant.tenant_id}:{event.issue_key}:{cycle.cycle_id}",
+            payload={
+                "comment": _build_cycle_comment(case=case, cycle=cycle),
+            },
+            now=occurred_at,
+        )
+        outbox_effect_ids.append(effect.effect_id)
 
     session.commit()
     session.refresh(case)
     if cycle is not None:
         session.refresh(cycle)
     return case, cycle, tuple(outbox_effect_ids)
+
+
+def _publish_decision_effects(
+    *,
+    session: Session,
+    effect_ids: tuple[str, ...],
+    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]],
+    occurred_at: datetime,
+) -> None:
+    for effect_id in effect_ids:
+        effect = session.get(DecisionEffectOutbox, effect_id)
+        if effect is None or effect.status != "pending":
+            continue
+        if effect.effect_type != "jira_comment":
+            continue
+        posted, error = publish_jira_comment_fn(str(effect.payload_json.get("comment") or ""))
+        if posted:
+            effect.status = "sent"
+            effect.sent_at = occurred_at
+            effect.updated_at = occurred_at
+        else:
+            effect.status = "failed"
+            effect.attempt_count += 1
+            effect.last_error = error
+            effect.updated_at = occurred_at
+        session.commit()
 
 
 def _enqueue_or_get_effect(
@@ -944,7 +1324,80 @@ def _load_or_create_case(
     return case
 
 
+def _existing_case_for_issue(*, session: Session, tenant_id: str, issue_key: str) -> DecisionCase | None:
+    return session.execute(
+        select(DecisionCase).where(
+            DecisionCase.tenant_id == tenant_id,
+            DecisionCase.issue_key == issue_key,
+        )
+    ).scalar_one_or_none()
+
+
+def _merge_case_metadata(
+    *,
+    existing_metadata: object,
+    auto_resolved_answers: dict[str, SlotResolution],
+    classification: str,
+    issue_labels: list[str],
+    decision: IngressDecision,
+) -> dict[str, object]:
+    metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+    stored_answers = metadata.get("auto_resolved_answers")
+    resolved_answers = dict(stored_answers) if isinstance(stored_answers, dict) else {}
+    for slot_name, answer in auto_resolved_answers.items():
+        resolved_answers[slot_name] = _serialize_slot_resolution(answer)
+    metadata["auto_resolved_answers"] = resolved_answers
+    metadata["auto_resolved_slots"] = sorted(resolved_answers.keys())
+    metadata["result_snapshot"] = _serialize_result_snapshot(
+        decision=decision,
+        classification=classification,
+        issue_labels=issue_labels,
+        missing_slots=precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else [],
+        auto_resolved_slots=sorted(resolved_answers.keys()),
+    )
+    return metadata
+
+
+def _slot_resolutions_from_case(*, case: DecisionCase | None) -> dict[str, SlotResolution]:
+    if case is None or not isinstance(case.metadata_json, dict):
+        return {}
+    answers = case.metadata_json.get("auto_resolved_answers")
+    if not isinstance(answers, dict):
+        return {}
+    resolved: dict[str, SlotResolution] = {}
+    for slot_name, raw in answers.items():
+        if not isinstance(raw, dict):
+            continue
+        value = str(raw.get("slot_value") or "").strip()
+        if not value:
+            continue
+        resolved[str(slot_name)] = SlotResolution(
+            slot_name=str(slot_name),
+            slot_value=value,
+            source_timestamp=raw.get("source_timestamp"),
+            confidence=float(raw.get("confidence") or 0.0),
+            citation=dict(raw.get("citation") or {}),
+            inferred=bool(raw.get("inferred", False)),
+        )
+    return resolved
+
+
+def _serialize_slot_resolution(answer: SlotResolution) -> dict[str, object]:
+    return {
+        "slot_value": answer.slot_value,
+        "source_timestamp": answer.source_timestamp,
+        "confidence": answer.confidence,
+        "citation": dict(answer.citation),
+        "inferred": answer.inferred,
+    }
+
+
 def _build_cycle_comment(*, case: DecisionCase, cycle: DecisionCycle) -> str:
+    unresolved_ids = {
+        str(question_id).strip()
+        for question_id in cycle.unresolved_question_ids_json
+        if str(question_id).strip()
+    }
     lines = [
         f"<!-- decision-cycle:{cycle.cycle_id} -->",
         f"Decision state: `{case.state}`",
@@ -958,6 +1411,8 @@ def _build_cycle_comment(*, case: DecisionCase, cycle: DecisionCycle) -> str:
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
+            if unresolved_ids and question_id and question_id not in unresolved_ids:
+                continue
             if question_id:
                 lines.append(f"- [{question_id}] {text}")
             else:
@@ -966,15 +1421,36 @@ def _build_cycle_comment(*, case: DecisionCase, cycle: DecisionCycle) -> str:
 
 
 def _apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, classification: str) -> object:
+    unresolved_ids = {
+        str(question_id).strip()
+        for question_id in cycle.unresolved_question_ids_json
+        if str(question_id).strip()
+    }
     decision_gate_questions = [
         str(item.get("text") or "").strip()
         for item in cycle.question_set_json
-        if str(item.get("kind") or "").strip() == _QUESTION_KIND_DG and str(item.get("text") or "").strip()
+        if (
+            str(item.get("kind") or "").strip() == _QUESTION_KIND_DG
+            and str(item.get("text") or "").strip()
+            and (
+                not unresolved_ids
+                or not str(item.get("id") or "").strip()
+                or str(item.get("id") or "").strip() in unresolved_ids
+            )
+        )
     ]
     gtd_questions = [
         str(item.get("text") or "").strip()
         for item in cycle.question_set_json
-        if str(item.get("kind") or "").strip() == _QUESTION_KIND_GTD and str(item.get("text") or "").strip()
+        if (
+            str(item.get("kind") or "").strip() == _QUESTION_KIND_GTD
+            and str(item.get("text") or "").strip()
+            and (
+                not unresolved_ids
+                or not str(item.get("id") or "").strip()
+                or str(item.get("id") or "").strip() in unresolved_ids
+            )
+        )
     ]
     resolved = pre_check
     decision_gate = getattr(resolved, "decision_gate", None)

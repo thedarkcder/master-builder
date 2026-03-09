@@ -11,6 +11,8 @@ from orchestrator.core.agent_observability import (
     reset_agent_observability_for_tests,
 )
 from orchestrator.core.runs import enqueue_run
+from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.workflow.runner import (
     PmPlan,
     WorkflowDiagnostics,
@@ -24,33 +26,59 @@ from orchestrator.worker import process_next_queued_run
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
 
-def _evaluate_decision_gate_test_stub(
+def _evaluate_pre_run_check_test_stub(
     *,
     issue_summary: str | None = None,
     issue_description: str | None = None,
     **_: object,
-) -> DecisionGateResult:
+) -> PreRunCheckResult:
     summary = (issue_summary or "").lower()
     description = (issue_description or "").lower()
     if "unclear requirements" in summary or "tbd:" in description:
-        return DecisionGateResult(
-            triggered=True,
-            reason="Decision Gate required.",
-            missing_sections=("Objective", "Scope"),
-            questions=(
-                "What is the objective?",
-                "What is in scope?",
+        return PreRunCheckResult(
+            outcome="decision_gate_required",
+            ready_label="agent:ready",
+            ready_label_present=True,
+            required_worker_capability="linux",
+            required_worker_label="worker:linux",
+            required_worker_label_present=True,
+            decision_gate=DecisionGateResult(
+                triggered=True,
+                reason="Decision Gate required.",
+                missing_sections=("Objective", "Scope"),
+                questions=(
+                    "What is the objective?",
+                    "What is in scope?",
+                ),
+                recommendation="Decision required before build",
+                tags=("[NEEDS-PM]",),
             ),
-            recommendation="Decision required before build",
-            tags=("[NEEDS-PM]",),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
         )
-    return DecisionGateResult(
-        triggered=False,
-        reason="Decision Gate not required",
-        missing_sections=(),
-        questions=(),
-        recommendation="Proceed",
-        tags=(),
+    return PreRunCheckResult(
+        outcome="ready_for_agent",
+        ready_label="agent:ready",
+        ready_label_present=True,
+        required_worker_capability="linux",
+        required_worker_label="worker:linux",
+        required_worker_label_present=True,
+        decision_gate=DecisionGateResult(
+            triggered=False,
+            reason="Decision Gate not required",
+            missing_sections=(),
+            questions=(),
+            recommendation="Proceed",
+            tags=(),
+        ),
+        gtd=GoodToDoValidationResult(
+            valid=True,
+            missing_criteria=(),
+            clarification_questions=(),
+        ),
     )
 
 
@@ -147,8 +175,8 @@ class WorkerWorkflowTests(unittest.TestCase):
         )
         self.checkout_mock = self.checkout_patcher.start()
         self.decision_gate_patcher = patch(
-            "orchestrator.core.worker.execution_service.evaluate_decision_gate",
-            new=_evaluate_decision_gate_test_stub,
+            "orchestrator.core.worker.execution_service.evaluate_pre_run_check",
+            new=_evaluate_pre_run_check_test_stub,
         )
         self.decision_gate_patcher.start()
         self._create_tenant()
@@ -367,14 +395,27 @@ class WorkerWorkflowTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.core.worker.execution_service.evaluate_decision_gate",
-                return_value=DecisionGateResult(
-                    triggered=True,
-                    reason="Ambiguous requirements and unclear dependencies",
-                    missing_sections=(),
-                    questions=("What is the acceptance criteria?",),
-                    recommendation="Add clarification questions in Jira and clarify scope.",
-                    tags=("gtd",),
+                "orchestrator.core.worker.execution_service.evaluate_pre_run_check",
+                return_value=PreRunCheckResult(
+                    outcome="decision_gate_required",
+                    ready_label="agent:ready",
+                    ready_label_present=True,
+                    required_worker_capability="linux",
+                    required_worker_label="worker:linux",
+                    required_worker_label_present=True,
+                    decision_gate=DecisionGateResult(
+                        triggered=True,
+                        reason="Ambiguous requirements and unclear dependencies",
+                        missing_sections=(),
+                        questions=("What is the acceptance criteria?",),
+                        recommendation="Add clarification questions in Jira and clarify scope.",
+                        tags=("gtd",),
+                    ),
+                    gtd=GoodToDoValidationResult(
+                        valid=True,
+                        missing_criteria=(),
+                        clarification_questions=(),
+                    ),
                 ),
             ),
             self.session_factory() as session,

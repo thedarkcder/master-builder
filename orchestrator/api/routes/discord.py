@@ -92,7 +92,6 @@ from orchestrator.core.communications.command_pipeline import (
 )
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_gate import evaluate_decision_gate
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -837,10 +836,8 @@ def execute_tenant_command_ingress(
         settings_factory_fn=get_settings,
         build_codex_runtime_fn=build_codex_runtime,
         tenant_jira_oauth_context_fn=_tenant_jira_oauth_context,
-        evaluate_decision_gate_fn=evaluate_decision_gate,
         ensure_issue_is_executable_fn=_ensure_issue_is_executable,
         resolve_codex_working_dir_fn=_resolve_codex_working_dir,
-        search_issues_for_tenant_fn=_search_jira_issues_for_tenant,
     )
     return _execute_tenant_command_ingress(
         tenant_id=tenant_id,

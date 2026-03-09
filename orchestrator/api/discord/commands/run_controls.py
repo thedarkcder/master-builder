@@ -38,8 +38,6 @@ logger = logging.getLogger(__name__)
 
 DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
 DECISION_GATE_BLOCK_END = "<!-- decision-gate-clarifications:end -->"
-PRECHECK_BOARD_BLOCK_START = "<!-- precheck-board-context:start -->"
-PRECHECK_BOARD_BLOCK_END = "<!-- precheck-board-context:end -->"
 KNOWLEDGE_AUTOFILL_BLOCK_START = "<!-- knowledge-autofill:start -->"
 KNOWLEDGE_AUTOFILL_BLOCK_END = "<!-- knowledge-autofill:end -->"
 
@@ -223,52 +221,6 @@ def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides:
     return enabled, mode
 
 
-def _build_board_context_block(
-    *,
-    issue_key: str,
-    project_key: str,
-    issues: list[Any],
-) -> str:
-    status_counts: dict[str, int] = {}
-    lines: list[str] = []
-    for issue in issues:
-        key = str(getattr(issue, "key", "") or "").strip().upper()
-        if not key or key == issue_key:
-            continue
-        summary = str(getattr(issue, "summary", "") or "").strip()
-        status_name = str(getattr(issue, "status", "") or "").strip() or "Unknown"
-        status_counts[status_name] = status_counts.get(status_name, 0) + 1
-        lines.append(f"- {key} [{status_name}] {summary}")
-        if len(lines) >= 12:
-            break
-    if not lines:
-        return ""
-    counts = ", ".join(f"{name}={count}" for name, count in sorted(status_counts.items(), key=lambda item: item[0].lower()))
-    block_lines = [
-        PRECHECK_BOARD_BLOCK_START,
-        f"## Board Context ({project_key})",
-        "Recent related tickets in this project:",
-        *lines,
-        f"Status counts: {counts}",
-        PRECHECK_BOARD_BLOCK_END,
-    ]
-    return "\n".join(block_lines)
-
-
-def _build_precheck_description(
-    *,
-    issue_description: str | None,
-    issue_key: str,
-    project_key: str,
-    search_issues_for_tenant: Callable[..., Any],
-    session: Session,
-    tenant: Tenant,
-) -> str | None:
-    _ = (issue_key, project_key, search_issues_for_tenant, session, tenant)
-    # Keep precheck deterministic against canonical ticket content.
-    return issue_description
-
-
 def _persist_precheck_questions_block(
     *,
     oauth_client,  # noqa: ANN001
@@ -407,10 +359,8 @@ def dispatch_run_control_command(
     settings_factory: Callable[[], Any],
     build_codex_runtime: Callable[..., Any],
     tenant_jira_oauth_context: Callable[..., Any],
-    evaluate_decision_gate: Callable[..., Any],
     ensure_issue_is_executable: Callable[..., Any],
     resolve_codex_working_dir: Callable[..., str],
-    search_issues_for_tenant: Callable[..., Any],
 ) -> DiscordCommandResponse | None:
     if command_name == "run":
         if len(arguments) != 1:
@@ -445,14 +395,6 @@ def dispatch_run_control_command(
         except HTTPException:
             issue_description = None
             issue_labels = None
-        precheck_description = _build_precheck_description(
-            issue_description=issue_description,
-            issue_key=issue_key,
-            project_key=project.jira_project_key,
-            search_issues_for_tenant=search_issues_for_tenant,
-            session=session,
-            tenant=tenant,
-        )
         decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
             tenant=tenant,
@@ -460,7 +402,7 @@ def dispatch_run_control_command(
             source="discord_run",
             issue_key=issue_key,
             issue_summary=issue_preview.summary,
-            issue_description=precheck_description,
+            issue_description=issue_description,
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
@@ -606,14 +548,6 @@ def dispatch_run_control_command(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Issue {run.issue_key} is outside the mapped project scope",
             )
-        precheck_description = _build_precheck_description(
-            issue_description=issue_description,
-            issue_key=run.issue_key,
-            project_key=project.jira_project_key,
-            search_issues_for_tenant=search_issues_for_tenant,
-            session=session,
-            tenant=tenant,
-        )
         decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
             tenant=tenant,
@@ -621,7 +555,7 @@ def dispatch_run_control_command(
             source="discord_retry",
             issue_key=run.issue_key,
             issue_summary=issue_preview.summary,
-            issue_description=precheck_description,
+            issue_description=issue_description,
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
@@ -784,14 +718,6 @@ def dispatch_run_control_command(
                 detail=f"Failed to update Jira context for `{issue_key}`: {exc}",
             ) from exc
 
-        precheck_description = _build_precheck_description(
-            issue_description=updated_description,
-            issue_key=issue_key,
-            project_key=project.jira_project_key,
-            search_issues_for_tenant=search_issues_for_tenant,
-            session=session,
-            tenant=tenant,
-        )
         decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
             tenant=tenant,
@@ -799,7 +725,7 @@ def dispatch_run_control_command(
             source="discord_reply",
             issue_key=issue_key,
             issue_summary=updated_summary,
-            issue_description=precheck_description,
+            issue_description=updated_description,
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
@@ -934,10 +860,8 @@ def dispatch_run_control_command(
                 settings_factory=settings_factory,
                 build_codex_runtime=build_codex_runtime,
                 tenant_jira_oauth_context=tenant_jira_oauth_context,
-                evaluate_decision_gate=evaluate_decision_gate,
                 ensure_issue_is_executable=ensure_issue_is_executable,
                 resolve_codex_working_dir=resolve_codex_working_dir,
-                search_issues_for_tenant=search_issues_for_tenant,
             )
 
         # Pre-run clarification path: no retryable run exists yet, so queue initial run.
@@ -956,10 +880,8 @@ def dispatch_run_control_command(
             settings_factory=settings_factory,
             build_codex_runtime=build_codex_runtime,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
-            evaluate_decision_gate=evaluate_decision_gate,
             ensure_issue_is_executable=ensure_issue_is_executable,
             resolve_codex_working_dir=resolve_codex_working_dir,
-            search_issues_for_tenant=search_issues_for_tenant,
         )
 
     return None

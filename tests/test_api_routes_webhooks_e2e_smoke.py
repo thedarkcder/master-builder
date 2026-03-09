@@ -129,7 +129,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin.ensure_project_checkout",
+                "orchestrator.api.admin.route_helpers.ensure_project_checkout",
                 return_value=None,
             )
         )

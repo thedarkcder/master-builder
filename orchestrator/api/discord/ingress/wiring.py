@@ -37,10 +37,8 @@ def build_discord_ingress_dependencies(
     settings_factory_fn,
     build_codex_runtime_fn,
     tenant_jira_oauth_context_fn,
-    evaluate_decision_gate_fn,
     ensure_issue_is_executable_fn,
     resolve_codex_working_dir_fn,
-    search_issues_for_tenant_fn,
 ):  # noqa: ANN001
     handlers = DiscordIngressHandlers(
         simple=lambda ctx: dispatch_simple_discord_command(
@@ -127,10 +125,8 @@ def build_discord_ingress_dependencies(
             settings_factory=settings_factory_fn,
             build_codex_runtime=build_codex_runtime_fn,
             tenant_jira_oauth_context=tenant_jira_oauth_context_fn,
-            evaluate_decision_gate=evaluate_decision_gate_fn,
             ensure_issue_is_executable=ensure_issue_is_executable_fn,
             resolve_codex_working_dir=resolve_codex_working_dir_fn,
-            search_issues_for_tenant=search_issues_for_tenant_fn,
         ),
     )
     return DiscordIngressDependencies(

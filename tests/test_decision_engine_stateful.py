@@ -12,7 +12,7 @@ from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import DecisionEvent, Project, Tenant
+from orchestrator.storage.models import DecisionCase, DecisionEffectOutbox, DecisionEvent, Project, Tenant
 
 
 def _precheck_result(
@@ -213,6 +213,122 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         self.assertFalse(first.duplicate_event)
         self.assertTrue(second.duplicate_event)
         self.assertEqual(event_count, 1)
+
+    def test_duplicate_event_does_not_mutate_existing_case_state(self) -> None:
+        prechecks = [
+            _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Need owner",
+                decision_gate_questions=("Who owns this?",),
+                decision_gate_missing_sections=("decision owner",),
+            ),
+            _precheck_result(outcome="ready_for_agent"),
+        ]
+
+        def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
+            return prechecks.pop(0)
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="dup-state",
+                    issue_key="MAB-164",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            case_before = session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
+            updated_at_before = case_before.updated_at
+
+            second = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="dup-state",
+                    issue_key="MAB-164",
+                    issue_summary="Summary changed",
+                    issue_description="Changed Description",
+                    issue_labels=["agent:ready"],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            case_after = session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
+
+        self.assertEqual(first.case_state, "blocked_decision_gate")
+        self.assertTrue(second.duplicate_event)
+        self.assertEqual(second.case_state, "blocked_decision_gate")
+        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("Who owns this?",))
+        self.assertEqual(case_after.updated_at, updated_at_before)
+
+    def test_jira_comment_effect_is_published_after_state_commit(self) -> None:
+        precheck = _precheck_result(
+            outcome="decision_gate_required",
+            decision_gate_triggered=True,
+            decision_gate_reason="Need owner decision",
+            decision_gate_questions=("Who owns this decision?",),
+            decision_gate_missing_sections=("decision owner",),
+        )
+        observed_state: dict[str, object] = {}
+
+        def _publish(comment: str) -> tuple[bool, str | None]:
+            with self.session_factory() as verify_session:
+                case = verify_session.query(DecisionCase).filter_by(issue_key="MAB-165").one()
+                effect = verify_session.query(DecisionEffectOutbox).filter_by(issue_key="MAB-165").one()
+                observed_state["case_state"] = case.state
+                observed_state["effect_status"] = effect.status
+            observed_state["comment"] = comment
+            return True, None
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            result = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="effect-1",
+                    issue_key="MAB-165",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                publish_jira_comment_fn=_publish,
+                evaluate_pre_run_check_fn=lambda **__: precheck,
+            )
+
+            effect = session.query(DecisionEffectOutbox).filter_by(issue_key="MAB-165").one()
+
+        self.assertEqual(result.case_state, "blocked_decision_gate")
+        self.assertEqual(observed_state["case_state"], "blocked_decision_gate")
+        self.assertEqual(observed_state["effect_status"], "pending")
+        self.assertIn("Who owns this decision?", str(observed_state["comment"]))
+        self.assertEqual(effect.status, "sent")
 
     def test_resolves_before_block_when_knowledge_answers_missing_slot(self) -> None:
         def _stub_precheck(**kwargs: object) -> PreRunCheckResult:

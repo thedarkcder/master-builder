@@ -2,6 +2,10 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from orchestrator.core.decision_engine import DecisionEngineResult
+from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.storage.models import JiraOAuthConnection
 
@@ -39,27 +43,56 @@ def _run() -> SimpleNamespace:
     )
 
 
+def _engine_result(
+    *,
+    outcome: str,
+    policy_error: str | None = None,
+    decision_gate_reason: str = "Decision Gate not required",
+    decision_gate_questions: tuple[str, ...] = (),
+) -> DecisionEngineResult:
+    return DecisionEngineResult(
+        decision=SimpleNamespace(
+            pre_check=PreRunCheckResult(
+                outcome=outcome,
+                ready_label="agent:ready",
+                ready_label_present=True,
+                required_worker_capability="linux",
+                required_worker_label="worker:linux",
+                required_worker_label_present=True,
+                decision_gate=DecisionGateResult(
+                    triggered=outcome == "decision_gate_required",
+                    reason=decision_gate_reason,
+                    missing_sections=(),
+                    questions=decision_gate_questions,
+                    recommendation="Clarification required" if outcome == "decision_gate_required" else "Proceed",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=outcome != "gtd_required",
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
+            ),
+            block_reason=outcome if outcome in {"decision_gate_required", "gtd_required"} else None,
+            guidance=None,
+            policy_error=policy_error,
+        ),
+        issue_labels=[],
+        classification="decision_gate" if outcome == "decision_gate_required" else "clear",
+        missing_slots=[],
+        auto_resolved_slots=[],
+        case_id="case-1",
+        case_state="blocked_decision_gate" if outcome == "decision_gate_required" else "clear",
+        cycle_id="cycle-1" if outcome == "decision_gate_required" else None,
+        outbox_effect_ids=(),
+        duplicate_event=False,
+    )
+
+
 def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
     session = _Session()
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1")
-
-    def _raise_rules_missing(
-        *,
-        tenant_id: str,
-        project_id: str | None,
-        issue_key: str,
-        run_id: str,
-        issue_summary: str,
-        issue_description: str,
-    ):  # noqa: ANN202
-        assert tenant_id == run.tenant_id
-        assert project_id == run.project_id
-        assert issue_key == run.issue_key
-        assert run_id == run.run_id
-        assert issue_summary == run.issue_summary
-        assert issue_description == run.issue_description
-        raise ValueError("rules missing")
 
     def _send_discord_message(
         *,
@@ -81,18 +114,25 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
         _ = session, tenant, issue_key, stage, message, settings
         return None
 
-    terminal, meta = apply_decision_gate(
-        session=session,
-        run=run,
-        tenant=tenant,
-        settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-        evaluate_decision_gate_fn=_raise_rules_missing,
-        send_discord_message_fn=_send_discord_message,
-        send_jira_message_fn=_send_jira_message,
-        ask_reply_components_fn=lambda: [],
-        blocked_status="blocked",
-        failed_status="failed",
-    )
+    with patch(
+        "orchestrator.core.worker.decision_gate.evaluate_decision_event",
+        return_value=_engine_result(outcome="clear", policy_error="rules missing"),
+    ), patch(
+        "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+        return_value=None,
+    ):
+        terminal, meta = apply_decision_gate(
+            session=session,
+            run=run,
+            tenant=tenant,
+            settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
+            tenant_jira_oauth_context_fn=lambda **_: None,
+            send_discord_message_fn=_send_discord_message,
+            send_jira_message_fn=_send_jira_message,
+            ask_reply_components_fn=lambda: [],
+            blocked_status="blocked",
+            failed_status="failed",
+        )
 
     assert terminal is run
     assert meta is None
@@ -105,25 +145,6 @@ def test_apply_decision_gate_returns_none_when_not_triggered() -> None:
     session = _Session()
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1")
-    result = SimpleNamespace(triggered=False)
-
-    def _evaluate(
-        *,
-        tenant_id: str,
-        project_id: str | None,
-        issue_key: str,
-        run_id: str,
-        issue_summary: str,
-        issue_description: str,
-    ):  # noqa: ANN202
-        assert tenant_id == run.tenant_id
-        assert project_id == run.project_id
-        assert issue_key == run.issue_key
-        assert run_id == run.run_id
-        assert issue_summary == run.issue_summary
-        assert issue_description == run.issue_description
-        return result
-
     def _send_discord_message(
         *,
         session,
@@ -144,18 +165,25 @@ def test_apply_decision_gate_returns_none_when_not_triggered() -> None:
         _ = session, tenant, issue_key, stage, message, settings
         return None
 
-    terminal, meta = apply_decision_gate(
-        session=session,
-        run=run,
-        tenant=tenant,
-        settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-        evaluate_decision_gate_fn=_evaluate,
-        send_discord_message_fn=_send_discord_message,
-        send_jira_message_fn=_send_jira_message,
-        ask_reply_components_fn=lambda: [],
-        blocked_status="blocked",
-        failed_status="failed",
-    )
+    with patch(
+        "orchestrator.core.worker.decision_gate.evaluate_decision_event",
+        return_value=_engine_result(outcome="ready_for_agent"),
+    ), patch(
+        "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+        return_value=None,
+    ):
+        terminal, meta = apply_decision_gate(
+            session=session,
+            run=run,
+            tenant=tenant,
+            settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
+            tenant_jira_oauth_context_fn=lambda **_: None,
+            send_discord_message_fn=_send_discord_message,
+            send_jira_message_fn=_send_jira_message,
+            ask_reply_components_fn=lambda: [],
+            blocked_status="blocked",
+            failed_status="failed",
+        )
     assert terminal is None
     assert meta is None
 
@@ -170,12 +198,6 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
     session = _TriggeredSession()
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"connection_id": "conn-1"})
-    decision_gate = SimpleNamespace(
-        triggered=True,
-        reason="Need PM clarity",
-        questions=["What is in scope?"],
-        to_payload=lambda: {"triggered": True},
-    )
     sent_discord_messages: list[str] = []
 
     def _send_discord_message_fn(
@@ -199,24 +221,15 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
         _ = session, tenant, issue_key, stage, message, settings
         return None
 
-    def _evaluate(
-        *,
-        tenant_id: str,
-        project_id: str | None,
-        issue_key: str,
-        run_id: str,
-        issue_summary: str,
-        issue_description: str,
-    ):  # noqa: ANN202
-        assert tenant_id == run.tenant_id
-        assert project_id == run.project_id
-        assert issue_key == run.issue_key
-        assert run_id == run.run_id
-        assert issue_summary == run.issue_summary
-        assert issue_description == run.issue_description
-        return decision_gate
-
     with (
+        patch(
+            "orchestrator.core.worker.decision_gate.evaluate_decision_event",
+            return_value=_engine_result(
+                outcome="decision_gate_required",
+                decision_gate_reason="Need PM clarity",
+                decision_gate_questions=("What is in scope?",),
+            ),
+        ),
         patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None),
         patch("orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run),
     ):
@@ -225,7 +238,7 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            evaluate_decision_gate_fn=_evaluate,
+            tenant_jira_oauth_context_fn=lambda **_: None,
             send_discord_message_fn=_send_discord_message_fn,
             send_jira_message_fn=_send_jira_message,
             ask_reply_components_fn=lambda: [],
