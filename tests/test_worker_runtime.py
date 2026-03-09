@@ -129,7 +129,7 @@ class RuntimeFactoryTests(unittest.TestCase):
         with (
             patch("orchestrator.core.worker.runtime_factory.get_settings", return_value=settings) as settings_mock,
             patch("orchestrator.core.worker.runtime_factory.build_codex_runtime", return_value=MagicMock()) as runtime_mock,
-            patch("orchestrator.core.worker.runtime_factory.CodexWorkflowAgents", return_value=MagicMock()) as agents_mock,
+            patch("orchestrator.core.worker.runtime_factory.OneShotWorkflowExecutor", return_value=MagicMock()) as agents_mock,
             patch("orchestrator.core.worker.runtime_factory.WorkflowRunner", return_value=MagicMock()) as runner_mock,
         ):
             runner = build_workflow_runner_for_session(session=session)

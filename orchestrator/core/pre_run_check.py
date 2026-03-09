@@ -42,6 +42,27 @@ class PreRunCheckResult:
     def gtd_clarification_questions(self) -> tuple[str, ...]:
         return self.gtd.clarification_questions
 
+    @property
+    def ready_label_missing(self) -> bool:
+        return bool(self.ready_label and not self.ready_label_present)
+
+    def with_ready_label_present(self) -> PreRunCheckResult:
+        if not self.ready_label_missing:
+            return self
+        outcome = self.outcome
+        if outcome == "missing_ready_label":
+            outcome = "ready_for_agent"
+        return PreRunCheckResult(
+            outcome=outcome,
+            ready_label=self.ready_label,
+            ready_label_present=True,
+            required_worker_capability=self.required_worker_capability,
+            required_worker_label=self.required_worker_label,
+            required_worker_label_present=self.required_worker_label_present,
+            decision_gate=self.decision_gate,
+            gtd=self.gtd,
+        )
+
 
 def evaluate_pre_run_check(
     *,

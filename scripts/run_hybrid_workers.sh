@@ -40,6 +40,27 @@ echo "Installing/updating Python dependencies in ${VENV_DIR}..."
 "${VENV_DIR}/bin/python" -m pip install --upgrade pip
 "${VENV_DIR}/bin/pip" install -e .
 
+UI_PID=""
+cleanup() {
+  if [[ -n "${UI_PID}" ]] && kill -0 "${UI_PID}" >/dev/null 2>&1; then
+    echo "Stopping local admin UI (pid=${UI_PID})..."
+    kill "${UI_PID}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+if command -v npm >/dev/null 2>&1 && [[ -f "${ROOT_DIR}/admin-ui/package.json" ]]; then
+  echo "Starting local admin UI with npm run dev (admin-ui)..."
+  (
+    cd "${ROOT_DIR}/admin-ui"
+    npm run dev
+  ) &
+  UI_PID="$!"
+  echo "Local admin UI started (pid=${UI_PID})"
+else
+  echo "Skipping local admin UI startup (npm or admin-ui/package.json not found)."
+fi
+
 echo "Hybrid worker mode started."
 echo "Docker worker capability: linux (container)"
 echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"

@@ -47,6 +47,11 @@ def test_ensure_project_checkout_clones_when_repo_missing() -> None:
         assert calls[1][0][:3] == ("remote", "set-url", "origin")
         assert (repo_dir / "AGENTS.md").exists()
         assert (repo_dir / ".codex").is_dir()
+        copied_codex_config = (repo_dir / ".codex" / "config.toml").read_text(encoding="utf-8")
+        assert "[mcp_servers.jira_master_builder]" in copied_codex_config
+        assert "[mcp_servers.jira_bsktpay]" in copied_codex_config
+        assert "enabled = true" not in copied_codex_config
+        assert copied_codex_config.count("enabled = false") >= 2
         assert (repo_dir / ".gitignore").exists()
         gitignore_content = (repo_dir / ".gitignore").read_text(encoding="utf-8")
         assert "Seeded by Master Builder" in gitignore_content

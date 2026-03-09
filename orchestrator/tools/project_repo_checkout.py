@@ -56,6 +56,11 @@ out/
 *.class
 """
 
+_MCP_SERVER_DISABLED_LINES = (
+    ("jira_master_builder", 'enabled = false'),
+    ("jira_bsktpay", 'enabled = false'),
+)
+
 
 def _repo_full_name(repository_url: str) -> str:
     normalized = normalize_repo_identifier(repository_url)
@@ -145,6 +150,7 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
 
     if codex_src.exists() and codex_src.is_dir():
         shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
+        _disable_jira_mcp_servers_in_project_codex(repo_dir=repo_dir)
 
     gitignore_path = repo_dir / ".gitignore"
     if not gitignore_path.exists():
@@ -167,6 +173,36 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
         prefix = "\n" if exclude_path.exists() and exclude_path.read_text(encoding="utf-8") else ""
         with exclude_path.open("a", encoding="utf-8") as handle:
             handle.write(prefix + "\n".join(missing_lines) + "\n")
+
+
+def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:
+    config_path = repo_dir / ".codex" / "config.toml"
+    if not config_path.exists():
+        return
+    raw = config_path.read_text(encoding="utf-8")
+    updated = raw
+    for server_name, enabled_line in _MCP_SERVER_DISABLED_LINES:
+        section_pattern = (
+            rf"(?ms)(^\[mcp_servers\.{re.escape(server_name)}\]\s*$.*?)(^\[|\Z)"
+        )
+        section_match = re.search(section_pattern, updated)
+        if section_match is None:
+            continue
+        section_body = section_match.group(1)
+        if re.search(r"(?m)^\s*enabled\s*=\s*(true|false)\s*$", section_body):
+            section_body = re.sub(
+                r"(?m)^\s*enabled\s*=\s*(true|false)\s*$",
+                enabled_line,
+                section_body,
+                count=1,
+            )
+        else:
+            if not section_body.endswith("\n"):
+                section_body += "\n"
+            section_body += f"{enabled_line}\n"
+        updated = f"{updated[:section_match.start(1)]}{section_body}{updated[section_match.end(1):]}"
+    if updated != raw:
+        config_path.write_text(updated, encoding="utf-8")
 
 
 def ensure_project_checkout(

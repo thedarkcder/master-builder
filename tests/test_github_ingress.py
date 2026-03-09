@@ -35,6 +35,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             "github_client_from_tenant_config": MagicMock(return_value=MagicMock()),
             "ReviewAgentGate": MagicMock(),
             "send_tenant_discord_message": MagicMock(),
+            "enqueue_pr_remediation_if_needed": MagicMock(return_value=None),
             "resolve_scoped_secret_ref": MagicMock(return_value="secret"),
             "_validate_github_webhook_signature": MagicMock(),
         }

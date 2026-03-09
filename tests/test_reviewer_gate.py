@@ -31,6 +31,10 @@ class _FakeGitHubClient:
             number=pr_number,
             html_url=f"https://github.com/{repo_full_name}/pull/{pr_number}",
             head_sha="abc123",
+            title=f"PR {pr_number}",
+            state="open",
+            head_ref="feature/test",
+            base_ref="main",
             body=self._review_body,
         )
 

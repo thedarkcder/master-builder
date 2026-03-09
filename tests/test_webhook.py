@@ -360,6 +360,58 @@ class JiraWebhookTests(unittest.TestCase):
             labels=["worker:macos"],
         )
 
+    def test_webhook_applies_ready_label_when_precheck_reports_missing(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-140", status_name="To Do", labels=["worker:linux"])
+        oauth_client = MagicMock()
+        oauth_context = SimpleNamespace(
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1"),
+            client=oauth_client,
+        )
+        missing_ready_decision_gate = PreRunCheckResult(
+            outcome="decision_gate_required",
+            ready_label="agent:ready",
+            ready_label_present=False,
+            required_worker_capability="linux",
+            required_worker_label="worker:linux",
+            required_worker_label_present=True,
+            decision_gate=DecisionGateResult(
+                triggered=True,
+                reason="Missing GTD sections",
+                missing_sections=(),
+                questions=(),
+                recommendation="Decision required before build",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.jira_ingress.tenant_jira_oauth_context",
+                return_value=oauth_context,
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_ingress.evaluate_pre_run_check",
+                return_value=missing_ready_decision_gate,
+            ),
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enqueued"])
+        self.assertEqual(response.json()["reason"], "decision_gate_required")
+        oauth_client.add_issue_labels.assert_called_once_with(
+            access_token="tok",
+            cloud_id="cloud-1",
+            issue_id_or_key="TP-140",
+            labels=["agent:ready"],
+        )
+
     def test_webhook_does_not_enqueue_when_issue_is_not_on_configured_board(self) -> None:
         with self.session_factory() as session:
             project = session.execute(
