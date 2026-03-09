@@ -17,15 +17,14 @@ from orchestrator.core.communications.enqueue_reason_contract import (
     enqueue_reason_guidance,
     format_enqueue_conflict_detail,
 )
-from orchestrator.core.decision_engine import DecisionSource, IngressDecision, evaluate_ingress_precheck
-from orchestrator.core.knowledge_base import resolve_missing_slots_from_knowledge
-from orchestrator.core.label_action_service import apply_issue_label_actions
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.precheck_decision import (
-    build_precheck_message,
-    precheck_classification,
-    precheck_missing_slots,
+from orchestrator.core.decision_engine import (
+    DecisionEngineResult,
+    DecisionEventInput,
+    DecisionSource,
+    evaluate_decision_event,
 )
+from orchestrator.core.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.precheck_question_lock import (
     build_precheck_questions_block,
     remove_precheck_questions_block,
@@ -64,37 +63,27 @@ def _evaluate_precheck_decision_with_labels(
     settings_factory: Callable[[], Any],
     tenant_jira_oauth_context: Callable[..., Any],
     oauth_context: Any | None = None,
-) -> tuple[IngressDecision, list[str] | None]:
-    decision: IngressDecision = evaluate_ingress_precheck(
-        source=source,
-        tenant_id=tenant.tenant_id,
-        project_id=getattr(project, "project_id", None),
-        issue_key=issue_key,
-        issue_summary=issue_summary,
-        issue_description=issue_description,
-        issue_labels=issue_labels,
-        ready_label=(tenant.jira_config or {}).get("ready_label"),
-        evaluate_pre_run_check_fn=evaluate_pre_run_check,
-    )
-    if decision.pre_check is None:
-        return decision, issue_labels
-    apply_result = apply_issue_label_actions(
+) -> DecisionEngineResult:
+    settings = settings_factory()
+    return evaluate_decision_event(
         session=session,
         tenant=tenant,
-        project_policy_overrides=getattr(project, "policy_overrides", {}) or {},
-        issue_key=issue_key,
-        existing_labels=issue_labels,
-        actions=decision.label_actions,
-        settings=settings_factory(),
+        project=project,
+        event=DecisionEventInput(
+            source=source,
+            event_type=f"discord_{source}",
+            idempotency_key=None,
+            issue_key=issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            issue_labels=issue_labels,
+        ),
+        settings=settings,
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
         oauth_context=oauth_context,
-        logger=logger,
+        publish_jira_comment_fn=None,
+        evaluate_pre_run_check_fn=evaluate_pre_run_check,
     )
-    normalized_labels = [str(label).strip() for label in (issue_labels or []) if str(label).strip()]
-    for label in apply_result.applied_labels:
-        if label.casefold() not in {item.casefold() for item in normalized_labels}:
-            normalized_labels.append(label)
-    return decision.with_applied_labels(list(apply_result.applied_labels)), normalized_labels
 
 
 def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, questions: list[str]) -> str:
@@ -464,7 +453,7 @@ def dispatch_run_control_command(
             session=session,
             tenant=tenant,
         )
-        precheck_decision, issue_labels = _evaluate_precheck_decision_with_labels(
+        decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
             tenant=tenant,
             project=project,
@@ -476,6 +465,7 @@ def dispatch_run_control_command(
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
         )
+        precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -624,7 +614,7 @@ def dispatch_run_control_command(
             session=session,
             tenant=tenant,
         )
-        precheck_decision, issue_labels = _evaluate_precheck_decision_with_labels(
+        decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
             tenant=tenant,
             project=project,
@@ -636,6 +626,7 @@ def dispatch_run_control_command(
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
         )
+        precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -801,7 +792,7 @@ def dispatch_run_control_command(
             session=session,
             tenant=tenant,
         )
-        precheck_decision, issue_labels = _evaluate_precheck_decision_with_labels(
+        decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
             tenant=tenant,
             project=project,
@@ -814,6 +805,7 @@ def dispatch_run_control_command(
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             oauth_context=oauth,
         )
+        precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
             return DiscordCommandResponse(
                 ok=True,
@@ -826,72 +818,9 @@ def dispatch_run_control_command(
                 },
             )
         pre_check = precheck_decision.pre_check
-        classification = precheck_classification(pre_check)
-        missing_slots = precheck_missing_slots(pre_check)
-        auto_resolved_slots: list[str] = []
-
-        knowledge_enabled, knowledge_mode = _is_knowledge_enabled_for_project(
-            tenant_policy=tenant.policy_config or {},
-            project_overrides=getattr(project, "policy_overrides", {}) or {},
-        )
-        if classification != "clear" and knowledge_enabled and missing_slots:
-            slot_answers = resolve_missing_slots_from_knowledge(
-                session=session,
-                tenant_id=tenant.tenant_id,
-                project_id=project.project_id,
-                missing_slots=missing_slots,
-                mode=knowledge_mode,
-            )
-            if slot_answers:
-                auto_resolved_slots = sorted(slot_answers.keys())
-                updated_description = _upsert_block(
-                    current_description=str(updated_description or ""),
-                    block=_build_knowledge_autofill_block(slot_answers=slot_answers),
-                    start_marker=KNOWLEDGE_AUTOFILL_BLOCK_START,
-                    end_marker=KNOWLEDGE_AUTOFILL_BLOCK_END,
-                )
-                oauth_client.update_issue_summary_and_description(
-                    access_token=oauth_access_token,
-                    cloud_id=str(cloud_id),
-                    issue_id_or_key=issue_key,
-                    summary=updated_summary,
-                    description=updated_description,
-                )
-                precheck_description = _build_precheck_description(
-                    issue_description=updated_description,
-                    issue_key=issue_key,
-                    project_key=project.jira_project_key,
-                    search_issues_for_tenant=search_issues_for_tenant,
-                    session=session,
-                    tenant=tenant,
-                )
-                precheck_decision, issue_labels = _evaluate_precheck_decision_with_labels(
-                    session=session,
-                    tenant=tenant,
-                    project=project,
-                    source="discord_reply",
-                    issue_key=issue_key,
-                    issue_summary=updated_summary,
-                    issue_description=precheck_description,
-                    issue_labels=issue_labels,
-                    settings_factory=settings_factory,
-                    tenant_jira_oauth_context=tenant_jira_oauth_context,
-                    oauth_context=oauth,
-                )
-                if precheck_decision.pre_check is None:
-                    return DiscordCommandResponse(
-                        ok=True,
-                        command=command_name,
-                        message=enqueue_reason_guidance("policy_eval_failed"),
-                        data={
-                            "issue_key": issue_key,
-                            "recheck_required": True,
-                            "policy_error": True,
-                        },
-                    )
-                pre_check = precheck_decision.pre_check
-                classification = precheck_classification(pre_check)
-                missing_slots = precheck_missing_slots(pre_check)
+        classification = decision_result.classification
+        missing_slots = decision_result.missing_slots
+        auto_resolved_slots = list(decision_result.auto_resolved_slots)
 
         if classification != "clear":
             decision_gate = getattr(pre_check, "decision_gate", None)
@@ -965,7 +894,7 @@ def dispatch_run_control_command(
                     "questions": generated_questions or decision_gate_questions or gtd_questions,
                     "missing_slots": missing_slots,
                     "auto_resolved_slots": auto_resolved_slots,
-                    "knowledge_mode": knowledge_mode if knowledge_enabled else None,
+                    "knowledge_mode": None,
                 },
             )
 
