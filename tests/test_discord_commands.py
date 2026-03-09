@@ -727,7 +727,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.enqueue_run",
+                "orchestrator.api.discord.commands.run_controls.enqueue_issue_run_with_precheck",
                 return_value=enqueue_result,
             ) as enqueue_mock,
         ):
@@ -812,7 +812,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.enqueue_run",
+                "orchestrator.api.discord.commands.run_controls.enqueue_issue_run_with_precheck",
                 return_value=SimpleNamespace(
                     enqueued=True,
                     run=SimpleNamespace(run_id="run-new-2", issue_key="TP-92"),
