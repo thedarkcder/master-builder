@@ -6,9 +6,9 @@ import { useParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TokenStackedBarChart } from "@/components/charts";
 import {
@@ -96,7 +96,7 @@ type ChatTimelineEntry = {
   text: string;
   kind: "message" | "reasoning" | "status" | "error";
 };
-type RunPanelTab = "overview" | "outputs" | "sessions" | "diagnostics" | "raw" | "token";
+type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
 type AgentStage = "pm" | "dev" | "test" | "review";
 const CHAT_PAGE_SIZE = 40;
 
@@ -126,14 +126,9 @@ function statusFromLifecycleEvent(eventType: string): RunRecord["status"] | null
   return null;
 }
 
-function statusBadge(status: string) {
-  if (status === "succeeded") {
-    return <Badge>{status}</Badge>;
-  }
-  if (status === "failed" || status === "blocked") {
-    return <Badge variant="secondary">{status}</Badge>;
-  }
-  return <Badge variant="outline">{status}</Badge>;
+// statusBadge is superseded by StatusBadge component; kept to avoid cascade changes in unchanged code paths.
+function statusBadge(_status: string) {
+  return null;
 }
 
 function parseTelemetryPayload(message: string): InvocationTelemetry | null {
@@ -1016,222 +1011,220 @@ export default function RunDetailPage() {
     return () => window.cancelAnimationFrame(raf);
   }, [activePanel, chatAutoScroll, visibleChatTimelineEntries.length]);
 
+  const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
+    { id: "overview", label: "Overview" },
+    { id: "agents", label: "Agents" },
+    { id: "diagnostics", label: "Diagnostics" },
+    { id: "cost", label: "Cost" }
+  ];
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <CardTitle>{run?.run_id ?? params.runId}</CardTitle>
-            <CardDescription>Run details</CardDescription>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => void loadRun()} disabled={busy}>
+    <div className="space-y-0">
+      {/* Page header — metadata strip */}
+      <div className="mb-6 space-y-3">
+        {/* Row 1: status + id + actions */}
+        <div className="flex flex-wrap items-center gap-2">
+          {run ? <StatusBadge status={run.status} /> : null}
+          <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono">{run?.run_id ?? params.runId}</code>
+          {run?.issue_key ? (
+            run.issue_url ? (
+              <Link
+                href={run.issue_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium text-primary hover:bg-muted"
+              >
+                {run.issue_key}
+                <ArrowLeft className="h-3 w-3 rotate-[135deg]" />
+              </Link>
+            ) : (
+              <span className="rounded-md border px-2 py-0.5 text-xs font-medium">{run.issue_key}</span>
+            )
+          ) : null}
+          {run?.pr_url ? (
+            <Link
+              href={run.pr_url}
+              target="_blank"
+              className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+            >
+              PR <ArrowLeft className="h-3 w-3 rotate-[135deg]" />
+            </Link>
+          ) : null}
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void loadRun()} disabled={busy}>
               {busy ? "Refreshing..." : "Refresh"}
             </Button>
             {isRerunnable ? (
-              <Button variant="default" onClick={() => void handleRerun()} disabled={rerunBusy}>
+              <Button size="sm" className="h-7 text-xs" onClick={() => void handleRerun()} disabled={rerunBusy}>
                 {rerunBusy ? "Requeueing..." : "Rerun"}
               </Button>
             ) : null}
             {isActiveRun ? (
-              <Button variant="secondary" onClick={() => void handleForceRerun()} disabled={forceRerunBusy}>
+              <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => void handleForceRerun()} disabled={forceRerunBusy}>
                 {forceRerunBusy ? "Force rerunning..." : "Force Rerun"}
               </Button>
             ) : null}
-            <Button asChild variant="outline">
+            <Button asChild variant="outline" size="sm" className="h-7 text-xs">
               <Link href={run ? `/tenants/${encodeURIComponent(run.tenant_id)}/runs` : "/tenants/select"}>
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Runs
+                <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
+                Back
               </Link>
             </Button>
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4 text-sm">
-        {statusLine ? <p className="rounded-md border px-3 py-2 text-red-700">{statusLine}</p> : null}
+
+        {/* Row 2: metadata chips */}
         {run ? (
-          <>
-            <div className="grid gap-3 md:grid-cols-2">
-              <p>
-                <strong>Tenant:</strong> {run.tenant_id}
-              </p>
-              <p>
-                <strong>Project:</strong> {run.project_id ?? "None"}
-              </p>
-              <p>
-                <strong>Issue:</strong>{" "}
-                {run.issue_url && run.issue_key ? (
-                  <Link className="text-primary hover:underline" href={run.issue_url} target="_blank" rel="noopener noreferrer">
-                    {run.issue_key}
-                  </Link>
-                ) : (
-                  run.issue_key || "None"
-                )}
-              </p>
-              <p>
-                <strong>Status:</strong> {statusBadge(run.status)}
-              </p>
-              <p>
-                <strong>Created:</strong> {new Date(run.created_at).toLocaleString()}
-              </p>
-              <p>
-                <strong>Started:</strong> {run.started_at ? new Date(run.started_at).toLocaleString() : "Not started"}
-              </p>
-              <p>
-                <strong>Finished:</strong> {run.finished_at ? new Date(run.finished_at).toLocaleString() : "Not finished"}
-              </p>
-              <p>
-                <strong>Branch:</strong> {run.branch ?? "None"}
-              </p>
-              <p className="md:col-span-2">
-                <strong>Codex session:</strong>{" "}
-                {latestCodexSessionId ? (
-                  <code className="rounded bg-muted px-1 py-0.5 text-xs">{latestCodexSessionId}</code>
-                ) : (
-                  "Not established yet"
-                )}
-              </p>
-              <p className="md:col-span-2">
-                <strong>Repository:</strong>{" "}
-                {run.repo_url ? (
-                  <Link className="text-primary hover:underline" href={run.repo_url} target="_blank" rel="noopener noreferrer">
-                    {run.repo_url}
-                  </Link>
-                ) : (
-                  "None"
-                )}
-              </p>
-              <p className="md:col-span-2">
-                <strong>Code Path:</strong>{" "}
-                {codePath ? (
-                  <>
-                    <a
-                      className="text-primary hover:underline"
-                      href={`file://${encodeURI(codePath)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Open local path
-                    </a>
-                    <span className="ml-2 break-all text-muted-foreground">{codePath}</span>
-                  </>
-                ) : (
-                  "Not available yet"
-                )}
-              </p>
-              <p className="md:col-span-2">
-                <strong>PR:</strong>{" "}
-                {run.pr_url ? (
-                  <Link className="text-primary hover:underline" href={run.pr_url} target="_blank">
-                    {run.pr_url}
-                  </Link>
-                ) : (
-                  "None"
-                )}
-              </p>
-              <p className="md:col-span-2">
-                <strong>Last error:</strong> {run.last_error ?? "None"}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/20 p-2">
-              {(["overview", "outputs", "sessions", "diagnostics", "raw", "token"] as RunPanelTab[]).map((tab) => (
-                <Button
-                  key={tab}
-                  variant={activePanel === tab ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setActivePanel(tab)}
-                  className="capitalize"
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span><span className="font-medium text-foreground">Tenant</span> {run.tenant_id}</span>
+            {run.project_id ? <span><span className="font-medium text-foreground">Project</span> {run.project_id}</span> : null}
+            {run.branch ? <span><span className="font-medium text-foreground">Branch</span> <code className="rounded bg-muted px-1">{run.branch}</code></span> : null}
+            <span><span className="font-medium text-foreground">Created</span> {new Date(run.created_at).toLocaleString()}</span>
+            {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {new Date(run.started_at).toLocaleString()}</span> : null}
+            {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {new Date(run.finished_at).toLocaleString()}</span> : null}
+            {latestCodexSessionId ? (
+              <span><span className="font-medium text-foreground">Session</span> <code className="rounded bg-muted px-1">{latestCodexSessionId}</code></span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {statusLine ? (
+        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {statusLine}
+        </div>
+      ) : null}
+
+      {run ? (
+        <>
+          {/* Pipeline stage bar */}
+          <div className="mb-6 flex items-center gap-2 overflow-x-auto">
+            {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
+              const progress = stageProgress[stage];
+              const isRunning = progress.status === "running";
+              const isDone = progress.status === "completed";
+              const statusDot = isRunning
+                ? <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-warning" />
+                : isDone
+                  ? <span className="inline-block h-2 w-2 rounded-full bg-success" />
+                  : <span className="inline-block h-2 w-2 rounded-full border border-muted-foreground/40 bg-muted" />;
+              return (
+                <div key={stage} className="flex items-center gap-2">
+                  <div
+                    className="flex flex-col items-center gap-1 rounded-lg border px-3 py-2 text-xs"
+                    style={{ borderColor: isDone || isRunning ? stageColor(stage) + "60" : undefined, backgroundColor: isDone || isRunning ? stageColor(stage) + "10" : undefined }}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {statusDot}
+                      <span className="font-semibold uppercase tracking-wide" style={{ color: isDone || isRunning ? stageColor(stage) : undefined }}>
+                        {stage}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">{progress.detail}</span>
+                  </div>
+                  {idx < 3 ? <span className="text-muted-foreground/40">→</span> : null}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Tab bar — underline style */}
+          <div className="border-b mb-6">
+            <nav className="-mb-px flex gap-0">
+              {PANEL_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActivePanel(tab.id)}
+                  className={[
+                    "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                    activePanel === tab.id
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+                  ].join(" ")}
                 >
-                  {tab}
-                </Button>
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+          </div>
+
+          {/* Agents panel */}
+          {activePanel === "agents" ? (
+            <div className="space-y-3">
+              {agentOutcomes.map((outcome) => (
+                <Card key={outcome.stage}>
+                  <CardHeader className="pb-2 pt-4">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: stageColor(outcome.stage) }}
+                      />
+                      <CardTitle className="text-sm font-semibold uppercase tracking-wide">
+                        {outcome.label}
+                      </CardTitle>
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
+                      </span>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="text-xs">
+                    {outcome.items.length === 0 && !stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
+                      <p className="text-muted-foreground">{outcome.emptyText}</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {outcome.items.map((item, idx) => (
+                          <p key={`${outcome.stage}-item-${idx}`} className="whitespace-pre-wrap">
+                            {item}
+                          </p>
+                        ))}
+                        {outcome.items.length === 0 && stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
+                          <p className="whitespace-pre-wrap text-muted-foreground">
+                            Live snapshot ({new Date(stageLiveSnapshots.get(outcome.stage as AgentStage)!.recordedAt).toLocaleTimeString()}): {stageLiveSnapshots.get(outcome.stage as AgentStage)!.text}
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+                    {outcome.feedback ? (
+                      <p className="mt-2 rounded border border-warning/30 bg-warning/10 p-2 text-warning-foreground">
+                        Feedback: {outcome.feedback}
+                      </p>
+                    ) : null}
+                  </CardContent>
+                </Card>
               ))}
             </div>
-            {activePanel === "outputs" ? (
-              <div className="rounded-md border bg-muted/40 p-3">
-                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent final outputs</p>
-                <ul className="space-y-2 text-xs">
-                  {agentOutcomes.map((outcome) => (
-                    <li
-                      key={outcome.stage}
-                      className="rounded border bg-background p-3"
-                      style={{ borderLeft: `3px solid ${stageColor(outcome.stage)}` }}
-                    >
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {outcome.label} final output
-                    </p>
-                      <p className="mb-1 text-[11px] text-muted-foreground">
-                        {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
-                      </p>
-                      {outcome.items.length === 0 && !stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
-                        <p className="text-xs text-muted-foreground">{outcome.emptyText}</p>
-                      ) : (
-                        <div className="space-y-1">
-                          {outcome.items.map((item, idx) => (
-                            <p key={`${outcome.stage}-item-${idx}`} className="whitespace-pre-wrap">
-                              {item}
-                            </p>
-                          ))}
-                          {outcome.items.length === 0 && stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
-                            <p className="whitespace-pre-wrap">
-                              Live snapshot ({new Date(stageLiveSnapshots.get(outcome.stage as AgentStage)!.recordedAt).toLocaleTimeString()}
-                              ): {stageLiveSnapshots.get(outcome.stage as AgentStage)!.text}
-                            </p>
-                          ) : null}
-                        </div>
-                      )}
-                      {outcome.feedback ? (
-                        <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-                          Feedback: {outcome.feedback}
-                        </p>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {activePanel === "token" ? (
-              <div className="space-y-3">
-                {tokenTimelineBusy ? <p className="text-sm text-muted-foreground">Loading token timeline...</p> : null}
-                {tokenTimelineBusy ? null : tokenTimelineError ? (
-                  <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                    {tokenTimelineError}
-                  </p>
-                ) : null}
+          ) : null}
+
+          {/* Cost panel */}
+          {activePanel === "cost" ? (
+            <div className="space-y-4">
+              {tokenTimelineBusy ? <p className="text-sm text-muted-foreground">Loading cost data...</p> : null}
+              {!tokenTimelineBusy && tokenTimelineError ? (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  {tokenTimelineError}
+                </div>
+              ) : null}
                 {tokenTimelineBusy || !tokenTimeline ? null : (
                   <>
-                    <div className="grid gap-2 md:grid-cols-4">
-                      <div className="rounded border bg-muted/20 p-2">
-                        <p className="text-[11px] uppercase text-muted-foreground">Total Input</p>
-                        <p className="text-base font-semibold">{formatTokenCount(tokenTimeline.totals.input)}</p>
-                      </div>
-                      <div className="rounded border bg-muted/20 p-2">
-                        <p className="text-[11px] uppercase text-muted-foreground">Uncached Input</p>
-                        <p className="text-base font-semibold">{formatTokenCount(tokenTimeline.totals.uncached_input)}</p>
-                      </div>
-                      <div className="rounded border bg-muted/20 p-2">
-                        <p className="text-[11px] uppercase text-muted-foreground">Output</p>
-                        <p className="text-base font-semibold">{formatTokenCount(tokenTimeline.totals.output)}</p>
-                      </div>
-                      <div className="rounded border bg-muted/20 p-2">
-                        <p className="text-[11px] uppercase text-muted-foreground">Cache Ratio</p>
-                        <p className="text-base font-semibold">{(tokenTimeline.totals.cache_ratio * 100).toFixed(1)}%</p>
-                      </div>
-                      <div className="rounded border bg-muted/20 p-2">
-                        <p className="text-[11px] uppercase text-muted-foreground">Total I/O</p>
-                        <p className="text-base font-semibold">{formatTokenCount(tokenTimeline.totals.total_io)}</p>
-                      </div>
-                      <div className="rounded border bg-muted/20 p-2">
-                        <p className="text-[11px] uppercase text-muted-foreground">Avg Runtime</p>
-                        <p className="text-base font-semibold">{formatDuration(tokenTimeline.totals.avg_runtime_ms)} (avg)</p>
-                      </div>
-                      <div className="rounded border bg-muted/20 p-2">
-                        <p className="text-[11px] uppercase text-muted-foreground">P95 Runtime</p>
-                        <p className="text-base font-semibold">{formatDuration(tokenTimeline.totals.p95_runtime_ms)} (p95)</p>
-                      </div>
-                      <div className="rounded border bg-muted/20 p-2">
-                        <p className="text-[11px] uppercase text-muted-foreground">Turn Count</p>
-                        <p className="text-base font-semibold">{tokenTimeline.turns.length}</p>
-                      </div>
+                    {/* KPI strip */}
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      {[
+                        { label: "Total Input", value: formatTokenCount(tokenTimeline.totals.input) },
+                        { label: "Uncached Input", value: formatTokenCount(tokenTimeline.totals.uncached_input) },
+                        { label: "Output", value: formatTokenCount(tokenTimeline.totals.output) },
+                        { label: "Cache Ratio", value: `${(tokenTimeline.totals.cache_ratio * 100).toFixed(1)}%` },
+                        { label: "Total I/O", value: formatTokenCount(tokenTimeline.totals.total_io) },
+                        { label: "Avg Runtime", value: formatDuration(tokenTimeline.totals.avg_runtime_ms) },
+                        { label: "P95 Runtime", value: formatDuration(tokenTimeline.totals.p95_runtime_ms) },
+                        { label: "Turns", value: String(tokenTimeline.turns.length) }
+                      ].map((kpi) => (
+                        <Card key={kpi.label}>
+                          <CardContent className="p-4">
+                            <p className="text-xs text-muted-foreground uppercase tracking-wide">{kpi.label}</p>
+                            <p className="mt-1 text-2xl font-bold">{kpi.value}</p>
+                          </CardContent>
+                        </Card>
+                      ))}
                     </div>
                     <div className="rounded-md border bg-muted/20 p-3">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token lane by turn</p>
@@ -1343,290 +1336,254 @@ export default function RunDetailPage() {
                 )}
               </div>
             ) : null}
-            {activePanel === "overview" ? (
-              <>
-                <div className="rounded-md border bg-muted/20 p-3">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Run timeline</p>
-                  {!runTimeline ? (
-                    <p className="text-xs text-muted-foreground">Timeline data will appear as soon as telemetry events are captured.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="grid gap-2 md:grid-cols-4">
-                        <div className="rounded border bg-background p-2 text-xs">
-                          <p className="text-muted-foreground">Total window</p>
-                          <p className="font-semibold">{formatDuration(runTimeline.totalMs)}</p>
+
+          {/* Overview panel — run timeline + chat */}
+          {activePanel === "overview" ? (
+            <div className="space-y-4">
+              {/* Gantt timeline */}
+              {runTimeline ? (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">Run Timeline</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      {[
+                        { label: "Total", value: formatDuration(runTimeline.totalMs) },
+                        { label: "Queue wait", value: formatDuration(runTimeline.queueWaitMs) },
+                        { label: "Stage runtime", value: formatDuration(runTimeline.stageMs) },
+                        { label: "Resumed", value: String(runTimeline.resumedCount) }
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-lg border p-3 text-xs">
+                          <p className="text-muted-foreground">{item.label}</p>
+                          <p className="mt-0.5 font-semibold">{item.value}</p>
                         </div>
-                        <div className="rounded border bg-background p-2 text-xs">
-                          <p className="text-muted-foreground">Queue wait</p>
-                          <p className="font-semibold">{formatDuration(runTimeline.queueWaitMs)}</p>
-                        </div>
-                        <div className="rounded border bg-background p-2 text-xs">
-                          <p className="text-muted-foreground">Stage runtime</p>
-                          <p className="font-semibold">{formatDuration(runTimeline.stageMs)}</p>
-                        </div>
-                        <div className="rounded border bg-background p-2 text-xs">
-                          <p className="text-muted-foreground">Resumed stages</p>
-                          <p className="font-semibold">{runTimeline.resumedCount}</p>
-                        </div>
-                      </div>
-                      <div className="rounded border bg-background p-2">
-                        <div className="relative h-10 overflow-hidden rounded bg-muted/50">
-                          {runTimeline.segments.map((segment) => {
-                            const leftPct = ((segment.startMs - runTimeline.minStartMs) / runTimeline.totalMs) * 100;
-                            const widthPct = Math.max(1, (segment.durationMs / runTimeline.totalMs) * 100);
-                            return (
-                              <div
-                                key={segment.key}
-                                className="absolute top-0 h-10 text-[10px] font-semibold text-white"
-                                style={{
-                                  left: `${leftPct}%`,
-                                  width: `${widthPct}%`,
-                                  backgroundColor: segment.color
-                                }}
-                                title={`${segment.label}: ${formatDuration(segment.durationMs)} (${segment.detail})`}
-                              >
-                                <span className="block truncate px-1 pt-3">{segment.label}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
+                      ))}
                     </div>
-                  )}
-                </div>
-                <div className="rounded-md border bg-muted/20 p-3">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Chat timeline</p>
-                  {chatTimelineEntries.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No timeline messages captured yet.</p>
-                  ) : (
-                    <>
-                      <div className="mb-2 flex items-center justify-end gap-2">
-                        {hasOlderChatMessages ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setChatVisibleCount((current) => Math.min(current + CHAT_PAGE_SIZE, chatTimelineEntries.length));
-                              setChatAutoScroll(false);
-                            }}
+                    <div className="relative h-8 overflow-hidden rounded-lg bg-muted/50">
+                      {runTimeline.segments.map((segment) => {
+                        const leftPct = ((segment.startMs - runTimeline.minStartMs) / runTimeline.totalMs) * 100;
+                        const widthPct = Math.max(1, (segment.durationMs / runTimeline.totalMs) * 100);
+                        return (
+                          <div
+                            key={segment.key}
+                            className="absolute top-0 h-8 text-[10px] font-semibold text-white"
+                            style={{ left: `${leftPct}%`, width: `${widthPct}%`, backgroundColor: segment.color }}
+                            title={`${segment.label}: ${formatDuration(segment.durationMs)} (${segment.detail})`}
                           >
-                            Load older messages
-                          </Button>
-                        ) : null}
-                        {!chatAutoScroll ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setChatVisibleCount(CHAT_PAGE_SIZE);
-                              setChatAutoScroll(true);
-                            }}
-                          >
-                            Jump to latest
-                          </Button>
-                        ) : null}
-                      </div>
-                      <ul ref={chatListRef} className="max-h-[360px] space-y-2 overflow-y-auto pr-1 text-xs">
-                        {visibleChatTimelineEntries.map((entry) => (
-                        <li
-                          key={entry.key}
-                          className="rounded border bg-background p-2"
-                          style={{ borderLeft: `3px solid ${stageColor(entry.stage)}` }}
-                        >
-                          <p className="mb-1 text-[11px] text-muted-foreground">
-                            {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)}
-                            {entry.attempt !== null ? ` #${entry.attempt}` : ""} · {entry.speaker}
-                          </p>
-                          <p
-                            className={
-                              entry.kind === "error"
-                                ? "whitespace-pre-wrap text-red-700"
-                                : entry.kind === "reasoning"
-                                  ? "whitespace-pre-wrap text-slate-700"
-                                  : "whitespace-pre-wrap"
-                            }
-                          >
-                            {entry.text}
-                          </p>
-                        </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-                </div>
-              </>
-            ) : null}
-            {activePanel === "sessions" ? (
-              <div className="rounded-md border bg-muted/20 p-3">
-                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Codex session timeline
-                </p>
-                {invocationSessionRows.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
-                ) : (
-                  <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
-                    {invocationSessionRows.map((row) => (
-                      <li key={row.key} className="rounded border p-2">
-                        <p>
-                          <strong>{row.stage}</strong>
-                          {row.attempt !== null ? ` #${row.attempt}` : ""} ·{" "}
-                          <strong>
-                            {row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}
-                          </strong>
-                          {row.durationMs !== null ? ` · ${row.durationMs}ms` : ""}
-                          {row.status ? ` · ${row.status}` : ""}
-                        </p>
-                        <p className="text-muted-foreground">
-                          start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish:{" "}
-                          {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}
-                        </p>
-                        <p className="break-all text-muted-foreground">
-                          session: {row.codexSessionId ?? "n/a"} · invocation: {row.invocationId}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ) : null}
-            {activePanel === "diagnostics" ? (
-              <>
-                {workflowDiagnostics ? (
-                  <div className="rounded-md border bg-muted/40 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Terminal diagnostics</p>
-                    <p className="mt-1 text-xs">
-                      <strong>Stage:</strong> {workflowDiagnostics.stage || "unknown"}
-                    </p>
-                    <p className="text-xs">
-                      <strong>Message:</strong> {workflowDiagnostics.message || run?.last_error || "No diagnostics message."}
-                    </p>
+                            <span className="block truncate px-1 pt-2">{segment.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {/* Chat timeline */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm">Activity Timeline</CardTitle>
+                    <div className="flex gap-1.5">
+                      {hasOlderChatMessages ? (
+                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount((c) => Math.min(c + CHAT_PAGE_SIZE, chatTimelineEntries.length)); setChatAutoScroll(false); }}>
+                          Load older
+                        </Button>
+                      ) : null}
+                      {!chatAutoScroll ? (
+                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount(CHAT_PAGE_SIZE); setChatAutoScroll(true); }}>
+                          Latest
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
-                ) : null}
-                <div className="rounded-md border bg-muted/20 p-3">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Live stage updates</p>
-                  {liveStageUpdates.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No live stage updates captured yet.</p>
+                </CardHeader>
+                <CardContent>
+                  {chatTimelineEntries.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No messages captured yet.</p>
                   ) : (
-                    <ul className="space-y-2 text-xs">
-                      {liveStageUpdates.map((entry, idx) => (
-                        <li key={`live-stage-${idx}`} className="rounded border p-2">
-                          <p>
-                            <strong>{String(entry.stage ?? "unknown_stage")}</strong>
-                          </p>
-                          <p className="text-muted-foreground">{String(entry.recorded_at ?? "")}</p>
+                    <ul ref={chatListRef} className="max-h-[480px] space-y-1.5 overflow-y-auto pr-1 text-xs">
+                      {visibleChatTimelineEntries.map((entry) => {
+                        if (entry.kind === "status") {
+                          return (
+                            <li key={entry.key} className="flex items-center gap-2 py-1">
+                              <div className="h-px flex-1 bg-border" />
+                              <span className="rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+                                {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} — {entry.text}
+                              </span>
+                              <div className="h-px flex-1 bg-border" />
+                            </li>
+                          );
+                        }
+                        if (entry.kind === "error") {
+                          return (
+                            <li
+                              key={entry.key}
+                              className="rounded-lg border-l-2 border-destructive bg-destructive/5 p-2.5"
+                            >
+                              <p className="mb-1 text-[10px] text-muted-foreground">
+                                {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)} · {entry.speaker}
+                              </p>
+                              <p className="whitespace-pre-wrap text-destructive">{entry.text}</p>
+                            </li>
+                          );
+                        }
+                        if (entry.kind === "reasoning") {
+                          return (
+                            <li key={entry.key}>
+                              <details className="rounded-lg border bg-muted/30 p-2 text-[10px] text-muted-foreground">
+                                <summary className="cursor-pointer font-medium">
+                                  {stageDisplayLabel(entry.stage)} reasoning · {new Date(entry.recordedAt).toLocaleTimeString()}
+                                </summary>
+                                <p className="mt-1.5 whitespace-pre-wrap italic">{entry.text}</p>
+                              </details>
+                            </li>
+                          );
+                        }
+                        return (
+                          <li
+                            key={entry.key}
+                            className="rounded-lg bg-primary/5 p-2.5"
+                            style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}
+                          >
+                            <p className="mb-1 text-[10px] text-muted-foreground">
+                              {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} · {entry.speaker}
+                            </p>
+                            <p className="whitespace-pre-wrap">{entry.text}</p>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          ) : null}
+
+          {/* Diagnostics panel — merged sessions + diagnostics + raw logs */}
+          {activePanel === "diagnostics" ? (
+            <div className="space-y-4">
+              {/* Terminal diagnostics */}
+              {workflowDiagnostics ? (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Terminal Diagnostics</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-xs space-y-1">
+                    <p><span className="font-medium">Stage:</span> {workflowDiagnostics.stage || "unknown"}</p>
+                    <p><span className="font-medium">Message:</span> {workflowDiagnostics.message || run?.last_error || "No diagnostics message."}</p>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {/* Session timeline */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Codex Session Timeline</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {invocationSessionRows.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
+                  ) : (
+                    <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
+                      {invocationSessionRows.map((row) => (
+                        <li key={row.key} className="rounded-lg border p-2.5">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-semibold uppercase" style={{ color: stageColor(row.stage) }}>{row.stage}</span>
+                            {row.attempt !== null ? <span className="text-muted-foreground">#{row.attempt}</span> : null}
+                            <span className="rounded-full border px-1.5 py-0.5 text-[10px]">{row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}</span>
+                            {row.status ? <span className="text-muted-foreground">{row.status}</span> : null}
+                            {row.durationMs !== null ? <span className="ml-auto text-muted-foreground">{formatDuration(row.durationMs)}</span> : null}
+                          </div>
+                          <p className="text-muted-foreground">start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish: {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}</p>
+                          {row.codexSessionId ? <p className="break-all text-muted-foreground">session: {row.codexSessionId}</p> : null}
                         </li>
                       ))}
                     </ul>
                   )}
-                </div>
-                <div className="rounded-md border bg-muted/20 p-3">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent events (live)</p>
+                </CardContent>
+              </Card>
+
+              {/* Agent events */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Agent Events</CardTitle>
+                </CardHeader>
+                <CardContent>
                   {events.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No agent events captured for this run yet.</p>
+                    <p className="text-xs text-muted-foreground">No agent events captured yet.</p>
                   ) : (
                     <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
                       {events.map((event, idx) => (
-                        <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded border p-2">
-                          <p>
-                            <strong>{event.event_type}</strong> by {event.agent_id}
-                          </p>
+                        <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border p-2.5">
+                          <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
                           <p className="text-muted-foreground">{new Date(event.recorded_at).toLocaleString()}</p>
                         </li>
                       ))}
                     </ul>
                   )}
-                </div>
-              </>
-            ) : null}
-            {activePanel === "raw" ? (
-              <>
-                <div className="rounded-md border bg-muted/40 p-3">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Plan JSON</p>
-                  <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap text-xs">
-                    {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
-                  </pre>
-                </div>
-                <div className="rounded-md border bg-muted/20 p-3">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent logs (live)</p>
-                    <div className="flex items-center gap-2 text-xs">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void handleLoadOlderLogs()}
-                        disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}
-                      >
-                        {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older logs" : "All logs loaded"}
+                </CardContent>
+              </Card>
+
+              {/* Raw logs */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <CardTitle className="text-sm">Raw Agent Logs</CardTitle>
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <Button variant="outline" size="sm" className="h-7" onClick={() => void handleLoadOlderLogs()} disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}>
+                        {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older" : "All loaded"}
                       </Button>
-                      <label className="flex items-center gap-1">
-                        Agent
-                        <select
-                          className="rounded border bg-background px-2 py-1"
-                          value={logAgentFilter}
-                          onChange={(event) => setLogAgentFilter(event.target.value)}
-                        >
-                          <option value="all">All</option>
-                          <option value="pm">pm</option>
-                          <option value="dev">dev</option>
-                          <option value="tester">tester</option>
-                          <option value="review">review</option>
+                      {[
+                        { label: "Agent", value: logAgentFilter, onChange: setLogAgentFilter, options: [["all", "All agents"], ["pm", "pm"], ["dev", "dev"], ["tester", "tester"], ["review", "review"]] },
+                        { label: "Stage", value: logStageFilter, onChange: setLogStageFilter, options: [["all", "All stages"], ["pm", "pm"], ["dev", "dev"], ["test", "test"], ["review", "review"], ["orchestrated_run", "orchestrated_run"]] },
+                        { label: "Stream", value: logStreamFilter, onChange: setLogStreamFilter, options: [["all", "All"], ["stdout", "stdout"], ["stderr", "stderr"]] }
+                      ].map((filter) => (
+                        <select key={filter.label} className="h-7 rounded border border-input bg-background px-2 text-xs" value={filter.value} onChange={(e) => filter.onChange(e.target.value)}>
+                          {filter.options.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
                         </select>
-                      </label>
-                      <label className="flex items-center gap-1">
-                        Stage
-                        <select
-                          className="rounded border bg-background px-2 py-1"
-                          value={logStageFilter}
-                          onChange={(event) => setLogStageFilter(event.target.value)}
-                        >
-                          <option value="all">All</option>
-                          <option value="pm">pm</option>
-                          <option value="dev">dev</option>
-                          <option value="test">test</option>
-                          <option value="review">review</option>
-                          <option value="orchestrated_run">orchestrated_run</option>
-                        </select>
-                      </label>
-                      <label className="flex items-center gap-1">
-                        Stream
-                        <select
-                          className="rounded border bg-background px-2 py-1"
-                          value={logStreamFilter}
-                          onChange={(event) => setLogStreamFilter(event.target.value)}
-                        >
-                          <option value="all">All</option>
-                          <option value="stdout">stdout</option>
-                          <option value="stderr">stderr</option>
-                        </select>
-                      </label>
+                      ))}
                     </div>
                   </div>
+                </CardHeader>
+                <CardContent>
                   {logs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No agent logs captured for this run yet.</p>
+                    <p className="text-xs text-muted-foreground">No logs captured yet.</p>
                   ) : filteredLogs.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
                   ) : (
                     <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
                       {filteredLogs.map((entry, idx) => (
-                        <li key={`${entry.recorded_at}-${idx}`} className="rounded border p-2">
-                          <p>
-                            <strong>{entry.agent_id}</strong> · <strong>{entry.stage}</strong>
-                            {entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}]
+                        <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
+                          <p className="mb-0.5 text-muted-foreground">
+                            <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {new Date(entry.recorded_at).toLocaleString()}
                           </p>
                           <p className="whitespace-pre-wrap">{entry.message}</p>
-                          <p className="text-muted-foreground">{new Date(entry.recorded_at).toLocaleString()}</p>
                         </li>
                       ))}
                     </ul>
                   )}
-                </div>
-              </>
-            ) : null}
-          </>
-        ) : (
-          <p className="text-muted-foreground">Loading run details...</p>
-        )}
-      </CardContent>
-    </Card>
+                </CardContent>
+              </Card>
+
+              {/* Plan JSON */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Plan JSON</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <pre className="max-h-[360px] overflow-auto rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap">
+                    {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
+                  </pre>
+                </CardContent>
+              </Card>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="text-muted-foreground">Loading run details...</p>
+      )}
+    </div>
   );
 }

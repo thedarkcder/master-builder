@@ -436,14 +436,14 @@ export default function TenantStageDiagnosticsPage() {
   }, [results?.issue_stage_totals]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Stage Diagnostics</CardTitle>
-        <CardDescription>
-          Drill into stage-level efficiency, retry impact, and command signatures correlated with token spikes.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="space-y-6">
+      <details className="group rounded-lg border bg-card" open>
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium">
+          <span>Filters</span>
+          <span className="text-xs text-muted-foreground group-open:hidden">Show</span>
+          <span className="text-xs text-muted-foreground hidden group-open:inline">Hide</span>
+        </summary>
+        <div className="border-t px-4 pb-4 pt-3">
         <div className="grid gap-2 md:grid-cols-4">
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
@@ -528,27 +528,20 @@ export default function TenantStageDiagnosticsPage() {
             onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))}
           />
           <div className="flex items-center gap-4 text-sm">
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={filters.only_retried}
-                onChange={(event) => setFilters((current) => ({ ...current, only_retried: event.target.checked }))}
-              />
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={filters.only_retried} onChange={(e) => setFilters((c) => ({ ...c, only_retried: e.target.checked }))} />
               Only retried runs
             </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={filters.only_with_test_stage}
-                onChange={(event) =>
-                  setFilters((current) => ({ ...current, only_with_test_stage: event.target.checked }))
-                }
-              />
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={filters.only_with_test_stage} onChange={(e) => setFilters((c) => ({ ...c, only_with_test_stage: e.target.checked }))} />
               Only with test stage
             </label>
           </div>
         </div>
-        <Card>
+        </div>
+      </details>
+
+      <Card>
           <CardHeader>
             <CardTitle className="text-base">Cross-project stage compare</CardTitle>
             <CardDescription>Radar profile for stage metrics across selected projects.</CardDescription>
@@ -895,7 +888,6 @@ export default function TenantStageDiagnosticsPage() {
             </div>
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
   );
 }
