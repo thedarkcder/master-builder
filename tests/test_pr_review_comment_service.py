@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from orchestrator.api.webhooks.pr_review_comment_service import (
     publish_inline_review_batch,
+    upsert_sticky_remediation_comment,
     upsert_sticky_review_comment,
 )
 from orchestrator.core.pr_review_findings import PrReviewFindingsResult, ReviewFinding
@@ -92,3 +93,54 @@ def test_publish_inline_review_batch_filters_to_valid_locations() -> None:
     assert result.review_id == 555
     assert result.inline_count == 1
     assert captured["commit_id"] == "abc123"
+
+
+def test_upsert_sticky_remediation_comment_creates_and_updates() -> None:
+    github_client = SimpleNamespace(
+        list_pull_request_issue_comments=lambda **_kwargs: [],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=202),
+        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=202),
+    )
+    created = upsert_sticky_remediation_comment(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        issue_created=True,
+        enqueued=True,
+        reason=None,
+        run_id="run-10",
+        head_sha="abc123",
+        event="pull_request_review_comment",
+        action="created",
+    )
+    assert created.action == "created"
+    assert created.comment_id == 202
+
+    marker_body = "<!-- codex:pr-remediation:t1:p1:org/repo:10 -->"
+    github_client = SimpleNamespace(
+        list_pull_request_issue_comments=lambda **_kwargs: [SimpleNamespace(comment_id=202, body=marker_body)],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=202),
+    )
+    updated = upsert_sticky_remediation_comment(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        issue_created=False,
+        enqueued=False,
+        reason="run_already_active",
+        run_id="run-10",
+        head_sha="abc123",
+        event="check_run",
+        action="completed",
+    )
+    assert updated.action == "updated"
+    assert updated.comment_id == 202
