@@ -7,7 +7,6 @@ from urllib.parse import quote_plus
 from uuid import uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.entrypoint import execute_tenant_jira_comment_command
@@ -15,6 +14,11 @@ from orchestrator.api.discord.ask.context import remove_issue_key_from_tenant_as
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
+from orchestrator.api.webhooks.jira_trigger_policy import (
+    resolve_decision_gate_cooldown_block,
+    resolve_jira_trigger_decision,
+    resolve_retry_source,
+)
 from orchestrator.api.webhooks.contracts import (
     JIRA_COMMENT_EVENTS,
     extract_delivery_id,
@@ -37,14 +41,8 @@ from orchestrator.core.decision_engine import (
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck, resolve_run_gate_block
-from orchestrator.core.runs import (
-    RUN_STATUS_BLOCKED,
-    RUN_STATUS_CANCELLED,
-    RUN_STATUS_FAILED,
-)
 from orchestrator.api.discord.shared.state import normalize_status_name, remove_issue_key_from_seed_followups
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
-from orchestrator.storage.models import Run
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.jira_oauth import JiraOAuthError
 from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
@@ -73,37 +71,6 @@ def _resolve_ready_trigger_mode_for_tenant(tenant: Tenant) -> str:
         if normalized_mode in {"status_recheck", "transition_only"}:
             return normalized_mode
     return "status_recheck"
-
-
-def _latest_decision_gate_blocked_run(
-    *,
-    session: Session,
-    tenant_id: str,
-    issue_key: str,
-) -> Run | None:
-    return session.execute(
-        select(Run)
-        .where(
-            Run.tenant_id == tenant_id,
-            Run.issue_key == issue_key,
-            Run.status == RUN_STATUS_BLOCKED,
-            Run.last_error.is_not(None),
-            Run.last_error.like("Decision Gate required:%"),
-        )
-        .order_by(Run.created_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _decision_gate_cooldown_remaining_seconds(*, blocked_run: Run, now: datetime) -> int:
-    blocked_at = blocked_run.finished_at or blocked_run.created_at
-    if blocked_at is None:
-        return 0
-    if blocked_at.tzinfo is None:
-        blocked_at = blocked_at.replace(tzinfo=timezone.utc)
-    elapsed = now - blocked_at
-    remaining = DECISION_GATE_COOLDOWN - elapsed
-    return max(0, int(remaining.total_seconds()))
 
 
 def _notify_jira_enqueue_skipped(
@@ -968,20 +935,15 @@ async def ingest_jira_webhook_event(
 
         from_status, to_status = extract_status_transition(context.payload)
         ready_trigger_mode = _resolve_ready_trigger_mode_for_tenant(context.tenant)
-        trigger_reason = "status_recheck"
-        if context.comment_command == "run":
-            trigger_reason = "comment_command_run"
-        elif context.comment_command == "retry":
-            trigger_reason = "comment_command_retry"
-        elif context.webhook_event == "issue_created":
-            trigger_reason = "issue_created"
-        elif (
-            to_status is not None
-            and from_status is not None
-            and from_status.casefold() != to_status.casefold()
-        ):
-            trigger_reason = "status_transition_to_todo" if _is_todo_status(to_status) else "status_transition_to_ready"
-        if trigger_reason == "status_recheck" and ready_trigger_mode == "transition_only":
+        trigger_decision = resolve_jira_trigger_decision(
+            comment_command=context.comment_command,
+            webhook_event=context.webhook_event,
+            from_status=from_status,
+            to_status=to_status,
+            ready_trigger_mode=ready_trigger_mode,
+        )
+        trigger_reason = trigger_decision.trigger_reason
+        if trigger_decision.trigger_mode_skip_reason is not None:
             logger.info(
                 "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=ready_status_recheck_disabled trigger_mode=%s",
                 request_id,
@@ -1026,76 +988,66 @@ async def ingest_jira_webhook_event(
                 webhook_event=context.webhook_event,
             )
 
-        latest_decision_gate_block = _latest_decision_gate_blocked_run(
+        cooldown_block = resolve_decision_gate_cooldown_block(
             session=session,
             tenant_id=tenant_id,
             issue_key=context.issue_key,
+            cooldown_window=DECISION_GATE_COOLDOWN,
+            now=_utcnow(),
         )
-        if latest_decision_gate_block is not None:
-            remaining_seconds = _decision_gate_cooldown_remaining_seconds(
-                blocked_run=latest_decision_gate_block,
-                now=_utcnow(),
+        if cooldown_block is not None:
+            logger.info(
+                "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=decision_gate_cooldown_active remaining_seconds=%s run_id=%s",
+                request_id,
+                tenant_id,
+                context.issue_key,
+                cooldown_block.remaining_seconds,
+                cooldown_block.run_id,
             )
-            if remaining_seconds > 0:
-                logger.info(
-                    "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=decision_gate_cooldown_active remaining_seconds=%s run_id=%s",
-                    request_id,
-                    tenant_id,
-                    context.issue_key,
-                    remaining_seconds,
-                    latest_decision_gate_block.run_id,
-                )
-                return jira_webhook_response(
-                    context,
-                    enqueued=False,
-                    reason="decision_gate_cooldown_active",
-                    guidance=(
-                        "Decision Gate was recently required for this issue. "
-                        "Wait for the cooldown to expire, then rerun."
-                    ),
-                    run_id=latest_decision_gate_block.run_id,
-                    cooldown_seconds_remaining=remaining_seconds,
-                    ready_for_agent=True,
-                    trigger_reason=trigger_reason,
-                    webhook_event=context.webhook_event,
-                )
+            return jira_webhook_response(
+                context,
+                enqueued=False,
+                reason="decision_gate_cooldown_active",
+                guidance=(
+                    "Decision Gate was recently required for this issue. "
+                    "Wait for the cooldown to expire, then rerun."
+                ),
+                run_id=cooldown_block.run_id,
+                cooldown_seconds_remaining=cooldown_block.remaining_seconds,
+                ready_for_agent=True,
+                trigger_reason=trigger_reason,
+                webhook_event=context.webhook_event,
+            )
 
-        retry_source_run = None
-        resolved_issue_description = context.issue_description
-        if context.comment_command == "retry":
-            retryable_statuses = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
-            retry_source_run = session.execute(
-                select(Run)
-                .where(
-                    Run.tenant_id == tenant_id,
-                    Run.issue_key == context.issue_key,
-                    Run.status.in_(retryable_statuses),
-                )
-                .order_by(Run.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if retry_source_run is None:
-                logger.info(
-                    "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=no_retryable_run",
-                    request_id,
-                    tenant_id,
-                    context.issue_key,
-                )
-                _notify_jira_enqueue_skipped(
-                    context=context,
-                    session=session,
-                    settings=settings,
-                    reason="no_retryable_run",
-                )
-                return jira_webhook_response(
-                    context,
-                    enqueued=False,
-                    reason="no_retryable_run",
-                    guidance=enqueue_reason_guidance("no_retryable_run"),
-                    trigger_reason=trigger_reason,
-                    webhook_event=context.webhook_event,
-                )
-            resolved_issue_description = retry_source_run.issue_description
+        retry_resolution = resolve_retry_source(
+            session=session,
+            tenant_id=tenant_id,
+            issue_key=context.issue_key,
+            comment_command=context.comment_command,
+            fallback_issue_description=context.issue_description,
+        )
+        if retry_resolution.missing_retryable_run:
+            logger.info(
+                "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=no_retryable_run",
+                request_id,
+                tenant_id,
+                context.issue_key,
+            )
+            _notify_jira_enqueue_skipped(
+                context=context,
+                session=session,
+                settings=settings,
+                reason="no_retryable_run",
+            )
+            return jira_webhook_response(
+                context,
+                enqueued=False,
+                reason="no_retryable_run",
+                guidance=enqueue_reason_guidance("no_retryable_run"),
+                trigger_reason=trigger_reason,
+                webhook_event=context.webhook_event,
+            )
+        resolved_issue_description = retry_resolution.issue_description
 
         decision_result = _evaluate_precheck_decision_with_labels(
             context=context,
