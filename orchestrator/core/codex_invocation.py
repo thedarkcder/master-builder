@@ -12,12 +12,14 @@ from typing import Callable
 from uuid import uuid4
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.knowledge_base import build_knowledge_prompt_context
+from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.codex_telemetry import build_codex_log_sink
 from orchestrator.core.run_logs import extract_turn_completed_usage
 from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Run
+from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
 _ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
@@ -227,6 +229,125 @@ def _collect_context_injection_metrics(*, working_dir: str) -> dict[str, int | b
     }
 
 
+def _resolve_knowledge_policy_for_context(
+    *,
+    context: CodexInvocationContext,
+) -> tuple[str | None, bool, str]:
+    settings = get_settings()
+    database_url = str(getattr(settings, "database_url", "") or "").strip()
+    tenant_id = str(context.tenant_id or "").strip()
+    if not tenant_id:
+        return (
+            context.project_id,
+            bool(getattr(settings, "knowledge_base_enabled_default", True)),
+            str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive")),
+        )
+    if not database_url:
+        return (
+            context.project_id,
+            bool(getattr(settings, "knowledge_base_enabled_default", True)),
+            str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive")),
+        )
+
+    session_factory = create_session_factory(database_url=database_url)
+    resolved_project_id = context.project_id
+    knowledge_enabled = bool(getattr(settings, "knowledge_base_enabled_default", True))
+    knowledge_mode = str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive"))
+    try:
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            if tenant is None:
+                return resolved_project_id, knowledge_enabled, knowledge_mode
+            if resolved_project_id is None and context.run_id:
+                run = session.get(Run, context.run_id)
+                if run is not None and run.tenant_id == tenant_id:
+                    resolved_project_id = run.project_id
+            project_overrides: dict[str, object] = {}
+            if resolved_project_id:
+                project = session.get(Project, resolved_project_id)
+                if project is not None and project.tenant_id == tenant_id:
+                    project_overrides = project.policy_overrides or {}
+            effective = resolve_effective_policy(
+                tenant_policy=tenant.policy_config or {},
+                project_overrides=project_overrides,
+            )
+            knowledge_enabled = bool(effective.get("knowledge_base_enabled", knowledge_enabled))
+            normalized_mode = str(effective.get("knowledge_auto_answer_mode") or "").strip().lower()
+            if normalized_mode in {"safe", "balanced", "aggressive"}:
+                knowledge_mode = normalized_mode
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "knowledge_policy_resolution_skipped tenant_id=%s run_id=%s error=%s",
+            tenant_id,
+            context.run_id,
+            exc,
+        )
+    return resolved_project_id, knowledge_enabled, knowledge_mode
+
+
+def _augment_prompt_with_knowledge_context(
+    *,
+    context: CodexInvocationContext,
+    system_prompt: str,
+    user_prompt: str,
+) -> tuple[str, dict[str, object]]:
+    settings = get_settings()
+    database_url = str(getattr(settings, "database_url", "") or "").strip()
+    if not bool(getattr(settings, "knowledge_injection_enabled", True)):
+        return user_prompt, {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0}
+    tenant_id = str(context.tenant_id or "").strip()
+    if not tenant_id:
+        return user_prompt, {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0}
+    if not database_url:
+        return user_prompt, {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0}
+
+    project_id, knowledge_enabled, knowledge_mode = _resolve_knowledge_policy_for_context(context=context)
+    if not knowledge_enabled:
+        return user_prompt, {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0}
+
+    query_text = "\n".join(
+        part for part in [str(context.command or ""), str(context.stage or ""), user_prompt, system_prompt[:1200]] if part.strip()
+    )
+    session_factory = create_session_factory(database_url=database_url)
+    try:
+        with session_factory() as session:
+            context_payload = build_knowledge_prompt_context(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                query=query_text,
+                max_items=max(1, int(getattr(settings, "knowledge_context_top_k", 5))),
+                max_chars=max(500, int(getattr(settings, "knowledge_context_max_chars", 3200))),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "knowledge_context_lookup_failed tenant_id=%s project_id=%s command=%s stage=%s error=%s",
+            tenant_id,
+            project_id,
+            context.command,
+            context.stage,
+            exc,
+        )
+        return user_prompt, {"kb_lookup_attempted": True, "kb_hits": 0, "kb_context_chars": 0}
+
+    context_text = str(context_payload.text or "").strip()
+    if not context_text:
+        return user_prompt, {"kb_lookup_attempted": True, "kb_hits": 0, "kb_context_chars": 0}
+    augmented = "\n\n".join(
+        [
+            user_prompt.strip(),
+            "Knowledge Base context (project-scoped; prefer newer dated facts; cite assets when used):",
+            context_text,
+            f"Knowledge answer mode: {knowledge_mode}",
+        ]
+    ).strip()
+    return augmented, {
+        "kb_lookup_attempted": True,
+        "kb_hits": len(context_payload.citations),
+        "kb_context_chars": len(context_text),
+    }
+
+
 def _emit_invocation_event(
     *,
     context: CodexInvocationContext,
@@ -410,11 +531,16 @@ def invoke_codex_json(
     extra_on_log_line: Callable[[str, str], None] | None = None,
     require_json: bool = True,
 ) -> dict:
+    effective_user_prompt, knowledge_metrics = _augment_prompt_with_knowledge_context(
+        context=context,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
     invocation_id = context.invocation_id or uuid4().hex
     prompt_metrics = {
         "system_prompt_chars": len(system_prompt),
-        "user_prompt_chars": len(user_prompt),
-        "estimated_prompt_tokens": _estimate_token_count(system_prompt) + _estimate_token_count(user_prompt),
+        "user_prompt_chars": len(effective_user_prompt),
+        "estimated_prompt_tokens": _estimate_token_count(system_prompt) + _estimate_token_count(effective_user_prompt),
         "issue_description_chars": max(0, int(context.issue_description_chars or 0)),
     }
     context_metrics = _collect_context_injection_metrics(working_dir=context.working_dir)
@@ -459,6 +585,7 @@ def invoke_codex_json(
             "codex_session_id": resume_session_id or "",
             **prompt_metrics,
             **context_metrics,
+            **knowledge_metrics,
         },
     )
     payload: dict | None = None
@@ -467,7 +594,7 @@ def invoke_codex_json(
     try:
         payload = runtime.run_json(
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            user_prompt=effective_user_prompt,
             working_dir=context.working_dir,
             on_log_line=_combined_log_sink(
                 context=invocation_context,
@@ -528,6 +655,7 @@ def invoke_codex_json(
                 "actual_usage_observed": any(value is not None for value in usage_state.values()),
                 **prompt_metrics,
                 **context_metrics,
+                **knowledge_metrics,
             },
         )
         if bool(sink_state["no_assistant_output_detected"]):

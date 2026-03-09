@@ -18,8 +18,14 @@ from orchestrator.core.communications.enqueue_reason_contract import (
     format_enqueue_conflict_detail,
 )
 from orchestrator.core.decision_engine import DecisionSource, IngressDecision, evaluate_ingress_precheck
+from orchestrator.core.knowledge_base import resolve_missing_slots_from_knowledge
 from orchestrator.core.label_action_service import apply_issue_label_actions
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.precheck_decision import (
+    build_precheck_message,
+    precheck_classification,
+    precheck_missing_slots,
+)
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import cancel_run, enqueue_run, resolve_precheck_outcome_for_enqueue
 from orchestrator.storage.models import Run, Tenant
@@ -30,6 +36,8 @@ DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
 DECISION_GATE_BLOCK_END = "<!-- decision-gate-clarifications:end -->"
 PRECHECK_BOARD_BLOCK_START = "<!-- precheck-board-context:start -->"
 PRECHECK_BOARD_BLOCK_END = "<!-- precheck-board-context:end -->"
+KNOWLEDGE_AUTOFILL_BLOCK_START = "<!-- knowledge-autofill:start -->"
+KNOWLEDGE_AUTOFILL_BLOCK_END = "<!-- knowledge-autofill:end -->"
 
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
@@ -162,6 +170,65 @@ def _upsert_block(*, current_description: str, block: str, start_marker: str, en
     return f"{current}\n\n{block}"
 
 
+def _slot_display_name(slot_name: str) -> str:
+    mapping = {
+        "objective": "Objective",
+        "scope": "Scope",
+        "acceptance_criteria": "Acceptance Criteria",
+        "how_to_test": "How to test",
+        "nfr_intent": "NFR intent (MVP vs scale-ready)",
+        "reliability_security_constraints": "Mandatory reliability/security constraints",
+        "out_of_scope": "Explicitly out of scope",
+        "rollout_constraints": "Rollout/migration constraints",
+        "decision_owner": "Decision owner",
+        "dependencies_and_risks": "Dependencies / Risks",
+    }
+    return mapping.get(slot_name, slot_name.replace("_", " ").title())
+
+
+def _build_knowledge_autofill_block(*, slot_answers: dict[str, object]) -> str:
+    lines = [
+        KNOWLEDGE_AUTOFILL_BLOCK_START,
+        "## Knowledge Base Auto-Resolved Clarifications",
+    ]
+    for slot_name in sorted(slot_answers.keys()):
+        value = slot_answers.get(slot_name)
+        if value is None:
+            continue
+        slot_value = str(getattr(value, "slot_value", "") or "").strip()
+        citation = getattr(value, "citation", {}) if value is not None else {}
+        citation_title = str(citation.get("title") or "").strip()
+        citation_asset_id = str(citation.get("asset_id") or "").strip()
+        citation_ts = str(citation.get("source_timestamp") or "").strip()
+        confidence = float(getattr(value, "confidence", 0.0) or 0.0)
+        if not slot_value:
+            continue
+        if citation_title or citation_asset_id or citation_ts:
+            citation_parts = []
+            if citation_title:
+                citation_parts.append(citation_title)
+            if citation_asset_id:
+                citation_parts.append(f"asset:{citation_asset_id}")
+            if citation_ts:
+                citation_parts.append(f"dated:{citation_ts}")
+            slot_value = f"{slot_value} (source: {', '.join(citation_parts)}; confidence={confidence:.2f})"
+        lines.append(f"{_slot_display_name(slot_name)}: {slot_value}")
+    lines.append(KNOWLEDGE_AUTOFILL_BLOCK_END)
+    return "\n".join(lines)
+
+
+def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides: dict) -> tuple[bool, str]:
+    effective_policy = resolve_effective_policy(
+        tenant_policy=tenant_policy,
+        project_overrides=project_overrides,
+    )
+    enabled = bool(effective_policy.get("knowledge_base_enabled", True))
+    mode = str(effective_policy.get("knowledge_auto_answer_mode") or "").strip().lower()
+    if mode not in {"safe", "balanced", "aggressive"}:
+        mode = "aggressive"
+    return enabled, mode
+
+
 def _build_board_context_block(
     *,
     issue_key: str,
@@ -203,29 +270,9 @@ def _build_precheck_description(
     session: Session,
     tenant: Tenant,
 ) -> str | None:
-    jql = f'project = "{project_key}" ORDER BY updated DESC'
-    try:
-        issues = search_issues_for_tenant(
-            session=session,
-            tenant=tenant,
-            jql=jql,
-            max_results=20,
-        )
-    except HTTPException:
-        return issue_description
-    block = _build_board_context_block(
-        issue_key=issue_key,
-        project_key=project_key,
-        issues=list(issues or []),
-    )
-    if not block:
-        return issue_description
-    return _upsert_block(
-        current_description=str(issue_description or ""),
-        block=block,
-        start_marker=PRECHECK_BOARD_BLOCK_START,
-        end_marker=PRECHECK_BOARD_BLOCK_END,
-    )
+    _ = (issue_key, project_key, search_issues_for_tenant, session, tenant)
+    # Keep precheck deterministic against canonical ticket content.
+    return issue_description
 
 
 def _plan_decision_gate_jira_update(
@@ -734,48 +781,123 @@ def dispatch_run_control_command(
                 },
             )
         pre_check = precheck_decision.pre_check
-        if pre_check.decision_gate_triggered:
-            return DiscordCommandResponse(
-                ok=True,
-                command=command_name,
-                message=_decision_gate_remaining_questions_message(
-                    issue_key=issue_key,
-                    reason=str(pre_check.decision_gate.reason or "").strip(),
-                    questions=[
-                        question.strip()
-                        for question in pre_check.decision_gate.questions
-                        if str(question).strip()
-                    ],
-                ),
-                data={
-                    "issue_key": issue_key,
-                    "recheck_required": True,
-                    "decision_gate_reason": pre_check.decision_gate.reason,
-                    "questions": [
-                        question.strip()
-                        for question in pre_check.decision_gate.questions
-                        if str(question).strip()
-                    ],
-                },
+        classification = precheck_classification(pre_check)
+        missing_slots = precheck_missing_slots(pre_check)
+        auto_resolved_slots: list[str] = []
+
+        knowledge_enabled, knowledge_mode = _is_knowledge_enabled_for_project(
+            tenant_policy=tenant.policy_config or {},
+            project_overrides=getattr(project, "policy_overrides", {}) or {},
+        )
+        if classification != "clear" and knowledge_enabled and missing_slots:
+            slot_answers = resolve_missing_slots_from_knowledge(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                missing_slots=missing_slots,
+                mode=knowledge_mode,
             )
-        if not pre_check.gtd_valid:
-            questions = [question.strip() for question in pre_check.gtd_clarification_questions if question.strip()]
-            missing = [item.strip() for item in pre_check.gtd_missing_criteria if item.strip()]
-            lines = [f"Good To Do still needs clarification for `{issue_key}`."]
-            if missing:
-                lines.append("Missing criteria: " + ", ".join(missing))
-            if questions:
-                lines.append("Please reply with:")
-                lines.extend(f"- {question}" for question in questions)
+            if slot_answers:
+                auto_resolved_slots = sorted(slot_answers.keys())
+                updated_description = _upsert_block(
+                    current_description=str(updated_description or ""),
+                    block=_build_knowledge_autofill_block(slot_answers=slot_answers),
+                    start_marker=KNOWLEDGE_AUTOFILL_BLOCK_START,
+                    end_marker=KNOWLEDGE_AUTOFILL_BLOCK_END,
+                )
+                oauth_client.update_issue_summary_and_description(
+                    access_token=oauth_access_token,
+                    cloud_id=str(cloud_id),
+                    issue_id_or_key=issue_key,
+                    summary=updated_summary,
+                    description=updated_description,
+                )
+                precheck_description = _build_precheck_description(
+                    issue_description=updated_description,
+                    issue_key=issue_key,
+                    project_key=project.jira_project_key,
+                    search_issues_for_tenant=search_issues_for_tenant,
+                    session=session,
+                    tenant=tenant,
+                )
+                precheck_decision, issue_labels = _evaluate_precheck_decision_with_labels(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    source="discord_reply",
+                    issue_key=issue_key,
+                    issue_summary=updated_summary,
+                    issue_description=precheck_description,
+                    issue_labels=issue_labels,
+                    settings_factory=settings_factory,
+                    tenant_jira_oauth_context=tenant_jira_oauth_context,
+                    oauth_context=oauth,
+                )
+                if precheck_decision.pre_check is None:
+                    return DiscordCommandResponse(
+                        ok=True,
+                        command=command_name,
+                        message=enqueue_reason_guidance("policy_eval_failed"),
+                        data={
+                            "issue_key": issue_key,
+                            "recheck_required": True,
+                            "policy_error": True,
+                        },
+                    )
+                pre_check = precheck_decision.pre_check
+                classification = precheck_classification(pre_check)
+                missing_slots = precheck_missing_slots(pre_check)
+
+        if classification != "clear":
+            decision_gate = getattr(pre_check, "decision_gate", None)
+            decision_gate_questions = [
+                question.strip()
+                for question in getattr(decision_gate, "questions", ())
+                if str(question).strip()
+            ]
+            gtd_questions = [
+                question.strip()
+                for question in getattr(pre_check, "gtd_clarification_questions", ())
+                if str(question).strip()
+            ]
+            gtd_missing = [
+                item.strip()
+                for item in getattr(pre_check, "gtd_missing_criteria", ())
+                if str(item).strip()
+            ]
+            message, generated_questions = build_precheck_message(
+                runtime=runtime,
+                invocation_context=CodexInvocationContext(
+                    channel="discord",
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    command="reply",
+                    stage="precheck_message",
+                    working_dir=codex_working_dir,
+                    issue_key=issue_key,
+                ),
+                issue_key=issue_key,
+                classification=classification,
+                decision_gate_reason=str(getattr(decision_gate, "reason", "") or "").strip(),
+                decision_gate_questions=decision_gate_questions,
+                gtd_missing_criteria=gtd_missing,
+                gtd_questions=gtd_questions,
+                missing_slots=missing_slots,
+            )
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message="\n".join(lines),
+                message=message,
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,
-                    "gtd_missing_criteria": missing,
-                    "questions": questions,
+                    "classification": classification,
+                    "decision_gate_reason": str(getattr(decision_gate, "reason", "") or "").strip() or None,
+                    "gtd_missing_criteria": gtd_missing,
+                    "questions": generated_questions or decision_gate_questions or gtd_questions,
+                    "missing_slots": missing_slots,
+                    "auto_resolved_slots": auto_resolved_slots,
+                    "knowledge_mode": knowledge_mode if knowledge_enabled else None,
                 },
             )
 

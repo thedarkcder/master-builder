@@ -49,6 +49,8 @@ class PolicyConfig(BaseModel):
     max_concurrent_runs: int = 2
     allowed_commands: list[str] = Field(default_factory=list)
     require_agents_md: bool = False
+    knowledge_base_enabled: bool = True
+    knowledge_auto_answer_mode: str = Field(default="aggressive", pattern="^(safe|balanced|aggressive)$")
 
     @field_validator("allowed_commands")
     @classmethod
@@ -145,6 +147,38 @@ class ProjectRead(BaseModel):
     is_archived: bool
     created_at: datetime
     updated_at: datetime
+
+
+class KnowledgeAssetCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    source_type: str = Field(default="manual", min_length=1, max_length=32)
+    mime_type: str | None = Field(default=None, max_length=128)
+    source_ref: str | None = Field(default=None, max_length=1024)
+    source_timestamp: str | None = None
+    text_content: str | None = None
+    content_base64: str | None = None
+
+
+class KnowledgeAssetRead(BaseModel):
+    asset_id: str
+    tenant_id: str
+    project_id: str
+    source_type: str
+    title: str
+    mime_type: str | None = None
+    source_ref: str | None = None
+    source_timestamp: datetime | None = None
+    chunk_count: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeSyncResultRead(BaseModel):
+    ok: bool
+    synced_assets: int
+    skipped_assets: int
+    details: str | None = None
 
 
 class IntegrationTestResult(BaseModel):

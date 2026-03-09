@@ -14,6 +14,8 @@ POLICY_OVERRIDE_FIELDS = {
     "max_concurrent_runs",
     "allowed_commands",
     "require_agents_md",
+    "knowledge_base_enabled",
+    "knowledge_auto_answer_mode",
 }
 
 _BOOLEAN_CAP_FIELDS = {
@@ -21,7 +23,18 @@ _BOOLEAN_CAP_FIELDS = {
     "allow_pr_creation",
     "allow_label_mutations",
     "allow_auto_merge",
+    "knowledge_base_enabled",
 }
+
+_BOOLEAN_DEFAULTS = {
+    "allow_jira_transitions": False,
+    "allow_pr_creation": False,
+    "allow_label_mutations": False,
+    "allow_auto_merge": False,
+    "knowledge_base_enabled": True,
+}
+
+_KNOWLEDGE_AUTO_ANSWER_MODES = {"safe", "balanced", "aggressive"}
 
 _NUMERIC_CAP_FIELDS = {
     "max_dev_test_review_loops",
@@ -49,6 +62,11 @@ def normalize_project_policy_overrides(raw: Mapping[str, Any] | None) -> dict[st
         if key in _BOOLEAN_CAP_FIELDS or key == "require_agents_md":
             if isinstance(value, bool):
                 normalized[key] = value
+            continue
+        if key == "knowledge_auto_answer_mode":
+            normalized_value = str(value or "").strip().lower()
+            if normalized_value in _KNOWLEDGE_AUTO_ANSWER_MODES:
+                normalized[key] = normalized_value
             continue
         if key in _NUMERIC_CAP_FIELDS:
             coerced = _coerce_positive_int(value)
@@ -85,7 +103,10 @@ def resolve_effective_policy(
         effective[field] = min(tenant_value, override_value)
 
     for field in _BOOLEAN_CAP_FIELDS:
-        tenant_value = bool(effective.get(field))
+        if field in effective:
+            tenant_value = bool(effective.get(field))
+        else:
+            tenant_value = _BOOLEAN_DEFAULTS.get(field, False)
         override_value = overrides.get(field)
         if isinstance(override_value, bool):
             effective[field] = tenant_value and override_value
@@ -103,5 +124,14 @@ def resolve_effective_policy(
 
     if "require_agents_md" in overrides and isinstance(overrides["require_agents_md"], bool):
         effective["require_agents_md"] = bool(effective.get("require_agents_md")) or overrides["require_agents_md"]
+
+    tenant_mode = str(effective.get("knowledge_auto_answer_mode") or "").strip().lower()
+    if tenant_mode not in _KNOWLEDGE_AUTO_ANSWER_MODES:
+        tenant_mode = "aggressive"
+    override_mode = str(overrides.get("knowledge_auto_answer_mode") or "").strip().lower()
+    if override_mode in _KNOWLEDGE_AUTO_ANSWER_MODES:
+        effective["knowledge_auto_answer_mode"] = override_mode
+    else:
+        effective["knowledge_auto_answer_mode"] = tenant_mode
 
     return effective
