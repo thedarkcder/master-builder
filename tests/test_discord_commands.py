@@ -519,10 +519,6 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.routes.discord._tenant_jira_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.routes.discord.build_codex_runtime", return_value=runtime),
             patch(
-                "orchestrator.api.routes.discord.evaluate_decision_gate",
-                return_value=SimpleNamespace(triggered=False, reason="", questions=[]),
-            ),
-            patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
                 return_value=PreRunCheckResult(
                     outcome="ready_for_agent",

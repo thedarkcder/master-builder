@@ -294,14 +294,15 @@ def enqueue_pr_remediation_if_needed(
             head_sha=head_sha,
         )
     run = enqueue_result.run
-    existing_plan = run.plan if isinstance(run.plan, dict) else {}
-    run.plan = {
-        **existing_plan,
-        "trigger_context": trigger_context,
-        "orchestration_mode": "orchestrated_subagents",
-    }
-    session.commit()
-    session.refresh(run)
+    if enqueue_result.enqueued:
+        existing_plan = run.plan if isinstance(run.plan, dict) else {}
+        run.plan = {
+            **existing_plan,
+            "trigger_context": trigger_context,
+            "orchestration_mode": "orchestrated_subagents",
+        }
+        session.commit()
+        session.refresh(run)
     return PrRemediationResult(
         triggered=True,
         issue_key=issue_key,

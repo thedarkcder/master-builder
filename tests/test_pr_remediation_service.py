@@ -185,6 +185,47 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertIn("jira_bug_create_failed", str(result.reason))
         enqueue_run_mock.assert_not_called()
 
+    def test_does_not_mutate_existing_active_run_when_enqueue_conflicts(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        active_run = SimpleNamespace(
+            run_id="run-active",
+            plan={"existing": True},
+        )
+        enqueue_result = EnqueueRunResult(
+            enqueued=False,
+            reason="run_already_active",
+            run=active_run,
+        )
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_service._find_existing_issue_key_for_pr_head",
+                return_value="GP-122",
+            ),
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_service.enqueue_run",
+                return_value=enqueue_result,
+            ),
+        ):
+            result = enqueue_pr_remediation_if_needed(
+                session=session,
+                tenant=tenant,
+                project=project,
+                github_client=github_client,
+                event="pull_request_review_comment",
+                action="created",
+                payload=payload,
+                pr_number=11,
+                repo_full_name="org/repo",
+                settings=settings,
+            )
+
+        self.assertTrue(result.triggered)
+        self.assertFalse(result.enqueued)
+        self.assertEqual(active_run.plan, {"existing": True})
+        session.commit.assert_not_called()
+        session.refresh.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
