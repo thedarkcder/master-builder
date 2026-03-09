@@ -3,18 +3,31 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { ExternalLink, RefreshCw, SlidersHorizontal, X } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { listRuns, type RunRecord } from "@/lib/api";
+import { cn } from "@/lib/utils";
+
+function statusBorderClass(status: string): string {
+  const s = status?.toLowerCase() ?? "";
+  if (s === "succeeded") return "border-l-success";
+  if (s === "failed" || s === "blocked") return "border-l-destructive";
+  if (s === "running") return "border-l-warning";
+  if (s === "queued") return "border-l-info";
+  return "border-l-border";
+}
 
 export default function TenantRunsPage() {
   const params = useParams<{ tenantId: string }>();
   const { credentials, ready } = useAuth();
+  const tenantId = decodeURIComponent(params.tenantId);
+
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [issueFilter, setIssueFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -24,14 +37,10 @@ export default function TenantRunsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [loading, setLoading] = useState(false);
-  const [statusLine, setStatusLine] = useState("Load runs to inspect execution state.");
-
-  const tenantId = decodeURIComponent(params.tenantId);
+  const [totalLoaded, setTotalLoaded] = useState<number | null>(null);
 
   const loadRuns = useCallback(async () => {
-    if (!credentials) {
-      return;
-    }
+    if (!credentials) return;
     setLoading(true);
     try {
       const from = fromDate ? new Date(`${fromDate}T00:00:00.000Z`).toISOString() : undefined;
@@ -44,167 +53,207 @@ export default function TenantRunsPage() {
         from,
         to,
         limit: pageSize,
-        offset: (page - 1) * pageSize,
+        offset: (page - 1) * pageSize
       });
       setRuns(payload);
-      setStatusLine(`Loaded ${payload.length} run(s) on page ${page}.`);
-    } catch (error) {
-      setStatusLine(`Failed loading runs: ${(error as Error).message}`);
+      setTotalLoaded(payload.length);
+    } catch {
+      setTotalLoaded(null);
     } finally {
       setLoading(false);
     }
   }, [credentials, tenantId, issueFilter, statusFilter, prFilter, fromDate, toDate, page, pageSize]);
 
   useEffect(() => {
-    if (ready && credentials) {
-      void loadRuns();
-    }
+    if (ready && credentials) void loadRuns();
   }, [ready, credentials, loadRuns]);
 
-  function statusBadge(status: string) {
-    if (status === "succeeded") {
-      return <Badge>{status}</Badge>;
-    }
-    if (status === "failed" || status === "blocked") {
-      return <Badge variant="secondary">{status}</Badge>;
-    }
-    return <Badge variant="outline">{status}</Badge>;
+  function clearFilters() {
+    setIssueFilter("");
+    setStatusFilter("");
+    setPrFilter("any");
+    setFromDate("");
+    setToDate("");
+    setPage(1);
   }
 
+  const hasFilters = issueFilter || statusFilter || prFilter !== "any" || fromDate || toDate;
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Runs</CardTitle>
-        <CardDescription>Tenant-scoped run history and execution status.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-2 md:grid-cols-3">
-          <Input value={issueFilter} onChange={(event) => setIssueFilter(event.target.value)} placeholder="Issue key or summary" />
-          <Input value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} placeholder="Status filter" />
-          <select
-            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-            value={prFilter}
-            onChange={(event) => setPrFilter(event.target.value as "any" | "none" | "has_value")}
-          >
-            <option value="any">PR: Any</option>
-            <option value="none">PR: None</option>
-            <option value="has_value">PR: Has value</option>
-          </select>
-          <Input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} placeholder="From date" />
-          <Input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} placeholder="To date" />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => void loadRuns()} disabled={loading}>
-            {loading ? "Loading..." : "Refresh"}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setPage(1);
-              void loadRuns();
-            }}
-            disabled={loading}
-          >
-            Apply filters
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setIssueFilter("");
-              setStatusFilter("");
-              setPrFilter("any");
-              setFromDate("");
-              setToDate("");
-              setPage(1);
-            }}
-            disabled={loading}
-          >
-            Clear
-          </Button>
-          <label className="ml-auto flex items-center gap-2 text-sm">
-            Page size
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-xl font-semibold">Pipeline</h1>
+        <p className="text-sm text-muted-foreground">All orchestration runs for this tenant.</p>
+      </div>
+
+      <Card>
+        {/* Filter toolbar */}
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <SlidersHorizontal className="h-4 w-4" />
+              <span className="text-xs font-medium uppercase tracking-wide">Filters</span>
+            </div>
+
+            <Input
+              className="h-8 w-36 text-sm"
+              value={issueFilter}
+              onChange={(e) => { setIssueFilter(e.target.value); setPage(1); }}
+              placeholder="Issue key"
+            />
+            <Input
+              className="h-8 w-28 text-sm"
+              value={statusFilter}
+              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+              placeholder="Status"
+            />
             <select
-              className="h-9 rounded-md border border-input bg-background px-2"
-              value={String(pageSize)}
-              onChange={(event) => {
-                setPageSize(Number(event.target.value));
-                setPage(1);
-              }}
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              value={prFilter}
+              onChange={(e) => { setPrFilter(e.target.value as "any" | "none" | "has_value"); setPage(1); }}
             >
-              <option value="25">25</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
+              <option value="any">PR: Any</option>
+              <option value="none">PR: None</option>
+              <option value="has_value">PR: Has PR</option>
             </select>
-          </label>
-        </div>
+            <Input
+              className="h-8 w-32 text-sm"
+              type="date"
+              value={fromDate}
+              onChange={(e) => { setFromDate(e.target.value); setPage(1); }}
+              placeholder="From"
+            />
+            <Input
+              className="h-8 w-32 text-sm"
+              type="date"
+              value={toDate}
+              onChange={(e) => { setToDate(e.target.value); setPage(1); }}
+              placeholder="To"
+            />
 
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Run</TableHead>
-              <TableHead>Issue</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>PR</TableHead>
-              <TableHead>Created</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {runs.map((run) => (
-              <TableRow key={run.run_id}>
-                <TableCell className="font-medium">
-                  <Link
-                    className="text-primary hover:underline"
-                    href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
-                  >
-                    {run.issue_summary?.trim() || run.issue_key || run.run_id}
-                  </Link>
-                  <p className="text-xs text-muted-foreground">{run.run_id}</p>
-                </TableCell>
-                <TableCell>
-                  {run.issue_url ? (
-                    <Link className="text-primary hover:underline" href={run.issue_url} target="_blank" rel="noopener noreferrer">
-                      {run.issue_key}
-                    </Link>
-                  ) : (
-                    run.issue_key
-                  )}
-                </TableCell>
-                <TableCell>{statusBadge(run.status)}</TableCell>
-                <TableCell>
-                  {run.pr_url ? (
-                    <Link className="text-sm text-primary hover:underline" href={run.pr_url} target="_blank">
-                      Open PR
-                    </Link>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">None</span>
-                  )}
-                </TableCell>
-                <TableCell>{new Date(run.created_at).toLocaleString()}</TableCell>
-              </TableRow>
-            ))}
-            {runs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
-                  No runs found for current filters.
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
-
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm text-muted-foreground">{statusLine}</p>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={loading || page <= 1}>
-              Previous
-            </Button>
-            <span className="text-sm">Page {page}</span>
-            <Button variant="outline" onClick={() => setPage((current) => current + 1)} disabled={loading || runs.length < pageSize}>
-              Next
-            </Button>
+            <div className="ml-auto flex items-center gap-1.5">
+              {hasFilters ? (
+                <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={clearFilters}>
+                  <X className="mr-1 h-3 w-3" />
+                  Clear
+                </Button>
+              ) : null}
+              <Button variant="outline" size="sm" className="h-8" onClick={() => void loadRuns()} disabled={loading}>
+                <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
+                Refresh
+              </Button>
+              <select
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                value={String(pageSize)}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+            </div>
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        </CardHeader>
+
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Run</TableHead>
+                <TableHead>Issue</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>PR</TableHead>
+                <TableHead>Created</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {runs.map((run) => (
+                <TableRow
+                  key={run.run_id}
+                  className={cn("border-l-2", statusBorderClass(run.status))}
+                >
+                  <TableCell className="font-medium">
+                    <Link
+                      className="text-primary hover:underline"
+                      href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
+                    >
+                      {run.issue_summary?.trim() || run.issue_key || run.run_id}
+                    </Link>
+                    <p className="text-xs text-muted-foreground">{run.run_id}</p>
+                  </TableCell>
+                  <TableCell>
+                    {run.issue_url ? (
+                      <Link
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        href={run.issue_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {run.issue_key}
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    ) : (
+                      <span className="text-xs">{run.issue_key}</span>
+                    )}
+                  </TableCell>
+                  <TableCell><StatusBadge status={run.status} /></TableCell>
+                  <TableCell>
+                    {run.pr_url ? (
+                      <Link
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        href={run.pr_url}
+                        target="_blank"
+                      >
+                        PR <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {new Date(run.created_at).toLocaleString()}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {runs.length === 0 && !loading ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                    No runs found for the current filters.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+
+          {/* Pagination footer */}
+          <div className="flex items-center justify-between border-t px-6 py-3">
+            <span className="text-xs text-muted-foreground">
+              {totalLoaded !== null ? `${totalLoaded} run${totalLoaded !== 1 ? "s" : ""} on page ${page}` : ""}
+            </span>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={loading || page <= 1}
+              >
+                ← Prev
+              </Button>
+              <span className="px-2 text-xs text-muted-foreground">Page {page}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={loading || runs.length < pageSize}
+              >
+                Next →
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
