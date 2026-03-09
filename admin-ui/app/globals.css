@@ -3,20 +3,70 @@
 @tailwind utilities;
 
 :root {
-  --background: 72 23% 95%;
-  --foreground: 160 22% 13%;
+  --background: 220 20% 97%;
+  --foreground: 224 71% 4%;
   --card: 0 0% 100%;
-  --card-foreground: 160 22% 13%;
-  --primary: 151 53% 30%;
+  --card-foreground: 224 71% 4%;
+  --primary: 238 84% 62%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 156 19% 89%;
-  --secondary-foreground: 160 22% 13%;
-  --muted: 160 14% 92%;
-  --muted-foreground: 158 10% 35%;
-  --border: 154 14% 83%;
-  --input: 154 14% 83%;
-  --ring: 151 53% 30%;
-  --radius: 0.75rem;
+  --secondary: 220 14% 91%;
+  --secondary-foreground: 224 71% 4%;
+  --muted: 220 14% 93%;
+  --muted-foreground: 215 16% 47%;
+  --border: 220 13% 88%;
+  --input: 220 13% 88%;
+  --ring: 238 84% 62%;
+  --radius: 0.625rem;
+
+  /* Always-dark sidebar tokens */
+  --sidebar: 222 47% 11%;
+  --sidebar-foreground: 210 40% 96%;
+  --sidebar-border: 217 32% 20%;
+  --sidebar-accent: 238 50% 22%;
+  --sidebar-accent-foreground: 210 40% 96%;
+  --sidebar-muted-foreground: 215 20% 60%;
+
+  /* Semantic status tokens */
+  --success: 142 71% 45%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 20 14% 4%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --info: 201 90% 52%;
+  --info-foreground: 0 0% 100%;
+}
+
+.dark {
+  --background: 222 47% 8%;
+  --foreground: 210 40% 95%;
+  --card: 222 47% 11%;
+  --card-foreground: 210 40% 95%;
+  --primary: 238 84% 70%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 217 32% 18%;
+  --secondary-foreground: 210 40% 95%;
+  --muted: 217 32% 15%;
+  --muted-foreground: 215 20% 60%;
+  --border: 217 32% 20%;
+  --input: 217 32% 20%;
+  --ring: 238 84% 70%;
+
+  --sidebar: 222 47% 5%;
+  --sidebar-foreground: 210 40% 96%;
+  --sidebar-border: 217 32% 15%;
+  --sidebar-accent: 238 50% 18%;
+  --sidebar-accent-foreground: 210 40% 96%;
+  --sidebar-muted-foreground: 215 20% 50%;
+
+  --success: 142 71% 50%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 55%;
+  --warning-foreground: 20 14% 4%;
+  --destructive: 0 72% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --info: 201 90% 58%;
+  --info-foreground: 0 0% 100%;
 }
 
 * {
@@ -25,7 +75,4 @@
 
 body {
   @apply bg-background text-foreground antialiased;
-  background-image:
-    radial-gradient(circle at 15% 15%, rgba(129, 201, 154, 0.18), transparent 35%),
-    radial-gradient(circle at 85% 15%, rgba(167, 214, 181, 0.15), transparent 32%);
 }

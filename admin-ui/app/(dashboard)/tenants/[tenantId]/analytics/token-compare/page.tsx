@@ -252,12 +252,14 @@ export default function TenantTokenComparePage() {
   }, [ready, credentials, form.project_id, runIds, compareRuns]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Run Compare</CardTitle>
-        <CardDescription>Compare token behavior across runs side-by-side and inspect per-turn deltas.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="space-y-6">
+      <details className="group rounded-lg border bg-card" open>
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium">
+          <span>Filters</span>
+          <span className="text-xs text-muted-foreground group-open:hidden">Show</span>
+          <span className="text-xs text-muted-foreground hidden group-open:inline">Hide</span>
+        </summary>
+        <div className="border-t px-4 pb-4 pt-3 space-y-3">
         <div className="grid gap-2 md:grid-cols-3">
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
@@ -329,17 +331,14 @@ export default function TenantTokenComparePage() {
           <p className="text-sm text-muted-foreground">Selected issues: {form.selected_issue_keys.length}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={() => void compareRuns()} disabled={busy || runIds.length < 2 || !form.project_id}>
+          <Button size="sm" onClick={() => void compareRuns()} disabled={busy || runIds.length < 2 || !form.project_id}>
             {busy ? "Comparing..." : "Compare"}
           </Button>
           <Button
             variant="outline"
+            size="sm"
             onClick={() => {
-              setForm((current) => ({
-                ...current,
-                selected_issue_keys: [],
-                selected_run_ids: [],
-              }));
+              setForm((current) => ({ ...current, selected_issue_keys: [], selected_run_ids: [] }));
               setResults(null);
               setStatusLine("Select a project and at least two runs to compare.");
             }}
@@ -348,31 +347,41 @@ export default function TenantTokenComparePage() {
             Clear
           </Button>
         </div>
-        {!results ? (
+        </div>
+      </details>
+
+      {!results ? (
           <p className="text-sm text-muted-foreground">{statusLine}</p>
         ) : (
           <>
-            <div className="grid gap-2 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-2">
               {results.runs.map((run) => (
-                <div key={run.run_id} className="rounded-md border bg-muted/20 p-2">
-                  <p className="mb-2 text-sm font-semibold break-all">
-                    <span className="text-muted-foreground">Run:</span> {run.run_id}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {run.issue_key} · {run.status}
-                  </p>
-                  <div className="mt-2 grid gap-1 text-xs">
-                    <p>Input: {formatNumber(run.totals.input)}</p>
-                    <p>Uncached: {formatNumber(run.totals.uncached_input)}</p>
-                    <p>Output: {formatNumber(run.totals.output)}</p>
-                    <p>Total I/O: {formatNumber(run.totals.total_io)}</p>
-                    <p>Cache Ratio: {(run.totals.cache_ratio * 100).toFixed(1)}%</p>
-                  </div>
-                </div>
+                <Card key={run.run_id}>
+                  <CardContent className="p-4">
+                    <p className="mb-1 text-xs font-semibold break-all text-muted-foreground">Run</p>
+                    <p className="mb-2 font-medium text-sm break-all">{run.run_id}</p>
+                    <p className="mb-3 text-xs text-muted-foreground">{run.issue_key} · {run.status}</p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {[
+                        ["Input", formatNumber(run.totals.input)],
+                        ["Uncached", formatNumber(run.totals.uncached_input)],
+                        ["Output", formatNumber(run.totals.output)],
+                        ["Total I/O", formatNumber(run.totals.total_io)],
+                        ["Cache Ratio", `${(run.totals.cache_ratio * 100).toFixed(1)}%`]
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded border p-2">
+                          <p className="text-muted-foreground">{label}</p>
+                          <p className="font-semibold">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
               ))}
             </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Per-stage totals</p>
+            <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">Per-stage Totals</CardTitle></CardHeader>
+              <CardContent className="p-0">
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -408,9 +417,11 @@ export default function TenantTokenComparePage() {
                   </TableBody>
                 </Table>
               </div>
-            </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Delta waterfall</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">Delta Waterfall</CardTitle></CardHeader>
+              <CardContent>
               {results.waterfall.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No turn data in selected runs.</p>
               ) : (
@@ -456,11 +467,11 @@ export default function TenantTokenComparePage() {
                   </div>
                 </div>
               )}
-            </div>
+              </CardContent>
+            </Card>
           </>
         )}
-        <p className="text-sm text-muted-foreground">{statusLine}</p>
-      </CardContent>
-    </Card>
+        {statusLine ? <p className="text-sm text-muted-foreground">{statusLine}</p> : null}
+      </div>
   );
 }
