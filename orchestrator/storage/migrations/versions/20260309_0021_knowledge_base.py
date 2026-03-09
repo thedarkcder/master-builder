@@ -18,12 +18,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "postgresql":
-        op.execute(
-            "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS vector; EXCEPTION WHEN undefined_file THEN NULL; END $$;"
-        )
-
     op.create_table(
         "knowledge_assets",
         sa.Column("asset_id", sa.String(length=64), nullable=False),
