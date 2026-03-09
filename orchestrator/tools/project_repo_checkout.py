@@ -26,6 +26,41 @@ Thumbs.db
 !.env.example
 """
 
+_SEEDED_GITIGNORE_SWIFT_CONTENT = """
+
+# Swift / Xcode
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+"""
+
+_SEEDED_GITIGNORE_NEXT_CONTENT = """
+
+# Next.js / Node
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+"""
+
+_SEEDED_GITIGNORE_JAVA_CONTENT = """
+
+# Java
+target/
+build/
+out/
+*.class
+"""
+
+_MCP_SERVER_DISABLED_LINES = (
+    ("jira_master_builder", 'enabled = false'),
+    ("jira_bsktpay", 'enabled = false'),
+)
+
 
 def _repo_full_name(repository_url: str) -> str:
     normalized = normalize_repo_identifier(repository_url)
@@ -67,6 +102,44 @@ def project_repo_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
     return Path(base_dir) / tenant_id / project_id / "repo"
 
 
+def _is_swift_repo(repo_dir: Path) -> bool:
+    if (repo_dir / "Package.swift").exists():
+        return True
+    if any(repo_dir.glob("*.xcodeproj")):
+        return True
+    if any(repo_dir.glob("*.xcworkspace")):
+        return True
+    return False
+
+
+def _is_next_repo(repo_dir: Path) -> bool:
+    if any(
+        (repo_dir / filename).exists()
+        for filename in ("next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs")
+    ):
+        return True
+    if (repo_dir / "next-env.d.ts").exists():
+        return True
+    return False
+
+
+def _is_java_repo(repo_dir: Path) -> bool:
+    if any((repo_dir / filename).exists() for filename in ("pom.xml", "build.gradle", "build.gradle.kts", "gradlew")):
+        return True
+    return False
+
+
+def _build_seeded_gitignore_content(*, repo_dir: Path) -> str:
+    sections: list[str] = [_SEEDED_GITIGNORE_CONTENT]
+    if _is_swift_repo(repo_dir):
+        sections.append(_SEEDED_GITIGNORE_SWIFT_CONTENT)
+    if _is_next_repo(repo_dir):
+        sections.append(_SEEDED_GITIGNORE_NEXT_CONTENT)
+    if _is_java_repo(repo_dir):
+        sections.append(_SEEDED_GITIGNORE_JAVA_CONTENT)
+    return "".join(sections)
+
+
 def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
     source_root = Path(__file__).resolve().parents[2]
     agents_src = source_root / "AGENTS.md"
@@ -77,10 +150,11 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
 
     if codex_src.exists() and codex_src.is_dir():
         shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
+        _disable_jira_mcp_servers_in_project_codex(repo_dir=repo_dir)
 
     gitignore_path = repo_dir / ".gitignore"
     if not gitignore_path.exists():
-        gitignore_path.write_text(_SEEDED_GITIGNORE_CONTENT, encoding="utf-8")
+        gitignore_path.write_text(_build_seeded_gitignore_content(repo_dir=repo_dir), encoding="utf-8")
 
     # Keep workspace policy files out of accidental commits inside project repos.
     info_dir = repo_dir / ".git" / "info"
@@ -99,6 +173,36 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
         prefix = "\n" if exclude_path.exists() and exclude_path.read_text(encoding="utf-8") else ""
         with exclude_path.open("a", encoding="utf-8") as handle:
             handle.write(prefix + "\n".join(missing_lines) + "\n")
+
+
+def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:
+    config_path = repo_dir / ".codex" / "config.toml"
+    if not config_path.exists():
+        return
+    raw = config_path.read_text(encoding="utf-8")
+    updated = raw
+    for server_name, enabled_line in _MCP_SERVER_DISABLED_LINES:
+        section_pattern = (
+            rf"(?ms)(^\[mcp_servers\.{re.escape(server_name)}\]\s*$.*?)(^\[|\Z)"
+        )
+        section_match = re.search(section_pattern, updated)
+        if section_match is None:
+            continue
+        section_body = section_match.group(1)
+        if re.search(r"(?m)^\s*enabled\s*=\s*(true|false)\s*$", section_body):
+            section_body = re.sub(
+                r"(?m)^\s*enabled\s*=\s*(true|false)\s*$",
+                enabled_line,
+                section_body,
+                count=1,
+            )
+        else:
+            if not section_body.endswith("\n"):
+                section_body += "\n"
+            section_body += f"{enabled_line}\n"
+        updated = f"{updated[:section_match.start(1)]}{section_body}{updated[section_match.end(1):]}"
+    if updated != raw:
+        config_path.write_text(updated, encoding="utf-8")
 
 
 def ensure_project_checkout(

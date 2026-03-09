@@ -31,6 +31,10 @@ class _FakeGitHubClient:
             number=pr_number,
             html_url=f"https://github.com/{repo_full_name}/pull/{pr_number}",
             head_sha="abc123",
+            title=f"PR {pr_number}",
+            state="open",
+            head_ref="feature/test",
+            base_ref="main",
             body=self._review_body,
         )
 
@@ -190,6 +194,28 @@ class ReviewerGateTests(unittest.TestCase):
         signal = gate.evaluate_pr(
             repo_full_name="example/repo",
             pr_number=16,
+        )
+        self.assertNotEqual(signal.state, "missing_test_coverage")
+
+    def test_reviewer_accepts_src_test_java_coverage(self) -> None:
+        gate = self._gate(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="src/main/java/com/example/Service.java", patch="+ change"),
+                    PullRequestFileChange(
+                        filename="src/test/java/com/example/ServiceTest.java",
+                        patch="+ test",
+                    ),
+                ],
+            )
+        )
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=17,
         )
         self.assertNotEqual(signal.state, "missing_test_coverage")
 

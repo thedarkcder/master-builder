@@ -12,8 +12,9 @@ from typing import Callable
 from uuid import uuid4
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.codex_runtime import CodexRuntime
+from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.codex_telemetry import build_codex_log_sink
+from orchestrator.core.run_logs import extract_turn_completed_usage
 from orchestrator.core.run_logs import record_run_log_event, record_run_log_events_batch
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run
@@ -22,6 +23,13 @@ logger = logging.getLogger(__name__)
 _ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
 _WORKFLOW_STAGE_PM = "pm"
 _WORKFLOW_EXECUTION_STAGES = {"dev", "test", "review"}
+_JSON_PARSE_ERROR_MARKERS = (
+    "not include json",
+    "invalid json payload",
+    "did not return a json object",
+    "expecting value",
+    "empty response",
+)
 
 
 @dataclass(frozen=True)
@@ -360,8 +368,17 @@ def _append_raw_log_line(
         logger.exception("codex_raw_log_write_failed path=%s", raw_path)
 
 
-def _should_persist_db_line(*, stream: str, message: str, line_index: int, sample_every: int) -> bool:
+def _should_persist_db_line(
+    *,
+    stream: str,
+    message: str,
+    line_index: int,
+    sample_every: int,
+    persist_turn_completed_usage: bool,
+) -> bool:
     if stream == "system":
+        return True
+    if persist_turn_completed_usage and extract_turn_completed_usage(message) is not None:
         return True
     if _is_error_like(message):
         return True
@@ -377,6 +394,13 @@ def _enqueue_codex_log_line(*, context: CodexInvocationContext, stream: str, mes
     writer.enqueue(context=context, stream=stream, message=message)
 
 
+def _is_recoverable_json_parse_failure(exc: Exception) -> bool:
+    if not isinstance(exc, CodexRuntimeError):
+        return False
+    failure_reason_lower = str(exc).lower()
+    return any(marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS)
+
+
 def invoke_codex_json(
     *,
     runtime: CodexRuntime,
@@ -384,6 +408,7 @@ def invoke_codex_json(
     system_prompt: str,
     user_prompt: str,
     extra_on_log_line: Callable[[str, str], None] | None = None,
+    require_json: bool = True,
 ) -> dict:
     invocation_id = context.invocation_id or uuid4().hex
     prompt_metrics = {
@@ -420,6 +445,11 @@ def invoke_codex_json(
         "raw_lines_written": 0,
         "codex_session_id": resume_session_id or "",
     }
+    usage_state: dict[str, int | None] = {
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "total_tokens": None,
+    }
     _emit_invocation_event(
         context=invocation_context,
         event_kind="stage_invocation_started",
@@ -433,6 +463,7 @@ def invoke_codex_json(
     )
     payload: dict | None = None
     failure_reason: str | None = None
+    failure_payload_preview: str | None = None
     try:
         payload = runtime.run_json(
             system_prompt=system_prompt,
@@ -442,6 +473,7 @@ def invoke_codex_json(
                 context=invocation_context,
                 extra_on_log_line=extra_on_log_line,
                 sink_state=sink_state,
+                usage_state=usage_state,
             ),
             reasoning_effort=context.reasoning_effort,
             resume_session_id=resume_session_id,
@@ -451,12 +483,26 @@ def invoke_codex_json(
                 session_id=session_id,
                 session_column=session_column,
             ),
+            on_usage=lambda usage: _capture_usage_metrics(
+                usage_state=usage_state,
+                usage=usage,
+            ),
         )
         return payload
     except Exception as exc:  # noqa: BLE001
+        if hasattr(exc, "payload_preview") and isinstance(exc.payload_preview, str):
+            failure_payload_preview = exc.payload_preview
         failure_reason = str(exc)
-        if "empty response" in str(exc).lower():
+        failure_reason_lower = failure_reason.lower()
+        if "empty response" in failure_reason_lower:
             sink_state["no_assistant_output_detected"] = True
+        if not require_json and _is_recoverable_json_parse_failure(exc):
+            return {
+                "_raw_response": failure_payload_preview or "",
+                "_parse_error": failure_reason,
+                "_stage": context.stage,
+                "_command": context.command,
+            }
         raise
     finally:
         _get_log_writer().flush_invocation(invocation_id=invocation_id)
@@ -475,6 +521,11 @@ def invoke_codex_json(
                 "codex_session_id": str(sink_state.get("codex_session_id") or ""),
                 "output_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
                 "error": failure_reason or "",
+                "failure_payload_preview": failure_payload_preview,
+                "actual_prompt_tokens": usage_state.get("prompt_tokens"),
+                "actual_completion_tokens": usage_state.get("completion_tokens"),
+                "actual_total_tokens": usage_state.get("total_tokens"),
+                "actual_usage_observed": any(value is not None for value in usage_state.values()),
                 **prompt_metrics,
                 **context_metrics,
             },
@@ -508,11 +559,22 @@ def _capture_session_id(
     )
 
 
+def _capture_usage_metrics(*, usage_state: dict[str, int | None], usage: dict[str, int]) -> None:
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = usage.get(key)
+        if not isinstance(value, int) or value < 0:
+            continue
+        current = usage_state.get(key)
+        if current is None or value >= current:
+            usage_state[key] = value
+
+
 def _combined_log_sink(
     *,
     context: CodexInvocationContext,
     extra_on_log_line: Callable[[str, str], None] | None,
     sink_state: dict[str, int | bool],
+    usage_state: dict[str, int | None],
 ) -> Callable[[str, str], None]:
     telemetry_sink = build_codex_log_sink(
         channel=context.channel,
@@ -526,6 +588,16 @@ def _combined_log_sink(
     def _sink(stream: str, message: str) -> None:
         telemetry_sink(stream, message)
         message_text = str(message or "")
+        parsed_usage = extract_turn_completed_usage(message_text)
+        usage_from_line: dict[str, int] | None = None
+        if parsed_usage is not None:
+            usage_from_line = {
+                "prompt_tokens": parsed_usage.input_tokens,
+                "completion_tokens": parsed_usage.output_tokens,
+                "total_tokens": parsed_usage.input_tokens + parsed_usage.output_tokens,
+            }
+        if usage_from_line is not None:
+            _capture_usage_metrics(usage_state=usage_state, usage=usage_from_line)
         line_counter = int(sink_state.get("raw_lines_written", 0)) + 1
         sink_state["raw_lines_written"] = line_counter
         if "turn_context" in message_text:
@@ -539,11 +611,15 @@ def _combined_log_sink(
         _append_raw_log_line(context=context, stream=stream, message=message_text)
         settings = get_settings()
         sample_every = max(1, int(getattr(settings, "codex_db_log_sampling_interval", 100)))
+        persist_turn_completed_usage = bool(
+            getattr(settings, "codex_persist_turn_completed_usage", True)
+        )
         if not _should_persist_db_line(
             stream=stream,
             message=message_text,
             line_index=line_counter,
             sample_every=sample_every,
+            persist_turn_completed_usage=persist_turn_completed_usage,
         ):
             if extra_on_log_line is not None:
                 extra_on_log_line(stream, message)

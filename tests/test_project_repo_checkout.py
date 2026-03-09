@@ -47,6 +47,11 @@ def test_ensure_project_checkout_clones_when_repo_missing() -> None:
         assert calls[1][0][:3] == ("remote", "set-url", "origin")
         assert (repo_dir / "AGENTS.md").exists()
         assert (repo_dir / ".codex").is_dir()
+        copied_codex_config = (repo_dir / ".codex" / "config.toml").read_text(encoding="utf-8")
+        assert "[mcp_servers.jira_master_builder]" in copied_codex_config
+        assert "[mcp_servers.jira_bsktpay]" in copied_codex_config
+        assert "enabled = true" not in copied_codex_config
+        assert copied_codex_config.count("enabled = false") >= 2
         assert (repo_dir / ".gitignore").exists()
         gitignore_content = (repo_dir / ".gitignore").read_text(encoding="utf-8")
         assert "Seeded by Master Builder" in gitignore_content
@@ -160,4 +165,32 @@ def test_ensure_project_checkout_preserves_existing_gitignore() -> None:
 
         assert resolved == repo_dir
         assert (repo_dir / ".gitignore").read_text(encoding="utf-8") == "custom-ignore\n"
+        run_git_mock.assert_not_called()
+
+
+def test_ensure_project_checkout_seeds_stack_specific_gitignore_defaults() -> None:
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    with TemporaryDirectory() as tmpdir:
+        repo_dir = Path(tmpdir) / "tenant-a" / "project-1" / "repo"
+        (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "Package.swift").write_text("import PackageDescription\n", encoding="utf-8")
+        (repo_dir / "next.config.js").write_text("module.exports = {}\n", encoding="utf-8")
+        (repo_dir / "pom.xml").write_text("<project></project>\n", encoding="utf-8")
+
+        with patch("orchestrator.tools.project_repo_checkout._run_git") as run_git_mock:
+            resolved = ensure_project_checkout(
+                base_dir=tmpdir,
+                tenant_id="tenant-a",
+                project=project,
+                github_installation_token="token-123",
+            )
+
+        assert resolved == repo_dir
+        gitignore = (repo_dir / ".gitignore").read_text(encoding="utf-8")
+        assert "# Swift / Xcode" in gitignore
+        assert "DerivedData/" in gitignore
+        assert "# Next.js / Node" in gitignore
+        assert "node_modules/" in gitignore
+        assert "# Java" in gitignore
+        assert "target/" in gitignore
         run_git_mock.assert_not_called()

@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete
 
+from orchestrator.core.decision_engine import evaluate_worker_decision
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.runs import mark_run_terminal
+from orchestrator.storage.models import RunLock
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker.stage_events import decision_gate_required_update
-from orchestrator.storage.models import RunLock
 
 
 def apply_decision_gate(
@@ -25,18 +26,19 @@ def apply_decision_gate(
     blocked_status: str,
     failed_status: str,
 ) -> tuple[object | None, dict | None]:
-    try:
-        decision_gate = evaluate_decision_gate_fn(
-            tenant_id=run.tenant_id,
-            project_id=run.project_id,
-            issue_key=run.issue_key,
-            run_id=run.run_id,
-            issue_summary=run.issue_summary,
-            issue_description=run.issue_description,
-        )
-    except (FileNotFoundError, ValueError) as exc:
+    worker_decision = evaluate_worker_decision(
+        run_plan=getattr(run, "plan", None),
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        issue_key=run.issue_key,
+        run_id=run.run_id,
+        issue_summary=run.issue_summary,
+        issue_description=run.issue_description,
+        evaluate_decision_gate_fn=evaluate_decision_gate_fn,
+    )
+    if worker_decision.configuration_error:
         run.status = failed_status
-        run.last_error = f"Decision Gate configuration error: {exc}"
+        run.last_error = worker_decision.configuration_error
         run.finished_at = datetime.now(timezone.utc)
         session.execute(
             delete(RunLock).where(
@@ -49,8 +51,9 @@ def apply_decision_gate(
         session.refresh(run)
         return run, None
 
-    if not decision_gate.triggered:
+    if worker_decision.allowed or worker_decision.decision_gate is None:
         return None, None
+    decision_gate = worker_decision.decision_gate
 
     jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=run.issue_key)
     stage_update = decision_gate_required_update(

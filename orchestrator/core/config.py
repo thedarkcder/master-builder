@@ -27,12 +27,15 @@ class Settings(BaseSettings):
     codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "errors_only"
     codex_db_log_sampling_interval: int = 100
+    codex_persist_turn_completed_usage: bool = True
     codex_raw_log_path: str = "/tmp/orchestrator-codex.ndjson"
     codex_max_output_tokens: int = 1800
     codex_hang_detection_quiet_seconds: int = 300
     codex_hang_detection_report_interval_seconds: int = 120
     codex_log_batch_size: int = 50
     codex_log_batch_flush_ms: int = 50
+    workflow_max_parallel_workstreams: int = 3
+    workflow_one_shot_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"

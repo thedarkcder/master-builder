@@ -60,7 +60,34 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         )
 
         transport.send_ask_with_thread.assert_called_once()
+        self.assertEqual(transport.send_ask_with_thread.call_args.kwargs["issue_key"], "example-46")
         transport.send_interaction_followup.assert_not_called()
+
+    def test_command_followup_passes_issue_key_to_thread_transport(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(
+            return_value=SimpleNamespace(
+                command="run",
+                message="Queued run",
+                data={"issue_key": "MAB-159"},
+            )
+        )
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!run MAB-159",
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        transport.send_ask_with_thread.assert_called_once()
+        self.assertEqual(transport.send_ask_with_thread.call_args.kwargs["issue_key"], "MAB-159")
 
     def test_command_followup_uses_thread_reply_transport_when_replying(self) -> None:
         session = MagicMock()
@@ -257,6 +284,100 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         transport.send_ask_with_thread.assert_called_once()
         sent_content = transport.send_ask_with_thread.call_args.kwargs["content"]
         self.assertIn("Command failed: bad request", sent_content)
+
+    def test_command_followup_http_exception_preserves_issue_context_for_thread_binding(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(side_effect=HTTPException(status_code=409, detail="Good To Do still needs clarification"))
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!run GP-114",
+                command_params={"issue_key": "gp-114"},
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        transport.send_ask_with_thread.assert_called_once()
+        self.assertEqual(transport.send_ask_with_thread.call_args.kwargs["issue_key"], "GP-114")
+
+    def test_command_followup_http_exception_extracts_issue_key_from_command_text(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(side_effect=HTTPException(status_code=409, detail="Good To Do still needs clarification"))
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!run GP-118",
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        transport.send_ask_with_thread.assert_called_once()
+        self.assertEqual(transport.send_ask_with_thread.call_args.kwargs["issue_key"], "GP-118")
+
+    def test_command_followup_without_issue_context_binds_none(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(
+            return_value=SimpleNamespace(
+                command="help",
+                message="Usage",
+                data={},
+            )
+        )
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!help",
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        transport.send_ask_with_thread.assert_called_once()
+        self.assertIsNone(transport.send_ask_with_thread.call_args.kwargs["issue_key"])
+
+    def test_command_followup_response_issue_key_overrides_command_hint(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(
+            return_value=SimpleNamespace(
+                command="run",
+                message="Queued run",
+                data={"issue_key": "GP-200"},
+            )
+        )
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!run GP-100",
+                command_params={"issue_key": "gp-100"},
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        transport.send_ask_with_thread.assert_called_once()
+        self.assertEqual(transport.send_ask_with_thread.call_args.kwargs["issue_key"], "GP-200")
 
     def test_command_followup_disabled_tenant(self) -> None:
         session = MagicMock()

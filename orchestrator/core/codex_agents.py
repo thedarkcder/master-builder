@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 
 from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
@@ -117,22 +118,34 @@ class CodexWorkflowAgents:
                 ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=attempt),
+            require_json=False,
         )
-        next_stage = str(payload.get("next_stage") or "dev").strip().lower()
+        raw_response = _extract_raw_response(payload)
+        next_stage = str(payload.get("next_stage") or _extract_next_stage(raw_response) or "dev").strip().lower()
         if next_stage not in {"dev", "test"}:
             next_stage = "dev"
         execution_worker_capability = (
             normalize_worker_capability(payload.get("execution_worker_capability"))
+            or _extract_worker_capability(raw_response)
             or normalize_worker_capability(request.current_worker_capability)
             or "linux"
         )
         return PmPlan(
-            plan_steps=_string_list(payload.get("plan_steps"), fallback=["Analyze scope", "Implement", "Validate"]),
+            plan_steps=_string_list(
+                payload.get("plan_steps"),
+                fallback=_extract_marked_items(raw_response, max_items=5) or ["Analyze scope", "Implement", "Validate"],
+            ),
             acceptance_criteria=_string_list(
                 payload.get("acceptance_criteria"),
-                fallback=["Behavior implemented", "Tests and verification provided"],
+                fallback=(
+                    _extract_marked_items(raw_response, max_items=4)
+                    or ["Behavior implemented", "Tests and verification provided"]
+                ),
             ),
-            risks=_string_list(payload.get("risks"), fallback=[]),
+            risks=_string_list(
+                payload.get("risks"),
+                fallback=_extract_marked_items(raw_response, max_items=3),
+            ),
             next_stage=next_stage,
             execution_worker_capability=execution_worker_capability,
         )
@@ -181,7 +194,9 @@ class CodexWorkflowAgents:
                 ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="dev", attempt=attempt),
+            require_json=False,
         )
+        raw_response = _extract_raw_response(payload)
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
         hard_stop_raw = payload.get("hard_stop_reason")
@@ -190,8 +205,16 @@ class CodexWorkflowAgents:
             if isinstance(hard_stop_raw, str) and str(hard_stop_raw).strip()
             else None
         )
+        if hard_stop_reason is None:
+            hard_stop_reason = _extract_prefixed_value(raw_response, keys=("hard_stop_reason", "hard stop", "blocked"))
         return DevResult(
-            change_summary=_string_list(payload.get("change_summary"), fallback=["No change summary provided by Codex"]),
+            change_summary=_string_list(
+                payload.get("change_summary"),
+                fallback=(
+                    _extract_marked_items(raw_response, max_items=5)
+                    or ["No change summary provided by Codex"]
+                ),
+            ),
             pr_url=pr_url,
             hard_stop_reason=hard_stop_reason,
         )
@@ -240,14 +263,27 @@ class CodexWorkflowAgents:
                 ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="test", attempt=attempt),
+            require_json=False,
         )
 
-        passed = bool(payload.get("passed"))
+        raw_response = _extract_raw_response(payload)
+        passed = _coerce_bool(
+            value=payload.get("passed"),
+            raw_response=raw_response,
+            true_markers=("passed", "pass", "success", "passed.", "passes"),
+            false_markers=("failed", "fail", "blocked", "not passed", "needs fixes", "needs fixing", "retry"),
+        )
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
+        if feedback is None:
+            feedback = _extract_prefixed_value(raw_response, keys=("feedback", "reason", "summary"))
         guidance = _string_list(
             payload.get("guidance"),
-            fallback=request.suggested_test_commands or ["Run project test suite"],
+            fallback=(
+                _extract_marked_items(raw_response, max_items=5)
+                or request.suggested_test_commands
+                or ["Run project test suite"]
+            ),
         )
         return TestResult(passed=passed, guidance=guidance, feedback=feedback)
 
@@ -300,16 +336,31 @@ class CodexWorkflowAgents:
                 ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="review", attempt=attempt),
+            require_json=False,
         )
 
-        approved = bool(payload.get("approved"))
+        raw_response = _extract_raw_response(payload)
+        approved = _coerce_bool(
+            value=payload.get("approved"),
+            raw_response=raw_response,
+            true_markers=("approved", "pass", "acceptable", "looks good", "go"),
+            false_markers=("rejected", "reject", "request changes", "not approved", "blocked", "do not approve"),
+        )
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
+        if feedback is None:
+            feedback = _extract_prefixed_value(raw_response, keys=("feedback", "summary", "reason"))
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else dev_result.pr_url
         return ReviewResult(
             approved=approved,
-            summary=_string_list(payload.get("summary"), fallback=["No review summary provided by Codex"]),
+            summary=_string_list(
+                payload.get("summary"),
+                fallback=(
+                    _extract_marked_items(raw_response, max_items=5)
+                    or ["No review summary provided by Codex"]
+                ),
+            ),
             feedback=feedback,
             pr_url=pr_url,
         )
@@ -322,6 +373,113 @@ def _string_list(value: object, *, fallback: list[str]) -> list[str]:
         if normalized:
             return normalized
     return fallback
+
+
+def _extract_raw_response(payload: dict) -> str:
+    raw = payload.get("_raw_response")
+    if isinstance(raw, str):
+        return raw.strip()
+    return ""
+
+
+def _extract_marked_items(value: str, *, max_items: int = 6) -> list[str]:
+    extracted: list[str] = []
+    text = str(value or "").strip()
+    if not text:
+        return extracted
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(r"^[\-\*\+]\s+(.*)$", line)
+        if match:
+            item = match.group(1).strip()
+        else:
+            match = re.match(r"^\d+[.)]\s*(.*)$", line)
+            if match:
+                item = match.group(1).strip()
+            else:
+                item = line
+        if item:
+            extracted.append(item)
+            if len(extracted) >= max_items:
+                break
+    return extracted
+
+
+def _extract_prefixed_value(value: str, *, keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        match = re.search(rf"{re.escape(key)}\s*[:=]\s*(.+)", value, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip()
+            if candidate:
+                return candidate.strip("\"'")
+    return None
+
+
+def _extract_next_stage(value: str) -> str | None:
+    match = re.search(r"\bnext\s*stage\s*[:=]\s*(dev|test)\b", value, flags=re.IGNORECASE)
+    return match.group(1).lower() if match else None
+
+
+def _extract_worker_capability(value: str) -> str | None:
+    lowered = str(value or "").lower()
+    selected_match = re.search(
+        r"\b(?:selected|required|target(?:ed)?|requested|planned)\s+(linux|macos|mac)\b",
+        lowered,
+    )
+    if selected_match:
+        normalized = normalize_worker_capability(selected_match.group(1))
+        if normalized:
+            return normalized
+
+    worker_label_match = re.search(r"\bworker:(linux|macos|mac)\b", lowered)
+    if worker_label_match:
+        normalized = normalize_worker_capability(worker_label_match.group(1))
+        if normalized:
+            return normalized
+
+    has_linux = "linux" in lowered
+    has_macos = "macos" in lowered or bool(re.search(r"\bmac\b", lowered))
+    if has_linux and has_macos:
+        current_match = re.search(r"\bcurrent worker(?:\s+is|\s*:)?\s*(linux|macos|mac)\b", lowered)
+        if current_match:
+            current = normalize_worker_capability(current_match.group(1))
+            if current == "linux":
+                return "macos"
+            if current == "macos":
+                return "linux"
+        return None
+    if has_linux:
+        return "linux"
+    if has_macos:
+        return "macos"
+    return None
+
+
+def _coerce_bool(
+    *,
+    value: object,
+    raw_response: str,
+    true_markers: tuple[str, ...],
+    false_markers: tuple[str, ...],
+) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1"}:
+            return True
+        if normalized in {"false", "no", "0"}:
+            return False
+    lowered = str(raw_response or "").lower()
+    for marker in false_markers:
+        if re.search(rf"\b{re.escape(marker)}\b", lowered):
+            return False
+    for marker in true_markers:
+        if re.search(rf"\b{re.escape(marker)}\b", lowered):
+            return True
+    return False
 
 
 

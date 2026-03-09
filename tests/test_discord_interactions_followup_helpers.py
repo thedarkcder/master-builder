@@ -411,6 +411,38 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         self.assertIn("thread-1", project.discord_config["ask_thread_channel_ids"])
         session.commit.assert_called_once()
 
+    def test_send_discord_ask_response_with_thread_binds_issue_context(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _send_discord_ask_response_with_thread
+
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
+        project = SimpleNamespace(discord_config={}, updated_at=None)
+        settings = SimpleNamespace(discord_bot_token_secret_ref="token/ref", secrets_encryption_key="enc")
+
+        with (
+            patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+        ):
+            client = MagicMock()
+            client.post_message.side_effect = [{"id": "posted-1"}, {"id": "final-msg"}]
+            client.create_thread_from_message.return_value = "thread-1"
+            client_cls.return_value = client
+            _send_discord_ask_response_with_thread(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                channel_id="channel-1",
+                user_id="u1",
+                content="content",
+                issue_key="MAB-159",
+            )
+
+        mapping = project.discord_config.get("decision_gate_thread_issue_by_channel_id", {})
+        self.assertEqual(mapping.get("thread-1"), "MAB-159")
+        session.commit.assert_called_once()
+
     def test_send_discord_ask_response_with_thread_requires_token_and_message_id(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_ask_response_with_thread
 
@@ -884,6 +916,28 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             self.assertEqual(
                 _decision_gate_issue_for_thread(session=session, channel_id="thread-1"),
                 ("tenant-1", "MAB-158"),
+            )
+
+    def test_decision_gate_issue_for_thread_falls_back_to_tenant_mapping(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _decision_gate_issue_for_thread
+
+        session = MagicMock()
+        tenant = SimpleNamespace(
+            tenant_id="tenant-1",
+            discord_config={
+                "thread_issue_by_channel_id": {
+                    "thread-2": "mab-200",
+                }
+            },
+        )
+        project = SimpleNamespace(discord_config={})
+        with (
+            patch("orchestrator.api.discord.interactions.followup.resolve_tenant_for_discord_channel", return_value=tenant),
+            patch("orchestrator.api.discord.interactions.followup.resolve_project_for_discord_channel", return_value=project),
+        ):
+            self.assertEqual(
+                _decision_gate_issue_for_thread(session=session, channel_id="thread-2"),
+                ("tenant-1", "MAB-200"),
             )
 
     def test_decision_gate_reply_followup_rechecks_before_retry(self) -> None:

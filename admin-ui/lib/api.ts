@@ -220,6 +220,218 @@ export type RunLogEventRecord = {
   recorded_at: string;
 };
 
+export type TokenTimelineTurnRecord = {
+  turn_id: string;
+  invocation_id: string;
+  stage: string;
+  attempt: number | null;
+  recorded_at: string;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  delta_input: number;
+  delta_uncached: number;
+  delta_output: number;
+  runtime_ms: number | null;
+  is_growth_spike: boolean;
+  spike_reason: string[];
+};
+
+export type TokenTimelineTotals = {
+  input: number;
+  uncached_input: number;
+  output: number;
+  cached_input: number;
+  cache_ratio: number;
+  total_io: number;
+  avg_runtime_ms: number;
+  p95_runtime_ms: number;
+};
+
+export type TokenTimelineRecord = {
+  run_id: string;
+  issue_key: string;
+  model: string | null;
+  status: string;
+  totals: TokenTimelineTotals;
+  turns: TokenTimelineTurnRecord[];
+};
+
+export type TokenAlertRecord = {
+  rule: string;
+  severity: string;
+  run_id: string;
+  turn_id: string | null;
+  stage: string | null;
+  attempt: number | null;
+  value: number | null;
+  threshold: number | null;
+  message: string;
+};
+
+export type TokenOverviewSeriesPoint = {
+  day: string;
+  total_input: number;
+  total_uncached_input: number;
+  total_output: number;
+  total_io: number;
+  delta_input: number;
+  delta_uncached: number;
+  delta_output: number;
+  delta_total_io: number;
+  avg_runtime_ms: number;
+  p95_runtime_ms: number;
+  run_count: number;
+};
+
+export type TokenOverviewKpi = {
+  total_input: number;
+  total_uncached_input: number;
+  total_output: number;
+  total_io: number;
+  cache_ratio: number;
+  avg_runtime_ms: number;
+  p95_runtime_ms: number;
+  avg_io_per_run: number;
+  p95_io_per_run: number;
+  retest_waste_score: number;
+};
+
+export type TokenOverviewTopRun = {
+  run_id: string;
+  issue_key: string;
+  tenant_id: string;
+  project_id: string | null;
+  status: string;
+  input: number;
+  uncached_input: number;
+  output: number;
+  total_io: number;
+  delta_total_io: number;
+  cache_ratio: number;
+};
+
+export type TokenOverviewRecord = {
+  kpis: TokenOverviewKpi;
+  series_by_day: TokenOverviewSeriesPoint[];
+  top_costly_runs: TokenOverviewTopRun[];
+  alerts: TokenAlertRecord[];
+};
+
+export type TokenCompareStageTotals = {
+  stage: string;
+  input: number;
+  uncached_input: number;
+  output: number;
+  total_io: number;
+};
+
+export type TokenCompareRunTotals = {
+  input: number;
+  uncached_input: number;
+  output: number;
+  cached_input: number;
+  total_io: number;
+  cache_ratio: number;
+};
+
+export type TokenCompareRun = {
+  run_id: string;
+  issue_key: string;
+  status: string;
+  totals: TokenCompareRunTotals;
+  stage_totals: TokenCompareStageTotals[];
+};
+
+export type TokenCompareWaterfallStep = {
+  run_id: string;
+  turn_order: number;
+  turn_id: string;
+  recorded_at: string;
+  stage: string;
+  attempt: number | null;
+  delta_input: number;
+  uncached_delta: number;
+  output_tokens: number;
+  delta_reason: string[];
+};
+
+export type TokenCompareRecord = {
+  runs: TokenCompareRun[];
+  align_axis: number[];
+  waterfall: TokenCompareWaterfallStep[];
+};
+
+export type TokenCompareRequestBody = {
+  run_ids: string[];
+  align_by?: "turn_sequence" | "recorded_at";
+};
+
+export type TokenStageDiagnostic = {
+  stage: string;
+  avg_delta: number;
+  avg_uncached_delta: number;
+  retry_impact_index: number;
+  run_count: number;
+};
+
+export type TokenStageHeatmapCell = {
+  stage: string;
+  attempt: number;
+  avg_delta: number;
+  avg_uncached_delta: number;
+  sample_count: number;
+};
+
+export type TokenHeavyCommand = {
+  command_signature: string;
+  stage: string;
+  spike_count: number;
+  avg_delta: number;
+  avg_uncached_delta: number;
+};
+
+export type TokenScatterPoint = {
+  run_id: string;
+  issue_key: string;
+  stage: string;
+  attempt: number | null;
+  runtime_ms: number | null;
+  token_delta: number;
+  recorded_at: string;
+};
+
+export type TokenIssueStageUsage = {
+  issue_key: string;
+  stage: string;
+  input: number;
+  uncached_input: number;
+  output: number;
+  total_io: number;
+  delta_total_io: number;
+  run_count: number;
+};
+
+export type TokenStageDiagnosticsRecord = {
+  stages: TokenStageDiagnostic[];
+  heavy_commands: TokenHeavyCommand[];
+  scatter_points: TokenScatterPoint[];
+  heatmap: TokenStageHeatmapCell[];
+  retest_waste_score: number;
+  issue_stage_totals: TokenIssueStageUsage[];
+};
+
+export type TokenProjectStageDiagnostics = {
+  project_id: string;
+  project_name: string | null;
+  stages: TokenStageDiagnostic[];
+  retest_waste_score: number;
+};
+
+export type TokenStageDiagnosticsCompareRecord = {
+  projects: TokenProjectStageDiagnostics[];
+};
+
 export type ManagedSecretRecord = {
   secret_ref: string;
   source: "managed" | "environment" | "missing" | string;
@@ -662,6 +874,237 @@ export function listRunLogs(
   return request<RunLogEventRecord[]>(
     credentials,
     `/api/admin/runs/${encodeURIComponent(runId)}/logs${suffix}`
+  );
+}
+
+export function getTokenTimeline(
+  credentials: Credentials,
+  runId: string,
+  params: {
+    tenantId: string;
+    stage?: string;
+    attempt?: number;
+    include_retries?: boolean;
+    model?: string;
+  }
+): Promise<TokenTimelineRecord> {
+  const query = new URLSearchParams();
+  if (params.stage) {
+    query.set("stage", params.stage);
+  }
+  if (typeof params.attempt === "number") {
+    query.set("attempt", String(params.attempt));
+  }
+  if (params.include_retries !== undefined) {
+    query.set("include_retries", params.include_retries ? "true" : "false");
+  }
+  if (params.model) {
+    query.set("model", params.model);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<TokenTimelineRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(params.tenantId)}/runs/${encodeURIComponent(runId)}/token-timeline${suffix}`
+  );
+}
+
+export function getTokenOverview(
+  credentials: Credentials,
+  params: {
+    tenant_id: string;
+    project_id: string;
+    issue_key?: string;
+    run_status?: string;
+    stage?: string;
+    attempt?: number;
+    model?: string;
+    start_date?: string;
+    end_date?: string;
+    only_retried?: boolean;
+    only_with_test_stage?: boolean;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<TokenOverviewRecord> {
+  const query = new URLSearchParams();
+  query.set("project_id", params.project_id);
+  if (params.issue_key) {
+    query.set("issue_key", params.issue_key);
+  }
+  if (params.run_status) {
+    query.set("run_status", params.run_status);
+  }
+  if (params.stage) {
+    query.set("stage", params.stage);
+  }
+  if (typeof params.attempt === "number") {
+    query.set("attempt", String(params.attempt));
+  }
+  if (params.model) {
+    query.set("model", params.model);
+  }
+  if (params.start_date) {
+    query.set("start_date", params.start_date);
+  }
+  if (params.end_date) {
+    query.set("end_date", params.end_date);
+  }
+  if (params.only_retried !== undefined) {
+    query.set("only_retried", params.only_retried ? "true" : "false");
+  }
+  if (params.only_with_test_stage !== undefined) {
+    query.set("only_with_test_stage", params.only_with_test_stage ? "true" : "false");
+  }
+  if (typeof params.page === "number") {
+    query.set("page", String(params.page));
+  }
+  if (typeof params.page_size === "number") {
+    query.set("page_size", String(params.page_size));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<TokenOverviewRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(params.tenant_id)}/token-overview${suffix}`
+  );
+}
+
+export function compareRunsTokens(
+  credentials: Credentials,
+  payload: TokenCompareRequestBody,
+  options: {
+    tenantId: string;
+    projectId: string;
+  }
+): Promise<TokenCompareRecord> {
+  const query = new URLSearchParams();
+  query.set("project_id", options.projectId);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<TokenCompareRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(options.tenantId)}/token-compare${suffix}`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function compareTokens(
+  credentials: Credentials,
+  payload: TokenCompareRequestBody,
+  options: {
+    tenantId: string;
+    projectId: string;
+  }
+): Promise<TokenCompareRecord> {
+  return compareRunsTokens(credentials, payload, options);
+}
+
+export function getTokenStageDiagnostics(
+  credentials: Credentials,
+  params: {
+    tenant_id: string;
+    project_id: string;
+    issue_key?: string;
+    run_status?: string;
+    stage?: string;
+    attempt?: number;
+    model?: string;
+    start_date?: string;
+    end_date?: string;
+    only_retried?: boolean;
+    only_with_test_stage?: boolean;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<TokenStageDiagnosticsRecord> {
+  const query = new URLSearchParams();
+  query.set("project_id", params.project_id);
+  if (params.issue_key) {
+    query.set("issue_key", params.issue_key);
+  }
+  if (params.run_status) {
+    query.set("run_status", params.run_status);
+  }
+  if (params.stage) {
+    query.set("stage", params.stage);
+  }
+  if (typeof params.attempt === "number") {
+    query.set("attempt", String(params.attempt));
+  }
+  if (params.model) {
+    query.set("model", params.model);
+  }
+  if (params.start_date) {
+    query.set("start_date", params.start_date);
+  }
+  if (params.end_date) {
+    query.set("end_date", params.end_date);
+  }
+  if (params.only_retried !== undefined) {
+    query.set("only_retried", params.only_retried ? "true" : "false");
+  }
+  if (params.only_with_test_stage !== undefined) {
+    query.set("only_with_test_stage", params.only_with_test_stage ? "true" : "false");
+  }
+  if (typeof params.page === "number") {
+    query.set("page", String(params.page));
+  }
+  if (typeof params.page_size === "number") {
+    query.set("page_size", String(params.page_size));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<TokenStageDiagnosticsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(params.tenant_id)}/token-stage-diagnostics${suffix}`
+  );
+}
+
+export function getTokenStageDiagnosticsCompare(
+  credentials: Credentials,
+  params: {
+    tenant_id: string;
+    project_ids: string[];
+    issue_key?: string;
+    run_status?: string;
+    stage?: string;
+    attempt?: number;
+    model?: string;
+    start_date?: string;
+    end_date?: string;
+    only_retried?: boolean;
+    only_with_test_stage?: boolean;
+  }
+): Promise<TokenStageDiagnosticsCompareRecord> {
+  const query = new URLSearchParams();
+  query.set("project_ids", params.project_ids.join(","));
+  if (params.issue_key) {
+    query.set("issue_key", params.issue_key);
+  }
+  if (params.run_status) {
+    query.set("run_status", params.run_status);
+  }
+  if (params.stage) {
+    query.set("stage", params.stage);
+  }
+  if (typeof params.attempt === "number") {
+    query.set("attempt", String(params.attempt));
+  }
+  if (params.model) {
+    query.set("model", params.model);
+  }
+  if (params.start_date) {
+    query.set("start_date", params.start_date);
+  }
+  if (params.end_date) {
+    query.set("end_date", params.end_date);
+  }
+  if (params.only_retried !== undefined) {
+    query.set("only_retried", params.only_retried ? "true" : "false");
+  }
+  if (params.only_with_test_stage !== undefined) {
+    query.set("only_with_test_stage", params.only_with_test_stage ? "true" : "false");
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<TokenStageDiagnosticsCompareRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(params.tenant_id)}/token-stage-diagnostics-compare${suffix}`
   );
 }
 

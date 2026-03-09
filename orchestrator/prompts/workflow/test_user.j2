@@ -11,9 +11,15 @@ Allowed tools for this stage: {{ allowed_tools_json }}
 Agent tool command: {{ agent_tool_command }}
 
 Required actions:
-1. Validate whether acceptance criteria are met using available tests/checks.
-2. Provide concrete guidance for missing verification or failures.
-3. Fail closed when verification cannot be completed.
+1. Run validation in two steps:
+   - Step A: execute targeted tests/checks for changed areas first.
+   - Step B: run broader/full-suite checks only when Step A indicates risk, uncertainty, or uncovered acceptance criteria.
+2. When attempt > 1, identify unchanged areas and skip redundant re-testing for those areas.
+3. Keep command output lean:
+   - Use concise flags/reporters where possible.
+   - For verbose commands, capture full output in an artifact file and summarize key failures in guidance.
+4. Provide concrete guidance for missing verification or failures.
+5. Fail closed when verification cannot be completed.
 
 Output contract:
 - passed: boolean readiness signal.
