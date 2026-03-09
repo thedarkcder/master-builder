@@ -522,7 +522,11 @@ async def ingest_github_webhook_event(
                 tenant=tenant,
                 issue_key=remediation_result.issue_key,
             )
-            remediation_run_id = remediation_result.run.run_id if remediation_result.run is not None else None
+            remediation_run_id = (
+                str(getattr(remediation_result.run, "run_id", "")).strip() or None
+                if remediation_result.run is not None
+                else None
+            )
             try:
                 remediation_comment_result = upsert_sticky_remediation_comment(
                     github_client=github_client,
