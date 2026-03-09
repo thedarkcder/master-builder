@@ -33,6 +33,8 @@ type FilterState = {
   only_with_test_stage: boolean;
 };
 
+const STAGE_AXIS = ["pm", "dev", "test", "review", "orchestrated_run"] as const;
+
 function toIsoDate(value: string): string {
   if (!value) {
     return "";
@@ -61,7 +63,13 @@ function stageColor(stage: string): string {
   if (stage === "test") {
     return "#f59e0b";
   }
-  return "#ef4444";
+  if (stage === "review") {
+    return "#ef4444";
+  }
+  if (stage === "orchestrated_run") {
+    return "#8b5cf6";
+  }
+  return "#64748b";
 }
 
 function attemptOptions() {
@@ -353,9 +361,8 @@ export default function TenantStageDiagnosticsPage() {
     [results?.scatter_points]
   );
   const radarData = useMemo(() => {
-    const stageAxis = ["pm", "dev", "test", "review"];
     const projectsPayload = compareResults?.projects ?? [];
-    const rows = stageAxis.map((stageName) => {
+    const rows = STAGE_AXIS.map((stageName) => {
       const row: Record<string, string | number> = { stage: stageName.toUpperCase() };
       const values: number[] = [];
       for (const project of projectsPayload) {
@@ -386,9 +393,8 @@ export default function TenantStageDiagnosticsPage() {
     [compareResults?.projects, projectNameLookup]
   );
   const projectRadarRows = useMemo(() => {
-    const stageAxis = ["pm", "dev", "test", "review"];
     return (compareResults?.projects ?? []).map((project) => {
-      const baseRows = stageAxis.map((stageName) => {
+      const baseRows = STAGE_AXIS.map((stageName) => {
         const stageEntry = project.stages.find((stage) => stage.stage === stageName);
         return {
           stage: stageName.toUpperCase(),
@@ -412,17 +418,20 @@ export default function TenantStageDiagnosticsPage() {
     });
   }, [compareMetric, compareResults?.projects, normalizeCompare, projectNameLookup]);
   const issueStageChartData = useMemo(() => {
-    const byIssue = new Map<string, { issue_key: string; pm: number; dev: number; test: number; review: number }>();
+    const byIssue = new Map<string, { issue_key: string; pm: number; dev: number; test: number; review: number; orchestrated_run: number }>();
     for (const row of results?.issue_stage_totals ?? []) {
-      const issue = byIssue.get(row.issue_key) ?? { issue_key: row.issue_key, pm: 0, dev: 0, test: 0, review: 0 };
+      const issue = byIssue.get(row.issue_key) ?? { issue_key: row.issue_key, pm: 0, dev: 0, test: 0, review: 0, orchestrated_run: 0 };
       if (row.stage === "pm") issue.pm += row.total_io;
       if (row.stage === "dev") issue.dev += row.total_io;
       if (row.stage === "test") issue.test += row.total_io;
       if (row.stage === "review") issue.review += row.total_io;
+      if (row.stage === "orchestrated_run") issue.orchestrated_run += row.total_io;
       byIssue.set(row.issue_key, issue);
     }
     return Array.from(byIssue.values()).sort(
-      (a, b) => (b.pm + b.dev + b.test + b.review) - (a.pm + a.dev + a.test + a.review)
+      (a, b) =>
+        (b.pm + b.dev + b.test + b.review + b.orchestrated_run) -
+        (a.pm + a.dev + a.test + a.review + a.orchestrated_run)
     );
   }, [results?.issue_stage_totals]);
 
@@ -489,6 +498,7 @@ export default function TenantStageDiagnosticsPage() {
             <option value="dev">dev</option>
             <option value="test">test</option>
             <option value="review">review</option>
+            <option value="orchestrated_run">orchestrated_run</option>
           </select>
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
@@ -769,6 +779,7 @@ export default function TenantStageDiagnosticsPage() {
                     { key: "dev", label: "Dev", color: "#22c55e", stackId: "stage" },
                     { key: "test", label: "Test", color: "#f59e0b", stackId: "stage" },
                     { key: "review", label: "Review", color: "#ef4444", stackId: "stage" },
+                    { key: "orchestrated_run", label: "Orchestrated", color: "#8b5cf6", stackId: "stage" },
                   ]}
                 />
                 <div className="overflow-x-auto">

@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     codex_log_batch_size: int = 50
     codex_log_batch_flush_ms: int = 50
     workflow_max_parallel_workstreams: int = 3
+    workflow_orchestrated_run_timeout_minutes: int = 90
+    # Deprecated: retained for backward compatibility with existing env vars.
     workflow_one_shot_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200

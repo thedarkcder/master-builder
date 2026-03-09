@@ -80,6 +80,8 @@ class WorkflowResult:
     dev_rationale: list[str] = field(default_factory=list)
     review_summary: list[str] = field(default_factory=list)
     review_feedback: str | None = None
+    orchestration_stage_trace: list[dict[str, object]] = field(default_factory=list)
+    orchestration_workstream_trace: list[dict[str, object]] = field(default_factory=list)
     follow_up_issue: dict | None = None
     diagnostics: WorkflowDiagnostics | None = None
 
@@ -93,8 +95,15 @@ class WorkflowResult:
             "dev_rationale": self.dev_rationale,
             "review_summary": self.review_summary,
             "review_feedback": self.review_feedback,
+            "orchestration_stage_trace": self.orchestration_stage_trace,
+            "orchestration_workstream_trace": self.orchestration_workstream_trace,
             "follow_up_issue": self.follow_up_issue,
         }
+        if self.orchestration_stage_trace or self.orchestration_workstream_trace:
+            payload["orchestration_trace"] = {
+                "stage_events": self.orchestration_stage_trace,
+                "workstream_events": self.orchestration_workstream_trace,
+            }
         if self.plan is not None:
             payload["plan"] = asdict(self.plan)
         if self.diagnostics is not None:

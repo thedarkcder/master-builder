@@ -60,6 +60,27 @@ type TimelineSegment = {
   detail: string;
 };
 
+type OrchestrationStageTraceEntry = {
+  order: number;
+  stage: string;
+  status: string;
+  summary: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  invocationId: string | null;
+  attempt: number | null;
+  durationMs: number | null;
+};
+
+type OrchestrationWorkstreamTraceEntry = {
+  order: number;
+  name: string;
+  stage: string;
+  status: string;
+  summary: string;
+  branch: string | null;
+};
+
 type WorkflowDiagnosticsHistoryEntry = {
   stage: string;
   attempt: string;
@@ -181,6 +202,8 @@ function stageColor(stage: string): string {
       return "#f59e0b";
     case "review":
       return "#ef4444";
+    case "orchestrated_run":
+      return "#8b5cf6";
     default:
       return "#64748b";
   }
@@ -189,6 +212,9 @@ function stageColor(stage: string): string {
 function stageDisplayLabel(stage: string): string {
   if (stage === "pm" || stage === "dev" || stage === "test" || stage === "review") {
     return stage.toUpperCase();
+  }
+  if (stage === "orchestrated_run") {
+    return "ORCHESTRATED RUN";
   }
   return stage;
 }
@@ -509,6 +535,72 @@ export default function RunDetailPage() {
       })),
     [tokenTimeline?.turns]
   );
+  const orchestrationTrace = useMemo(() => {
+    if (!isRecord(run?.plan)) {
+      return {
+        stageEvents: [] as OrchestrationStageTraceEntry[],
+        workstreamEvents: [] as OrchestrationWorkstreamTraceEntry[],
+      };
+    }
+    const planRoot = run.plan;
+    const orchestrationRoot = isRecord(planRoot["orchestration_trace"])
+      ? (planRoot["orchestration_trace"] as Record<string, unknown>)
+      : null;
+    const stageRaw = Array.isArray(planRoot["orchestration_stage_trace"])
+      ? planRoot["orchestration_stage_trace"]
+      : Array.isArray(orchestrationRoot?.["stage_events"])
+        ? (orchestrationRoot?.["stage_events"] as unknown[])
+        : [];
+    const workstreamRaw = Array.isArray(planRoot["orchestration_workstream_trace"])
+      ? planRoot["orchestration_workstream_trace"]
+      : Array.isArray(orchestrationRoot?.["workstream_events"])
+        ? (orchestrationRoot?.["workstream_events"] as unknown[])
+        : [];
+    const stageEvents: OrchestrationStageTraceEntry[] = stageRaw
+      .map((item, index) => {
+        if (!isRecord(item)) {
+          return null;
+        }
+        const stage = String(item["stage"] ?? "").trim().toLowerCase();
+        if (!stage) {
+          return null;
+        }
+        return {
+          order: Number.isFinite(Number(item["order"])) ? Number(item["order"]) : index,
+          stage,
+          status: String(item["status"] ?? "").trim().toLowerCase() || "completed",
+          summary: String(item["summary"] ?? "").trim(),
+          startedAt: String(item["started_at"] ?? "").trim() || null,
+          finishedAt: String(item["finished_at"] ?? "").trim() || null,
+          invocationId: String(item["invocation_id"] ?? "").trim() || null,
+          attempt: Number.isFinite(Number(item["attempt"])) ? Number(item["attempt"]) : null,
+          durationMs: Number.isFinite(Number(item["duration_ms"])) ? Number(item["duration_ms"]) : null,
+        } satisfies OrchestrationStageTraceEntry;
+      })
+      .filter((item): item is OrchestrationStageTraceEntry => item !== null)
+      .sort((a, b) => a.order - b.order);
+    const workstreamEvents: OrchestrationWorkstreamTraceEntry[] = workstreamRaw
+      .map((item, index) => {
+        if (!isRecord(item)) {
+          return null;
+        }
+        const name = String(item["name"] ?? "").trim();
+        if (!name) {
+          return null;
+        }
+        return {
+          order: Number.isFinite(Number(item["order"])) ? Number(item["order"]) : index,
+          name,
+          stage: String(item["stage"] ?? "").trim().toLowerCase() || "dev",
+          status: String(item["status"] ?? "").trim().toLowerCase() || "completed",
+          summary: String(item["summary"] ?? "").trim(),
+          branch: String(item["branch"] ?? "").trim() || null,
+        } satisfies OrchestrationWorkstreamTraceEntry;
+      })
+      .filter((item): item is OrchestrationWorkstreamTraceEntry => item !== null)
+      .sort((a, b) => a.order - b.order);
+    return { stageEvents, workstreamEvents };
+  }, [run?.plan]);
   const invocationSessionRows = useMemo(() => {
     const telemetryRows = logs
       .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
@@ -555,12 +647,39 @@ export default function RunDetailPage() {
       }
       byInvocation.set(invocationId, current);
     }
+    const syntheticBaseTimestamp = run?.started_at ?? run?.created_at ?? new Date().toISOString();
+    for (const [index, item] of orchestrationTrace.stageEvents.entries()) {
+      if (!["pm", "dev", "test", "review"].includes(item.stage)) {
+        continue;
+      }
+      const invocationId = item.invocationId ?? `orchestration-trace-${item.stage}-${item.order}`;
+      if (byInvocation.has(invocationId)) {
+        continue;
+      }
+      byInvocation.set(invocationId, {
+        key: invocationId,
+        stage: item.stage,
+        attempt: item.attempt ?? 1,
+        invocationId,
+        startedAt: item.startedAt ?? syntheticBaseTimestamp,
+        finishedAt:
+          item.finishedAt ??
+          (item.status === "running" ? null : item.startedAt ?? syntheticBaseTimestamp),
+        status: item.status,
+        durationMs: item.durationMs,
+        resumedSession: false,
+        codexSessionId: null,
+      });
+      if (index > 24) {
+        break;
+      }
+    }
     return Array.from(byInvocation.values()).sort((a, b) => {
       const aTime = new Date(a.startedAt ?? a.finishedAt ?? 0).getTime();
       const bTime = new Date(b.startedAt ?? b.finishedAt ?? 0).getTime();
       return bTime - aTime;
     });
-  }, [logs]);
+  }, [logs, orchestrationTrace.stageEvents, run?.created_at, run?.started_at]);
   const latestCodexSessionId = useMemo(() => {
     const fromTimeline = invocationSessionRows.find((row) => row.codexSessionId)?.codexSessionId;
     if (fromTimeline) {
@@ -614,6 +733,13 @@ export default function RunDetailPage() {
     const reviewHistory = (workflowDiagnostics?.history ?? [])
       .filter((entry) => entry.stage.toLowerCase() === "review")
       .map((entry) => entry.event);
+    const workstreamSummaries = orchestrationTrace.workstreamEvents.map((entry) => {
+      const detail = `${entry.name} · ${entry.stage} · ${entry.status}`;
+      if (entry.summary) {
+        return `${detail}: ${entry.summary}`;
+      }
+      return detail;
+    });
     return [
       {
         stage: "pm",
@@ -625,7 +751,7 @@ export default function RunDetailPage() {
       {
         stage: "dev",
         label: "Dev",
-        items: toStringList(planRoot["dev_rationale"]),
+        items: [...toStringList(planRoot["dev_rationale"]), ...workstreamSummaries],
         feedback: null as string | null,
         emptyText: "No Dev rationale captured."
       },
@@ -644,7 +770,7 @@ export default function RunDetailPage() {
         emptyText: "No review summary captured."
       }
     ];
-  }, [run?.plan, workflowDiagnostics?.history]);
+  }, [orchestrationTrace.workstreamEvents, run?.plan, workflowDiagnostics?.history]);
   const stageLiveSnapshots = useMemo(() => {
     const snapshots = new Map<AgentStage, { recordedAt: string; text: string }>();
     const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
@@ -1458,6 +1584,7 @@ export default function RunDetailPage() {
                           <option value="dev">dev</option>
                           <option value="test">test</option>
                           <option value="review">review</option>
+                          <option value="orchestrated_run">orchestrated_run</option>
                         </select>
                       </label>
                       <label className="flex items-center gap-1">

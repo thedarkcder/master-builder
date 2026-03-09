@@ -17,7 +17,7 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.storage.models import Run, RunTokenUsage
 
-_KNOWN_STAGES = ("pm", "dev", "test", "review")
+_KNOWN_STAGES = ("pm", "dev", "test", "review", "orchestrated_run")
 _MAX_DATE_SPAN = timedelta(days=180)
 _STAGE_SPIKE_THRESHOLD = 2000
 _UNCACHED_SPIKE_THRESHOLD = 1500
