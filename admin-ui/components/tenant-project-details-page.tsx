@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { ArrowLeft, MessageSquare } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { ProjectKnowledgeBaseSection } from "@/components/project-knowledge-base-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -281,6 +282,11 @@ export function TenantProjectDetailsPage() {
                 {project.is_archived ? "Unarchive" : "Archive"}
               </Button>
             </div>
+            <ProjectKnowledgeBaseSection
+              credentials={credentials}
+              tenantId={params.tenantId}
+              projectId={params.projectId}
+            />
             <div className="space-y-2 border-t pt-4">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Project runs</p>
               <div className="grid gap-2 md:grid-cols-3">

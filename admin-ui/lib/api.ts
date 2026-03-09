@@ -141,6 +141,38 @@ export type ProjectUpdatePayload = {
   is_archived: boolean;
 };
 
+export type ProjectKnowledgeAssetRecord = {
+  asset_id: string;
+  tenant_id: string;
+  project_id: string;
+  title: string;
+  mime_type: string | null;
+  source_type: string;
+  source_ref: string | null;
+  source_timestamp: string | null;
+  chunk_count: number;
+  status: string;
+  updated_at: string;
+  created_at: string;
+};
+
+export type ProjectKnowledgeAssetCreatePayload = {
+  title: string;
+  mime_type?: string | null;
+  source_type: string;
+  source_ref?: string;
+  source_timestamp?: string;
+  text_content?: string;
+  content_base64?: string;
+};
+
+export type ProjectKnowledgeSyncResult = {
+  ok: boolean;
+  synced_assets: number;
+  skipped_assets: number;
+  details: string | null;
+};
+
 export type JiraWebhookActionResult = {
   ok: boolean;
   action: string;
@@ -774,6 +806,62 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
   return request<ProjectRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`
+  );
+}
+
+export function listProjectKnowledgeAssets(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectKnowledgeAssetRecord[]> {
+  return request<ProjectKnowledgeAssetRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets`
+  );
+}
+
+export function createProjectKnowledgeAsset(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectKnowledgeAssetCreatePayload
+): Promise<ProjectKnowledgeAssetRecord> {
+  return request<ProjectKnowledgeAssetRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function deleteProjectKnowledgeAsset(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  assetId: string
+): Promise<void> {
+  await request<void>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets/${encodeURIComponent(assetId)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
+export function syncProjectKnowledgeFromJira(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectKnowledgeSyncResult> {
+  return request<ProjectKnowledgeSyncResult>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets/sync-jira`,
+    {
+      method: "POST"
+    }
   );
 }
 
