@@ -314,6 +314,12 @@ def _persist_precheck_questions_block(
     return next_description
 
 
+def _locked_decision_gate_reason(*, classification: str, decision_gate: Any | None) -> str | None:
+    if classification not in {"decision_gate", "both"}:
+        return None
+    return str(getattr(decision_gate, "reason", "") or "").strip() or None
+
+
 def _plan_decision_gate_jira_update(
     *,
     runtime,  # noqa: ANN001
@@ -889,6 +895,10 @@ def dispatch_run_control_command(
 
         if classification != "clear":
             decision_gate = getattr(pre_check, "decision_gate", None)
+            locked_decision_gate_reason = _locked_decision_gate_reason(
+                classification=classification,
+                decision_gate=decision_gate,
+            )
             decision_gate_questions = [
                 question.strip()
                 for question in getattr(decision_gate, "questions", ())
@@ -912,7 +922,7 @@ def dispatch_run_control_command(
                     issue_key=issue_key,
                     issue_summary=updated_summary,
                     current_description=str(updated_description or ""),
-                    decision_gate_reason=str(getattr(decision_gate, "reason", "") or "").strip() or None,
+                    decision_gate_reason=locked_decision_gate_reason,
                     decision_gate_questions=decision_gate_questions,
                     gtd_questions=gtd_questions,
                 )
