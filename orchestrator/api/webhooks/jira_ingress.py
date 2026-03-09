@@ -30,12 +30,12 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
-from orchestrator.core.decision_engine import IngressDecision, evaluate_ingress_precheck
-from orchestrator.core.knowledge_base import resolve_missing_slots_from_knowledge
+from orchestrator.core.decision_engine import (
+    DecisionEngineResult,
+    DecisionEventInput,
+    evaluate_decision_event,
+)
 from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.label_action_service import apply_issue_label_actions
-from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
-from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.runs import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
@@ -220,19 +220,12 @@ def _build_knowledge_autofill_block(*, slot_answers: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
-def _build_backlog_pre_run_check(context: JiraWebhookContext) -> dict[str, object]:
-    decision = evaluate_ingress_precheck(
-        source="jira_webhook",
-        tenant_id=context.tenant_id,
-        project_id=context.project.project_id if context.project is not None else None,
-        issue_key=context.issue_key,
-        issue_summary=context.issue_summary,
-        issue_description=context.issue_description,
-        issue_labels=context.issue_labels,
-        ready_label=_resolve_ready_label_for_tenant(context.tenant),
-        evaluate_pre_run_check_fn=evaluate_pre_run_check,
-    )
-    pre_check = decision.pre_check
+def _build_backlog_pre_run_check(
+    *,
+    context: JiraWebhookContext,
+    decision_result: DecisionEngineResult,
+) -> dict[str, object]:
+    pre_check = decision_result.decision.pre_check
     if pre_check is None:
         return {
             "outcome": "policy_eval_failed",
@@ -242,10 +235,12 @@ def _build_backlog_pre_run_check(context: JiraWebhookContext) -> dict[str, objec
             "required_worker_label": "worker:linux",
             "required_worker_label_present": False,
             "decision_gate_triggered": False,
-            "decision_gate_reason": _normalize_backlog_pre_run_check_text(decision.policy_error),
+            "decision_gate_reason": "Precheck policy evaluation failed",
             "gtd_valid": False,
             "gtd_missing_criteria": [],
             "gtd_clarification_questions": [],
+            "auto_resolved_slots": list(decision_result.auto_resolved_slots),
+            "cycle_id": decision_result.cycle_id,
         }
     decision_gate_reason = _normalize_backlog_pre_run_check_text(pre_check.decision_gate_reason)
 
@@ -261,6 +256,8 @@ def _build_backlog_pre_run_check(context: JiraWebhookContext) -> dict[str, objec
         "gtd_valid": pre_check.gtd_valid,
         "gtd_missing_criteria": list(pre_check.gtd_missing_criteria),
         "gtd_clarification_questions": list(pre_check.gtd_clarification_questions),
+        "auto_resolved_slots": list(decision_result.auto_resolved_slots),
+        "cycle_id": decision_result.cycle_id,
     }
 
 
@@ -328,136 +325,47 @@ def _evaluate_precheck_decision_with_labels(
     session: Session,
     settings,  # noqa: ANN001
     issue_description: str | None = None,
-) -> tuple[IngressDecision, list[str]]:
-    decision = evaluate_ingress_precheck(
-        source="jira_webhook",
-        tenant_id=context.tenant_id,
-        project_id=context.project.project_id if context.project is not None else None,
-        issue_key=context.issue_key,
-        issue_summary=context.issue_summary,
-        issue_description=context.issue_description if issue_description is None else issue_description,
-        issue_labels=context.issue_labels,
-        ready_label=_resolve_ready_label_for_tenant(context.tenant),
-        evaluate_pre_run_check_fn=evaluate_pre_run_check,
-    )
-    if decision.pre_check is None:
-        return decision, []
-    apply_result = apply_issue_label_actions(
+) -> DecisionEngineResult:
+    effective_description = context.issue_description if issue_description is None else issue_description
+
+    def _publish_jira_comment(comment: str) -> tuple[bool, str | None]:
+        return post_jira_comment(
+            session=session,
+            tenant=context.tenant,
+            issue_key=context.issue_key,
+            comment=comment,
+            settings=settings,
+        )
+
+    result = evaluate_decision_event(
         session=session,
         tenant=context.tenant,
-        project_policy_overrides=context.project.policy_overrides if context.project is not None else {},
-        issue_key=context.issue_key,
-        existing_labels=context.issue_labels,
-        actions=decision.label_actions,
+        project=context.project,
+        event=DecisionEventInput(
+            source="jira_webhook",
+            event_type=str(context.webhook_event or "jira_webhook"),
+            idempotency_key=f"{context.request_id}:{context.webhook_event or 'unknown'}:{context.issue_key}",
+            issue_key=context.issue_key,
+            issue_summary=context.issue_summary,
+            issue_description=effective_description,
+            issue_labels=context.issue_labels,
+        ),
         settings=settings,
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-        logger=logger,
+        publish_jira_comment_fn=_publish_jira_comment,
+        evaluate_pre_run_check_fn=evaluate_pre_run_check,
     )
-    applied_labels = list(apply_result.applied_labels)
-    if applied_labels:
-        context.issue_labels = [*context.issue_labels, *applied_labels]
+
+    if result.issue_labels != context.issue_labels:
+        context.issue_labels = list(result.issue_labels)
         logger.info(
             "jira_webhook_labels_applied request_id=%s tenant_id=%s issue_key=%s labels=%s",
             context.request_id,
             context.tenant_id,
             context.issue_key,
-            ",".join(applied_labels),
+            ",".join(context.issue_labels),
         )
-    resolved_decision = decision.with_applied_labels(applied_labels)
-    pre_check = resolved_decision.pre_check
-    if (
-        pre_check is not None
-        and resolved_decision.block_reason in {"decision_gate_required", "gtd_required"}
-        and context.project is not None
-    ):
-        effective_policy = resolve_effective_policy(
-            tenant_policy=context.tenant.policy_config or {},
-            project_overrides=context.project.policy_overrides or {},
-        )
-        knowledge_enabled = bool(effective_policy.get("knowledge_base_enabled", True))
-        knowledge_mode = str(effective_policy.get("knowledge_auto_answer_mode") or "").strip().lower()
-        if knowledge_mode not in {"safe", "balanced", "aggressive"}:
-            knowledge_mode = "aggressive"
-        missing_slots = precheck_missing_slots(pre_check)
-        if knowledge_enabled and missing_slots:
-            slot_answers = resolve_missing_slots_from_knowledge(
-                session=session,
-                tenant_id=context.tenant_id,
-                project_id=context.project.project_id,
-                missing_slots=missing_slots,
-                mode=knowledge_mode,
-            )
-            if slot_answers:
-                try:
-                    oauth = tenant_jira_oauth_context(session=session, tenant=context.tenant, settings=settings)
-                    oauth_client = getattr(oauth, "client", None)
-                    oauth_connection = getattr(oauth, "connection", None)
-                    oauth_access_token = getattr(oauth, "access_token", None)
-                    cloud_id = getattr(oauth_connection, "cloud_id", None)
-                    if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
-                        raise RuntimeError("Tenant Jira OAuth context is incomplete")
-                    next_description = _upsert_block(
-                        current_description=str(
-                            context.issue_description if issue_description is None else issue_description or ""
-                        ),
-                        block=_build_knowledge_autofill_block(slot_answers=slot_answers),
-                        start_marker=KNOWLEDGE_AUTOFILL_BLOCK_START,
-                        end_marker=KNOWLEDGE_AUTOFILL_BLOCK_END,
-                    )
-                    oauth_client.update_issue_summary_and_description(
-                        access_token=oauth_access_token,
-                        cloud_id=str(cloud_id),
-                        issue_id_or_key=context.issue_key,
-                        summary=str(context.issue_summary or context.issue_key),
-                        description=next_description,
-                    )
-                    context.issue_description = next_description
-                    reevaluated_decision = evaluate_ingress_precheck(
-                        source="jira_webhook",
-                        tenant_id=context.tenant_id,
-                        project_id=context.project.project_id if context.project is not None else None,
-                        issue_key=context.issue_key,
-                        issue_summary=context.issue_summary,
-                        issue_description=next_description,
-                        issue_labels=context.issue_labels,
-                        ready_label=_resolve_ready_label_for_tenant(context.tenant),
-                        evaluate_pre_run_check_fn=evaluate_pre_run_check,
-                    )
-                    if reevaluated_decision.pre_check is not None:
-                        reapply_result = apply_issue_label_actions(
-                            session=session,
-                            tenant=context.tenant,
-                            project_policy_overrides=context.project.policy_overrides if context.project is not None else {},
-                            issue_key=context.issue_key,
-                            existing_labels=context.issue_labels,
-                            actions=reevaluated_decision.label_actions,
-                            settings=settings,
-                            tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-                            oauth_context=oauth,
-                            logger=logger,
-                        )
-                        re_applied = list(reapply_result.applied_labels)
-                        if re_applied:
-                            context.issue_labels = [*context.issue_labels, *re_applied]
-                            applied_labels = [*applied_labels, *re_applied]
-                        resolved_decision = reevaluated_decision.with_applied_labels(re_applied)
-                        logger.info(
-                            "jira_webhook_knowledge_autofill_applied request_id=%s tenant_id=%s issue_key=%s classification=%s resolved_slots=%s",
-                            context.request_id,
-                            context.tenant_id,
-                            context.issue_key,
-                            precheck_classification(resolved_decision.pre_check),
-                            ",".join(sorted(slot_answers.keys())),
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "jira_webhook_knowledge_autofill_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
-                        context.request_id,
-                        context.tenant_id,
-                        context.issue_key,
-                        exc,
-                    )
-    return resolved_decision, applied_labels
+    return result
 
 
 @dataclass
@@ -864,7 +772,15 @@ def stage_handle_run_board_gate(
 
     if location == "backlog":
         reason = "issue_in_backlog"
-        pre_run_check = _build_backlog_pre_run_check(context)
+        decision_result = _evaluate_precheck_decision_with_labels(
+            context=context,
+            session=session,
+            settings=settings,
+        )
+        pre_run_check = _build_backlog_pre_run_check(
+            context=context,
+            decision_result=decision_result,
+        )
         if context.webhook_event == "issue_created":
             _notify_backlog_pre_run_check(
                 context=context,
@@ -1043,35 +959,6 @@ async def ingest_jira_webhook_event(
                 webhook_event=context.webhook_event,
             )
 
-        initial_precheck_decision, _ = _evaluate_precheck_decision_with_labels(
-            context=context,
-            session=session,
-            settings=settings,
-        )
-        if initial_precheck_decision.pre_check is None:
-            logger.warning(
-                "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=policy_eval_failed error=%s",
-                request_id,
-                tenant_id,
-                context.issue_key,
-                initial_precheck_decision.policy_error,
-            )
-            _notify_jira_enqueue_skipped(
-                context=context,
-                session=session,
-                settings=settings,
-                reason="policy_eval_failed",
-                extra_detail=initial_precheck_decision.policy_error,
-            )
-            return jira_webhook_response(
-                context,
-                enqueued=False,
-                reason="policy_eval_failed",
-                guidance=enqueue_reason_guidance("policy_eval_failed"),
-                trigger_reason="status_recheck",
-                webhook_event=context.webhook_event,
-            )
-
         board_gate_response = stage_handle_run_board_gate(
             context=context,
             session=session,
@@ -1211,12 +1098,13 @@ async def ingest_jira_webhook_event(
                 )
             resolved_issue_description = retry_source_run.issue_description
 
-        precheck_decision, _ = _evaluate_precheck_decision_with_labels(
+        decision_result = _evaluate_precheck_decision_with_labels(
             context=context,
             session=session,
             settings=settings,
             issue_description=resolved_issue_description,
         )
+        precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
             logger.warning(
                 "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=policy_eval_failed error=%s",
