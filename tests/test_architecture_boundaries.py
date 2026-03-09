@@ -23,6 +23,7 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/main.py": {
         "orchestrator.api.routes.admin",
         "orchestrator.api.routes.admin_auth",
+        "orchestrator.api.routes.admin_knowledge",
         "orchestrator.api.routes.admin_secrets",
         "orchestrator.api.routes.discord",
         "orchestrator.api.routes.runs",
