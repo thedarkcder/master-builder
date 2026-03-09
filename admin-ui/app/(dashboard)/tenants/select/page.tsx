@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ChevronRight, Plus, Zap } from "lucide-react";
+import { ChevronRight, KeyRound, Plus, Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -139,6 +139,17 @@ export default function SelectTenantPage() {
               </li>
             </ul>
           )}
+        </div>
+
+        {/* Platform link */}
+        <div className="mt-4 text-center">
+          <Link
+            href="/secrets"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <KeyRound className="h-3 w-3" />
+            Platform Secrets
+          </Link>
         </div>
       </div>
     </div>
