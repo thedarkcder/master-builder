@@ -8,7 +8,9 @@ POLICY_OVERRIDE_FIELDS = {
     "allow_jira_transitions",
     "allow_pr_creation",
     "allow_label_mutations",
+    "allow_auto_merge",
     "max_dev_test_review_loops",
+    "max_pr_auto_remediation_loops",
     "max_concurrent_runs",
     "allowed_commands",
     "require_agents_md",
@@ -18,10 +20,12 @@ _BOOLEAN_CAP_FIELDS = {
     "allow_jira_transitions",
     "allow_pr_creation",
     "allow_label_mutations",
+    "allow_auto_merge",
 }
 
 _NUMERIC_CAP_FIELDS = {
     "max_dev_test_review_loops",
+    "max_pr_auto_remediation_loops",
     "max_concurrent_runs",
 }
 

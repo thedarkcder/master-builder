@@ -43,7 +43,9 @@ class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
     allow_label_mutations: bool = True
+    allow_auto_merge: bool = False
     max_dev_test_review_loops: int = 2
+    max_pr_auto_remediation_loops: int = 5
     max_concurrent_runs: int = 2
     allowed_commands: list[str] = Field(default_factory=list)
     require_agents_md: bool = False

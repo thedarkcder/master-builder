@@ -12,6 +12,7 @@ _ENQUEUE_REASON_GUIDANCE = {
     "run_already_active": "A run for this issue is already active.",
     "tenant_concurrency_limit_reached": "The tenant concurrency limit is reached; wait for an active run to finish.",
     "duplicate_delivery": "This webhook delivery was already processed.",
+    "pr_remediation_attempt_limit_reached": "Automatic PR remediation attempt limit reached for this commit head.",
     "project_not_mapped": "Issue key is not mapped to an active project.",
     "no_retryable_run": "No failed/blocked/cancelled run is available to retry for this issue.",
     "ready_for_agent_backlog": "Issue is ready-for-agent in backlog; move it to To Do to start execution.",
@@ -23,6 +24,7 @@ _ENQUEUE_REASON_GUIDANCE = {
     "decision_gate_required": "Decision Gate is required before execution. Reply with the missing clarifications.",
     "gtd_required": "Good To Do details are incomplete. Add the missing GTD details, then rerun.",
     "missing_ready_label": "Issue is missing the configured ready label.",
+    "policy_eval_failed": "Pre-run policy evaluation failed. Resolve policy/runtime errors before rerunning.",
 }
 
 
