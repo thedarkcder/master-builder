@@ -111,19 +111,19 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         self.addCleanup(self.patch_stack.close)
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin._jira_oauth_client",
+                "orchestrator.api.routes.admin_integrations._jira_oauth_client",
                 side_effect=lambda **_: _FakeJiraClient(),
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin._refresh_jira_connection_tokens",
+                "orchestrator.api.routes.admin_integrations._refresh_jira_connection_tokens",
                 return_value="access-token",
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin.github_client_from_tenant_config",
+                "orchestrator.api.routes.admin_integrations.github_client_from_tenant_config",
                 side_effect=lambda *_, **__: _FakeGitHubClient(),
             )
         )
