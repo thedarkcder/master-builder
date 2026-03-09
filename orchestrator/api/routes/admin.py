@@ -91,29 +91,12 @@ from orchestrator.api.admin.runs_service import (
     list_runs as _list_runs_impl,
     rerun_run as _rerun_run_impl,
 )
-from orchestrator.api.admin.agent_activity_service import (
-    list_agent_activity as _list_agent_activity_impl,
-)
 from orchestrator.api.admin.run_event_stream_service import (
     stream_run_events_ndjson as _stream_run_events_ndjson_impl,
 )
 from orchestrator.api.admin.codex_logs_service import (
     list_codex_log_events as _list_codex_log_events_impl,
     stream_codex_events_ndjson as _stream_codex_events_ndjson_impl,
-)
-from orchestrator.api.admin.project_metrics_service import (
-    project_execution_metrics as _project_execution_metrics_impl,
-)
-from orchestrator.api.admin.alert_policy_service import (
-    evaluate_alerts as _evaluate_alerts_impl,
-)
-from orchestrator.api.admin.tenant_health_service import (
-    tenant_health as _tenant_health_impl,
-)
-from orchestrator.api.admin.observability_service import (
-    platform_observability as _platform_observability_impl,
-    tenant_observability as _tenant_observability_impl,
-    project_observability as _project_observability_impl,
 )
 from orchestrator.api.admin.jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as _build_jira_webhook_diagnostics_impl,
@@ -164,21 +147,14 @@ from orchestrator.api.schemas import (
     JiraWebhookDiagnosticsRead,
     ReadyGatePreviewRead,
     JiraProjectRead,
-    PlatformObservabilityRead,
-    ProjectObservabilityRead,
     ProjectCreate,
     ProjectRead,
-    TenantObservabilityRead,
     ProjectUpdate,
     ReleaseBootstrapReportRead,
     RepoBootstrapStateRead,
     RunRead,
     RunEventRead,
     RunLogEventRead,
-    AgentActivityRead,
-    ProjectExecutionMetricsRead,
-    AlertEvaluationRead,
-    TenantHealthRead,
     TenantCreate,
     TenantRead,
     TenantUpdate,
@@ -1040,99 +1016,3 @@ def stream_codex_events(
         media_type="application/x-ndjson",
     )
 
-
-@router.get("/agents/activity", response_model=list[AgentActivityRead])
-def list_agent_activity(
-    tenant_id: str | None = Query(default=None),
-    project_id: str | None = Query(default=None),
-    heartbeat_timeout_seconds: int = Query(default=300, ge=1, le=86400),
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> list[AgentActivityRead]:
-    return _list_agent_activity_impl(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        heartbeat_timeout_seconds=heartbeat_timeout_seconds,
-    )
-
-
-@router.get("/tenants/{tenant_id}/projects/{project_id}/metrics", response_model=ProjectExecutionMetricsRead)
-def get_project_execution_metrics(
-    tenant_id: str,
-    project_id: str,
-    sla_seconds: int = Query(default=1800, ge=1, le=86400),
-    stale_queue_seconds: int = Query(default=7200, ge=1, le=604800),
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ProjectExecutionMetricsRead:
-    return _project_execution_metrics_impl(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        sla_seconds=sla_seconds,
-        stale_queue_seconds=stale_queue_seconds,
-    )
-
-
-@router.get("/alerts/evaluate", response_model=AlertEvaluationRead)
-def evaluate_alerts(
-    tenant_id: str | None = Query(default=None),
-    cooldown_seconds: int = Query(default=600, ge=1, le=3600),
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> AlertEvaluationRead:
-    return _evaluate_alerts_impl(
-        session=session,
-        tenant_id=tenant_id,
-        cooldown_seconds=cooldown_seconds,
-    )
-
-
-@router.get("/tenants/{tenant_id}/health", response_model=TenantHealthRead)
-def get_tenant_health(
-    tenant_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantHealthRead:
-    return _tenant_health_impl(
-        session=session,
-        tenant_id=tenant_id,
-    )
-
-
-@router.get("/observability/platform", response_model=PlatformObservabilityRead)
-def platform_observability(
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> PlatformObservabilityRead:
-    return _platform_observability_impl(session=session)
-
-
-@router.get("/observability/tenants/{tenant_id}", response_model=TenantObservabilityRead)
-def tenant_observability(
-    tenant_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantObservabilityRead:
-    return _tenant_observability_impl(
-        session=session,
-        tenant_id=tenant_id,
-    )
-
-
-@router.get(
-    "/observability/tenants/{tenant_id}/projects/{project_id}",
-    response_model=ProjectObservabilityRead,
-)
-def project_observability(
-    tenant_id: str,
-    project_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ProjectObservabilityRead:
-    return _project_observability_impl(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-    )
