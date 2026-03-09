@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import runpy
 import threading
 import unittest
 from types import SimpleNamespace
@@ -147,7 +146,8 @@ class WorkerTests(unittest.TestCase):
     def test_process_next_queued_run_passes_send_discord_fn(self) -> None:
         import orchestrator.worker as worker_module
 
-        with patch.object(worker_module, "_process_next_queued_run_with_dependencies", return_value=None) as process_mock:
+        process_mock = MagicMock(return_value=None)
+        with patch.object(worker_module, "_process_next_queued_run_with_dependencies", new=process_mock):
             result = worker_module.process_next_queued_run(MagicMock(), MagicMock())
         self.assertIsNone(result)
         self.assertIn("send_discord_message_fn", process_mock.call_args.kwargs)
@@ -158,13 +158,11 @@ class WorkerTests(unittest.TestCase):
         fake_settings = MagicMock()
         fake_settings.database_url = "sqlite:///test.db"
         fake_settings.log_level = "INFO"
-        fake_loop = MagicMock()
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
             patch.object(worker_module, "create_session_factory"),
             patch.object(worker_module, "is_postgres_database_url", return_value=False),
-            patch("orchestrator.worker.asyncio.get_running_loop", return_value=fake_loop),
         ):
             with self.assertRaisesRegex(RuntimeError, "requires PostgreSQL"):
                 asyncio.run(worker_module.run_worker())
@@ -172,12 +170,14 @@ class WorkerTests(unittest.TestCase):
     def test_main_runs_asyncio_worker(self) -> None:
         import orchestrator.worker as worker_module
 
+        run_worker_mock = MagicMock(return_value="coro-token")
         with (
-            patch.object(worker_module, "run_worker", return_value="coro-token"),
+            patch.object(worker_module, "run_worker", new=run_worker_mock),
             patch("orchestrator.worker.asyncio.run") as run_mock,
         ):
             worker_module.main()
         run_mock.assert_called_once()
+        run_worker_mock.assert_called_once_with()
 
     def test_run_worker_processes_and_stops_cleanly(self) -> None:
         import orchestrator.worker as worker_module
@@ -196,6 +196,7 @@ class WorkerTests(unittest.TestCase):
             return _SessionCtx()
 
         listener = MagicMock()
+        process_mock = MagicMock(side_effect=[object(), None])
         wait_calls = {"count": 0}
 
         async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
@@ -214,7 +215,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()),
-            patch.object(worker_module, "process_next_queued_run", side_effect=[MagicMock(), None]) as process_mock,
+            patch.object(worker_module, "process_next_queued_run", new=process_mock),
         ):
             asyncio.run(worker_module.run_worker())
 
@@ -239,19 +240,26 @@ class WorkerTests(unittest.TestCase):
             return _SessionCtx()
 
         listener = MagicMock()
+        build_runner_mock = MagicMock(side_effect=worker_module.CodexRuntimeError("missing runtime"))
+        get_settings_mock = MagicMock(return_value=fake_settings)
+        configure_logging_mock = MagicMock()
+        create_session_factory_mock = MagicMock(return_value=_session_factory)
+        is_postgres_mock = MagicMock(return_value=True)
+        postgres_dsn_mock = MagicMock(return_value="postgres://dsn")
+        queue_bridge_mock = MagicMock(return_value=listener)
 
         async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
             wake_event.set()
 
         with (
-            patch.object(worker_module, "get_settings", return_value=fake_settings),
-            patch.object(worker_module, "configure_logging"),
-            patch.object(worker_module, "create_session_factory", return_value=_session_factory),
-            patch.object(worker_module, "is_postgres_database_url", return_value=True),
-            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
-            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "get_settings", new=get_settings_mock),
+            patch.object(worker_module, "configure_logging", new=configure_logging_mock),
+            patch.object(worker_module, "create_session_factory", new=create_session_factory_mock),
+            patch.object(worker_module, "is_postgres_database_url", new=is_postgres_mock),
+            patch.object(worker_module, "postgres_dsn_from_database_url", new=postgres_dsn_mock),
+            patch.object(worker_module, "RunQueueNotificationBridge", new=queue_bridge_mock),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
-            patch.object(worker_module, "build_workflow_runner_for_session", side_effect=worker_module.CodexRuntimeError("missing runtime")),
+            patch.object(worker_module, "build_workflow_runner_for_session", new=build_runner_mock),
         ):
             with self.assertRaisesRegex(RuntimeError, "Worker runtime unavailable"):
                 asyncio.run(worker_module.run_worker())
@@ -261,11 +269,12 @@ class WorkerTests(unittest.TestCase):
 
 class MainEntryTests(unittest.TestCase):
     def test_module_main_invokes_cli_main(self) -> None:
-        with patch("orchestrator.cli.main", return_value=0) as main_mock:
-            with patch("sys.argv", ["python", "arg1"]):
-                with self.assertRaises(SystemExit) as exit_ctx:
-                    runpy.run_module("orchestrator.__main__", run_name="__main__")
-        self.assertEqual(exit_ctx.exception.code, 0)
+        import orchestrator.__main__ as main_module
+
+        main_mock = MagicMock(return_value=0)
+        with patch.object(main_module, "main", new=main_mock):
+            result = main_module.run(["arg1"])
+        self.assertEqual(result, 0)
         main_mock.assert_called_once_with(["arg1"])
 
 

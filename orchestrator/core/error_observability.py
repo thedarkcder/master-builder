@@ -20,7 +20,11 @@ def _capture_exception_with_sentry(
     except Exception:
         return
 
-    with sentry_sdk.push_scope() as scope:
+    scope_factory = getattr(sentry_sdk, "new_scope", None) or getattr(sentry_sdk, "push_scope", None)
+    if scope_factory is None:
+        return
+
+    with scope_factory() as scope:
         scope.set_tag("event_type", event)
         scope.set_tag("error_ref", error_ref)
         if context:
