@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,14 +34,8 @@ type TokenOverviewStatus = {
   only_with_test_stage: boolean;
 };
 
-function statusBadge(status: string) {
-  if (status === "succeeded") {
-    return <Badge>{status}</Badge>;
-  }
-  if (status === "failed" || status === "blocked") {
-    return <Badge variant="secondary">{status}</Badge>;
-  }
-  return <Badge variant="outline">{status}</Badge>;
+function statusBadge(_status: string) {
+  return null;
 }
 
 function toIsoDate(value: string): string {
@@ -291,194 +285,140 @@ export default function TenantTokenOverviewPage() {
   );
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Token Overview</CardTitle>
-        <CardDescription>
-          Token growth and efficiency trends by tenant/project/date range. Use filters to narrow scope.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-2 md:grid-cols-4">
-          <select
-            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-            value={filters.project_id}
-            onChange={(event) =>
-              applyFilters((prev) => ({
-                ...prev,
-                project_id: event.target.value,
-                issue_keys: [],
-                run_status: "",
-              }))
-            }
-          >
-            <option value="">Select project</option>
-            {projects.map((project) => (
-              <option key={project.project_id} value={project.project_id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-          <IssueKeySelector
-            issueOptions={issueOptions}
-            selectedIssues={filters.issue_keys}
-            disabled={!filters.project_id}
-            onChange={(next) =>
-              applyFilters((prev) => ({
-                ...prev,
-                issue_keys: next,
-              }))
-            }
-          />
-          <select
-            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-            value={filters.run_status}
-            disabled={!filters.project_id}
-            onChange={(event) => applyFilters((prev) => ({ ...prev, run_status: event.target.value }))}
-          >
-            <option value="">Any status</option>
-            {runStatusOptions.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
-          <select
-            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-            value={filters.stage}
-            onChange={(event) => applyFilters((prev) => ({ ...prev, stage: event.target.value }))}
-          >
-            <option value="">Any stage</option>
-            <option value="pm">pm</option>
-            <option value="dev">dev</option>
-            <option value="test">test</option>
-            <option value="review">review</option>
-          </select>
-          <Input
-            type="date"
-            value={filters.from}
-            onChange={(event) => applyFilters((prev) => ({ ...prev, from: event.target.value }))}
-          />
-          <Input
-            type="date"
-            value={filters.to}
-            onChange={(event) => applyFilters((prev) => ({ ...prev, to: event.target.value }))}
-          />
-          <select
-            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-            value={filters.attempt}
-            onChange={(event) => applyFilters((prev) => ({ ...prev, attempt: event.target.value }))}
-          >
-            <option value="">Any attempt</option>
-            {attemptOptions().map((attempt) => (
-              <option key={attempt} value={attempt}>
-                {attempt}
-              </option>
-            ))}
-          </select>
-          <Input
-            value={filters.model}
-            placeholder="Model (optional)"
-            onChange={(event) => applyFilters((prev) => ({ ...prev, model: event.target.value }))}
-          />
-          <div className="flex items-center gap-3 text-sm">
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={filters.only_retried}
-                onChange={(event) =>
-                  applyFilters((prev) => ({ ...prev, only_retried: event.target.checked }))
-                }
-              />
+    <div className="space-y-6">
+      {/* Collapsible filter panel */}
+      <details className="group rounded-lg border bg-card" open>
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium">
+          <span>Filters</span>
+          <span className="text-xs text-muted-foreground group-open:hidden">Show</span>
+          <span className="text-xs text-muted-foreground hidden group-open:inline">Hide</span>
+        </summary>
+        <div className="border-t px-4 pb-4 pt-3 space-y-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <select
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              value={filters.project_id}
+              onChange={(event) =>
+                applyFilters((prev) => ({ ...prev, project_id: event.target.value, issue_keys: [], run_status: "" }))
+              }
+            >
+              <option value="">Select project</option>
+              {projects.map((project) => (
+                <option key={project.project_id} value={project.project_id}>{project.name}</option>
+              ))}
+            </select>
+            <IssueKeySelector
+              issueOptions={issueOptions}
+              selectedIssues={filters.issue_keys}
+              disabled={!filters.project_id}
+              onChange={(next) => applyFilters((prev) => ({ ...prev, issue_keys: next }))}
+            />
+            <select
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              value={filters.run_status}
+              disabled={!filters.project_id}
+              onChange={(event) => applyFilters((prev) => ({ ...prev, run_status: event.target.value }))}
+            >
+              <option value="">Any status</option>
+              {runStatusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              value={filters.stage}
+              onChange={(event) => applyFilters((prev) => ({ ...prev, stage: event.target.value }))}
+            >
+              <option value="">Any stage</option>
+              <option value="pm">pm</option>
+              <option value="dev">dev</option>
+              <option value="test">test</option>
+              <option value="review">review</option>
+            </select>
+            <Input type="date" value={filters.from} onChange={(event) => applyFilters((prev) => ({ ...prev, from: event.target.value }))} />
+            <Input type="date" value={filters.to} onChange={(event) => applyFilters((prev) => ({ ...prev, to: event.target.value }))} />
+            <select
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              value={filters.attempt}
+              onChange={(event) => applyFilters((prev) => ({ ...prev, attempt: event.target.value }))}
+            >
+              <option value="">Any attempt</option>
+              {attemptOptions().map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <Input value={filters.model} placeholder="Model (optional)" onChange={(event) => applyFilters((prev) => ({ ...prev, model: event.target.value }))} />
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={filters.only_retried} onChange={(e) => applyFilters((prev) => ({ ...prev, only_retried: e.target.checked }))} />
               Only retried runs
             </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={filters.only_with_test_stage}
-                onChange={(event) =>
-                  applyFilters((prev) => ({ ...prev, only_with_test_stage: event.target.checked }))
-                }
-              />
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={filters.only_with_test_stage} onChange={(e) => applyFilters((prev) => ({ ...prev, only_with_test_stage: e.target.checked }))} />
               Only runs with test stage
             </label>
           </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => void loadOverview()} disabled={busy}>
-            {busy ? "Loading..." : "Refresh"}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setPage(1);
-              setFilters({
-                project_id: "",
-                issue_keys: [],
-                run_status: "",
-                from: "",
-                to: "",
-                stage: "",
-                attempt: "",
-                model: "",
-                only_retried: false,
-                only_with_test_stage: false,
-              });
-            }}
-            disabled={busy}
-          >
-            Clear
-          </Button>
-          <label className="ml-auto flex items-center gap-2 text-sm">
-            Page size
-            <select
-              className="h-9 rounded-md border border-input bg-background px-2"
-              value={String(pageSize)}
-              onChange={(event) => {
-                setPageSize(Number(event.target.value));
-                setPage(1);
-              }}
-            >
-              <option value="10">10</option>
-              <option value="20">20</option>
-              <option value="50">50</option>
-            </select>
-          </label>
-        </div>
-        <div className="grid gap-2 md:grid-cols-4">
-          <div className="rounded border bg-muted/20 p-2">
-            <p className="text-[11px] uppercase text-muted-foreground">Total Input</p>
-            <p className="text-lg font-semibold">{formatMetricValue(overview?.kpis.total_input ?? 0)}</p>
-          </div>
-          <div className="rounded border bg-muted/20 p-2">
-            <p className="text-[11px] uppercase text-muted-foreground">Uncached Input</p>
-            <p className="text-lg font-semibold">{formatMetricValue(overview?.kpis.total_uncached_input ?? 0)}</p>
-          </div>
-          <div className="rounded border bg-muted/20 p-2">
-            <p className="text-[11px] uppercase text-muted-foreground">Output</p>
-            <p className="text-lg font-semibold">{formatMetricValue(overview?.kpis.total_output ?? 0)}</p>
-          </div>
-          <div className="rounded border bg-muted/20 p-2">
-            <p className="text-[11px] uppercase text-muted-foreground">Cache Ratio</p>
-            <p className="text-lg font-semibold">
-              {((overview?.kpis.cache_ratio ?? 0) * 100).toFixed(1)}%
-            </p>
-          </div>
-          <div className="rounded border bg-muted/20 p-2">
-            <p className="text-[11px] uppercase text-muted-foreground">Avg / Run (I/O)</p>
-            <p className="text-lg font-semibold">{formatMetricValue(overview?.kpis.avg_io_per_run ?? 0)}</p>
-          </div>
-          <div className="rounded border bg-muted/20 p-2">
-            <p className="text-[11px] uppercase text-muted-foreground">P95 / Run (I/O)</p>
-            <p className="text-lg font-semibold">{formatMetricValue(overview?.kpis.p95_io_per_run ?? 0)}</p>
-          </div>
-          <div className="rounded border bg-muted/20 p-2">
-            <p className="text-[11px] uppercase text-muted-foreground">Retest Waste Score</p>
-            <p className="text-lg font-semibold">
-              {((overview?.kpis.retest_waste_score ?? 0) * 100).toFixed(1)}%
-            </p>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => void loadOverview()} disabled={busy}>
+              {busy ? "Loading..." : "Apply"}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => { setPage(1); setFilters({ project_id: "", issue_keys: [], run_status: "", from: "", to: "", stage: "", attempt: "", model: "", only_retried: false, only_with_test_stage: false }); }} disabled={busy}>
+              Clear
+            </Button>
+            <div className="ml-auto flex items-center gap-2 text-sm">
+              Page size
+              <select className="h-8 rounded-md border border-input bg-background px-2 text-xs" value={String(pageSize)} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+              </select>
+            </div>
           </div>
         </div>
+      </details>
+
+      {/* KPI cards */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase text-muted-foreground">Total Input</p>
+            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_input ?? 0)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase text-muted-foreground">Uncached Input</p>
+            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_uncached_input ?? 0)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase text-muted-foreground">Output</p>
+            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.total_output ?? 0)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase text-muted-foreground">Cache Ratio</p>
+            <p className="mt-1 text-2xl font-bold">{((overview?.kpis.cache_ratio ?? 0) * 100).toFixed(1)}%</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase text-muted-foreground">Avg I/O / Run</p>
+            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.avg_io_per_run ?? 0)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase text-muted-foreground">P95 I/O / Run</p>
+            <p className="mt-1 text-2xl font-bold">{formatMetricValue(overview?.kpis.p95_io_per_run ?? 0)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xs uppercase text-muted-foreground">Retest Waste Score</p>
+            <p className="mt-1 text-2xl font-bold">{((overview?.kpis.retest_waste_score ?? 0) * 100).toFixed(1)}%</p>
+          </CardContent>
+        </Card>
+      </div>
         {!overview ? (
           <p className="text-sm text-muted-foreground">{statusLine}</p>
         ) : (
@@ -526,11 +466,12 @@ export default function TenantTokenOverviewPage() {
                 />
               </CardContent>
             </Card>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Top costly runs
-              </p>
-              <div className="overflow-x-auto">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">Top Costly Runs</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -556,7 +497,7 @@ export default function TenantTokenOverviewPage() {
                           </Link>
                         </TableCell>
                         <TableCell>{run.issue_key}</TableCell>
-                        <TableCell>{statusBadge(run.status)}</TableCell>
+                        <TableCell><StatusBadge status={run.status} /></TableCell>
                         <TableCell className="text-right">{formatMetricValue(run.input)}</TableCell>
                         <TableCell className="text-right">{formatMetricValue(run.uncached_input)}</TableCell>
                         <TableCell className="text-right">{formatMetricValue(run.output)}</TableCell>
@@ -574,44 +515,44 @@ export default function TenantTokenOverviewPage() {
                   </TableBody>
                 </Table>
               </div>
-            </div>
-            <div className="rounded-md border bg-muted/20 p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Alerts</p>
-              {overview.alerts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No alerts for current filters.</p>
-              ) : (
-                <ul className="space-y-1 text-sm">
-                  {overview.alerts.map((alert, idx) => (
-                    <li key={`${alert.rule}-${alert.run_id}-${idx}`} className="rounded border bg-background p-2">
-                      <p className="font-medium">
-                        <span className="text-muted-foreground">[{alert.rule}]</span> {alert.message}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        run {alert.run_id}
-                        {alert.turn_id ? ` · turn ${alert.turn_id}` : ""}
-                        {alert.stage ? ` · ${alert.stage}` : ""}
-                        {alert.attempt !== null ? ` · attempt ${alert.attempt}` : ""}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">Alerts</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {overview.alerts.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No alerts for current filters.</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {overview.alerts.map((alert, idx) => (
+                      <li key={`${alert.rule}-${alert.run_id}-${idx}`} className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
+                        <p className="font-medium">
+                          <span className="text-muted-foreground">[{alert.rule}]</span> {alert.message}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          run {alert.run_id}
+                          {alert.turn_id ? ` · turn ${alert.turn_id}` : ""}
+                          {alert.stage ? ` · ${alert.stage}` : ""}
+                          {alert.attempt !== null ? ` · attempt ${alert.attempt}` : ""}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
           </>
         )}
         <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
           <p>{statusLine}</p>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={busy || page <= 1}>
-              Previous
-            </Button>
+            <Button variant="outline" size="sm" onClick={() => setPage((c) => Math.max(1, c - 1))} disabled={busy || page <= 1}>← Prev</Button>
             <span>Page {page}</span>
-            <Button variant="outline" size="sm" onClick={() => setPage((current) => current + 1)} disabled={busy || !overview || overview.top_costly_runs.length < pageSize}>
-              Next
-            </Button>
+            <Button variant="outline" size="sm" onClick={() => setPage((c) => c + 1)} disabled={busy || !overview || overview.top_costly_runs.length < pageSize}>Next →</Button>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
   );
 }
