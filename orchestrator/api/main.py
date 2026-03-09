@@ -8,10 +8,16 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from orchestrator.api.routes.admin_integrations import router as admin_integrations_router
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
+from orchestrator.api.routes.admin_discord_allowlist import (
+    router as admin_discord_allowlist_router,
+)
+from orchestrator.api.routes.admin_github import router as admin_github_router
+from orchestrator.api.routes.admin_jira import router as admin_jira_router
 from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_router
 from orchestrator.api.routes.admin_observability import router as admin_observability_router
+from orchestrator.api.routes.admin_ready import router as admin_ready_router
+from orchestrator.api.routes.admin_release import router as admin_release_router
 from orchestrator.api.routes.admin_runs import router as admin_runs_router
 from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
 from orchestrator.api.routes.admin_tenants import router as admin_tenants_router
@@ -180,12 +186,16 @@ def create_app() -> FastAPI:
             headers=exc.headers,
         )
 
-    app.include_router(admin_integrations_router)
     app.include_router(admin_knowledge_router)
     app.include_router(admin_observability_router)
     app.include_router(admin_runs_router)
     app.include_router(admin_tenants_router)
     app.include_router(admin_auth_router)
+    app.include_router(admin_discord_allowlist_router)
+    app.include_router(admin_github_router)
+    app.include_router(admin_jira_router)
+    app.include_router(admin_ready_router)
+    app.include_router(admin_release_router)
     app.include_router(admin_secrets_router)
     app.include_router(admin_tokens_router)
     app.include_router(discord_router)
