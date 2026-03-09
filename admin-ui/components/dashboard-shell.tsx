@@ -175,6 +175,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           label: "Settings",
           icon: Settings2,
           matchPrefix: `/tenants/${decodedTenantId}/edit`
+        },
+        {
+          href: `/tenants/${decodedTenantId}/secrets`,
+          label: "Secrets",
+          icon: KeyRound,
+          matchPrefix: `/tenants/${decodedTenantId}/secrets`
         }
       ]
     : [];
@@ -230,6 +236,21 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                   );
                 })}
               </SidebarMenu>
+
+              {/* Platform links */}
+              <div className="mt-3 border-t border-sidebar-border pt-3">
+                <SidebarMenuLabel>Platform</SidebarMenuLabel>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={pathname === "/secrets"}>
+                      <Link href="/secrets">
+                        <KeyRound className="h-4 w-4 flex-shrink-0" />
+                        Platform Secrets
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </div>
             </div>
           ) : (
             <SidebarMenu>
