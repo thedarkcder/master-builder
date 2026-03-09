@@ -14,14 +14,24 @@ import {
   getProject,
   listDiscordAllowlistRequests,
   updateProject,
+  type Credentials,
   type DiscordAllowlistRequestRecord,
   type ProjectRecord,
 } from "@/lib/api";
 
-export function TenantProjectDiscordPage() {
-  const params = useParams<{ tenantId: string; projectId: string }>();
-  const { credentials, ready } = useAuth();
+// ─── Extracted content component (used as a tab in the project detail page) ────
 
+type ProjectNotificationsContentProps = {
+  tenantId: string;
+  projectId: string;
+  credentials: Credentials | null;
+};
+
+export function ProjectNotificationsContent({
+  tenantId,
+  projectId,
+  credentials,
+}: ProjectNotificationsContentProps) {
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [statusLine, setStatusLine] = useState("");
@@ -31,12 +41,12 @@ export function TenantProjectDiscordPage() {
   const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!ready || !credentials) return;
+    if (!credentials) return;
     void (async () => {
       setBusy(true);
       try {
-        const payload = await getProject(credentials, params.tenantId, params.projectId);
-        const requests = await listDiscordAllowlistRequests(credentials, params.tenantId, params.projectId);
+        const payload = await getProject(credentials, tenantId, projectId);
+        const requests = await listDiscordAllowlistRequests(credentials, tenantId, projectId);
         setProject(payload);
         setDiscordEnabled(Boolean(payload.discord));
         setNotifyEvents(payload.discord?.notify_events ?? []);
@@ -48,7 +58,7 @@ export function TenantProjectDiscordPage() {
         setBusy(false);
       }
     })();
-  }, [ready, credentials, params.tenantId, params.projectId]);
+  }, [credentials, tenantId, projectId]);
 
   function toggleNotifyEvent(eventValue: string, enabled: boolean): void {
     setNotifyEvents((current) =>
@@ -60,7 +70,7 @@ export function TenantProjectDiscordPage() {
     if (!credentials || !project) return;
     setBusy(true);
     try {
-      const updated = await updateProject(credentials, params.tenantId, params.projectId, {
+      const updated = await updateProject(credentials, tenantId, projectId, {
         name: project.name,
         github_repository: project.github_repository,
         jira_project_key: project.jira_project_key,
@@ -73,7 +83,7 @@ export function TenantProjectDiscordPage() {
       setProject(updated);
       setDiscordEnabled(Boolean(updated.discord));
       setNotifyEvents(updated.discord?.notify_events ?? []);
-      setStatusLine("Project Discord settings saved.");
+      setStatusLine("Discord settings saved.");
     } catch (error) {
       setStatusLine(`Save failed: ${(error as Error).message}`);
     } finally {
@@ -85,8 +95,8 @@ export function TenantProjectDiscordPage() {
     if (!credentials) return;
     setAllowlistBusyUserId(userId);
     try {
-      const result = await approveDiscordAllowlistRequest(credentials, params.tenantId, params.projectId, userId);
-      const requests = await listDiscordAllowlistRequests(credentials, params.tenantId, params.projectId);
+      const result = await approveDiscordAllowlistRequest(credentials, tenantId, projectId, userId);
+      const requests = await listDiscordAllowlistRequests(credentials, tenantId, projectId);
       setAllowlistRequests(requests);
       setStatusLine(result.details);
     } catch (error) {
@@ -98,23 +108,6 @@ export function TenantProjectDiscordPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold">
-            <MessageSquare className="h-5 w-5 text-muted-foreground" />
-            Discord
-          </h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">{project?.name ?? params.projectId}</p>
-        </div>
-        <Button asChild variant="outline" size="sm">
-          <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}`}>
-            <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-            Back to Project
-          </Link>
-        </Button>
-      </div>
-
       {statusLine ? (
         <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
       ) : null}
@@ -152,7 +145,11 @@ export function TenantProjectDiscordPage() {
               </span>
             ) : null}
           </div>
-          <p className="text-sm text-muted-foreground">Approve pending <code className="rounded bg-muted px-1 text-xs">/request</code> submissions for this project.</p>
+          <p className="text-sm text-muted-foreground">
+            Approve pending{" "}
+            <code className="rounded bg-muted px-1 text-xs">/request</code>{" "}
+            submissions for this project.
+          </p>
         </CardHeader>
         <CardContent>
           {allowlistRequests.length === 0 ? (
@@ -178,9 +175,7 @@ export function TenantProjectDiscordPage() {
                         <span className="text-xs text-muted-foreground">#{request.channel_id}</span>
                       ) : null}
                     </div>
-                    {request.reason ? (
-                      <p className="text-sm">{request.reason}</p>
-                    ) : null}
+                    {request.reason ? <p className="text-sm">{request.reason}</p> : null}
                     <p className="flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3" />
                       {request.requested_at}
@@ -200,6 +195,38 @@ export function TenantProjectDiscordPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ─── Standalone page shell (for the /discord sub-route) ─────────────────────
+
+export function TenantProjectDiscordPage() {
+  const params = useParams<{ tenantId: string; projectId: string }>();
+  const { credentials } = useAuth();
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="flex items-center gap-2 text-xl font-semibold">
+            <MessageSquare className="h-5 w-5 text-muted-foreground" />
+            Discord
+          </h1>
+        </div>
+        <Button asChild variant="outline" size="sm">
+          <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}`}>
+            <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
+            Back to Project
+          </Link>
+        </Button>
+      </div>
+
+      <ProjectNotificationsContent
+        tenantId={params.tenantId}
+        projectId={params.projectId}
+        credentials={credentials}
+      />
     </div>
   );
 }
