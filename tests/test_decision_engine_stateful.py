@@ -106,6 +106,11 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
         self.settings = get_settings()
+        self._codex_resolution_patcher = patch(
+            "orchestrator.core.decision_engine.resolve_slots_with_codex_resolution",
+            return_value={},
+        )
+        self._codex_resolution_patcher.start()
 
         with self.session_factory() as session:
             tenant = Tenant(
@@ -139,6 +144,7 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             session.commit()
 
     def tearDown(self) -> None:
+        self._codex_resolution_patcher.stop()
         self._tmp.cleanup()
         reset_db_engine_cache()
 
