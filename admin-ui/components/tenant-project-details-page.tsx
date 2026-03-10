@@ -17,15 +17,19 @@ import {
 import { useAuth } from "@/components/auth-provider";
 import { ProjectKnowledgeBaseSection } from "@/components/project-knowledge-base-section";
 import { ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
+import { CodexModelSelect } from "@/components/codex-model-select";
+import { OverrideSegmentedControl } from "@/components/override-segmented-control";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import {
   getProject,
   getTenant,
+  listCodexModels,
   listGitHubRepositories,
   listJiraProjects,
   listRuns,
@@ -34,14 +38,48 @@ import {
   type RunRecord,
 } from "@/lib/api";
 
-type Tab = "overview" | "runs" | "knowledge-base" | "notifications" | "secrets";
+type Tab = "overview" | "settings" | "runs" | "knowledge-base" | "notifications" | "secrets";
+type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
+type OverrideToggleValue = "inherit" | "enabled" | "disabled";
+type RequireAgentsValue = "inherit" | "required";
+type KnowledgeModeValue = "inherit" | "safe" | "balanced" | "aggressive";
+type AllowedCommandsMode = "inherit" | "custom";
+
+type ProjectFormState = {
+  name: string;
+  github_repository: string;
+  jira_project_key: string;
+  codex_model: string | null;
+  codex_reasoning_effort: "low" | "medium" | "high" | null;
+  allow_jira_transitions: OverrideToggleValue;
+  allow_pr_creation: OverrideToggleValue;
+  allow_label_mutations: OverrideToggleValue;
+  allow_auto_merge: OverrideToggleValue;
+  require_agents_md: RequireAgentsValue;
+  knowledge_base_enabled: OverrideToggleValue;
+  knowledge_auto_answer_mode: KnowledgeModeValue;
+  max_dev_test_review_loops: string;
+  max_pr_auto_remediation_loops: string;
+  max_concurrent_runs: string;
+  allowed_commands_mode: AllowedCommandsMode;
+  allowed_commands_text: string;
+};
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
+  { id: "settings", label: "Settings" },
   { id: "runs", label: "Runs" },
   { id: "knowledge-base", label: "Knowledge Base" },
   { id: "notifications", label: "Notifications" },
   { id: "secrets", label: "Secrets" },
+];
+
+const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
+  { id: "general", label: "General", description: "Name, repository, and Jira mapping." },
+  { id: "ai", label: "AI", description: "Model and reasoning controls." },
+  { id: "automation", label: "Automation", description: "Execution, PR, and command policy." },
+  { id: "knowledge", label: "Knowledge", description: "Knowledge-base behavior for this project." },
+  { id: "governance", label: "Governance", description: "Repository standards and archive controls." },
 ];
 
 const STATUS_BORDER: Record<string, string> = {
@@ -52,19 +90,117 @@ const STATUS_BORDER: Record<string, string> = {
   pending: "border-l-muted-foreground",
 };
 
+const BOOLEAN_OVERRIDE_OPTIONS: { value: OverrideToggleValue; label: string }[] = [
+  { value: "inherit", label: "Inherit" },
+  { value: "enabled", label: "On" },
+  { value: "disabled", label: "Off" },
+];
+
+function booleanOverrideToState(value: unknown): OverrideToggleValue {
+  if (value === true) {
+    return "enabled";
+  }
+  if (value === false) {
+    return "disabled";
+  }
+  return "inherit";
+}
+
+function booleanStateToOverride(value: OverrideToggleValue): boolean | undefined {
+  if (value === "enabled") {
+    return true;
+  }
+  if (value === "disabled") {
+    return false;
+  }
+  return undefined;
+}
+
+function requireAgentsOverrideToState(value: unknown): RequireAgentsValue {
+  return value === true ? "required" : "inherit";
+}
+
+function knowledgeModeOverrideToState(value: unknown): KnowledgeModeValue {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "safe" || normalized === "balanced" || normalized === "aggressive") {
+    return normalized;
+  }
+  return "inherit";
+}
+
+function numericOverrideToText(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return String(value);
+  }
+  const normalized = String(value || "").trim();
+  return normalized;
+}
+
+function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState {
+  const overrides = payload?.policy_overrides ?? {};
+  const allowedCommands = Array.isArray(overrides.allowed_commands)
+    ? overrides.allowed_commands.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  return {
+    name: payload?.name ?? "",
+    github_repository: payload?.github_repository ?? "",
+    jira_project_key: payload?.jira_project_key ?? "",
+    codex_model: typeof overrides.codex_model === "string" ? overrides.codex_model : null,
+    codex_reasoning_effort:
+      overrides.codex_reasoning_effort === "low" ||
+      overrides.codex_reasoning_effort === "medium" ||
+      overrides.codex_reasoning_effort === "high"
+        ? overrides.codex_reasoning_effort
+        : null,
+    allow_jira_transitions: booleanOverrideToState(overrides.allow_jira_transitions),
+    allow_pr_creation: booleanOverrideToState(overrides.allow_pr_creation),
+    allow_label_mutations: booleanOverrideToState(overrides.allow_label_mutations),
+    allow_auto_merge: booleanOverrideToState(overrides.allow_auto_merge),
+    require_agents_md: requireAgentsOverrideToState(overrides.require_agents_md),
+    knowledge_base_enabled: booleanOverrideToState(overrides.knowledge_base_enabled),
+    knowledge_auto_answer_mode: knowledgeModeOverrideToState(overrides.knowledge_auto_answer_mode),
+    max_dev_test_review_loops: numericOverrideToText(overrides.max_dev_test_review_loops),
+    max_pr_auto_remediation_loops: numericOverrideToText(overrides.max_pr_auto_remediation_loops),
+    max_concurrent_runs: numericOverrideToText(overrides.max_concurrent_runs),
+    allowed_commands_mode: "allowed_commands" in overrides ? "custom" : "inherit",
+    allowed_commands_text: allowedCommands.join("\n"),
+  };
+}
+
+function parsePositiveOverride(value: string): number | undefined {
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return Math.trunc(parsed);
+}
+
+function formatBoolean(value: boolean): string {
+  return value ? "Enabled" : "Disabled";
+}
+
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
   const { credentials, ready } = useAuth();
 
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
 
   // Project state
   const [project, setProject] = useState<ProjectRecord | null>(null);
-  const [form, setForm] = useState({ name: "", github_repository: "", jira_project_key: "" });
+  const [form, setForm] = useState<ProjectFormState>(() => buildProjectFormState(null));
   const [busy, setBusy] = useState(false);
   const [statusLine, setStatusLine] = useState("");
   const [repoOptions, setRepoOptions] = useState<string[]>([]);
   const [jiraOptions, setJiraOptions] = useState<string[]>([]);
+  const [codexModels, setCodexModels] = useState<{ id: string; label: string; description?: string | null }[]>([]);
+  const [globalCodexModel, setGlobalCodexModel] = useState("");
+  const [reasoningEfforts, setReasoningEfforts] = useState<{ id: string; label: string; description?: string | null }[]>([]);
+  const [globalCodexReasoningEffort, setGlobalCodexReasoningEffort] = useState("");
 
   // Runs state
   const [runs, setRuns] = useState<RunRecord[]>([]);
@@ -88,6 +224,11 @@ export function TenantProjectDetailsPage() {
     if (!credentials) return;
     try {
       const tenant = await getTenant(credentials, params.tenantId);
+      const modelCatalog = await listCodexModels(credentials);
+      setCodexModels(modelCatalog.models);
+      setGlobalCodexModel(modelCatalog.default_model);
+      setReasoningEfforts(modelCatalog.reasoning_efforts);
+      setGlobalCodexReasoningEffort(modelCatalog.default_reasoning_effort);
       if (tenant.github.installation_id) {
         const repos = await listGitHubRepositories(credentials, params.tenantId);
         setRepoOptions(repos.map((repo) => repo.html_url));
@@ -135,12 +276,9 @@ export function TenantProjectDetailsPage() {
     try {
       const payload = await getProject(credentials, params.tenantId, params.projectId);
       setProject(payload);
-      setForm({
-        name: payload.name,
-        github_repository: payload.github_repository,
-        jira_project_key: payload.jira_project_key,
-      });
+      setForm(buildProjectFormState(payload));
       setSecretRefs(payload.secret_refs ?? {});
+      await loadOptions();
       await loadRuns();
       setStatusLine("");
     } catch (error) {
@@ -173,7 +311,7 @@ export function TenantProjectDetailsPage() {
         is_archived: !project.is_archived,
       });
       setProject(updated);
-      setForm({ name: updated.name, github_repository: updated.github_repository, jira_project_key: updated.jira_project_key });
+      setForm(buildProjectFormState(updated));
       setStatusLine(updated.is_archived ? "Project archived." : "Project unarchived.");
     } catch (error) {
       setStatusLine(`Unable to update project: ${(error as Error).message}`);
@@ -188,20 +326,97 @@ export function TenantProjectDetailsPage() {
       setStatusLine("Project name, repository, and Jira key are required.");
       return;
     }
+    const nextPolicyOverrides = { ...(project.policy_overrides ?? {}) };
+    if (form.codex_model?.trim()) {
+      nextPolicyOverrides.codex_model = form.codex_model.trim();
+    } else {
+      delete nextPolicyOverrides.codex_model;
+    }
+    if (form.codex_reasoning_effort) {
+      nextPolicyOverrides.codex_reasoning_effort = form.codex_reasoning_effort;
+    } else {
+      delete nextPolicyOverrides.codex_reasoning_effort;
+    }
+    const allowJiraTransitions = booleanStateToOverride(form.allow_jira_transitions);
+    const allowPrCreation = booleanStateToOverride(form.allow_pr_creation);
+    const allowLabelMutations = booleanStateToOverride(form.allow_label_mutations);
+    const allowAutoMerge = booleanStateToOverride(form.allow_auto_merge);
+    const knowledgeBaseEnabled = booleanStateToOverride(form.knowledge_base_enabled);
+    const maxDevTestReviewLoops = parsePositiveOverride(form.max_dev_test_review_loops);
+    const maxPrAutoRemediationLoops = parsePositiveOverride(form.max_pr_auto_remediation_loops);
+    const maxConcurrentRuns = parsePositiveOverride(form.max_concurrent_runs);
+    if (allowJiraTransitions === undefined) {
+      delete nextPolicyOverrides.allow_jira_transitions;
+    } else {
+      nextPolicyOverrides.allow_jira_transitions = allowJiraTransitions;
+    }
+    if (allowPrCreation === undefined) {
+      delete nextPolicyOverrides.allow_pr_creation;
+    } else {
+      nextPolicyOverrides.allow_pr_creation = allowPrCreation;
+    }
+    if (allowLabelMutations === undefined) {
+      delete nextPolicyOverrides.allow_label_mutations;
+    } else {
+      nextPolicyOverrides.allow_label_mutations = allowLabelMutations;
+    }
+    if (allowAutoMerge === undefined) {
+      delete nextPolicyOverrides.allow_auto_merge;
+    } else {
+      nextPolicyOverrides.allow_auto_merge = allowAutoMerge;
+    }
+    if (form.require_agents_md === "required") {
+      nextPolicyOverrides.require_agents_md = true;
+    } else {
+      delete nextPolicyOverrides.require_agents_md;
+    }
+    if (knowledgeBaseEnabled === undefined) {
+      delete nextPolicyOverrides.knowledge_base_enabled;
+    } else {
+      nextPolicyOverrides.knowledge_base_enabled = knowledgeBaseEnabled;
+    }
+    if (form.knowledge_auto_answer_mode === "inherit") {
+      delete nextPolicyOverrides.knowledge_auto_answer_mode;
+    } else {
+      nextPolicyOverrides.knowledge_auto_answer_mode = form.knowledge_auto_answer_mode;
+    }
+    if (maxDevTestReviewLoops === undefined) {
+      delete nextPolicyOverrides.max_dev_test_review_loops;
+    } else {
+      nextPolicyOverrides.max_dev_test_review_loops = maxDevTestReviewLoops;
+    }
+    if (maxPrAutoRemediationLoops === undefined) {
+      delete nextPolicyOverrides.max_pr_auto_remediation_loops;
+    } else {
+      nextPolicyOverrides.max_pr_auto_remediation_loops = maxPrAutoRemediationLoops;
+    }
+    if (maxConcurrentRuns === undefined) {
+      delete nextPolicyOverrides.max_concurrent_runs;
+    } else {
+      nextPolicyOverrides.max_concurrent_runs = maxConcurrentRuns;
+    }
+    if (form.allowed_commands_mode === "inherit") {
+      delete nextPolicyOverrides.allowed_commands;
+    } else {
+      nextPolicyOverrides.allowed_commands = form.allowed_commands_text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line, index, array) => line.length > 0 && array.indexOf(line) === index);
+    }
     setBusy(true);
     try {
       const updated = await updateProject(credentials, params.tenantId, params.projectId, {
         name: form.name.trim(),
         github_repository: form.github_repository.trim(),
         jira_project_key: form.jira_project_key.trim().toUpperCase(),
-        policy_overrides: project.policy_overrides,
+        policy_overrides: nextPolicyOverrides,
         environment: project.environment,
         secret_refs: secretRefs,
         discord: project.discord,
         is_archived: project.is_archived,
       });
       setProject(updated);
-      setForm({ name: updated.name, github_repository: updated.github_repository, jira_project_key: updated.jira_project_key });
+      setForm(buildProjectFormState(updated));
       setStatusLine("Project details saved.");
     } catch (error) {
       setStatusLine(`Unable to update project: ${(error as Error).message}`);
@@ -296,87 +511,558 @@ export function TenantProjectDetailsPage() {
 
       {/* ── Overview tab ─────────────────────────────────────────────────── */}
       {activeTab === "overview" ? (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-base">Project Details</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => void loadOptions()} disabled={busy}>
-                <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
-                Refresh options
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {statusLine ? (
-              <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
-            ) : null}
-            {project ? (
-              <>
-                <div className="grid gap-4 md:grid-cols-3">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Project name
-                    </label>
-                    <Input
-                      value={form.name}
-                      onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-                      disabled={busy}
-                    />
+        <div className="space-y-4">
+          {statusLine ? (
+            <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
+          ) : null}
+          {project ? (
+            <>
+              <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
+                <Card>
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-base">Project overview</CardTitle>
+                        <p className="text-sm text-muted-foreground">
+                          Core project identity and the main places operators will go next.
+                        </p>
+                      </div>
+                      <Button size="sm" onClick={() => setActiveTab("settings")}>
+                        Open settings
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Project name</p>
+                      <p className="text-sm font-medium text-foreground">{project.name}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</p>
+                      <p className="text-sm font-medium text-foreground">{project.is_archived ? "Archived" : "Active"}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Repository</p>
+                      <Link
+                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                        href={project.github_repository}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {project.github_repository}
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Jira project</p>
+                      <p className="text-sm font-medium text-foreground">{project.jira_project_key}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Secret refs</p>
+                      <p className="text-sm font-medium text-foreground">{Object.keys(secretRefs).length}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Loaded runs</p>
+                      <p className="text-sm font-medium text-foreground">{runs.length}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Quick navigation</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-2 sm:grid-cols-2">
+                    <Button variant="outline" size="sm" onClick={() => setActiveTab("settings")}>
+                      Settings
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setActiveTab("knowledge-base")}>
+                      Knowledge Base
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setActiveTab("notifications")}>
+                      Notifications
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setActiveTab("secrets")}>
+                      Secrets
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-3">
+                <Card className="xl:col-span-1">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Effective AI policy</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {project.effective_policy.codex_model ?? (globalCodexModel || "Global default")}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reasoning mode</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {project.effective_policy.codex_reasoning_effort ?? (globalCodexReasoningEffort || "medium")}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge base</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {formatBoolean(project.effective_policy.knowledge_base_enabled)}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge answer mode</p>
+                      <p className="text-sm font-medium text-foreground">{project.effective_policy.knowledge_auto_answer_mode}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="xl:col-span-1">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Effective automation policy</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR creation</p>
+                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_creation)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Auto merge</p>
+                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_auto_merge)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Label mutations</p>
+                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_label_mutations)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Jira transitions</p>
+                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_jira_transitions)}</p>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Dev/test/review loops</p>
+                        <p className="text-sm font-medium text-foreground">{project.effective_policy.max_dev_test_review_loops}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation loops</p>
+                        <p className="text-sm font-medium text-foreground">{project.effective_policy.max_pr_auto_remediation_loops}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Concurrent runs</p>
+                        <p className="text-sm font-medium text-foreground">{project.effective_policy.max_concurrent_runs}</p>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Allowed commands</p>
+                      <p className="text-sm text-foreground">
+                        {project.effective_policy.allowed_commands.length > 0
+                          ? project.effective_policy.allowed_commands.join(", ")
+                          : "None"}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="xl:col-span-1">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Governance</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AGENTS.md requirement</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {project.effective_policy.require_agents_md ? "Required" : "Not required"}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notifications</p>
+                      <p className="text-sm text-muted-foreground">
+                        Manage channel routing and project alerts from the Notifications tab.
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Secrets</p>
+                      <p className="text-sm text-muted-foreground">
+                        Runtime secret references are configured separately to keep settings focused.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">Loading project details…</p>
+          )}
+        </div>
+      ) : null}
+
+      {/* ── Settings tab ─────────────────────────────────────────────────── */}
+      {activeTab === "settings" ? (
+        <div className="space-y-4">
+          {statusLine ? (
+            <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
+          ) : null}
+          {project ? (
+            <>
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base">Settings</CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        Project-level overrides for execution, automation, and AI behavior.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => void loadOptions()} disabled={busy}>
+                        <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
+                        Refresh options
+                      </Button>
+                      <Button size="sm" onClick={() => void saveDetails()} disabled={busy}>
+                        Save settings
+                      </Button>
+                    </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Repository
-                    </label>
-                    <Input
-                      list="project-details-repo-options"
-                      value={form.github_repository}
-                      onChange={(e) => setForm((prev) => ({ ...prev, github_repository: e.target.value }))}
-                      placeholder="Choose repository"
-                      disabled={busy}
-                    />
-                    <datalist id="project-details-repo-options">
-                      {repoOptions.map((repo) => <option key={repo} value={repo} />)}
-                      {!repoOptions.includes(form.github_repository) && form.github_repository
-                        ? <option value={form.github_repository} />
-                        : null}
-                    </datalist>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-2 md:grid-cols-5">
+                    {SETTINGS_SECTIONS.map((section) => (
+                      <button
+                        key={section.id}
+                        type="button"
+                        onClick={() => setActiveSettingsSection(section.id)}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+                          activeSettingsSection === section.id
+                            ? "border-primary bg-primary/5"
+                            : "border-border bg-background hover:bg-muted/40"
+                        }`}
+                      >
+                        <p className="text-sm font-medium text-foreground">{section.label}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{section.description}</p>
+                      </button>
+                    ))}
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Jira project
-                    </label>
-                    <Input
-                      list="project-details-jira-options"
-                      value={form.jira_project_key}
-                      onChange={(e) =>
-                        setForm((prev) => ({ ...prev, jira_project_key: e.target.value.toUpperCase() }))
-                      }
-                      placeholder="Choose Jira project"
-                      disabled={busy}
-                    />
-                    <datalist id="project-details-jira-options">
-                      {jiraOptions.map((key) => <option key={key} value={key} />)}
-                      {!jiraOptions.includes(form.jira_project_key) && form.jira_project_key
-                        ? <option value={form.jira_project_key} />
-                        : null}
-                    </datalist>
-                  </div>
+                </CardContent>
+              </Card>
+
+              {activeSettingsSection === "general" ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">General</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-4 md:grid-cols-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Project name
+                      </label>
+                      <Input
+                        value={form.name}
+                        onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                        disabled={busy}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Repository
+                      </label>
+                      <Input
+                        list="project-details-repo-options"
+                        value={form.github_repository}
+                        onChange={(e) => setForm((prev) => ({ ...prev, github_repository: e.target.value }))}
+                        placeholder="Choose repository"
+                        disabled={busy}
+                      />
+                      <datalist id="project-details-repo-options">
+                        {repoOptions.map((repo) => <option key={repo} value={repo} />)}
+                        {!repoOptions.includes(form.github_repository) && form.github_repository
+                          ? <option value={form.github_repository} />
+                          : null}
+                      </datalist>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Jira project
+                      </label>
+                      <Input
+                        list="project-details-jira-options"
+                        value={form.jira_project_key}
+                        onChange={(e) =>
+                          setForm((prev) => ({ ...prev, jira_project_key: e.target.value.toUpperCase() }))
+                        }
+                        placeholder="Choose Jira project"
+                        disabled={busy}
+                      />
+                      <datalist id="project-details-jira-options">
+                        {jiraOptions.map((key) => <option key={key} value={key} />)}
+                        {!jiraOptions.includes(form.jira_project_key) && form.jira_project_key
+                          ? <option value={form.jira_project_key} />
+                          : null}
+                      </datalist>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {activeSettingsSection === "ai" ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">AI</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1.5 md:col-span-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Codex model override
+                      </label>
+                      <CodexModelSelect
+                        value={form.codex_model}
+                        models={codexModels}
+                        inheritLabel="Inherit tenant model"
+                        effectiveLabel={`Effective model: ${project.effective_policy.codex_model ?? (globalCodexModel || "global default")}`}
+                        helperText={globalCodexModel ? `Global default: ${globalCodexModel}` : undefined}
+                        disabled={busy}
+                        onChange={(next) => setForm((prev) => ({ ...prev, codex_model: next }))}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Reasoning mode
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.codex_reasoning_effort ?? ""}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            codex_reasoning_effort: (e.target.value || null) as ProjectFormState["codex_reasoning_effort"],
+                          }))
+                        }
+                        disabled={busy}
+                      >
+                        <option value="">Inherit tenant reasoning mode</option>
+                        {reasoningEfforts.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground">
+                        Effective: {project.effective_policy.codex_reasoning_effort ?? (globalCodexReasoningEffort || "medium")}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {activeSettingsSection === "automation" ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Automation</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Jira transitions
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_jira_transitions}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_jira_transitions: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_jira_transitions)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        PR creation
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_pr_creation}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_pr_creation: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_pr_creation)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Label mutations
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_label_mutations}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_label_mutations: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_label_mutations)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Auto merge
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_auto_merge}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_auto_merge: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_auto_merge)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Max dev/test/review loops
+                      </label>
+                      <Input
+                        type="number"
+                        value={form.max_dev_test_review_loops}
+                        onChange={(e) => setForm((prev) => ({ ...prev, max_dev_test_review_loops: e.target.value }))}
+                        placeholder={`Inherit (${project.effective_policy.max_dev_test_review_loops})`}
+                        disabled={busy}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Max PR remediation loops
+                      </label>
+                      <Input
+                        type="number"
+                        value={form.max_pr_auto_remediation_loops}
+                        onChange={(e) => setForm((prev) => ({ ...prev, max_pr_auto_remediation_loops: e.target.value }))}
+                        placeholder={`Inherit (${project.effective_policy.max_pr_auto_remediation_loops})`}
+                        disabled={busy}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Max concurrent runs
+                      </label>
+                      <Input
+                        type="number"
+                        value={form.max_concurrent_runs}
+                        onChange={(e) => setForm((prev) => ({ ...prev, max_concurrent_runs: e.target.value }))}
+                        placeholder={`Inherit (${project.effective_policy.max_concurrent_runs})`}
+                        disabled={busy}
+                      />
+                    </div>
+                    <div className="space-y-1.5 md:col-span-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Allowed commands override
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.allowed_commands_mode}
+                        onChange={(e) => setForm((prev) => ({ ...prev, allowed_commands_mode: e.target.value as AllowedCommandsMode }))}
+                        disabled={busy}
+                      >
+                        <option value="inherit">Inherit tenant commands</option>
+                        <option value="custom">Set project command allowlist</option>
+                      </select>
+                      {form.allowed_commands_mode === "custom" ? (
+                        <Textarea
+                          value={form.allowed_commands_text}
+                          onChange={(e) => setForm((prev) => ({ ...prev, allowed_commands_text: e.target.value }))}
+                          placeholder="git status"
+                          className="min-h-[110px]"
+                          disabled={busy}
+                        />
+                      ) : null}
+                      <p className="text-xs text-muted-foreground">
+                        Effective commands: {project.effective_policy.allowed_commands.length > 0 ? project.effective_policy.allowed_commands.join(", ") : "none"}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {activeSettingsSection === "knowledge" ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Knowledge</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Knowledge base
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.knowledge_base_enabled}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, knowledge_base_enabled: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.knowledge_base_enabled)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Knowledge answer mode
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.knowledge_auto_answer_mode}
+                        onChange={(e) => setForm((prev) => ({ ...prev, knowledge_auto_answer_mode: e.target.value as KnowledgeModeValue }))}
+                        disabled={busy}
+                      >
+                        <option value="inherit">Inherit tenant setting</option>
+                        <option value="safe">Safe</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="aggressive">Aggressive</option>
+                      </select>
+                      <p className="text-xs text-muted-foreground">Effective: {project.effective_policy.knowledge_auto_answer_mode}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {activeSettingsSection === "governance" ? (
+                <div className="space-y-4">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">Governance</CardTitle>
+                    </CardHeader>
+                    <CardContent className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          Require AGENTS.md
+                        </label>
+                        <select
+                          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          value={form.require_agents_md}
+                          onChange={(e) => setForm((prev) => ({ ...prev, require_agents_md: e.target.value as RequireAgentsValue }))}
+                          disabled={busy}
+                        >
+                          <option value="inherit">Inherit tenant setting</option>
+                          <option value="required">Require AGENTS.md</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">Effective: {project.effective_policy.require_agents_md ? "Required" : "Not required"}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="border-warning/40">
+                    <CardHeader>
+                      <CardTitle className="text-base">Archive</CardTitle>
+                    </CardHeader>
+                    <CardContent className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-sm text-muted-foreground">
+                        Archive this project to stop treating it as an active workspace without deleting its history.
+                      </p>
+                      <Button variant="outline" size="sm" onClick={() => void toggleArchive()} disabled={busy}>
+                        <Archive className="mr-1.5 h-3.5 w-3.5" />
+                        {project.is_archived ? "Unarchive" : "Archive"}
+                      </Button>
+                    </CardContent>
+                  </Card>
                 </div>
-                <div className="flex items-center gap-2 border-t pt-4">
-                  <Button size="sm" onClick={() => void saveDetails()} disabled={busy}>
-                    Save changes
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => void toggleArchive()} disabled={busy}>
-                    <Archive className="mr-1.5 h-3.5 w-3.5" />
-                    {project.is_archived ? "Unarchive" : "Archive"}
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">Loading project details…</p>
-            )}
-          </CardContent>
-        </Card>
+              ) : null}
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">Loading project details…</p>
+          )}
+        </div>
       ) : null}
 
       {/* ── Runs tab ─────────────────────────────────────────────────────── */}

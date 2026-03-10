@@ -24,6 +24,8 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "max_concurrent_runs": "bad",
                 "allowed_commands": [" run ", "", "  ", "retry"],
                 "require_agents_md": True,
+                "codex_model": " gpt-5.3-codex-spark ",
+                "codex_reasoning_effort": " high ",
                 "ignored": "x",
             }
         )
@@ -36,6 +38,8 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertNotIn("max_concurrent_runs", normalized)
         self.assertEqual(normalized["allowed_commands"], ["run", "retry"])
         self.assertEqual(normalized["require_agents_md"], True)
+        self.assertEqual(normalized["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(normalized["codex_reasoning_effort"], "high")
 
     def test_resolve_effective_policy_caps_and_intersections(self) -> None:
         effective = project_policy.resolve_effective_policy(
@@ -49,6 +53,8 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "max_concurrent_runs": 8,
                 "allowed_commands": ["run", "retry"],
                 "require_agents_md": False,
+                "codex_model": "gpt-5.4",
+                "codex_reasoning_effort": "medium",
             },
             project_overrides={
                 "allow_pr_creation": False,
@@ -58,7 +64,11 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "max_concurrent_runs": 3,
                 "allowed_commands": ["retry", "cancel"],
                 "require_agents_md": True,
+                "codex_model": "gpt-5.3-codex-spark",
+                "codex_reasoning_effort": "high",
             },
+            default_codex_model="gpt-5.4",
+            default_codex_reasoning_effort="medium",
         )
         self.assertEqual(effective["allow_pr_creation"], False)
         self.assertEqual(effective["allow_auto_merge"], False)
@@ -67,6 +77,8 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(effective["max_concurrent_runs"], 3)
         self.assertEqual(effective["allowed_commands"], ["retry"])
         self.assertEqual(effective["require_agents_md"], True)
+        self.assertEqual(effective["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(effective["codex_reasoning_effort"], "high")
 
 
 class JiraConnectionServiceTests(unittest.TestCase):

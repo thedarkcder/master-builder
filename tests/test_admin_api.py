@@ -40,6 +40,8 @@ class AdminApiTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
         os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+        os.environ["ORCHESTRATOR_CODEX_MODEL"] = "gpt-5.4"
+        os.environ["ORCHESTRATOR_CODEX_SUPPORTED_MODELS"] = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -87,6 +89,8 @@ class AdminApiTests(unittest.TestCase):
         os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", None)
         os.environ.pop("ORCHESTRATOR_GITHUB_APP_SLUG", None)
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
+        os.environ.pop("ORCHESTRATOR_CODEX_MODEL", None)
+        os.environ.pop("ORCHESTRATOR_CODEX_SUPPORTED_MODELS", None)
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -127,6 +131,8 @@ class AdminApiTests(unittest.TestCase):
                 "max_concurrent_runs": 2,
                 "allowed_commands": ["python -m unittest"],
                 "require_agents_md": False,
+                "codex_model": "gpt-5.4",
+                "codex_reasoning_effort": "medium",
             },
             "discord": {
                 "channel_id": "discord-channel-1",
@@ -165,6 +171,15 @@ class AdminApiTests(unittest.TestCase):
     def test_admin_routes_require_auth(self) -> None:
         response = self.client.get("/api/admin/tenants")
         self.assertEqual(response.status_code, 401)
+
+    def test_list_codex_models(self) -> None:
+        response = self.client.get("/api/admin/codex/models", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["default_model"], "gpt-5.4")
+        self.assertEqual(body["default_reasoning_effort"], "medium")
+        self.assertEqual([item["id"] for item in body["models"]], ["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
+        self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
 
     def test_admin_login_issues_bearer_token(self) -> None:
         login_response = self.client.post(
@@ -614,6 +629,8 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(create_project.json()["environment"], {"APP_ENV": "prod"})
         self.assertEqual(create_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN"})
         self.assertIsNone(create_project.json()["discord"])
+        self.assertEqual(create_project.json()["effective_policy"]["codex_model"], "gpt-5.4")
+        self.assertEqual(create_project.json()["effective_policy"]["codex_reasoning_effort"], "medium")
 
         duplicate_repo = self.client.post(
             "/api/admin/tenants/tenant-a/projects",
@@ -636,6 +653,15 @@ class AdminApiTests(unittest.TestCase):
                 "name": "mobile-app-renamed",
                 "github_repository": "https://github.com/example/mobile-app-renamed",
                 "jira_project_key": "MBAPP",
+                "policy_overrides": {
+                    "allow_auto_merge": False,
+                    "max_pr_auto_remediation_loops": 3,
+                    "knowledge_base_enabled": False,
+                    "knowledge_auto_answer_mode": "safe",
+                    "allowed_commands": ["git status"],
+                    "codex_model": "gpt-5.3-codex-spark",
+                    "codex_reasoning_effort": "high",
+                },
                 "environment": {"APP_ENV": "stage"},
                 "secret_refs": {"API_TOKEN": "RUNNER_TOKEN_NEXT"},
                 "is_archived": True,
@@ -647,6 +673,19 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.json()["environment"], {"APP_ENV": "stage"})
         self.assertEqual(update_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN_NEXT"})
         self.assertIsNone(update_project.json()["discord"])
+        self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(update_project.json()["policy_overrides"]["max_pr_auto_remediation_loops"], 3)
+        self.assertFalse(update_project.json()["policy_overrides"]["knowledge_base_enabled"])
+        self.assertEqual(update_project.json()["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
+        self.assertEqual(update_project.json()["policy_overrides"]["allowed_commands"], ["git status"])
+        self.assertEqual(update_project.json()["policy_overrides"]["codex_reasoning_effort"], "high")
+        self.assertEqual(update_project.json()["effective_policy"]["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(update_project.json()["effective_policy"]["codex_reasoning_effort"], "high")
+        self.assertFalse(update_project.json()["effective_policy"]["allow_auto_merge"])
+        self.assertEqual(update_project.json()["effective_policy"]["max_pr_auto_remediation_loops"], 3)
+        self.assertFalse(update_project.json()["effective_policy"]["knowledge_base_enabled"])
+        self.assertEqual(update_project.json()["effective_policy"]["knowledge_auto_answer_mode"], "safe")
+        self.assertEqual(update_project.json()["effective_policy"]["allowed_commands"], [])
 
     def test_project_discord_enable_provisions_channel_when_missing(self) -> None:
         payload = self._tenant_payload()

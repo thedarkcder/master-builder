@@ -415,6 +415,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(204,),
             ),
+            ("GET", "/api/admin/codex/models"): RouteScenario(
+                path="/api/admin/codex/models",
+                auth=admin,
+            ),
             ("PUT", "/api/admin/secrets/{secret_ref:path}"): RouteScenario(
                 path="/api/admin/secrets/platform%2FE2E_SET",
                 auth=admin,

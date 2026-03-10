@@ -66,11 +66,17 @@ export function defaultTenantFormValues(): TenantFormValues {
       allow_jira_transitions: false,
       allow_pr_creation: true,
       allow_label_mutations: true,
+      allow_auto_merge: false,
       max_runtime_minutes: 30,
       max_dev_test_review_loops: 2,
+      max_pr_auto_remediation_loops: 5,
       max_concurrent_runs: 2,
       allowed_commands: [],
-      require_agents_md: false
+      require_agents_md: false,
+      knowledge_base_enabled: true,
+      knowledge_auto_answer_mode: "aggressive",
+      codex_model: null,
+      codex_reasoning_effort: null
     },
     discordEnabled: false,
     discord: {
@@ -147,7 +153,11 @@ export function toCreatePayload(
       allowed_commands: parseMultiLine(textFields.policyAllowedCommandsText),
       max_runtime_minutes: Number(values.policy.max_runtime_minutes),
       max_dev_test_review_loops: Number(values.policy.max_dev_test_review_loops),
-      max_concurrent_runs: Number(values.policy.max_concurrent_runs)
+      max_pr_auto_remediation_loops: Number(values.policy.max_pr_auto_remediation_loops),
+      max_concurrent_runs: Number(values.policy.max_concurrent_runs),
+      codex_model: values.policy.codex_model?.trim() || null,
+      codex_reasoning_effort:
+        (values.policy.codex_reasoning_effort?.trim() || null) as PolicyConfig["codex_reasoning_effort"]
     },
     discord: values.discordEnabled
       ? {
