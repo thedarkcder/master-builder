@@ -11,12 +11,23 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.core.knowledge_base import build_knowledge_prompt_context
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, Tenant
+from orchestrator.storage.models import (
+    DecisionAnswer,
+    DecisionCase,
+    DecisionCycle,
+    DecisionEvidence,
+    JiraOAuthConnection,
+    Project,
+    Run,
+    Tenant,
+)
 from orchestrator.tools.git_ops import build_branch_name
 from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.project_repo_checkout import project_repo_dir
@@ -64,6 +75,12 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "github.list_pr_issue_comments",
         "github.list_check_suites",
         "repo.read",
+    },
+    "decision_planner": {
+        "jira.get_issue",
+        "repo.read",
+        "decision.read_state",
+        "knowledge.read",
     },
 }
 
@@ -140,6 +157,10 @@ def execute_agent_tool(
 
     if tool_name == "repo.read":
         return _tool_repo_read(context=context, args=args)
+    if tool_name.startswith("decision."):
+        return _execute_decision_tool(session=session, context=context, tool_name=tool_name, args=args)
+    if tool_name.startswith("knowledge."):
+        return _execute_knowledge_tool(session=session, context=context, tool_name=tool_name, args=args)
     if tool_name.startswith("jira."):
         return _execute_jira_tool(session=session, settings=settings, context=context, tool_name=tool_name, args=args)
     if tool_name.startswith("github."):
@@ -324,6 +345,126 @@ def _execute_jira_tool(
         return payload
 
     raise ValueError(f"Unsupported Jira tool '{tool_name}'")
+
+
+def _execute_decision_tool(
+    *,
+    session: Session,
+    context: AgentToolContext,
+    tool_name: str,
+    args: dict[str, Any],  # noqa: ANN401
+) -> dict[str, Any]:
+    if tool_name != "decision.read_state":
+        raise ValueError(f"Unsupported Decision tool '{tool_name}'")
+    issue_key = str(args.get("issue_key") or context.issue_key).strip()
+    if not issue_key:
+        raise ValueError("decision.read_state requires 'issue_key'")
+    case = session.execute(
+        select(DecisionCase).where(
+            DecisionCase.tenant_id == context.tenant.tenant_id,
+            DecisionCase.issue_key == issue_key,
+        )
+    ).scalar_one_or_none()
+    if case is None:
+        return {"issue_key": issue_key, "case": None, "active_cycle": None, "answers": [], "recent_evidence": []}
+    cycle = session.get(DecisionCycle, case.active_cycle_id) if case.active_cycle_id else None
+    answers = session.execute(
+        select(DecisionAnswer)
+        .where(
+            DecisionAnswer.tenant_id == context.tenant.tenant_id,
+            DecisionAnswer.issue_key == issue_key,
+        )
+        .order_by(DecisionAnswer.updated_at.desc())
+    ).scalars().all()
+    recent_evidence = session.execute(
+        select(DecisionEvidence)
+        .where(
+            DecisionEvidence.tenant_id == context.tenant.tenant_id,
+            DecisionEvidence.issue_key == issue_key,
+        )
+        .order_by(DecisionEvidence.created_at.desc())
+        .limit(8)
+    ).scalars().all()
+    return {
+        "issue_key": issue_key,
+        "case": {
+            "case_id": case.case_id,
+            "state": case.state,
+            "classification": case.classification,
+            "blocked_reason": case.blocked_reason,
+            "active_cycle_id": case.active_cycle_id,
+            "metadata": case.metadata_json if isinstance(case.metadata_json, dict) else {},
+        },
+        "active_cycle": (
+            {
+                "cycle_id": cycle.cycle_id,
+                "status": cycle.status,
+                "classification": cycle.classification,
+                "reason": cycle.reason,
+                "questions": cycle.question_set_json,
+                "unresolved_question_ids": cycle.unresolved_question_ids_json,
+                "metadata": cycle.metadata_json if isinstance(cycle.metadata_json, dict) else {},
+            }
+            if cycle is not None
+            else None
+        ),
+        "answers": [
+            {
+                "question_id": answer.question_id,
+                "question_text": answer.question_text,
+                "status": answer.status,
+                "answer": answer.normalized_answer,
+                "notes": (
+                    str((answer.metadata_json or {}).get("notes") or "").strip()
+                    if isinstance(answer.metadata_json, dict)
+                    else ""
+                ),
+                "updated_at": answer.updated_at.isoformat() if answer.updated_at else None,
+            }
+            for answer in answers
+        ],
+        "recent_evidence": [
+            {
+                "evidence_id": evidence.evidence_id,
+                "source_transport": evidence.source_transport,
+                "source_ref": evidence.source_ref,
+                "raw_text": evidence.raw_text,
+                "question_ids": evidence.question_ids_json,
+                "normalized_answers": evidence.normalized_answers_json,
+                "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
+            }
+            for evidence in recent_evidence
+        ],
+    }
+
+
+def _execute_knowledge_tool(
+    *,
+    session: Session,
+    context: AgentToolContext,
+    tool_name: str,
+    args: dict[str, Any],  # noqa: ANN401
+) -> dict[str, Any]:
+    if tool_name != "knowledge.read":
+        raise ValueError(f"Unsupported Knowledge tool '{tool_name}'")
+    query = str(args.get("query") or context.issue_key).strip()
+    if not query:
+        raise ValueError("knowledge.read requires 'query'")
+    max_items = int(args.get("max_items") or 5)
+    max_chars = int(args.get("max_chars") or 2400)
+    payload = build_knowledge_prompt_context(
+        session=session,
+        tenant_id=context.tenant.tenant_id,
+        project_id=context.project.project_id,
+        query=query,
+        max_items=max(1, min(max_items, 10)),
+        max_chars=max(500, min(max_chars, 6000)),
+    )
+    return {
+        "query": query,
+        "text": payload.text,
+        "citations": payload.citations,
+    }
 
 
 def _execute_github_tool(

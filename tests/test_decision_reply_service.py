@@ -3,10 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_reply_service import capture_decision_reply, serialize_recorded_answers_for_policy
+from orchestrator.core.decision_reply_service import (
+    capture_decision_reply,
+    serialize_recorded_answers_for_policy,
+    sync_cycle_answers_from_planner,
+    unresolved_question_feedback_for_cycle,
+)
 from orchestrator.core.decision_presentation import build_cycle_comment
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -179,18 +183,8 @@ class DecisionReplyServiceTests(unittest.TestCase):
             ],
         )
 
-    def test_capture_decision_reply_does_not_downgrade_accepted_answer(self) -> None:
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision_reply_service._extract_reply_matches",
-            return_value=[
-                {
-                    "question_id": "dg_1",
-                    "status": "answered",
-                    "answer": "A weaker follow-up answer.",
-                    "notes": "partial follow-up",
-                }
-            ],
-        ):
+    def test_capture_decision_reply_records_evidence_without_mutating_accepted_answer(self) -> None:
+        with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-reply")
             project = session.get(Project, "project-reply")
             assert tenant is not None and project is not None
@@ -210,23 +204,14 @@ class DecisionReplyServiceTests(unittest.TestCase):
             answer = session.get(DecisionAnswer, "answer-1")
 
         assert answer is not None
-        self.assertEqual(capture.accepted_question_ids, ("dg_1",))
+        self.assertEqual(capture.accepted_question_ids, ())
         self.assertEqual(capture.answered_question_ids, ())
         self.assertEqual(answer.status, "accepted")
         self.assertEqual(answer.normalized_answer, "Accepted config answer.")
+        self.assertTrue(capture.evidence_id)
 
-    def test_capture_decision_reply_returns_unresolved_feedback_from_model_notes(self) -> None:
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision_reply_service._extract_reply_matches",
-            return_value=[
-                {
-                    "question_id": "dg_1",
-                    "status": "answered",
-                    "answer": "Production and staging values are listed.",
-                    "notes": "Config values were captured, but entitlement confirmation is still missing.",
-                }
-            ],
-        ):
+    def test_planner_state_drives_unresolved_feedback_from_missing_items(self) -> None:
+        with self.session_factory() as session:
             answer = session.get(DecisionAnswer, "answer-1")
             assert answer is not None
             answer.status = "open"
@@ -252,15 +237,36 @@ class DecisionReplyServiceTests(unittest.TestCase):
                 source_transport="discord",
                 source_ref="msg-2",
             )
+            accepted_ids, answered_ids, effect_ids = sync_cycle_answers_from_planner(
+                session=session,
+                tenant=tenant,
+                project=project,
+                case=case,
+                cycle=cycle,
+                planner_question_states=[
+                    {
+                        "question_id": "dg_1",
+                        "kind": "decision_gate",
+                        "question": "What config is approved?",
+                        "status": "answered",
+                        "detail": "Config values were captured, but entitlement confirmation is still missing.",
+                    }
+                ],
+                now=datetime.now(timezone.utc),
+            )
             session.commit()
 
-            question_feedback = list(capture.unresolved_question_feedback)
+            question_feedback = list(unresolved_question_feedback_for_cycle(session=session, cycle_id=cycle.cycle_id))
             comment = build_cycle_comment(session=session, case=case, cycle=cycle)
 
+        self.assertEqual(capture.answered_question_ids, ())
+        self.assertEqual(accepted_ids, ())
+        self.assertEqual(answered_ids, ("dg_1",))
+        self.assertEqual(effect_ids, ())
         self.assertEqual(len(question_feedback), 1)
         self.assertEqual(question_feedback[0]["question_id"], "dg_1")
-        self.assertEqual(
-            question_feedback[0]["note"],
+        self.assertIn(
             "Config values were captured, but entitlement confirmation is still missing.",
+            question_feedback[0]["note"],
         )
         self.assertIn("Missing detail: Config values were captured, but entitlement confirmation is still missing.", comment)

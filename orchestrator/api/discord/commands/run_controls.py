@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -25,8 +24,8 @@ from orchestrator.core.decision_engine import (
 )
 from orchestrator.core.decision_reply_service import (
     capture_decision_reply,
+    unresolved_question_feedback_for_cycle,
 )
-from orchestrator.core.decision_effect_service import publish_decision_effects
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.precheck_question_lock import (
@@ -502,7 +501,7 @@ def dispatch_run_control_command(
             )
             issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or None
             issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
-            capture = capture_decision_reply(
+            capture_decision_reply(
                 session=session,
                 settings=settings,
                 tenant=tenant,
@@ -558,12 +557,6 @@ def dispatch_run_control_command(
             oauth_context=oauth,
             publish_jira_comment_fn=_publish_jira_comment,
         )
-        if capture.effect_ids:
-            publish_decision_effects(
-                session=session,
-                effect_ids=capture.effect_ids,
-                occurred_at=datetime.now(timezone.utc),
-            )
         precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
             return DiscordCommandResponse(
@@ -602,17 +595,24 @@ def dispatch_run_control_command(
                 for item in getattr(pre_check, "gtd_missing_criteria", ())
                 if str(item).strip()
             ]
-            unresolved_question_feedback = [
-                item
-                for item in getattr(capture, "unresolved_question_feedback", ())
-                if isinstance(item, dict)
-            ]
-            if unresolved_question_feedback and classification in {"decision_gate", "both"}:
+            unresolved_question_feedback = list(
+                unresolved_question_feedback_for_cycle(
+                    session=session,
+                    cycle_id=str(decision_result.cycle_id or ""),
+                )
+            ) if decision_result.cycle_id else []
+            if classification in {"decision_gate", "both"} and unresolved_question_feedback:
                 message, generated_questions = _decision_gate_unresolved_feedback_message(
                     issue_key=issue_key,
                     reason=locked_decision_gate_reason or "clarification required",
                     question_feedback=unresolved_question_feedback,
                 )
+            elif classification in {"decision_gate", "both"}:
+                message, generated_questions = _decision_gate_remaining_questions_message(
+                    issue_key=issue_key,
+                    reason=locked_decision_gate_reason or "clarification required",
+                    questions=decision_gate_questions,
+                ), decision_gate_questions
             else:
                 message, generated_questions = build_precheck_message(
                     runtime=runtime,

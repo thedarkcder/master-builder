@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 from typing import Any, Callable
 
@@ -31,10 +32,12 @@ from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
     accepted_question_ids_for_cycle,
     classification_for_cycle_questions,
+    sync_cycle_answers_from_planner,
     recorded_cycle_answers,
     serialize_recorded_answers_for_policy,
     unresolved_question_ids_for_cycle,
 )
+from orchestrator.core.decision_planner import DecisionPlannerResult, plan_decision_questions
 from orchestrator.core.decision_state_repository import (
     active_cycle as active_cycle_state,
     existing_case_for_issue as existing_case_for_issue_state,
@@ -50,6 +53,7 @@ from orchestrator.core.decision_types import (
     WorkerDecision,
     blocking_reason_for_precheck,
 )
+from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
 from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
 from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
@@ -71,6 +75,139 @@ _READY_FOR_AGENT_OVERRIDE_SOURCES = {
     "cli_run",
     "github_pr_remediation",
 }
+
+
+def _planner_classification(gate_status: str) -> str:
+    normalized = str(gate_status or "").strip().lower()
+    if normalized == "blocked_decision_gate":
+        return "decision_gate"
+    if normalized == "blocked_gtd":
+        return "gtd"
+    if normalized == "blocked_both":
+        return "both"
+    return "clear"
+
+
+def _planner_block_reason(classification: str) -> str | None:
+    if classification in {"decision_gate", "both"}:
+        return "decision_gate_required"
+    if classification == "gtd":
+        return "gtd_required"
+    return None
+
+
+def _planner_question_set(planner_result: DecisionPlannerResult) -> list[dict[str, object]]:
+    states = planner_result.question_states or planner_result.questions
+    question_set: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in states:
+        if item.question_id in seen:
+            continue
+        seen.add(item.question_id)
+        question_set.append(
+            {
+                "id": item.question_id,
+                "kind": item.kind,
+                "text": item.question,
+                "status": item.status,
+                "detail": item.detail,
+            }
+        )
+    return question_set
+
+
+def _planner_question_state_payload(planner_result: DecisionPlannerResult) -> list[dict[str, object]]:
+    return [
+        {
+            "question_id": item.question_id,
+            "kind": item.kind,
+            "question": item.question,
+            "status": item.status,
+            "detail": item.detail,
+        }
+        for item in (planner_result.question_states or planner_result.questions)
+    ]
+
+
+def _decision_with_planner_result(
+    *,
+    decision: IngressDecision,
+    planner_result: DecisionPlannerResult,
+) -> IngressDecision:
+    pre_check = decision.pre_check
+    if not isinstance(pre_check, PreRunCheckResult):
+        return decision
+    classification = _planner_classification(planner_result.gate_status)
+    reason = planner_result.reason
+    decision_gate_questions = tuple(
+        item.question
+        for item in planner_result.questions
+        if item.kind == "decision_gate"
+    )
+    gtd_questions = tuple(
+        item.question
+        for item in planner_result.questions
+        if item.kind == "gtd"
+    )
+    missing_items = tuple(planner_result.missing_items)
+    if classification == "clear":
+        outcome = "missing_ready_label" if pre_check.ready_label_missing else "ready_for_agent"
+        updated_pre_check = replace(
+            pre_check,
+            outcome=outcome,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed with execution.",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        return IngressDecision(
+            source=decision.source,
+            pre_check=updated_pre_check,
+            block_reason=None,
+            guidance=None,
+            policy_error=decision.policy_error,
+            label_actions=decision.label_actions,
+        )
+
+    updated_pre_check = replace(
+        pre_check,
+        outcome="decision_gate_required" if classification in {"decision_gate", "both"} else "gtd_required",
+        decision_gate=DecisionGateResult(
+            triggered=classification in {"decision_gate", "both"},
+            reason=reason if classification in {"decision_gate", "both"} else "Decision Gate not required",
+            missing_sections=missing_items if classification in {"decision_gate", "both"} else (),
+            questions=decision_gate_questions,
+            recommendation=(
+                "Clarification required before execution."
+                if classification in {"decision_gate", "both"}
+                else pre_check.decision_gate.recommendation
+            ),
+            tags=pre_check.decision_gate.tags,
+        ),
+        gtd=GoodToDoValidationResult(
+            valid=classification not in {"gtd", "both"},
+            missing_criteria=missing_items if classification in {"gtd", "both"} else (),
+            clarification_questions=gtd_questions,
+        ),
+    )
+    block_reason = _planner_block_reason(classification)
+    return IngressDecision(
+        source=decision.source,
+        pre_check=updated_pre_check,
+        block_reason=block_reason,
+        guidance=enqueue_reason_guidance(block_reason) if block_reason else None,
+        policy_error=decision.policy_error,
+        label_actions=decision.label_actions,
+    )
 
 
 def evaluate_ingress_precheck(
@@ -363,7 +500,7 @@ def evaluate_decision_event(
         existing_cycle.unresolved_question_ids_json = list(unresolved_question_ids)
         existing_cycle.updated_at = occurred_at
         if unresolved_question_ids:
-            classification = classification_for_cycle_questions(
+            snapshot_classification = classification_for_cycle_questions(
                 cycle=existing_cycle,
                 unresolved_question_ids=unresolved_question_ids,
             )
@@ -376,33 +513,57 @@ def evaluate_decision_event(
             decision = decision_from_snapshot_state(
                 snapshot=snapshot,
                 source=event.source,
-                classification=classification,
+                classification=snapshot_classification,
                 cycle=existing_cycle,
                 case=existing_case,
             )
-            decision = IngressDecision(
-                source=decision.source,
-                pre_check=decision.pre_check,
-                block_reason=(
-                    "decision_gate_required"
-                    if classification in {"decision_gate", "both"}
-                    else "gtd_required" if classification == "gtd" else None
-                ),
-                guidance=decision.guidance,
-                policy_error=decision.policy_error,
-                label_actions=decision.label_actions,
+            planner_result = plan_decision_questions(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project=project,
+                issue_key=event.issue_key,
+                source=event.source,
+                classification=snapshot_classification,
+                block_reason=decision.block_reason,
+                case=existing_case,
+                cycle=existing_cycle,
             )
+            question_set_override = None
+            question_reason_override = None
+            classification = snapshot_classification
+            accepted_question_ids: set[str] = accepted_question_ids_for_cycle(
+                session=session,
+                cycle_id=existing_cycle.cycle_id,
+            )
+            if planner_result is not None:
+                decision = _decision_with_planner_result(
+                    decision=decision,
+                    planner_result=planner_result,
+                )
+                classification = _planner_classification(planner_result.gate_status)
+                question_set_override = _planner_question_set(planner_result)
+                question_reason_override = planner_result.reason
+                accepted_ids, _, effect_ids = sync_cycle_answers_from_planner(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    case=existing_case,
+                    cycle=existing_cycle,
+                    planner_question_states=_planner_question_state_payload(planner_result),
+                    now=occurred_at,
+                )
+                accepted_question_ids = set(accepted_ids)
+                outbox_effect_ids = tuple(effect_ids)
+            else:
+                outbox_effect_ids = ()
             issue_labels = [
                 str(label).strip()
                 for label in event.issue_labels or []
                 if str(label).strip()
             ]
             issue_description = event.issue_description
-            accepted_question_ids = accepted_question_ids_for_cycle(
-                session=session,
-                cycle_id=existing_cycle.cycle_id,
-            )
-            case, cycle, outbox_effect_ids = persist_decision_state_repo(
+            case, cycle, persist_effect_ids = persist_decision_state_repo(
                 session=session,
                 tenant=tenant,
                 project=project,
@@ -413,10 +574,13 @@ def evaluate_decision_event(
                 issue_description=issue_description,
                 decision=decision,
                 classification=classification,
+                question_set_override=question_set_override,
+                question_reason_override=question_reason_override,
                 auto_resolved_answers={},
                 accepted_question_ids=accepted_question_ids,
                 issue_fingerprint_fn=issue_fingerprint_state,
             )
+            outbox_effect_ids = tuple({*outbox_effect_ids, *persist_effect_ids})
             if publish_jira_comment_fn is not None and outbox_effect_ids:
                 publish_decision_effects_repo(
                     session=session,
@@ -521,6 +685,42 @@ def evaluate_decision_event(
             missing_slots = precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else []
 
     classification = precheck_classification(decision.pre_check) if decision.pre_check is not None else "clear"
+    question_set_override = None
+    question_reason_override = None
+    extra_effect_ids: tuple[str, ...] = ()
+    if classification in {"decision_gate", "gtd", "both"}:
+        planner_result = plan_decision_questions(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            issue_key=event.issue_key,
+            source=event.source,
+            classification=classification,
+            block_reason=decision.block_reason,
+            case=existing_case,
+            cycle=existing_cycle,
+        )
+        if planner_result is not None:
+            decision = _decision_with_planner_result(
+                decision=decision,
+                planner_result=planner_result,
+            )
+            classification = _planner_classification(planner_result.gate_status)
+            question_set_override = _planner_question_set(planner_result)
+            question_reason_override = planner_result.reason
+            if existing_case is not None and existing_cycle is not None:
+                accepted_ids, _, extra_effect_ids = sync_cycle_answers_from_planner(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    case=existing_case,
+                    cycle=existing_cycle,
+                    planner_question_states=_planner_question_state_payload(planner_result),
+                    now=occurred_at,
+                )
+                accepted_question_ids = set(accepted_ids)
+
     case, cycle, outbox_effect_ids = persist_decision_state_repo(
         session=session,
         tenant=tenant,
@@ -532,10 +732,13 @@ def evaluate_decision_event(
         issue_description=issue_description,
         decision=decision,
         classification=classification,
+        question_set_override=question_set_override,
+        question_reason_override=question_reason_override,
         auto_resolved_answers=auto_resolved_answers,
         accepted_question_ids=accepted_question_ids,
         issue_fingerprint_fn=issue_fingerprint_state,
     )
+    outbox_effect_ids = tuple({*extra_effect_ids, *outbox_effect_ids})
     if publish_jira_comment_fn is not None and outbox_effect_ids:
         publish_decision_effects_repo(
             session=session,

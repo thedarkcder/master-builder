@@ -57,6 +57,10 @@ def build_cycle_comment(*, session, case: DecisionCase, cycle: DecisionCycle) ->
                 if answer is not None and isinstance(answer.metadata_json, dict)
                 else ""
             )
+            if not note:
+                detail = str(item.get("detail") or "").strip()
+                if detail:
+                    note = detail
             if question_id:
                 lines.append(f"- [{question_id}] {text}")
             else:
