@@ -407,7 +407,7 @@ class CodexInvocationTests(unittest.TestCase):
             patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
             patch(
                 "orchestrator.core.codex_invocation._resolve_knowledge_policy_for_context",
-                return_value=("proj-1", True, "aggressive", "gpt-5.3-codex-spark", "high"),
+                return_value=("proj-1", True, "aggressive", "gpt-5.3-codex-spark", "high", True),
             ),
             patch("orchestrator.core.codex_invocation.create_session_factory"),
             patch("orchestrator.core.codex_invocation.build_knowledge_prompt_context", return_value=SimpleNamespace(text="", citations=[])),
@@ -421,6 +421,52 @@ class CodexInvocationTests(unittest.TestCase):
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(captured["model_override"], "gpt-5.3-codex-spark")
+        self.assertEqual(captured["reasoning_effort"], "high")
+
+    def test_invoke_codex_json_prefers_scoped_reasoning_override_over_context_default(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _Runtime:
+            def run_json(self, **kwargs):  # noqa: ANN003
+                captured.update(kwargs)
+                return {"ok": True}
+
+        context = CodexInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="pm",
+            working_dir=".",
+            run_id="run-1",
+            reasoning_effort="medium",
+        )
+
+        class _Writer:
+            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
+                _ = invocation_id
+                return None
+
+        with (
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch(
+                "orchestrator.core.codex_invocation._resolve_knowledge_policy_for_context",
+                return_value=("proj-1", True, "aggressive", "gpt-5.3-codex-spark", "high", True),
+            ),
+            patch("orchestrator.core.codex_invocation.create_session_factory"),
+            patch(
+                "orchestrator.core.codex_invocation.build_knowledge_prompt_context",
+                return_value=SimpleNamespace(text="", citations=[]),
+            ),
+        ):
+            payload = invoke_codex_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
         self.assertEqual(captured["reasoning_effort"], "high")
 
     def test_invoke_codex_json_uses_scoped_model_when_kb_injection_disabled(self) -> None:
@@ -450,7 +496,7 @@ class CodexInvocationTests(unittest.TestCase):
             patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
             patch(
                 "orchestrator.core.codex_invocation._resolve_knowledge_policy_for_context",
-                return_value=("proj-1", False, "aggressive", "gpt-5.3-codex-spark", "high"),
+                return_value=("proj-1", False, "aggressive", "gpt-5.3-codex-spark", "high", True),
             ) as resolve_policy_mock,
             patch("orchestrator.core.codex_invocation.get_settings") as settings_mock,
         ):
