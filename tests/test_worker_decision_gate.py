@@ -2,7 +2,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.decision_engine import DecisionEngineResult
+from orchestrator.core.decision_engine import WorkerDecision
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
@@ -43,49 +43,41 @@ def _run() -> SimpleNamespace:
     )
 
 
-def _engine_result(
+def _worker_decision(
     *,
     outcome: str,
     policy_error: str | None = None,
     decision_gate_reason: str = "Decision Gate not required",
     decision_gate_questions: tuple[str, ...] = (),
-) -> DecisionEngineResult:
-    return DecisionEngineResult(
-        decision=SimpleNamespace(
-            pre_check=PreRunCheckResult(
-                outcome=outcome,
-                ready_label="agent:ready",
-                ready_label_present=True,
-                required_worker_capability="linux",
-                required_worker_label="worker:linux",
-                required_worker_label_present=True,
-                decision_gate=DecisionGateResult(
-                    triggered=outcome == "decision_gate_required",
-                    reason=decision_gate_reason,
-                    missing_sections=(),
-                    questions=decision_gate_questions,
-                    recommendation="Clarification required" if outcome == "decision_gate_required" else "Proceed",
-                    tags=(),
-                ),
-                gtd=GoodToDoValidationResult(
-                    valid=outcome != "gtd_required",
-                    missing_criteria=(),
-                    clarification_questions=(),
-                ),
-            ),
-            block_reason=outcome if outcome in {"decision_gate_required", "gtd_required"} else None,
-            guidance=None,
-            policy_error=policy_error,
+) -> WorkerDecision:
+    pre_check = PreRunCheckResult(
+        outcome=outcome,
+        ready_label="agent:ready",
+        ready_label_present=True,
+        required_worker_capability="linux",
+        required_worker_label="worker:linux",
+        required_worker_label_present=True,
+        decision_gate=DecisionGateResult(
+            triggered=outcome == "decision_gate_required",
+            reason=decision_gate_reason,
+            missing_sections=(),
+            questions=decision_gate_questions,
+            recommendation="Clarification required" if outcome == "decision_gate_required" else "Proceed",
+            tags=(),
         ),
-        issue_labels=[],
+        gtd=GoodToDoValidationResult(
+            valid=outcome != "gtd_required",
+            missing_criteria=(),
+            clarification_questions=(),
+        ),
+    )
+    return WorkerDecision(
+        allowed=outcome not in {"decision_gate_required", "gtd_required"} and not policy_error,
+        decision_gate=pre_check.decision_gate if outcome == "decision_gate_required" else None,
+        configuration_error=policy_error,
+        block_reason=outcome if outcome in {"decision_gate_required", "gtd_required"} else None,
         classification="decision_gate" if outcome == "decision_gate_required" else "clear",
-        missing_slots=[],
-        auto_resolved_slots=[],
-        case_id="case-1",
-        case_state="blocked_decision_gate" if outcome == "decision_gate_required" else "clear",
-        cycle_id="cycle-1" if outcome == "decision_gate_required" else None,
-        outbox_effect_ids=(),
-        duplicate_event=False,
+        pre_check=pre_check,
     )
 
 
@@ -115,8 +107,8 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
         return None
 
     with patch(
-        "orchestrator.core.worker.decision_gate.evaluate_decision_event",
-        return_value=_engine_result(outcome="clear", policy_error="rules missing"),
+        "orchestrator.core.worker.decision_gate.evaluate_worker_decision",
+        return_value=_worker_decision(outcome="clear", policy_error="rules missing"),
     ), patch(
         "orchestrator.core.worker.decision_gate.resolve_project_for_run",
         return_value=None,
@@ -166,8 +158,8 @@ def test_apply_decision_gate_returns_none_when_not_triggered() -> None:
         return None
 
     with patch(
-        "orchestrator.core.worker.decision_gate.evaluate_decision_event",
-        return_value=_engine_result(outcome="ready_for_agent"),
+        "orchestrator.core.worker.decision_gate.evaluate_worker_decision",
+        return_value=_worker_decision(outcome="ready_for_agent"),
     ), patch(
         "orchestrator.core.worker.decision_gate.resolve_project_for_run",
         return_value=None,
@@ -223,8 +215,8 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
 
     with (
         patch(
-            "orchestrator.core.worker.decision_gate.evaluate_decision_event",
-            return_value=_engine_result(
+            "orchestrator.core.worker.decision_gate.evaluate_worker_decision",
+            return_value=_worker_decision(
                 outcome="decision_gate_required",
                 decision_gate_reason="Need PM clarity",
                 decision_gate_questions=("What is in scope?",),

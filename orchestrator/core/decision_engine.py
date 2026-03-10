@@ -192,12 +192,13 @@ def _decision_with_planner_result(
                 clarification_questions=(),
             ),
         )
+        updated_block_reason = blocking_reason_for_precheck(updated_pre_check)
         return IngressDecision(
             source=decision.source,
             pre_check=updated_pre_check,
-            block_reason=None,
-            guidance=None,
-            policy_error=decision.policy_error,
+            block_reason=updated_block_reason,
+            guidance=enqueue_reason_guidance(updated_block_reason) if updated_block_reason else None,
+            policy_error=None,
             label_actions=decision.label_actions,
         )
 
@@ -230,6 +231,64 @@ def _decision_with_planner_result(
         guidance=enqueue_reason_guidance(block_reason) if block_reason else None,
         policy_error=decision.policy_error,
         label_actions=decision.label_actions,
+    )
+
+
+def _clear_planner_result() -> DecisionPlannerResult:
+    return DecisionPlannerResult(
+        gate_status="clear",
+        reason="",
+        questions=(),
+        question_states=(),
+        resolved_items=(),
+        missing_items=(),
+        captured_answer_summary=None,
+    )
+
+
+def _synthetic_clear_pre_check(*, case: DecisionCase) -> PreRunCheckResult:
+    ready_label = str(case.ready_label or "").strip() or None
+    ready_label_present = bool(case.ready_label_present)
+    outcome = "missing_ready_label" if ready_label and not ready_label_present else "ready_for_agent"
+    return PreRunCheckResult(
+        outcome=outcome,
+        ready_label=ready_label,
+        ready_label_present=ready_label_present,
+        required_worker_capability=str(case.required_worker_capability or "").strip(),
+        required_worker_label=str(case.required_worker_label or "").strip(),
+        required_worker_label_present=bool(case.required_worker_label_present),
+        decision_gate=DecisionGateResult(
+            triggered=False,
+            reason="Decision Gate not required",
+            missing_sections=(),
+            questions=(),
+            recommendation="Proceed with execution.",
+            tags=(),
+        ),
+        gtd=GoodToDoValidationResult(
+            valid=True,
+            missing_criteria=(),
+            clarification_questions=(),
+        ),
+    )
+
+
+def _coerce_clear_decision(*, decision: IngressDecision, case: DecisionCase) -> IngressDecision:
+    normalized_pre_check = (
+        decision.pre_check
+        if isinstance(decision.pre_check, PreRunCheckResult)
+        else _synthetic_clear_pre_check(case=case)
+    )
+    return _decision_with_planner_result(
+        decision=IngressDecision(
+            source=decision.source,
+            pre_check=normalized_pre_check,
+            block_reason=blocking_reason_for_precheck(normalized_pre_check),
+            guidance=None,
+            policy_error=None,
+            label_actions=decision.label_actions,
+        ),
+        planner_result=_clear_planner_result(),
     )
 
 
@@ -515,6 +574,11 @@ def evaluate_decision_event(
         else []
     )
     structured_recorded_answers = serialize_recorded_answers_for_policy(recorded_answers)
+    current_issue_fingerprint = issue_fingerprint_state(
+        issue_summary=event.issue_summary,
+        issue_description=event.issue_description,
+        issue_labels=event.issue_labels or [],
+    )
     if existing_case is not None and existing_cycle is not None:
         unresolved_question_ids = unresolved_question_ids_for_cycle(
             session=session,
@@ -628,6 +692,124 @@ def evaluate_decision_event(
         existing_cycle.updated_at = occurred_at
         existing_case.active_cycle_id = None
         existing_case.updated_at = occurred_at
+        snapshot = (
+            existing_case.metadata_json.get("result_snapshot")
+            if isinstance(existing_case.metadata_json, dict)
+            and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
+            else {}
+        )
+        resolved_decision = _coerce_clear_decision(
+            decision=decision_from_snapshot_state(
+                snapshot=snapshot,
+                source=event.source,
+                classification="clear",
+                cycle=None,
+                case=existing_case,
+            ),
+            case=existing_case,
+        )
+        issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
+        issue_description = event.issue_description
+        case, cycle, outbox_effect_ids = persist_decision_state_repo(
+            session=session,
+            tenant=tenant,
+            project=project,
+            event=event,
+            occurred_at=occurred_at,
+            idempotency_key=idempotency_key,
+            issue_labels=issue_labels,
+            issue_description=issue_description,
+            decision=resolved_decision,
+            classification="clear",
+            question_set_override=None,
+            question_reason_override=None,
+            auto_resolved_answers={},
+            accepted_question_ids=accepted_question_ids_for_cycle(
+                session=session,
+                cycle_id=existing_cycle.cycle_id,
+            ),
+            issue_fingerprint_fn=issue_fingerprint_state,
+        )
+        if publish_jira_comment_fn is not None and outbox_effect_ids:
+            publish_decision_effects_repo(
+                session=session,
+                effect_ids=outbox_effect_ids,
+                publish_jira_comment_fn=publish_jira_comment_fn,
+                occurred_at=occurred_at,
+            )
+        return DecisionEngineResult(
+            decision=resolved_decision,
+            issue_labels=issue_labels,
+            classification="clear",
+            missing_slots=[],
+            auto_resolved_slots=[],
+            case_id=case.case_id,
+            case_state=case.state,
+            cycle_id=None,
+            outbox_effect_ids=outbox_effect_ids,
+            duplicate_event=False,
+        )
+
+    if (
+        existing_case is not None
+        and existing_cycle is None
+        and str(existing_case.classification or "").strip() == "clear"
+        and str(existing_case.issue_fingerprint or "").strip() == current_issue_fingerprint
+    ):
+        snapshot = (
+            existing_case.metadata_json.get("result_snapshot")
+            if isinstance(existing_case.metadata_json, dict)
+            and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
+            else {}
+        )
+        decision = _coerce_clear_decision(
+            decision=decision_from_snapshot_state(
+                snapshot=snapshot,
+                source=event.source,
+                classification="clear",
+                cycle=None,
+                case=existing_case,
+            ),
+            case=existing_case,
+        )
+        issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
+        issue_description = event.issue_description
+        case, cycle, outbox_effect_ids = persist_decision_state_repo(
+            session=session,
+            tenant=tenant,
+            project=project,
+            event=event,
+            occurred_at=occurred_at,
+            idempotency_key=idempotency_key,
+            issue_labels=issue_labels,
+            issue_description=issue_description,
+            decision=decision,
+            classification="clear",
+            question_set_override=None,
+            question_reason_override=None,
+            auto_resolved_answers={},
+            accepted_question_ids=set(),
+            issue_fingerprint_fn=issue_fingerprint_state,
+        )
+        if publish_jira_comment_fn is not None and outbox_effect_ids:
+            publish_decision_effects_repo(
+                session=session,
+                effect_ids=outbox_effect_ids,
+                publish_jira_comment_fn=publish_jira_comment_fn,
+                occurred_at=occurred_at,
+            )
+        return DecisionEngineResult(
+            decision=decision,
+            issue_labels=issue_labels,
+            classification="clear",
+            missing_slots=[],
+            auto_resolved_slots=[],
+            case_id=case.case_id,
+            case_state=case.state,
+            cycle_id=None,
+            outbox_effect_ids=outbox_effect_ids,
+            duplicate_event=False,
+        )
 
     initial = evaluate_with_labels_state(
         session=session,

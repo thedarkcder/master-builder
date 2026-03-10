@@ -12,6 +12,7 @@ from orchestrator.core.decision_precheck_mapping import (
     case_state_for_decision,
     decision_reason,
     merge_case_metadata,
+    normalize_clear_case_snapshot,
     serialize_result_snapshot,
 )
 from orchestrator.core.decision_resolution_service import serialize_slot_resolution
@@ -73,12 +74,18 @@ def load_or_create_case(
 
 
 def existing_case_for_issue(*, session, tenant_id: str, issue_key: str) -> DecisionCase | None:
-    return session.execute(
+    case = session.execute(
         select(DecisionCase).where(
             DecisionCase.tenant_id == tenant_id,
             DecisionCase.issue_key == issue_key,
         )
     ).scalar_one_or_none()
+    if case is not None:
+        normalize_clear_case_snapshot(
+            case=case,
+            source=str(case.last_source or "jira_webhook"),
+        )
+    return case
 
 
 def persist_decision_state(
@@ -178,7 +185,7 @@ def persist_decision_state(
 
     case.project_id = project.project_id if project is not None else case.project_id
     case.state = case_state
-    case.blocked_reason = decision.block_reason
+    case.blocked_reason = None if case_state == "clear" else decision.block_reason
     case.classification = classification
     case.issue_fingerprint = issue_fingerprint_fn(
         issue_summary=event.issue_summary,
