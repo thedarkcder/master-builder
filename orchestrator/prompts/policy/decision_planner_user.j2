@@ -23,5 +23,6 @@ Required process:
 5. Decide whether the gate is now clear or still blocked.
 6. Return `question_states` for the full current cycle, including accepted, answered, and open items.
 7. If blocked, return only the exact currently open questions in `questions`.
+8. Treat the current cycle questions as historical context, not wording that must be preserved. If the remaining gap is narrower now, rewrite the open question text accordingly while keeping the same `question_id`.
 
 Output JSON only.

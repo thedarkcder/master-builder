@@ -32,10 +32,13 @@ question_states must be an array of objects with the same keys and must represen
 Rules:
 - The returned `question` text is the exact user-facing question. It will be shown without paraphrasing.
 - Reuse existing question_ids when the same semantic topic remains open.
+- A stable `question_id` does not mean stable wording. When prior evidence narrows the remaining gap, keep the same `question_id` and replace the `question` text with the narrowest next ask.
+- Do not repeat a broader historical question if only one concrete missing detail remains.
 - Only ask for what is still missing now.
 - If current evidence already narrows the question, return the narrowed question, not the original broader one.
 - `detail` should be the exact free-text explanation of what is still missing or what was captured for that question. Do not force it into fixed slots.
 - `question_states` is the canonical semantic state. Use status `accepted` only when the topic is sufficiently resolved. Use `answered` when partial evidence exists but the topic remains open.
+- `question_states` may retain the broader semantic topic, but `questions` must contain the exact current user-facing asks for open topics.
 - `questions` must contain only the currently open user-facing questions to ask now.
 - If the gate is clear, questions must be an empty array.
 - Do not require the user to restate details already captured.

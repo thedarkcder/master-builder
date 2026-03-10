@@ -97,6 +97,11 @@ def _planner_block_reason(classification: str) -> str | None:
 
 
 def _planner_question_set(planner_result: DecisionPlannerResult) -> list[dict[str, object]]:
+    open_question_overrides = {
+        item.question_id: item
+        for item in planner_result.questions
+        if str(item.question_id or "").strip()
+    }
     states = planner_result.question_states or planner_result.questions
     question_set: list[dict[str, object]] = []
     seen: set[str] = set()
@@ -104,26 +109,44 @@ def _planner_question_set(planner_result: DecisionPlannerResult) -> list[dict[st
         if item.question_id in seen:
             continue
         seen.add(item.question_id)
+        override = open_question_overrides.get(item.question_id)
         question_set.append(
             {
                 "id": item.question_id,
-                "kind": item.kind,
-                "text": item.question,
+                "kind": override.kind if override is not None else item.kind,
+                "text": override.question if override is not None else item.question,
                 "status": item.status,
-                "detail": item.detail,
+                "detail": override.detail if override is not None else item.detail,
             }
         )
     return question_set
 
 
 def _planner_question_state_payload(planner_result: DecisionPlannerResult) -> list[dict[str, object]]:
+    open_question_overrides = {
+        item.question_id: item
+        for item in planner_result.questions
+        if str(item.question_id or "").strip()
+    }
     return [
         {
             "question_id": item.question_id,
-            "kind": item.kind,
-            "question": item.question,
+            "kind": (
+                open_question_overrides[item.question_id].kind
+                if item.question_id in open_question_overrides
+                else item.kind
+            ),
+            "question": (
+                open_question_overrides[item.question_id].question
+                if item.question_id in open_question_overrides
+                else item.question
+            ),
             "status": item.status,
-            "detail": item.detail,
+            "detail": (
+                open_question_overrides[item.question_id].detail
+                if item.question_id in open_question_overrides
+                else item.detail
+            ),
         }
         for item in (planner_result.question_states or planner_result.questions)
     ]
