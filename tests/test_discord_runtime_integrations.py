@@ -275,7 +275,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!issues followup follow up text")
 
     def test_handle_message_create_decision_gate_thread_routes_to_decision_gate_reply_command(self) -> None:
-        listener, _session = self._listener()
+        listener, session = self._listener()
         tenant = SimpleNamespace(tenant_id="route25")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="reply", message="ok", data={})
@@ -302,6 +302,36 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!reply")
         self.assertEqual(payload.command_params["issue_key"], "GP-80")
         self.assertEqual(payload.command_params["reply_text"], "Objective and acceptance details")
+        self.assertEqual(payload.command_params["source_ref"], "m-1")
+        session.commit.assert_not_called()
+        client_cls.return_value.post_message.assert_called_once()
+
+    def test_handle_message_create_does_not_manage_session_when_command_fails(self) -> None:
+        listener, session = self._listener()
+        tenant = SimpleNamespace(tenant_id="route25")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                side_effect=HTTPException(status_code=409, detail="blocked"),
+            ),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+        ):
+            listener._handle_message_create(
+                {
+                    "id": "m-rollback",
+                    "author": {"id": "u1"},
+                    "channel_id": "thread-1",
+                    "content": "reply text",
+                    "attachments": [],
+                },
+                bot_token="token",
+            )
+
+        session.rollback.assert_not_called()
         client_cls.return_value.post_message.assert_called_once()
 
     def test_handle_message_create_routes_to_reply_using_real_thread_issue_mapping(self) -> None:

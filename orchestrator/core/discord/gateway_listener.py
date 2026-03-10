@@ -325,6 +325,7 @@ class DiscordGatewayListener:
                 command_params = {
                     "issue_key": decision_gate_issue_key,
                     "reply_text": content,
+                    "source_ref": str(payload.get("id") or "").strip(),
                 }
             else:
                 command_text = content
