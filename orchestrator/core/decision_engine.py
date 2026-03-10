@@ -30,8 +30,10 @@ from orchestrator.core.decision_resolution_service import (
 from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
     accepted_question_ids_for_cycle,
+    classification_for_cycle_questions,
     recorded_cycle_answers,
     serialize_recorded_answers_for_policy,
+    unresolved_question_ids_for_cycle,
 )
 from orchestrator.core.decision_state_repository import (
     active_cycle as active_cycle_state,
@@ -337,6 +339,11 @@ def evaluate_decision_event(
             decision_effect_outbox_type=DecisionEffectOutbox,
         )
 
+    existing_case = existing_case_for_issue_state(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        issue_key=event.issue_key,
+    )
     _, existing_cycle = active_case_and_cycle_for_issue(
         session=session,
         tenant_id=tenant.tenant_id,
@@ -348,6 +355,92 @@ def evaluate_decision_event(
         else []
     )
     structured_recorded_answers = serialize_recorded_answers_for_policy(recorded_answers)
+    if existing_case is not None and existing_cycle is not None:
+        unresolved_question_ids = unresolved_question_ids_for_cycle(
+            session=session,
+            cycle=existing_cycle,
+        )
+        existing_cycle.unresolved_question_ids_json = list(unresolved_question_ids)
+        existing_cycle.updated_at = occurred_at
+        if unresolved_question_ids:
+            classification = classification_for_cycle_questions(
+                cycle=existing_cycle,
+                unresolved_question_ids=unresolved_question_ids,
+            )
+            snapshot = (
+                existing_case.metadata_json.get("result_snapshot")
+                if isinstance(existing_case.metadata_json, dict)
+                and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
+                else {}
+            )
+            decision = decision_from_snapshot_state(
+                snapshot=snapshot,
+                source=event.source,
+                classification=classification,
+                cycle=existing_cycle,
+                case=existing_case,
+            )
+            decision = IngressDecision(
+                source=decision.source,
+                pre_check=decision.pre_check,
+                block_reason=(
+                    "decision_gate_required"
+                    if classification in {"decision_gate", "both"}
+                    else "gtd_required" if classification == "gtd" else None
+                ),
+                guidance=decision.guidance,
+                policy_error=decision.policy_error,
+                label_actions=decision.label_actions,
+            )
+            issue_labels = [
+                str(label).strip()
+                for label in event.issue_labels or []
+                if str(label).strip()
+            ]
+            issue_description = event.issue_description
+            accepted_question_ids = accepted_question_ids_for_cycle(
+                session=session,
+                cycle_id=existing_cycle.cycle_id,
+            )
+            case, cycle, outbox_effect_ids = persist_decision_state_repo(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=event,
+                occurred_at=occurred_at,
+                idempotency_key=idempotency_key,
+                issue_labels=issue_labels,
+                issue_description=issue_description,
+                decision=decision,
+                classification=classification,
+                auto_resolved_answers={},
+                accepted_question_ids=accepted_question_ids,
+                issue_fingerprint_fn=issue_fingerprint_state,
+            )
+            if publish_jira_comment_fn is not None and outbox_effect_ids:
+                publish_decision_effects_repo(
+                    session=session,
+                    effect_ids=outbox_effect_ids,
+                    publish_jira_comment_fn=publish_jira_comment_fn,
+                    occurred_at=occurred_at,
+                )
+            return DecisionEngineResult(
+                decision=decision,
+                issue_labels=issue_labels,
+                classification=classification,
+                missing_slots=[],
+                auto_resolved_slots=[],
+                case_id=case.case_id,
+                case_state=case.state,
+                cycle_id=cycle.cycle_id if cycle is not None else None,
+                outbox_effect_ids=outbox_effect_ids,
+                duplicate_event=False,
+            )
+        existing_cycle.status = "resolved"
+        existing_cycle.closed_at = occurred_at
+        existing_cycle.updated_at = occurred_at
+        existing_case.active_cycle_id = None
+        existing_case.updated_at = occurred_at
 
     initial = evaluate_with_labels_state(
         session=session,
@@ -369,11 +462,6 @@ def evaluate_decision_event(
     issue_labels = initial.issue_labels
     issue_description = event.issue_description
     missing_slots = precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else []
-    existing_case = existing_case_for_issue_state(
-        session=session,
-        tenant_id=tenant.tenant_id,
-        issue_key=event.issue_key,
-    )
     persisted_slot_answers = slot_resolutions_from_case_resolution(case=existing_case)
     auto_resolved_answers: dict[str, SlotResolution] = {}
     accepted_question_ids = (

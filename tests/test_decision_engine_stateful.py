@@ -12,7 +12,7 @@ from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import DecisionCase, DecisionEffectOutbox, DecisionEvent, Project, Tenant
+from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent, Project, Tenant
 
 
 def _precheck_result(
@@ -100,6 +100,7 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             return tenant, project
 
     def test_freezes_cycle_questions_while_open(self) -> None:
+        precheck_calls = 0
         prechecks = [
             _precheck_result(
                 outcome="decision_gate_required",
@@ -118,6 +119,8 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         ]
 
         def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
             return prechecks.pop(0)
 
         with self.session_factory() as session:
@@ -165,6 +168,7 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             tuple(second.decision.pre_check.decision_gate.questions),
             ("Who owns this decision?",),
         )
+        self.assertEqual(precheck_calls, 1)
 
     def test_idempotency_key_deduplicates_event_rows(self) -> None:
         precheck = _precheck_result(outcome="ready_for_agent")
@@ -279,7 +283,7 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("Who owns this?",))
         self.assertEqual(case_after.updated_at, updated_at_before)
 
-    def test_reevaluation_includes_recorded_answers(self) -> None:
+    def test_open_cycle_with_answered_reply_does_not_rerun_precheck(self) -> None:
         prechecks = [
             _precheck_result(
                 outcome="decision_gate_required",
@@ -287,12 +291,14 @@ class DecisionEngineStatefulTests(unittest.TestCase):
                 decision_gate_reason="Need config",
                 decision_gate_questions=("What config is approved?",),
                 decision_gate_missing_sections=("config",),
-            ),
-            _precheck_result(outcome="ready_for_agent"),
+            )
         ]
+        precheck_calls = 0
         recorded_answers_seen: list[list[dict[str, str]] | None] = []
 
         def _evaluate_pre_run_check_stub(**kwargs: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
             recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
             return prechecks.pop(0)
 
@@ -319,6 +325,9 @@ class DecisionEngineStatefulTests(unittest.TestCase):
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
+            cycle = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle is not None
+            question_id = str(cycle.question_set_json[0]["id"])
 
             from orchestrator.storage.models import DecisionAnswer
 
@@ -330,7 +339,7 @@ class DecisionEngineStatefulTests(unittest.TestCase):
                     tenant_id=tenant.tenant_id,
                     project_id=project.project_id,
                     issue_key="MAB-166",
-                    question_id="dg_config",
+                    question_id=question_id,
                     question_kind="decision_gate",
                     question_text="What config is approved?",
                     status="answered",
@@ -363,16 +372,112 @@ class DecisionEngineStatefulTests(unittest.TestCase):
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
+        self.assertEqual(second.classification, "decision_gate")
+        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("What config is approved?",))
+        self.assertEqual(precheck_calls, 1)
+        self.assertEqual(recorded_answers_seen, [[]])
+
+    def test_resolved_cycle_reruns_precheck_after_all_questions_accepted(self) -> None:
+        prechecks = [
+            _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Need config",
+                decision_gate_questions=("What config is approved?",),
+                decision_gate_missing_sections=("config",),
+            ),
+            _precheck_result(outcome="ready_for_agent"),
+        ]
+        precheck_calls = 0
+        recorded_answers_seen: list[list[dict[str, str]] | None] = []
+
+        def _evaluate_pre_run_check_stub(**kwargs: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
+            recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
+            return prechecks.pop(0)
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-clear-1",
+                    issue_key="MAB-167",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            self.assertEqual(first.classification, "decision_gate")
+            cycle = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle is not None
+            question_id = str(cycle.question_set_json[0]["id"])
+
+            from orchestrator.storage.models import DecisionAnswer
+
+            session.add(
+                DecisionAnswer(
+                    answer_id="ans-2",
+                    case_id=first.case_id,
+                    cycle_id=str(first.cycle_id),
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key="MAB-167",
+                    question_id=question_id,
+                    question_kind="decision_gate",
+                    question_text="What config is approved?",
+                    status="accepted",
+                    normalized_answer="Production bundle ID is com.example.app.",
+                    source_transport="discord",
+                    source_ref=None,
+                    evidence_ids_json=[],
+                    metadata_json={},
+                    accepted_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            second = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-clear-2",
+                    issue_key="MAB-167",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+
         self.assertEqual(second.classification, "clear")
-        self.assertGreaterEqual(len(recorded_answers_seen), 2)
+        self.assertEqual(precheck_calls, 2)
         self.assertEqual(
             recorded_answers_seen[-1],
             [
                 {
-                    "question_id": "dg_config",
+                    "question_id": question_id,
                     "question_kind": "decision_gate",
                     "question_text": "What config is approved?",
-                    "status": "answered",
+                    "status": "accepted",
                     "answer": "Production bundle ID is com.example.app.",
                 }
             ],
