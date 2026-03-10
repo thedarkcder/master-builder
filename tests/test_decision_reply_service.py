@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_reply_service import capture_decision_reply, serialize_recorded_answers_for_policy
+from orchestrator.core.decision_presentation import build_cycle_comment
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import DecisionAnswer, DecisionCase, DecisionCycle, Project, Tenant
@@ -213,3 +214,53 @@ class DecisionReplyServiceTests(unittest.TestCase):
         self.assertEqual(capture.answered_question_ids, ())
         self.assertEqual(answer.status, "accepted")
         self.assertEqual(answer.normalized_answer, "Accepted config answer.")
+
+    def test_capture_decision_reply_returns_unresolved_feedback_from_model_notes(self) -> None:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_reply_service._extract_reply_matches",
+            return_value=[
+                {
+                    "question_id": "dg_1",
+                    "status": "answered",
+                    "answer": "Production and staging values are listed.",
+                    "notes": "Config values were captured, but entitlement confirmation is still missing.",
+                }
+            ],
+        ):
+            answer = session.get(DecisionAnswer, "answer-1")
+            assert answer is not None
+            answer.status = "open"
+            answer.normalized_answer = None
+            answer.metadata_json = {}
+            answer.accepted_at = None
+            answer.updated_at = datetime.now(timezone.utc)
+            session.commit()
+
+            tenant = session.get(Tenant, "tenant-reply")
+            project = session.get(Project, "project-reply")
+            case = session.get(DecisionCase, "case-1")
+            cycle = session.get(DecisionCycle, "cycle-1")
+            assert tenant is not None and project is not None and case is not None and cycle is not None
+
+            capture = capture_decision_reply(
+                session=session,
+                settings=self.settings,
+                tenant=tenant,
+                project=project,
+                issue_key="MAB-173",
+                reply_text="Follow-up reply",
+                source_transport="discord",
+                source_ref="msg-2",
+            )
+            session.commit()
+
+            question_feedback = list(capture.unresolved_question_feedback)
+            comment = build_cycle_comment(session=session, case=case, cycle=cycle)
+
+        self.assertEqual(len(question_feedback), 1)
+        self.assertEqual(question_feedback[0]["question_id"], "dg_1")
+        self.assertEqual(
+            question_feedback[0]["note"],
+            "Config values were captured, but entitlement confirmation is still missing.",
+        )
+        self.assertIn("Missing detail: Config values were captured, but entitlement confirmation is still missing.", comment)

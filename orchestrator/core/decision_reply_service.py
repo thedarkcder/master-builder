@@ -35,6 +35,7 @@ class DecisionReplyCaptureResult:
     answered_question_ids: tuple[str, ...]
     evidence_id: str
     effect_ids: tuple[str, ...]
+    unresolved_question_feedback: tuple[dict[str, str], ...]
 
 
 def is_machine_generated_decision_comment(*, text: str | None) -> bool:
@@ -290,6 +291,45 @@ def _question_lookup(cycle: DecisionCycle) -> dict[str, dict[str, str]]:
     return lookup
 
 
+def _feedback_for_cycle_questions(
+    *,
+    cycle: DecisionCycle,
+    answers: list[DecisionAnswer],
+) -> tuple[dict[str, str], ...]:
+    answer_lookup = {
+        str(answer.question_id or "").strip(): answer
+        for answer in answers
+        if str(answer.question_id or "").strip()
+    }
+    feedback: list[dict[str, str]] = []
+    unresolved_ids = {
+        str(question_id).strip()
+        for question_id in cycle.unresolved_question_ids_json
+        if str(question_id).strip()
+    }
+    for item in cycle.question_set_json:
+        question_id = str(item.get("id") or "").strip()
+        if not question_id or (unresolved_ids and question_id not in unresolved_ids):
+            continue
+        question_text = str(item.get("text") or "").strip()
+        answer = answer_lookup.get(question_id)
+        metadata = dict(answer.metadata_json or {}) if answer is not None else {}
+        note = str(metadata.get("notes") or "").strip()
+        status = str(answer.status or "").strip().lower() if answer is not None else "open"
+        row: dict[str, str] = {
+            "question_id": question_id,
+            "question_text": question_text,
+            "status": status or "open",
+        }
+        if note:
+            row["note"] = note
+        answer_text = str(answer.normalized_answer or "").strip() if answer is not None else ""
+        if answer_text:
+            row["answer"] = answer_text
+        feedback.append(row)
+    return tuple(feedback)
+
+
 def capture_decision_reply(
     *,
     session: Session,
@@ -436,6 +476,7 @@ def capture_decision_reply(
         now=now,
     )
     session.flush()
+    updated_answers = list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
     return DecisionReplyCaptureResult(
         case=case,
         cycle=cycle,
@@ -443,4 +484,8 @@ def capture_decision_reply(
         answered_question_ids=tuple(sorted(set(answered_question_ids))),
         evidence_id=evidence.evidence_id,
         effect_ids=effect_ids,
+        unresolved_question_feedback=_feedback_for_cycle_questions(
+            cycle=cycle,
+            answers=updated_answers,
+        ),
     )

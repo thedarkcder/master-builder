@@ -607,7 +607,17 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
-                return_value=SimpleNamespace(cycle=SimpleNamespace(cycle_id="cycle-1"), effect_ids=()),
+                return_value=SimpleNamespace(
+                    cycle=SimpleNamespace(cycle_id="cycle-1"),
+                    effect_ids=(),
+                    unresolved_question_feedback=(
+                        {
+                            "question_id": "dg_1",
+                            "question_text": "Objective?",
+                            "note": "Config values were captured, but entitlement confirmation is still missing.",
+                        },
+                    ),
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
@@ -633,6 +643,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ),
                 ),
             ),
+            patch("orchestrator.api.discord.commands.run_controls.build_precheck_message") as build_message_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -648,10 +659,22 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["command"], "reply")
         self.assertTrue(response.json()["data"]["recheck_required"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-90")
-        self.assertEqual(response.json()["data"]["questions"], ["Objective?", "How to test?"])
+        self.assertEqual(response.json()["data"]["questions"], ["Objective?"])
+        self.assertEqual(
+            response.json()["data"]["question_feedback"],
+            [
+                {
+                    "note": "Config values were captured, but entitlement confirmation is still missing.",
+                    "question_id": "dg_1",
+                    "question_text": "Objective?",
+                }
+            ],
+        )
+        self.assertIn("Config values were captured, but entitlement confirmation is still missing.", response.json()["message"])
         oauth_client.update_issue_summary_and_description.assert_not_called()
         dispatch_mock.assert_not_called()
         preview_mock.assert_not_called()
+        build_message_mock.assert_not_called()
 
     def test_reply_when_only_gtd_is_blocking_does_not_surface_decision_gate_reason(self) -> None:
         self._queue_run(run_id="run-failed-reply-gtd", issue_key="TP-90", status="failed")

@@ -199,6 +199,7 @@ def stage_handle_comment_decision_reply(
         questions=list(getattr(decision_result.decision.pre_check.decision_gate, "questions", ()))
         if decision_result.decision.pre_check is not None and getattr(decision_result.decision.pre_check, "decision_gate", None) is not None
         else [],
+        question_feedback=list(getattr(capture, "unresolved_question_feedback", ())),
         webhook_event=context.webhook_event,
     )
 
