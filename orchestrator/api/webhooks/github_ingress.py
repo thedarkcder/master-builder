@@ -86,6 +86,7 @@ async def ingest_github_webhook_event(
         project_overrides=getattr(project, "policy_overrides", {}) or {},
     )
     allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
+    allow_pr_remediation = bool(effective_policy.get("allow_pr_remediation", True))
     max_pr_auto_remediation_loops = _coerce_positive_int(
         effective_policy.get("max_pr_auto_remediation_loops"),
         default=5,
@@ -103,6 +104,7 @@ async def ingest_github_webhook_event(
         github_client=github_client,
         reviewer_gate=reviewer_gate,
         allow_auto_merge=allow_auto_merge,
+        allow_pr_remediation=allow_pr_remediation,
         max_pr_auto_remediation_loops=max_pr_auto_remediation_loops,
         session=session,
         settings=settings,

@@ -20,6 +20,7 @@ LEGACY_ROUTE_IMPORT_ALLOWLIST = {
 NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/main.py": {
         "orchestrator.api.routes.admin_auth",
+        "orchestrator.api.routes.admin_codex",
         "orchestrator.api.routes.admin_discord_allowlist",
         "orchestrator.api.routes.admin_github",
         "orchestrator.api.routes.admin_jira",

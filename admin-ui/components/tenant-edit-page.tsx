@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   archiveTenant,
   disconnectJira,
+  listCodexModels,
   getTenant,
   getJiraWebhookDiagnostics,
   listJiraProjects,
@@ -59,6 +60,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [jiraWebhook, setJiraWebhook] = useState<JiraWebhookDiagnosticsRecord | null>(null);
   const [jiraWebhookBusy, setJiraWebhookBusy] = useState(false);
   const [githubRepositories, setGithubRepositories] = useState<GitHubRepositoryRecord[]>([]);
+  const [codexModels, setCodexModels] = useState<{ id: string; label: string; description?: string | null }[]>([]);
+  const [globalCodexModel, setGlobalCodexModel] = useState("");
+  const [reasoningEfforts, setReasoningEfforts] = useState<{ id: string; label: string; description?: string | null }[]>([]);
+  const [globalCodexReasoningEffort, setGlobalCodexReasoningEffort] = useState("");
   const [repositoriesLoading, setRepositoriesLoading] = useState(false);
   const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -115,7 +120,12 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     setLoading(true);
     try {
       const payload = await getTenant(credentials, params.tenantId);
+      const modelCatalog = await listCodexModels(credentials);
       setTenant(payload);
+      setCodexModels(modelCatalog.models);
+      setGlobalCodexModel(modelCatalog.default_model);
+      setReasoningEfforts(modelCatalog.reasoning_efforts);
+      setGlobalCodexReasoningEffort(modelCatalog.default_reasoning_effort);
       setDiscordEnabled(Boolean(payload.discord));
       setDiscordServerId(payload.discord?.guild_id ?? "");
       await loadJiraWebhookDiagnostics();
@@ -599,6 +609,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               initialValues={recordToFormValues(tenant)}
               onSubmit={handleSave}
               submitting={saving}
+              codexModels={codexModels}
+              reasoningEfforts={reasoningEfforts}
+              globalCodexModel={globalCodexModel}
+              globalCodexReasoningEffort={globalCodexReasoningEffort}
               visibleSections={{
                 identity: false,
                 jira: false,
@@ -678,6 +692,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               initialValues={recordToFormValues(tenant)}
               onSubmit={handleSave}
               submitting={saving}
+              codexModels={codexModels}
+              reasoningEfforts={reasoningEfforts}
+              globalCodexModel={globalCodexModel}
+              globalCodexReasoningEffort={globalCodexReasoningEffort}
               visibleSections={{
                 identity: true,
                 jira: false,

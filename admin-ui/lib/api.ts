@@ -22,12 +22,19 @@ export type ReposConfig = {
 export type PolicyConfig = {
   allow_jira_transitions: boolean;
   allow_pr_creation: boolean;
+  allow_pr_remediation: boolean;
   allow_label_mutations: boolean;
+  allow_auto_merge: boolean;
   max_runtime_minutes: number;
   max_dev_test_review_loops: number;
+  max_pr_auto_remediation_loops: number;
   max_concurrent_runs: number;
   allowed_commands: string[];
   require_agents_md: boolean;
+  knowledge_base_enabled: boolean;
+  knowledge_auto_answer_mode: "safe" | "balanced" | "aggressive";
+  codex_model?: string | null;
+  codex_reasoning_effort?: "low" | "medium" | "high" | null;
 };
 
 export type DiscordConfig = {
@@ -88,14 +95,33 @@ export type ProjectPolicyOverrides = Partial<
     PolicyConfig,
     | "allow_jira_transitions"
     | "allow_pr_creation"
+    | "allow_pr_remediation"
     | "allow_label_mutations"
-    | "max_runtime_minutes"
+    | "allow_auto_merge"
     | "max_dev_test_review_loops"
+    | "max_pr_auto_remediation_loops"
     | "max_concurrent_runs"
     | "allowed_commands"
     | "require_agents_md"
+    | "knowledge_base_enabled"
+    | "knowledge_auto_answer_mode"
+    | "codex_model"
+    | "codex_reasoning_effort"
   >
 >;
+
+export type CodexModelOptionRecord = {
+  id: string;
+  label: string;
+  description?: string | null;
+};
+
+export type CodexModelCatalogRecord = {
+  default_model: string;
+  default_reasoning_effort: "low" | "medium" | "high";
+  models: CodexModelOptionRecord[];
+  reasoning_efforts: CodexModelOptionRecord[];
+};
 
 export type ProjectDiscordConfig = {
   channel_id?: string | null;
@@ -594,6 +620,10 @@ export function listTenants(credentials: Credentials): Promise<TenantRecord[]> {
 
 export function getTenant(credentials: Credentials, tenantId: string): Promise<TenantRecord> {
   return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`);
+}
+
+export function listCodexModels(credentials: Credentials): Promise<CodexModelCatalogRecord> {
+  return request<CodexModelCatalogRecord>(credentials, "/api/admin/codex/models");
 }
 
 export function createTenant(
