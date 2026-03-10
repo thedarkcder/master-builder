@@ -307,28 +307,36 @@ def _augment_prompt_with_knowledge_context(
     user_prompt: str,
 ) -> tuple[str, dict[str, object], str, str]:
     settings = get_settings()
+    default_codex_model = str(getattr(settings, "codex_model", "gpt-5.4") or "gpt-5.4")
+    default_codex_reasoning_effort = str(getattr(settings, "codex_reasoning_effort", "medium") or "medium")
     database_url = str(getattr(settings, "database_url", "") or "").strip()
+    tenant_id = str(context.tenant_id or "").strip()
+    resolved_codex_model = default_codex_model
+    resolved_codex_reasoning_effort = default_codex_reasoning_effort
+    if tenant_id:
+        _, _, _, resolved_codex_model, resolved_codex_reasoning_effort = _resolve_knowledge_policy_for_context(
+            context=context
+        )
     if not bool(getattr(settings, "knowledge_injection_enabled", True)):
         return (
             user_prompt,
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
-            str(getattr(settings, "codex_model", "gpt-5.4") or "gpt-5.4"),
-            str(getattr(settings, "codex_reasoning_effort", "medium") or "medium"),
+            resolved_codex_model,
+            resolved_codex_reasoning_effort,
         )
-    tenant_id = str(context.tenant_id or "").strip()
     if not tenant_id:
         return (
             user_prompt,
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
-            str(getattr(settings, "codex_model", "gpt-5.4") or "gpt-5.4"),
-            str(getattr(settings, "codex_reasoning_effort", "medium") or "medium"),
+            default_codex_model,
+            default_codex_reasoning_effort,
         )
     if not database_url:
         return (
             user_prompt,
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
-            str(getattr(settings, "codex_model", "gpt-5.4") or "gpt-5.4"),
-            str(getattr(settings, "codex_reasoning_effort", "medium") or "medium"),
+            resolved_codex_model,
+            resolved_codex_reasoning_effort,
         )
 
     project_id, knowledge_enabled, knowledge_mode, codex_model, codex_reasoning_effort = _resolve_knowledge_policy_for_context(context=context)
