@@ -152,7 +152,7 @@ def stage_handle_comment_decision_reply(
         return None
     author_account_id = extract_jira_comment_author_account_id(context.payload)
     try:
-        capture_decision_reply(
+        capture = capture_decision_reply(
             session=session,
             tenant=context.tenant,
             project=context.project,
@@ -167,6 +167,7 @@ def stage_handle_comment_decision_reply(
             context=context,
             session=session,
             settings=settings,
+            idempotency_key=f"decision-reply:{capture.evidence_id}",
         )
     except (RuntimeError, ValueError, HTTPException) as exc:
         logger.exception(

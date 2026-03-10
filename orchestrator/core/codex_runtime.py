@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -11,6 +12,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
 from orchestrator.core.config import Settings
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -20,6 +24,7 @@ _URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
 _UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+_CODEX_TOOL_DATABASE_HOST_ALIASES = {"postgres"}
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -431,6 +436,41 @@ def _extract_usage_from_json_stdout(lines: list[str]) -> dict[str, int] | None:
     return best_usage
 
 
+def _resolve_codex_tool_database_url(
+    *,
+    database_url: str | None,
+    tool_database_url: str | None,
+) -> str | None:
+    explicit_tool_database_url = str(tool_database_url or "").strip()
+    if explicit_tool_database_url:
+        return explicit_tool_database_url
+    normalized_database_url = str(database_url or "").strip()
+    if not normalized_database_url:
+        return None
+    try:
+        parsed = make_url(normalized_database_url)
+    except ArgumentError:
+        return normalized_database_url
+    if parsed.get_backend_name() != "postgresql":
+        return normalized_database_url
+    host = str(parsed.host or "").strip().lower()
+    port = int(parsed.port) if parsed.port is not None else None
+    if host in _CODEX_TOOL_DATABASE_HOST_ALIASES and (port is None or port == 5432):
+        return parsed.set(host="localhost", port=4402).render_as_string(hide_password=False)
+    return normalized_database_url
+
+
+def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
+    env = os.environ.copy()
+    tool_database_url = _resolve_codex_tool_database_url(
+        database_url=str(getattr(settings, "database_url", "") or "").strip(),
+        tool_database_url=str(getattr(settings, "codex_tool_database_url", "") or "").strip(),
+    )
+    if tool_database_url:
+        env["ORCHESTRATOR_DATABASE_URL"] = tool_database_url
+    return env
+
+
 def build_codex_runtime(
     *,
     session: Session | None = None,
@@ -475,6 +515,7 @@ def build_codex_runtime(
         raise CodexRuntimeError(
             f"Codex CLI command '{codex_command}' was not found in PATH"
         )
+    subprocess_env = _build_codex_subprocess_env(settings=settings)
 
     def _request(
         system_prompt: str,
@@ -552,6 +593,7 @@ def build_codex_runtime(
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=command_cwd or None,
+                env=subprocess_env,
             )
             stdout_lines: list[str] = []
             stderr_lines: list[str] = []

@@ -179,6 +179,7 @@ def evaluate_precheck_decision_with_labels(
     session: Session,
     settings,  # noqa: ANN001
     issue_description: str | None = None,
+    idempotency_key: str | None = None,
 ) -> DecisionEngineResult:
     effective_description = context.issue_description if issue_description is None else issue_description
 
@@ -198,7 +199,10 @@ def evaluate_precheck_decision_with_labels(
         event=DecisionEventInput(
             source="jira_webhook",
             event_type=str(context.webhook_event or "jira_webhook"),
-            idempotency_key=f"{context.request_id}:{context.webhook_event or 'unknown'}:{context.issue_key}",
+            idempotency_key=(
+                idempotency_key
+                or f"{context.request_id}:{context.webhook_event or 'unknown'}:{context.issue_key}"
+            ),
             issue_key=context.issue_key,
             issue_summary=context.issue_summary,
             issue_description=effective_description,
