@@ -12,9 +12,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ArgumentError
-
 from orchestrator.core.config import Settings
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -24,8 +21,6 @@ _URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
 _UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-_CODEX_TOOL_DATABASE_HOST_ALIASES = {"postgres"}
-
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -380,7 +375,6 @@ def _coerce_token_count(value: object) -> int | None:
         return candidate if candidate >= 0 else None
     return None
 
-
 def _extract_token_usage_from_dict(payload: dict[str, object]) -> dict[str, int] | None:
     prompt_tokens = _coerce_token_count(payload.get("prompt_tokens"))
     completion_tokens = _coerce_token_count(payload.get("completion_tokens"))
@@ -445,19 +439,7 @@ def _resolve_codex_tool_database_url(
     if explicit_tool_database_url:
         return explicit_tool_database_url
     normalized_database_url = str(database_url or "").strip()
-    if not normalized_database_url:
-        return None
-    try:
-        parsed = make_url(normalized_database_url)
-    except ArgumentError:
-        return normalized_database_url
-    if parsed.get_backend_name() != "postgresql":
-        return normalized_database_url
-    host = str(parsed.host or "").strip().lower()
-    port = int(parsed.port) if parsed.port is not None else None
-    if host in _CODEX_TOOL_DATABASE_HOST_ALIASES and (port is None or port == 5432):
-        return parsed.set(host="localhost", port=4402).render_as_string(hide_password=False)
-    return normalized_database_url
+    return normalized_database_url or None
 
 
 def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
