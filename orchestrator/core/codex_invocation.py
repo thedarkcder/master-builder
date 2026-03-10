@@ -11,6 +11,7 @@ import time
 from typing import Callable
 from uuid import uuid4
 
+from orchestrator.core.codex_models import normalize_codex_reasoning_effort
 from orchestrator.core.config import get_settings
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
 from orchestrator.core.project_policy import resolve_effective_policy
@@ -232,7 +233,7 @@ def _collect_context_injection_metrics(*, working_dir: str) -> dict[str, int | b
 def _resolve_knowledge_policy_for_context(
     *,
     context: CodexInvocationContext,
-) -> tuple[str | None, bool, str, str, str]:
+) -> tuple[str | None, bool, str, str, str, bool]:
     settings = get_settings()
     database_url = str(getattr(settings, "database_url", "") or "").strip()
     default_model = str(getattr(settings, "codex_model", "gpt-5.4") or "gpt-5.4")
@@ -245,6 +246,7 @@ def _resolve_knowledge_policy_for_context(
             str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive")),
             default_model,
             default_reasoning_effort,
+            False,
         )
     if not database_url:
         return (
@@ -253,6 +255,7 @@ def _resolve_knowledge_policy_for_context(
             str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive")),
             default_model,
             default_reasoning_effort,
+            False,
         )
 
     session_factory = create_session_factory(database_url=database_url)
@@ -261,11 +264,20 @@ def _resolve_knowledge_policy_for_context(
     knowledge_mode = str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive"))
     codex_model = default_model
     codex_reasoning_effort = default_reasoning_effort
+    has_explicit_reasoning_override = False
     try:
         with session_factory() as session:
             tenant = session.get(Tenant, tenant_id)
             if tenant is None:
-                return resolved_project_id, knowledge_enabled, knowledge_mode, codex_model, codex_reasoning_effort
+                return (
+                    resolved_project_id,
+                    knowledge_enabled,
+                    knowledge_mode,
+                    codex_model,
+                    codex_reasoning_effort,
+                    has_explicit_reasoning_override,
+                )
+            tenant_policy = tenant.policy_config or {}
             if resolved_project_id is None and context.run_id:
                 run = session.get(Run, context.run_id)
                 if run is not None and run.tenant_id == tenant_id:
@@ -275,8 +287,12 @@ def _resolve_knowledge_policy_for_context(
                 project = session.get(Project, resolved_project_id)
                 if project is not None and project.tenant_id == tenant_id:
                     project_overrides = project.policy_overrides or {}
+            has_explicit_reasoning_override = (
+                normalize_codex_reasoning_effort(project_overrides.get("codex_reasoning_effort")) is not None
+                or normalize_codex_reasoning_effort(tenant_policy.get("codex_reasoning_effort")) is not None
+            )
             effective = resolve_effective_policy(
-                tenant_policy=tenant.policy_config or {},
+                tenant_policy=tenant_policy,
                 project_overrides=project_overrides,
                 default_codex_model=default_model,
                 default_codex_reasoning_effort=default_reasoning_effort,
@@ -297,7 +313,14 @@ def _resolve_knowledge_policy_for_context(
             context.run_id,
             exc,
         )
-    return resolved_project_id, knowledge_enabled, knowledge_mode, codex_model, codex_reasoning_effort
+    return (
+        resolved_project_id,
+        knowledge_enabled,
+        knowledge_mode,
+        codex_model,
+        codex_reasoning_effort,
+        has_explicit_reasoning_override,
+    )
 
 
 def _augment_prompt_with_knowledge_context(
@@ -305,7 +328,7 @@ def _augment_prompt_with_knowledge_context(
     context: CodexInvocationContext,
     system_prompt: str,
     user_prompt: str,
-) -> tuple[str, dict[str, object], str, str]:
+) -> tuple[str, dict[str, object], str, str, bool]:
     settings = get_settings()
     default_codex_model = str(getattr(settings, "codex_model", "gpt-5.4") or "gpt-5.4")
     default_codex_reasoning_effort = str(getattr(settings, "codex_reasoning_effort", "medium") or "medium")
@@ -313,8 +336,16 @@ def _augment_prompt_with_knowledge_context(
     tenant_id = str(context.tenant_id or "").strip()
     resolved_codex_model = default_codex_model
     resolved_codex_reasoning_effort = default_codex_reasoning_effort
+    has_explicit_reasoning_override = False
     if tenant_id:
-        _, _, _, resolved_codex_model, resolved_codex_reasoning_effort = _resolve_knowledge_policy_for_context(
+        (
+            _,
+            _,
+            _,
+            resolved_codex_model,
+            resolved_codex_reasoning_effort,
+            has_explicit_reasoning_override,
+        ) = _resolve_knowledge_policy_for_context(
             context=context
         )
     if not bool(getattr(settings, "knowledge_injection_enabled", True)):
@@ -323,6 +354,7 @@ def _augment_prompt_with_knowledge_context(
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
             resolved_codex_model,
             resolved_codex_reasoning_effort,
+            has_explicit_reasoning_override,
         )
     if not tenant_id:
         return (
@@ -330,6 +362,7 @@ def _augment_prompt_with_knowledge_context(
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
             default_codex_model,
             default_codex_reasoning_effort,
+            False,
         )
     if not database_url:
         return (
@@ -337,11 +370,25 @@ def _augment_prompt_with_knowledge_context(
             {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
             resolved_codex_model,
             resolved_codex_reasoning_effort,
+            has_explicit_reasoning_override,
         )
 
-    project_id, knowledge_enabled, knowledge_mode, codex_model, codex_reasoning_effort = _resolve_knowledge_policy_for_context(context=context)
+    (
+        project_id,
+        knowledge_enabled,
+        knowledge_mode,
+        codex_model,
+        codex_reasoning_effort,
+        has_explicit_reasoning_override,
+    ) = _resolve_knowledge_policy_for_context(context=context)
     if not knowledge_enabled:
-        return user_prompt, {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0}, codex_model, codex_reasoning_effort
+        return (
+            user_prompt,
+            {"kb_lookup_attempted": False, "kb_hits": 0, "kb_context_chars": 0},
+            codex_model,
+            codex_reasoning_effort,
+            has_explicit_reasoning_override,
+        )
 
     query_text = "\n".join(
         part for part in [str(context.command or ""), str(context.stage or ""), user_prompt, system_prompt[:1200]] if part.strip()
@@ -366,11 +413,23 @@ def _augment_prompt_with_knowledge_context(
             context.stage,
             exc,
         )
-        return user_prompt, {"kb_lookup_attempted": True, "kb_hits": 0, "kb_context_chars": 0}, codex_model, codex_reasoning_effort
+        return (
+            user_prompt,
+            {"kb_lookup_attempted": True, "kb_hits": 0, "kb_context_chars": 0},
+            codex_model,
+            codex_reasoning_effort,
+            has_explicit_reasoning_override,
+        )
 
     context_text = str(context_payload.text or "").strip()
     if not context_text:
-        return user_prompt, {"kb_lookup_attempted": True, "kb_hits": 0, "kb_context_chars": 0}, codex_model, codex_reasoning_effort
+        return (
+            user_prompt,
+            {"kb_lookup_attempted": True, "kb_hits": 0, "kb_context_chars": 0},
+            codex_model,
+            codex_reasoning_effort,
+            has_explicit_reasoning_override,
+        )
     augmented = "\n\n".join(
         [
             user_prompt.strip(),
@@ -383,7 +442,7 @@ def _augment_prompt_with_knowledge_context(
         "kb_lookup_attempted": True,
         "kb_hits": len(context_payload.citations),
         "kb_context_chars": len(context_text),
-    }, codex_model, codex_reasoning_effort
+    }, codex_model, codex_reasoning_effort, has_explicit_reasoning_override
 
 
 def _emit_invocation_event(
@@ -569,12 +628,21 @@ def invoke_codex_json(
     extra_on_log_line: Callable[[str, str], None] | None = None,
     require_json: bool = True,
 ) -> dict:
-    effective_user_prompt, knowledge_metrics, resolved_codex_model, resolved_reasoning_effort = _augment_prompt_with_knowledge_context(
+    (
+        effective_user_prompt,
+        knowledge_metrics,
+        resolved_codex_model,
+        resolved_reasoning_effort,
+        has_explicit_reasoning_override,
+    ) = _augment_prompt_with_knowledge_context(
         context=context,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
-    effective_reasoning_effort = context.reasoning_effort or resolved_reasoning_effort
+    if has_explicit_reasoning_override:
+        effective_reasoning_effort = resolved_reasoning_effort
+    else:
+        effective_reasoning_effort = context.reasoning_effort or resolved_reasoning_effort
     invocation_id = context.invocation_id or uuid4().hex
     prompt_metrics = {
         "system_prompt_chars": len(system_prompt),
