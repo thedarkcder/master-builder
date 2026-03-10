@@ -423,6 +423,60 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(captured["model_override"], "gpt-5.3-codex-spark")
         self.assertEqual(captured["reasoning_effort"], "high")
 
+    def test_invoke_codex_json_uses_scoped_model_when_kb_injection_disabled(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _Runtime:
+            def run_json(self, **kwargs):  # noqa: ANN003
+                captured.update(kwargs)
+                return {"ok": True}
+
+        context = CodexInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="pm",
+            working_dir=".",
+            run_id="run-1",
+        )
+
+        class _Writer:
+            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
+                _ = invocation_id
+                return None
+
+        with (
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch(
+                "orchestrator.core.codex_invocation._resolve_knowledge_policy_for_context",
+                return_value=("proj-1", False, "aggressive", "gpt-5.3-codex-spark", "high"),
+            ) as resolve_policy_mock,
+            patch("orchestrator.core.codex_invocation.get_settings") as settings_mock,
+        ):
+            settings_mock.return_value = type(
+                "_Settings",
+                (),
+                {
+                    "knowledge_injection_enabled": False,
+                    "database_url": "sqlite:///ignored.db",
+                    "codex_model": "gpt-5.4",
+                    "codex_reasoning_effort": "medium",
+                    "codex_db_log_sampling_interval": 1,
+                },
+            )()
+            payload = invoke_codex_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        resolve_policy_mock.assert_called_once_with(context=context)
+        self.assertEqual(captured["model_override"], "gpt-5.3-codex-spark")
+        self.assertEqual(captured["reasoning_effort"], "high")
+
     def test_invoke_codex_json_non_json_fallback_only_for_parse_failures(self) -> None:
         class _Runtime:
             def run_json(self, **_kwargs):  # noqa: ANN003
