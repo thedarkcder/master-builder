@@ -7,17 +7,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.pr_remediation_issue_service import (
-    create_pr_remediation_bug_issue_key as _create_pr_remediation_bug_issue_key,
-    extract_issue_key as _extract_issue_key,
-    find_existing_issue_key_for_pr_head as _find_existing_issue_key_for_pr_head,
     latest_issue_run as _latest_issue_run,
     repository_full_name as _repository_full_name,
 )
-from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
-from orchestrator.core.runs import enqueue_run
+from orchestrator.api.webhooks.pr_remediation_enqueue import enqueue_pr_remediation_run
+from orchestrator.api.webhooks.pr_remediation_policy import (
+    coerce_positive_int as _coerce_positive_int,
+    is_remediation_trigger as _is_remediation_trigger,
+    resolve_pr_remediation_issue_key,
+)
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, GitHubAppClient
-from orchestrator.tools.jira_oauth import JiraOAuthError
 
 _ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 
@@ -168,45 +168,36 @@ def enqueue_pr_remediation_if_needed(
             head_sha=head_sha,
         )
 
-    issue_key = _extract_issue_key(texts=[title, body, str(head_ref or "")])
-    issue_created = False
-    if issue_key is None and head_sha:
-        issue_key = _find_existing_issue_key_for_pr_head(
-            session=session,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-            pr_number=resolved_pr_number,
+    issue_key, issue_created, issue_error = resolve_pr_remediation_issue_key(
+        session=session,
+        tenant=tenant,
+        project=project,
+        github_client=github_client,
+        settings=settings,
+        repo_full_name=resolved_repo,
+        pr_number=resolved_pr_number,
+        head_sha=head_sha,
+        head_ref=head_ref,
+        pr_url=pr_url,
+        title=title,
+        body=body,
+        event=normalized_event,
+        action=normalized_action,
+        checks=checks,
+        reviews=reviews,
+        review_comments=review_comments,
+        issue_comments=issue_comments,
+    )
+    if issue_error is not None:
+        return PrRemediationResult(
+            triggered=True,
+            issue_key=None,
+            issue_created=False,
+            enqueued=False,
+            reason=issue_error,
+            run=None,
             head_sha=head_sha,
         )
-    if issue_key is None:
-        try:
-            issue_key = _create_pr_remediation_bug_issue_key(
-                session=session,
-                tenant=tenant,
-                project=project,
-                settings=settings,
-                repo_full_name=resolved_repo,
-                pr_number=resolved_pr_number,
-                pr_url=pr_url,
-                head_sha=head_sha,
-                event=normalized_event,
-                action=normalized_action,
-                checks=checks,
-                reviews=reviews,
-                review_comments=review_comments,
-                issue_comments=issue_comments,
-            )
-            issue_created = True
-        except (JiraOAuthError, ValueError) as exc:
-            return PrRemediationResult(
-                triggered=True,
-                issue_key=None,
-                issue_created=False,
-                enqueued=False,
-                reason=f"jira_bug_create_failed:{exc}",
-                run=None,
-                head_sha=head_sha,
-            )
 
     normalized_max_attempts = _coerce_positive_int(max_attempts_per_head)
     if normalized_max_attempts is not None and head_sha:
@@ -235,57 +226,21 @@ def enqueue_pr_remediation_if_needed(
                 head_sha=head_sha,
             )
 
-    trigger_context = {
-        "source": "github_pr_review_feedback",
-        "event": normalized_event,
-        "action": normalized_action,
-        "pr_number": resolved_pr_number,
-        "pr_url": details.html_url,
-        "head_sha": details.head_sha,
-        "head_ref": details.head_ref or str(head_ref or ""),
-        "base_ref": details.base_ref or str(base_ref or ""),
-        "issue_key": issue_key,
-        "issue_created": issue_created,
-        "failing_checks": [
-            {"name": check.name, "status": check.status, "conclusion": check.conclusion}
-            for check in checks
-            if check.conclusion not in {None, "success"}
-        ],
-        "changes_requested": [
-            {
-                "id": review.review_id,
-                "state": review.state,
-                "body": review.body,
-                "user_login": review.user_login,
-            }
-            for review in reviews
-            if review.state.strip().upper() == "CHANGES_REQUESTED"
-        ],
-        "review_comments": [
-            {"id": comment.comment_id, "body": comment.body, "path": comment.path, "line": comment.line}
-            for comment in review_comments
-        ],
-        "issue_comments": [
-            {"id": comment.comment_id, "body": comment.body}
-            for comment in issue_comments
-        ],
-    }
-
     try:
-        enqueue_result = enqueue_run(
-            session,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
+        enqueue_result = enqueue_pr_remediation_run(
+            session=session,
+            tenant=tenant,
+            project=project,
             issue_key=issue_key,
-            issue_summary=f"{issue_key}: PR remediation for #{resolved_pr_number}",
-            issue_description=(
-                f"Automated remediation run triggered from GitHub PR #{resolved_pr_number} ({details.html_url}).\n"
-                f"Event: {normalized_event}/{normalized_action}\n"
-                f"Head SHA: {details.head_sha}"
-            ),
-            repo_url=project.github_repository,
-            delivery_id=None,
-            precheck_outcome=resolve_enqueue_precheck_outcome(source="github_pr_remediation"),
+            issue_created=issue_created,
+            pr_number=resolved_pr_number,
+            details=details,
+            normalized_event=normalized_event,
+            normalized_action=normalized_action,
+            checks=checks,
+            reviews=reviews,
+            review_comments=review_comments,
+            issue_comments=issue_comments,
             max_concurrent_runs=max_concurrent_runs,
         )
     except ValueError as exc:
@@ -299,15 +254,6 @@ def enqueue_pr_remediation_if_needed(
             head_sha=head_sha,
         )
     run = enqueue_result.run
-    if enqueue_result.enqueued:
-        existing_plan = run.plan if isinstance(run.plan, dict) else {}
-        run.plan = {
-            **existing_plan,
-            "trigger_context": trigger_context,
-            "orchestration_mode": "orchestrated_subagents",
-        }
-        session.commit()
-        session.refresh(run)
     return PrRemediationResult(
         triggered=True,
         issue_key=issue_key,
@@ -354,27 +300,3 @@ def count_pr_remediation_attempts(
             continue
         total += 1
     return total
-
-
-def _is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
-    if event == "pull_request_review" and action == "submitted":
-        review = payload.get("review")
-        state = str(review.get("state") or "").strip().lower() if isinstance(review, dict) else ""
-        return state == "changes_requested"
-    if event == "pull_request_review_comment" and action in {"created", "edited"}:
-        return True
-    if event == "check_run" and action in {"created", "completed", "rerequested"}:
-        check_run = payload.get("check_run")
-        conclusion = str(check_run.get("conclusion") or "").strip().lower() if isinstance(check_run, dict) else ""
-        return conclusion not in {"", "success", "neutral", "skipped"}
-    if event == "check_suite" and action in {"completed", "requested", "rerequested"}:
-        check_suite = payload.get("check_suite")
-        conclusion = str(check_suite.get("conclusion") or "").strip().lower() if isinstance(check_suite, dict) else ""
-        return conclusion not in {"", "success", "neutral", "skipped"}
-    return False
-def _coerce_positive_int(value: object | None) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return max(1, parsed)

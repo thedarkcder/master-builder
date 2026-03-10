@@ -79,14 +79,14 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service._find_existing_issue_key_for_pr_head",
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
                 return_value="GP-122",
             ),
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service._create_pr_remediation_bug_issue_key",
+                "orchestrator.api.webhooks.pr_remediation_policy.create_pr_remediation_bug_issue_key",
             ) as create_bug_mock,
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service.enqueue_run",
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
                 return_value=enqueue_result,
             ) as enqueue_run_mock,
         ):
@@ -121,15 +121,15 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service._find_existing_issue_key_for_pr_head",
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
                 return_value=None,
             ),
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service._create_pr_remediation_bug_issue_key",
+                "orchestrator.api.webhooks.pr_remediation_policy.create_pr_remediation_bug_issue_key",
                 return_value="GP-500",
             ) as create_bug_mock,
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service.enqueue_run",
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
                 return_value=enqueue_result,
             ),
         ):
@@ -157,14 +157,14 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service._find_existing_issue_key_for_pr_head",
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
                 return_value=None,
             ),
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service._create_pr_remediation_bug_issue_key",
+                "orchestrator.api.webhooks.pr_remediation_policy.create_pr_remediation_bug_issue_key",
                 side_effect=ValueError("jira down"),
             ),
-            patch("orchestrator.api.webhooks.pr_remediation_service.enqueue_run") as enqueue_run_mock,
+            patch("orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run") as enqueue_run_mock,
         ):
             result = enqueue_pr_remediation_if_needed(
                 session=session,
@@ -199,11 +199,11 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service._find_existing_issue_key_for_pr_head",
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
                 return_value="GP-122",
             ),
             patch(
-                "orchestrator.api.webhooks.pr_remediation_service.enqueue_run",
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
                 return_value=enqueue_result,
             ),
         ):
