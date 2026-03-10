@@ -9,15 +9,14 @@ from orchestrator.api.main import create_app
 
 class ApiErrorObservabilityTests(unittest.TestCase):
     def test_create_app_registers_discord_executor_once_on_startup(self) -> None:
-        app = create_app()
-
         with (
             patch("orchestrator.api.main.run_migrations"),
             patch("orchestrator.api.main.register_discord_command_executor") as register_mock,
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            TestClient(app, raise_server_exceptions=False),
         ):
-            pass
+            app = create_app()
+            with TestClient(app, raise_server_exceptions=False):
+                pass
 
         register_mock.assert_called_once()
 

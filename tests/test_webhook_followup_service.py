@@ -406,7 +406,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         execute = MagicMock(side_effect=RuntimeError("explode"))
         service, transport = self._build_service(session=session, execute_command_ingress=execute)
 
-        with patch("orchestrator.api.webhooks.followup_service.emit_hard_error") as emit_mock:
+        with patch("orchestrator.api.webhooks.followup_execution.emit_hard_error") as emit_mock:
             asyncio.run(
                 service.run_discord_command_followup(
                     tenant_id="tenant-1",
