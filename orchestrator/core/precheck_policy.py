@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
@@ -26,6 +27,7 @@ def evaluate_precheck_policy(
     *,
     issue_summary: str | None,
     issue_description: str | None,
+    recorded_answers: list[dict[str, str]] | None = None,
     tenant_id: str | None = None,
     project_id: str | None = None,
     issue_key: str | None = None,
@@ -55,6 +57,7 @@ def evaluate_precheck_policy(
                 "policy/precheck_user.j2",
                 issue_summary=normalized_issue_summary,
                 issue_description=normalized_issue_description,
+                recorded_answers_json=json.dumps(recorded_answers or []),
             ),
         )
     except CodexRuntimeError as exc:

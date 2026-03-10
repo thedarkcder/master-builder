@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Callable
 from uuid import uuid4
 
 from sqlalchemy import select
 
+from orchestrator.core.decision_effect_service import enqueue_cycle_comment_effect
 from orchestrator.core.decision_precheck_mapping import (
     BLOCKED_CLASSIFICATIONS,
     build_question_set,
@@ -16,7 +16,7 @@ from orchestrator.core.decision_precheck_mapping import (
 )
 from orchestrator.core.decision_resolution_service import serialize_slot_resolution
 from orchestrator.core.precheck_decision import precheck_missing_slots
-from orchestrator.storage.models import DecisionAnswer, DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent
+from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvent
 
 
 def active_cycle(*, session, case: DecisionCase) -> DecisionCycle | None:
@@ -79,96 +79,6 @@ def existing_case_for_issue(*, session, tenant_id: str, issue_key: str) -> Decis
             DecisionCase.issue_key == issue_key,
         )
     ).scalar_one_or_none()
-
-
-def build_cycle_comment(*, session, case: DecisionCase, cycle: DecisionCycle) -> str:
-    unresolved_ids = {
-        str(question_id).strip()
-        for question_id in cycle.unresolved_question_ids_json
-        if str(question_id).strip()
-    }
-    answers = session.execute(
-        select(DecisionAnswer)
-        .where(
-            DecisionAnswer.cycle_id == cycle.cycle_id,
-            DecisionAnswer.status == "accepted",
-        )
-        .order_by(DecisionAnswer.accepted_at.asc(), DecisionAnswer.created_at.asc())
-    ).scalars().all()
-    lines = [
-        f"<!-- decision-cycle:{cycle.cycle_id} -->",
-        f"Decision state: `{case.state}`",
-    ]
-    if cycle.reason:
-        lines.append(f"Reason: {cycle.reason}")
-    if answers:
-        lines.append("Accepted answers:")
-        for answer in answers:
-            answer_text = str(answer.normalized_answer or "").strip()
-            if not answer_text:
-                continue
-            lines.append(f"- [{answer.question_id}] {answer.question_text}")
-            lines.append(f"  Answer: {answer_text}")
-    if cycle.question_set_json:
-        lines.append("Outstanding questions:")
-        for item in cycle.question_set_json:
-            question_id = str(item.get("id") or "").strip()
-            text = str(item.get("text") or "").strip()
-            if not text:
-                continue
-            if unresolved_ids and question_id and question_id not in unresolved_ids:
-                continue
-            if question_id:
-                lines.append(f"- [{question_id}] {text}")
-            else:
-                lines.append(f"- {text}")
-    return "\n".join(lines)
-
-
-def enqueue_or_get_effect(
-    *,
-    session,
-    case: DecisionCase,
-    cycle: DecisionCycle,
-    effect_type: str,
-    dedupe_key: str,
-    payload: dict[str, object],
-    now: datetime,
-) -> DecisionEffectOutbox:
-    existing = session.execute(
-        select(DecisionEffectOutbox).where(
-            DecisionEffectOutbox.tenant_id == case.tenant_id,
-            DecisionEffectOutbox.dedupe_key == dedupe_key,
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        if existing.payload_json != payload:
-            existing.payload_json = payload
-            existing.status = "pending"
-            existing.sent_at = None
-            existing.last_error = None
-            existing.updated_at = now
-        return existing
-    effect = DecisionEffectOutbox(
-        effect_id=uuid4().hex,
-        dedupe_key=dedupe_key,
-        case_id=case.case_id,
-        cycle_id=cycle.cycle_id,
-        tenant_id=case.tenant_id,
-        project_id=case.project_id,
-        issue_key=case.issue_key,
-        effect_type=effect_type,
-        payload_json=payload,
-        status="pending",
-        attempt_count=0,
-        next_attempt_at=None,
-        sent_at=None,
-        last_error=None,
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(effect)
-    return effect
 
 
 def persist_decision_state(
@@ -326,47 +236,17 @@ def persist_decision_state(
     session.add(event_row)
 
     if cycle is not None and cycle.status == "open":
-        effect = enqueue_or_get_effect(
-            session=session,
-            case=case,
-            cycle=cycle,
-            effect_type="jira_comment",
-            dedupe_key=f"jira-comment:{tenant.tenant_id}:{event.issue_key}:{cycle.cycle_id}",
-            payload={
-                "comment": build_cycle_comment(session=session, case=case, cycle=cycle),
-            },
-            now=occurred_at,
+        outbox_effect_ids.append(
+            enqueue_cycle_comment_effect(
+                session=session,
+                case=case,
+                cycle=cycle,
+                now=occurred_at,
+            )
         )
-        outbox_effect_ids.append(effect.effect_id)
 
     session.commit()
     session.refresh(case)
     if cycle is not None:
         session.refresh(cycle)
     return case, cycle, tuple(outbox_effect_ids)
-
-
-def publish_decision_effects(
-    *,
-    session,
-    effect_ids: tuple[str, ...],
-    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]],
-    occurred_at: datetime,
-) -> None:
-    for effect_id in effect_ids:
-        effect = session.get(DecisionEffectOutbox, effect_id)
-        if effect is None or effect.status != "pending":
-            continue
-        if effect.effect_type != "jira_comment":
-            continue
-        posted, error = publish_jira_comment_fn(str(effect.payload_json.get("comment") or ""))
-        if posted:
-            effect.status = "sent"
-            effect.sent_at = occurred_at
-            effect.updated_at = occurred_at
-        else:
-            effect.status = "failed"
-            effect.attempt_count += 1
-            effect.last_error = error
-            effect.updated_at = occurred_at
-        session.commit()

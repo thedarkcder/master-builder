@@ -28,17 +28,17 @@ from orchestrator.core.decision_resolution_service import (
     slot_resolutions_from_case as slot_resolutions_from_case_resolution,
 )
 from orchestrator.core.decision_reply_service import (
-    accepted_cycle_answers,
     active_case_and_cycle_for_issue,
-    append_decision_answer_context,
     accepted_question_ids_for_cycle,
+    recorded_cycle_answers,
+    serialize_recorded_answers_for_policy,
 )
 from orchestrator.core.decision_state_repository import (
     active_cycle as active_cycle_state,
     existing_case_for_issue as existing_case_for_issue_state,
     persist_decision_state as persist_decision_state_repo,
-    publish_decision_effects as publish_decision_effects_repo,
 )
+from orchestrator.core.decision_effect_service import publish_decision_effects as publish_decision_effects_repo
 from orchestrator.core.decision_types import (
     DecisionEngineResult,
     DecisionEventInput,
@@ -81,6 +81,7 @@ def evaluate_ingress_precheck(
     issue_description: str | None,
     issue_labels: list[str] | None,
     ready_label: str | None,
+    recorded_answers: list[dict[str, str]] | None = None,
     evaluate_pre_run_check_fn: Callable[..., PreRunCheckResult],
 ) -> IngressDecision:
     try:
@@ -90,6 +91,7 @@ def evaluate_ingress_precheck(
             issue_key=issue_key,
             issue_summary=issue_summary,
             issue_description=issue_description,
+            recorded_answers=recorded_answers,
             issue_labels=issue_labels,
             ready_label=ready_label,
         )
@@ -210,6 +212,7 @@ def evaluate_worker_decision(
             issue_key=issue_key,
             issue_summary=issue_summary,
             issue_description=issue_description,
+            recorded_answers=None,
             issue_labels=issue_labels,
             ready_label=(tenant.jira_config or {}).get("ready_label"),
             evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
@@ -339,15 +342,12 @@ def evaluate_decision_event(
         tenant_id=tenant.tenant_id,
         issue_key=event.issue_key,
     )
-    accepted_answers = (
-        accepted_cycle_answers(session=session, cycle_id=existing_cycle.cycle_id)
+    recorded_answers = (
+        recorded_cycle_answers(session=session, cycle_id=existing_cycle.cycle_id)
         if existing_cycle is not None
         else []
     )
-    effective_issue_description = append_decision_answer_context(
-        issue_description=event.issue_description,
-        answers=accepted_answers,
-    )
+    structured_recorded_answers = serialize_recorded_answers_for_policy(recorded_answers)
 
     initial = evaluate_with_labels_state(
         session=session,
@@ -356,7 +356,8 @@ def evaluate_decision_event(
         source=event.source,
         issue_key=event.issue_key,
         issue_summary=event.issue_summary,
-        issue_description=effective_issue_description,
+        issue_description=event.issue_description,
+        recorded_answers=structured_recorded_answers,
         issue_labels=event.issue_labels,
         settings=settings,
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
@@ -366,7 +367,7 @@ def evaluate_decision_event(
     )
     decision = initial.decision
     issue_labels = initial.issue_labels
-    issue_description = effective_issue_description
+    issue_description = event.issue_description
     missing_slots = precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else []
     existing_case = existing_case_for_issue_state(
         session=session,
@@ -419,6 +420,7 @@ def evaluate_decision_event(
                 issue_key=event.issue_key,
                 issue_summary=event.issue_summary,
                 issue_description=issue_description,
+                recorded_answers=structured_recorded_answers,
                 issue_labels=issue_labels,
                 settings=settings,
                 tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,

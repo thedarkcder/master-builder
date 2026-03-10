@@ -279,6 +279,105 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("Who owns this?",))
         self.assertEqual(case_after.updated_at, updated_at_before)
 
+    def test_reevaluation_includes_recorded_answers(self) -> None:
+        prechecks = [
+            _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Need config",
+                decision_gate_questions=("What config is approved?",),
+                decision_gate_missing_sections=("config",),
+            ),
+            _precheck_result(outcome="ready_for_agent"),
+        ]
+        recorded_answers_seen: list[list[dict[str, str]] | None] = []
+
+        def _evaluate_pre_run_check_stub(**kwargs: object) -> PreRunCheckResult:
+            recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
+            return prechecks.pop(0)
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-1",
+                    issue_key="MAB-166",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            self.assertEqual(first.classification, "decision_gate")
+
+            from orchestrator.storage.models import DecisionAnswer
+
+            session.add(
+                DecisionAnswer(
+                    answer_id="ans-1",
+                    case_id=first.case_id,
+                    cycle_id=str(first.cycle_id),
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key="MAB-166",
+                    question_id="dg_config",
+                    question_kind="decision_gate",
+                    question_text="What config is approved?",
+                    status="answered",
+                    normalized_answer="Production bundle ID is com.example.app.",
+                    source_transport="discord",
+                    source_ref=None,
+                    evidence_ids_json=[],
+                    metadata_json={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            second = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-2",
+                    issue_key="MAB-166",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+
+        self.assertEqual(second.classification, "clear")
+        self.assertGreaterEqual(len(recorded_answers_seen), 2)
+        self.assertEqual(
+            recorded_answers_seen[-1],
+            [
+                {
+                    "question_id": "dg_config",
+                    "question_kind": "decision_gate",
+                    "question_text": "What config is approved?",
+                    "status": "answered",
+                    "answer": "Production bundle ID is com.example.app.",
+                }
+            ],
+        )
+
     def test_jira_comment_effect_is_published_after_state_commit(self) -> None:
         precheck = _precheck_result(
             outcome="decision_gate_required",

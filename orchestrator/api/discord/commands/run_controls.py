@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from difflib import SequenceMatcher
+from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (
@@ -24,10 +24,9 @@ from orchestrator.core.decision_engine import (
     evaluate_decision_event,
 )
 from orchestrator.core.decision_reply_service import (
-    accepted_cycle_answers,
-    append_decision_answer_context,
     capture_decision_reply,
 )
+from orchestrator.core.decision_effect_service import publish_decision_effects
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.precheck_question_lock import (
@@ -41,10 +40,6 @@ from orchestrator.core.runs import cancel_run
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
-
-DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
-DECISION_GATE_BLOCK_END = "<!-- decision-gate-clarifications:end -->"
-
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
     if isinstance(oauth_context, dict):
@@ -111,40 +106,6 @@ def _gtd_missing_message(*, issue_key: str, missing_criteria: tuple[str, ...], q
         lines.extend(f"- {question}" for question in cleaned_questions)
     return "\n".join(lines)
 
-
-def _choose_updated_summary(*, issue_key: str, current_summary: str, suggested_summary: str) -> str:
-    current = str(current_summary or "").strip()
-    suggested = str(suggested_summary or "").strip()[:255]
-    if not current:
-        return suggested or f"{issue_key} - Decision Gate clarified"
-    if not suggested or suggested.lower() == current.lower():
-        return current
-    similarity = SequenceMatcher(None, current.lower(), suggested.lower()).ratio()
-    if similarity >= 0.7 or current.lower() in suggested.lower() or suggested.lower() in current.lower():
-        return suggested
-    if "DG clarified" in current:
-        return current
-    return f"{current} | DG clarified"[:255]
-
-
-def _upsert_decision_gate_clarifications_block(*, current_description: str, block: str) -> str:
-    current = str(current_description or "").strip()
-    if not current:
-        return block
-    start_idx = current.find(DECISION_GATE_BLOCK_START)
-    end_idx = current.find(DECISION_GATE_BLOCK_END)
-    if start_idx >= 0 and end_idx > start_idx:
-        end_of_marker = end_idx + len(DECISION_GATE_BLOCK_END)
-        prefix = current[:start_idx].rstrip()
-        suffix = current[end_of_marker:].lstrip()
-        if prefix and suffix:
-            return f"{prefix}\n\n{block}\n\n{suffix}"
-        if prefix:
-            return f"{prefix}\n\n{block}"
-        if suffix:
-            return f"{block}\n\n{suffix}"
-        return block
-    return f"{current}\n\n{block}"
 
 def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides: dict) -> tuple[bool, str]:
     effective_policy = resolve_effective_policy(
@@ -286,88 +247,6 @@ def _locked_decision_gate_reason(*, classification: str, decision_gate: Any | No
     if classification not in {"decision_gate", "both"}:
         return None
     return str(getattr(decision_gate, "reason", "") or "").strip() or None
-
-
-def _plan_decision_gate_jira_update(
-    *,
-    runtime,  # noqa: ANN001
-    invocation_context: CodexInvocationContext,
-    issue_key: str,
-    current_summary: str,
-    current_description: str,
-    reply_text: str,
-) -> tuple[str, str]:
-    def _normalize_dependencies_and_risks(value: object) -> str:
-        if isinstance(value, list):
-            normalized = [str(item).strip() for item in value if str(item).strip()]
-            return "; ".join(normalized)
-        text = str(value or "").strip()
-        return text
-
-    payload = invoke_codex_json(
-        runtime=runtime,
-        context=invocation_context,
-        system_prompt=(
-            "You extract Decision Gate clarification fields from a user reply. "
-            "Return strict JSON only with keys: "
-            "summary, objective, scope, acceptance_criteria, how_to_test, nfr_intent, "
-            "reliability_security_constraints, out_of_scope, rollout_constraints, decision_owner, "
-            "dependencies_and_risks. "
-            "Do not rewrite the full ticket body."
-        ),
-        user_prompt=(
-            "Stage: decision-gate-reply-normalization\n"
-            f"Issue key: {issue_key}\n"
-            f"Current summary: {current_summary}\n"
-            f"Current description:\n{current_description}\n\n"
-            f"User reply text:\n{reply_text}\n\n"
-            "Constraints:\n"
-            "- Preserve existing ticket format by outputting only extracted field values.\n"
-            "- Include field text only when supported by user reply.\n"
-            "- Keep summary concise (<=255 chars), close to current summary wording.\n"
-        ),
-    )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return JSON object for Decision Gate update")
-    updated_summary = _choose_updated_summary(
-        issue_key=issue_key,
-        current_summary=current_summary,
-        suggested_summary=str(payload.get("summary") or "").strip(),
-    )
-    objective = str(payload.get("objective") or "").strip() or "Provided in thread reply."
-    scope = str(payload.get("scope") or "").strip() or "Provided in thread reply."
-    acceptance_criteria = str(payload.get("acceptance_criteria") or "").strip() or "Provided in thread reply."
-    how_to_test = str(payload.get("how_to_test") or "").strip() or "Provided in thread reply."
-    nfr_intent = str(payload.get("nfr_intent") or "").strip() or "Provided in thread reply."
-    reliability_security = str(payload.get("reliability_security_constraints") or "").strip() or "Not specified."
-    out_of_scope = str(payload.get("out_of_scope") or "").strip() or "Not specified."
-    rollout_constraints = str(payload.get("rollout_constraints") or "").strip() or "Not specified."
-    decision_owner = str(payload.get("decision_owner") or "").strip() or "Not specified."
-    dependencies_and_risks = _normalize_dependencies_and_risks(
-        payload.get("dependencies_and_risks")
-    ) or "Not specified."
-    clarification_block = "\n".join(
-        [
-            DECISION_GATE_BLOCK_START,
-            "## Decision Gate Clarifications",
-            f"Objective: {objective}",
-            f"Scope: {scope}",
-            f"Acceptance Criteria: {acceptance_criteria}",
-            f"How to test: {how_to_test}",
-            f"NFR intent (MVP vs scale-ready): {nfr_intent}",
-            f"Mandatory reliability/security constraints: {reliability_security}",
-            f"Explicitly out of scope: {out_of_scope}",
-            f"Rollout/migration constraints: {rollout_constraints}",
-            f"Dependencies / Risks: {dependencies_and_risks}",
-            f"Decision owner: {decision_owner}",
-            DECISION_GATE_BLOCK_END,
-        ]
-    )
-    updated_description = _upsert_decision_gate_clarifications_block(
-        current_description=current_description,
-        block=clarification_block,
-    )
-    return updated_summary, updated_description
 
 
 def dispatch_run_control_command(
@@ -599,53 +478,31 @@ def dispatch_run_control_command(
             )
             issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or None
             issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
-            try:
-                capture = capture_decision_reply(
-                    session=session,
-                    settings=settings,
-                    tenant=tenant,
-                    project=project,
-                    issue_key=issue_key,
-                    reply_text=reply_text,
-                    source_transport="discord",
-                    actor_ref=payload.user_id,
-                    metadata={
-                        "channel_id": payload.channel_id,
-                        "ingress": "discord",
-                    },
-                )
-                accepted_answers = accepted_cycle_answers(session=session, cycle_id=capture.cycle.cycle_id)
-                issue_description = append_decision_answer_context(
-                    issue_description=issue_description,
-                    answers=accepted_answers,
-                )
-            except ValueError:
-                issue_summary, issue_description = _plan_decision_gate_jira_update(
-                    runtime=runtime,
-                    invocation_context=CodexInvocationContext(
-                        channel="discord",
-                        tenant_id=tenant.tenant_id,
-                        project_id=project.project_id,
-                        command="reply",
-                        stage="decision_gate_normalize",
-                        working_dir=codex_working_dir,
-                        issue_key=issue_key,
-                    ),
-                    issue_key=issue_key,
-                    current_summary=str(getattr(issue_detail, "summary", "") or ""),
-                    current_description=str(getattr(issue_detail, "description", "") or ""),
-                    reply_text=reply_text,
-                )
-                oauth_client.update_issue_summary_and_description(
-                    access_token=oauth_access_token,
-                    cloud_id=str(cloud_id),
-                    issue_id_or_key=issue_key,
-                    summary=issue_summary,
-                    description=issue_description,
-                )
+            capture = capture_decision_reply(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project=project,
+                issue_key=issue_key,
+                reply_text=reply_text,
+                source_transport="discord",
+                actor_ref=payload.user_id,
+                metadata={
+                    "channel_id": payload.channel_id,
+                    "ingress": "discord",
+                },
+            )
             labels_raw = getattr(issue_detail, "labels", None)
             issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()] if isinstance(labels_raw, list) else None
-        except (HTTPException, CodexRuntimeError, RuntimeError, ValueError) as exc:
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"No active Decision Gate cycle exists for `{issue_key}`. "
+                    f"Run `!run {issue_key}` or `!retry {issue_key}` to reopen clarification first."
+                ),
+            ) from exc
+        except (HTTPException, CodexRuntimeError, RuntimeError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Failed to update Jira context for `{issue_key}`: {exc}",
@@ -677,6 +534,12 @@ def dispatch_run_control_command(
             oauth_context=oauth,
             publish_jira_comment_fn=_publish_jira_comment,
         )
+        if capture.effect_ids:
+            publish_decision_effects(
+                session=session,
+                effect_ids=capture.effect_ids,
+                occurred_at=datetime.now(timezone.utc),
+            )
         precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
             return DiscordCommandResponse(
