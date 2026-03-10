@@ -242,7 +242,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             self.assertEqual(popen_mock.call_args.kwargs["cwd"], "/tmp/repo")
             self.assertEqual(
                 popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
-                "postgresql+psycopg://orchestrator:orchestrator@localhost:4402/orchestrator",
+                settings.database_url,
             )
 
     def test_cli_request_uses_explicit_tool_database_url_override_when_configured(self) -> None:
