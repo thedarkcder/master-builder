@@ -96,6 +96,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
         os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
         os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
@@ -201,6 +202,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.client.close()
         self.temp_dir.cleanup()
+        os.environ.pop("ORCHESTRATOR_ADMIN_TOKEN_SECRET", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 

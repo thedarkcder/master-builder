@@ -202,7 +202,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook_discord_router)
     app.include_router(webhook_discord_interactions_router)
     app.include_router(webhook_github_router)
-    register_discord_command_executor()
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
