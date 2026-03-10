@@ -12,24 +12,19 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
-from orchestrator.core.knowledge_base import create_knowledge_asset
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.storage.models import (
     DecisionAnswer,
     DecisionCase,
     DecisionCycle,
     DecisionEvidence,
-    KnowledgeAsset,
     Project,
     Tenant,
 )
+from orchestrator.core.decision_effect_service import enqueue_decision_answer_kb_effects
 from orchestrator.tools.project_repo_checkout import project_repo_dir
 
 DECISION_CYCLE_COMMENT_MARKER = "<!-- decision-cycle:"
-DECISION_ANSWER_CONTEXT_START = "<!-- decision-answer-context:start -->"
-DECISION_ANSWER_CONTEXT_END = "<!-- decision-answer-context:end -->"
-DECISION_KNOWLEDGE_SOURCE_TYPE = "decision_answer"
-DECISION_KNOWLEDGE_PENDING_STATUS = "pending_review"
 
 
 @dataclass(frozen=True)
@@ -39,6 +34,7 @@ class DecisionReplyCaptureResult:
     accepted_question_ids: tuple[str, ...]
     answered_question_ids: tuple[str, ...]
     evidence_id: str
+    effect_ids: tuple[str, ...]
 
 
 def is_machine_generated_decision_comment(*, text: str | None) -> bool:
@@ -87,32 +83,34 @@ def accepted_cycle_answers(*, session: Session, cycle_id: str) -> list[DecisionA
     ).scalars().all()
 
 
-def append_decision_answer_context(
-    *,
-    issue_description: str | None,
-    answers: list[DecisionAnswer],
-) -> str | None:
-    accepted_answers = [
-        answer
-        for answer in answers
-        if str(answer.status or "").strip() == "accepted"
-        and str(answer.normalized_answer or "").strip()
-    ]
-    base = str(issue_description or "").strip()
-    if not accepted_answers:
-        return base or None
-    lines = [
-        DECISION_ANSWER_CONTEXT_START,
-        "## Accepted Decision Answers",
-    ]
-    for answer in accepted_answers:
-        lines.append(f"[{answer.question_id}] {answer.question_text}")
-        lines.append(f"Answer: {str(answer.normalized_answer or '').strip()}")
-    lines.append(DECISION_ANSWER_CONTEXT_END)
-    block = "\n".join(lines)
-    if not base:
-        return block
-    return f"{base}\n\n{block}".strip()
+def recorded_cycle_answers(*, session: Session, cycle_id: str) -> list[DecisionAnswer]:
+    return session.execute(
+        select(DecisionAnswer)
+        .where(
+            DecisionAnswer.cycle_id == cycle_id,
+            DecisionAnswer.status.in_(("answered", "accepted")),
+        )
+        .order_by(DecisionAnswer.created_at.asc())
+    ).scalars().all()
+
+
+def serialize_recorded_answers_for_policy(answers: list[DecisionAnswer]) -> list[dict[str, str]]:
+    serialized: list[dict[str, str]] = []
+    for answer in answers:
+        status = str(answer.status or "").strip()
+        value = str(answer.normalized_answer or "").strip()
+        if status not in {"answered", "accepted"} or not value:
+            continue
+        serialized.append(
+            {
+                "question_id": str(answer.question_id or "").strip(),
+                "question_kind": str(answer.question_kind or "").strip() or "decision_gate",
+                "question_text": str(answer.question_text or "").strip(),
+                "status": status,
+                "answer": value,
+            }
+        )
+    return serialized
 
 
 def accepted_question_ids_for_cycle(*, session: Session, cycle_id: str) -> set[str]:
@@ -225,6 +223,9 @@ def _extract_reply_matches(
         if status not in {"ignored", "answered", "accepted"}:
             status = "answered"
         answer_text = str(item.get("answer") or "").strip()
+        notes_text = str(item.get("notes") or "").strip()
+        if status in {"answered", "accepted"} and not answer_text and notes_text:
+            answer_text = notes_text
         if status in {"answered", "accepted"} and not answer_text:
             continue
         normalized.append(
@@ -232,7 +233,7 @@ def _extract_reply_matches(
                 "question_id": question_id,
                 "status": status,
                 "answer": answer_text,
-                "notes": str(item.get("notes") or "").strip() or None,
+                "notes": notes_text or None,
             }
         )
     return normalized
@@ -249,81 +250,6 @@ def _question_lookup(cycle: DecisionCycle) -> dict[str, dict[str, str]]:
             "kind": str(item.get("kind") or "").strip() or "decision_gate",
         }
     return lookup
-
-
-def _stage_accepted_answer_as_knowledge(
-    *,
-    session: Session,
-    tenant_id: str,
-    project_id: str | None,
-    issue_key: str,
-    case_id: str,
-    cycle_id: str,
-    answer: DecisionAnswer,
-    evidence_id: str,
-    now: datetime,
-) -> None:
-    if not project_id or answer.status != "accepted":
-        return
-    source_ref = f"{issue_key}:{answer.question_id}"
-    existing = session.execute(
-        select(KnowledgeAsset).where(
-            KnowledgeAsset.tenant_id == tenant_id,
-            KnowledgeAsset.project_id == project_id,
-            KnowledgeAsset.source_type == DECISION_KNOWLEDGE_SOURCE_TYPE,
-            KnowledgeAsset.source_ref == source_ref,
-            KnowledgeAsset.status != "deleted",
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        existing_metadata = dict(existing.metadata_json or {}) if isinstance(existing.metadata_json, dict) else {}
-        existing_evidence_ids = [
-            str(value).strip()
-            for value in existing_metadata.get("evidence_ids", [])
-            if str(value).strip()
-        ]
-        existing.text_content = (
-            f"Issue: {issue_key}\n"
-            f"Question ID: {answer.question_id}\n"
-            f"Question: {answer.question_text}\n"
-            f"Accepted answer: {str(answer.normalized_answer or '').strip()}\n"
-        )
-        existing.status = DECISION_KNOWLEDGE_PENDING_STATUS
-        existing.metadata_json = {
-            **existing_metadata,
-            "case_id": case_id,
-            "cycle_id": cycle_id,
-            "question_id": answer.question_id,
-            "evidence_ids": sorted({*existing_evidence_ids, evidence_id}),
-            "accepted_at": now.isoformat(),
-        }
-        existing.updated_at = now
-        return
-    create_knowledge_asset(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        source_type=DECISION_KNOWLEDGE_SOURCE_TYPE,
-        title=f"{issue_key}: {answer.question_text[:160]}",
-        mime_type="text/plain",
-        source_ref=source_ref,
-        source_timestamp=now,
-        text_content=(
-            f"Issue: {issue_key}\n"
-            f"Question ID: {answer.question_id}\n"
-            f"Question: {answer.question_text}\n"
-            f"Accepted answer: {str(answer.normalized_answer or '').strip()}\n"
-        ),
-        metadata_json={
-            "case_id": case_id,
-            "cycle_id": cycle_id,
-            "question_id": answer.question_id,
-            "evidence_ids": [evidence_id],
-            "accepted_at": now.isoformat(),
-        },
-        status=DECISION_KNOWLEDGE_PENDING_STATUS,
-        commit=False,
-    )
 
 
 def capture_decision_reply(
@@ -400,6 +326,7 @@ def capture_decision_reply(
 
     accepted_question_ids: list[str] = []
     answered_question_ids: list[str] = []
+    accepted_answer_rows: list[DecisionAnswer] = []
     for item in extracted_answers:
         question_id = str(item.get("question_id") or "").strip()
         if not question_id or question_id not in lookup:
@@ -454,18 +381,16 @@ def capture_decision_reply(
         answered_question_ids.append(question_id)
         if status == "accepted":
             accepted_question_ids.append(question_id)
-            _stage_accepted_answer_as_knowledge(
-                session=session,
-                tenant_id=tenant.tenant_id,
-                project_id=project.project_id if project is not None else None,
-                issue_key=issue_key,
-                case_id=case.case_id,
-                cycle_id=cycle.cycle_id,
-                answer=answer_row,
-                evidence_id=evidence.evidence_id,
-                now=now,
-            )
+            accepted_answer_rows.append(answer_row)
 
+    effect_ids = enqueue_decision_answer_kb_effects(
+        session=session,
+        case=case,
+        cycle=cycle,
+        answers=accepted_answer_rows,
+        evidence_id=evidence.evidence_id,
+        now=now,
+    )
     session.flush()
     return DecisionReplyCaptureResult(
         case=case,
@@ -473,4 +398,5 @@ def capture_decision_reply(
         accepted_question_ids=tuple(sorted(set(accepted_question_ids))),
         answered_question_ids=tuple(sorted(set(answered_question_ids))),
         evidence_id=evidence.evidence_id,
+        effect_ids=effect_ids,
     )

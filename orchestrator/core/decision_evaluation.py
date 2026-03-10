@@ -31,6 +31,7 @@ def evaluate_with_labels(
     issue_key: str,
     issue_summary: str | None,
     issue_description: str | None,
+    recorded_answers: list[dict[str, str]] | None,
     issue_labels: list[str] | None,
     settings,  # noqa: ANN001
     tenant_jira_oauth_context_fn: Callable[..., Any],
@@ -47,6 +48,7 @@ def evaluate_with_labels(
         issue_key=issue_key,
         issue_summary=issue_summary,
         issue_description=issue_description,
+        recorded_answers=recorded_answers,
         issue_labels=issue_labels,
         ready_label=(tenant.jira_config or {}).get("ready_label"),
         evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,

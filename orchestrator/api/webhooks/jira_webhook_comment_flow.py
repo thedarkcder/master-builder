@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 
 from fastapi import HTTPException
@@ -22,6 +23,7 @@ from orchestrator.core.decision_reply_service import (
     capture_decision_reply,
     is_machine_generated_decision_comment,
 )
+from orchestrator.core.decision_effect_service import publish_decision_effects
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +153,7 @@ def stage_handle_comment_decision_reply(
         return None
     author_account_id = extract_jira_comment_author_account_id(context.payload)
     try:
-        capture_decision_reply(
+        capture = capture_decision_reply(
             session=session,
             settings=settings,
             tenant=context.tenant,
@@ -168,6 +170,12 @@ def stage_handle_comment_decision_reply(
             session=session,
             settings=settings,
         )
+        if capture.effect_ids:
+            publish_decision_effects(
+                session=session,
+                effect_ids=capture.effect_ids,
+                occurred_at=datetime.now(timezone.utc),
+            )
     except (RuntimeError, ValueError, HTTPException) as exc:
         logger.exception(
             "jira_comment_decision_reply_failed request_id=%s tenant_id=%s issue_key=%s error=%s",

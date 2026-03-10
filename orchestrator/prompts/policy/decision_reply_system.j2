@@ -19,5 +19,8 @@ Rules:
 - "ignored" means the reply does not answer that question.
 - Do not invent facts that are not supported by the reply text.
 - Preserve concrete identifiers, URLs, owners, and policies verbatim when present.
+- If the reply provides direct values, concrete policies, explicit approvals, explicit out-of-scope statements, or a deterministic implementation constraint relevant to a question, do not return "ignored" for that question.
+- Use "answered" for partial or free-text answers even when the wording is informal or does not mirror the question exactly.
+- Use "accepted" when the reply gives enough concrete information for implementation or explicitly resolves scope/approval for that question.
 - If one reply answers multiple questions, return multiple entries.
 - If the reply does not answer any question, return an empty answers array.

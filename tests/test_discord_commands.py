@@ -514,6 +514,10 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
             patch(
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                return_value=SimpleNamespace(cycle=SimpleNamespace(cycle_id="cycle-1"), effect_ids=()),
+            ),
+            patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
                 return_value=PreRunCheckResult(
                     outcome="ready_for_agent",
@@ -551,19 +555,11 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["command"], "retry")
         oauth_client.get_issue_detail.assert_called_once()
-        oauth_client.update_issue_summary_and_description.assert_called_once()
-        update_kwargs = oauth_client.update_issue_summary_and_description.call_args.kwargs
-        self.assertEqual(update_kwargs["summary"], "Old summary | DG clarified")
-        self.assertIn("Objective: old", update_kwargs["description"])
-        self.assertIn("<!-- decision-gate-clarifications:start -->", update_kwargs["description"])
-        self.assertIn("<!-- decision-gate-clarifications:end -->", update_kwargs["description"])
-        self.assertIn("objective: clear onboarding objective.", update_kwargs["description"].lower())
-        self.assertIn("how to test: run listed scenario checks.", update_kwargs["description"].lower())
-        self.assertIn("Dependencies / Risks: Supabase evaluate-session must be deployed", update_kwargs["description"])
+        oauth_client.update_issue_summary_and_description.assert_not_called()
         self.assertGreaterEqual(precheck_mock.call_count, 2)
         precheck_calls = [call.kwargs for call in precheck_mock.call_args_list]
         self.assertEqual({call["issue_key"] for call in precheck_calls}, {"TP-88"})
-        self.assertIn("Old summary | DG clarified", [call["issue_summary"] for call in precheck_calls])
+        self.assertIn("Old summary", [call["issue_summary"] for call in precheck_calls])
         self.assertIn("Retry from reply", [call["issue_summary"] for call in precheck_calls])
 
     def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
@@ -601,16 +597,6 @@ class DiscordCommandApiTests(unittest.TestCase):
             "access_token": "tok-1",
             "client": oauth_client,
         }
-        runtime = unittest.mock.MagicMock()
-        runtime.run_json.return_value = {
-            "summary": "Updated summary",
-            "objective": "Clear onboarding objective.",
-            "scope": "Splash to onboarding to demo flow.",
-            "acceptance_criteria": "Flow and guards verified.",
-            "how_to_test": "Run listed scenario checks.",
-            "nfr_intent": "MVP-first, scale-aware.",
-        }
-
         with (
             patch(
                 "orchestrator.api.discord.commands.run_controls.dispatch_run_control_command"
@@ -619,14 +605,31 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview"
             ) as preview_mock,
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                return_value=SimpleNamespace(cycle=SimpleNamespace(cycle_id="cycle-1"), effect_ids=()),
+            ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
-                return_value=SimpleNamespace(
-                    decision_gate_triggered=True,
-                    decision_gate=SimpleNamespace(
+                return_value=PreRunCheckResult(
+                    outcome="decision_gate_required",
+                    ready_label="agent:ready",
+                    ready_label_present=True,
+                    required_worker_capability="linux",
+                    required_worker_label="worker:linux",
+                    required_worker_label_present=True,
+                    decision_gate=DecisionGateResult(
+                        triggered=True,
                         reason="Missing GTD sections",
-                        questions=["Objective?", "How to test?"],
+                        missing_sections=(),
+                        questions=("Objective?", "How to test?"),
+                        recommendation="Clarification required",
+                        tags=(),
+                    ),
+                    gtd=GoodToDoValidationResult(
+                        valid=True,
+                        missing_criteria=(),
+                        clarification_questions=(),
                     ),
                 ),
             ),
@@ -646,10 +649,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["data"]["recheck_required"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-90")
         self.assertEqual(response.json()["data"]["questions"], ["Objective?", "How to test?"])
-        self.assertEqual(oauth_client.update_issue_summary_and_description.call_count, 1)
-        latest_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
-        self.assertIn("Decision Gate Clarifications", latest_description)
-        self.assertIn("Objective", latest_description)
+        oauth_client.update_issue_summary_and_description.assert_not_called()
         dispatch_mock.assert_not_called()
         preview_mock.assert_not_called()
 
@@ -670,19 +670,12 @@ class DiscordCommandApiTests(unittest.TestCase):
             "access_token": "tok-1",
             "client": oauth_client,
         }
-        runtime = unittest.mock.MagicMock()
-        runtime.run_json.return_value = {
-            "summary": "Updated summary",
-            "objective": "Clear onboarding objective.",
-            "scope": "Splash to onboarding to demo flow.",
-            "acceptance_criteria": "Flow and guards verified.",
-            "how_to_test": "Run listed scenario checks.",
-            "nfr_intent": "MVP-first, scale-aware.",
-        }
-
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                return_value=SimpleNamespace(cycle=SimpleNamespace(cycle_id="cycle-1"), effect_ids=()),
+            ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
                 return_value=PreRunCheckResult(
@@ -725,10 +718,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("Dependencies and risks identified", response.json()["data"]["gtd_missing_criteria"])
         self.assertIn("Which dependencies or risks may impact delivery?", response.json()["data"]["questions"])
         self.assertNotIn("Decision Gate reason:", response.json()["message"])
-        self.assertEqual(oauth_client.update_issue_summary_and_description.call_count, 1)
-        latest_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
-        self.assertNotIn("Decision Gate reason:", latest_description)
-        self.assertIn("Decision Gate Clarifications", latest_description)
+        oauth_client.update_issue_summary_and_description.assert_not_called()
 
     def test_reply_without_retryable_run_queues_initial_run_after_clarification(self) -> None:
         oauth_client = SimpleNamespace(
@@ -744,15 +734,6 @@ class DiscordCommandApiTests(unittest.TestCase):
             "connection": SimpleNamespace(cloud_id="cloud-1"),
             "access_token": "tok-1",
             "client": oauth_client,
-        }
-        runtime = unittest.mock.MagicMock()
-        runtime.run_json.return_value = {
-            "summary": "Updated summary",
-            "objective": "Clear onboarding objective.",
-            "scope": "Splash to onboarding to demo flow.",
-            "acceptance_criteria": "Flow and guards verified.",
-            "how_to_test": "Run listed scenario checks.",
-            "nfr_intent": "MVP-first, scale-aware.",
         }
         ready_result = PreRunCheckResult(
             outcome="ready_for_agent",
@@ -780,7 +761,10 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                return_value=SimpleNamespace(cycle=SimpleNamespace(cycle_id="cycle-1"), effect_ids=()),
+            ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
                 return_value=ready_result,
@@ -817,15 +801,15 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["command"], "run")
         self.assertEqual(response.json()["data"]["issue_key"], "TP-91")
         self.assertEqual(response.json()["data"]["run_id"], "run-new-1")
-        oauth_client.update_issue_summary_and_description.assert_called_once()
+        oauth_client.update_issue_summary_and_description.assert_not_called()
         enqueue_mock.assert_called_once()
         self.assertGreaterEqual(precheck_mock.call_count, 2)
         precheck_calls = [call.kwargs for call in precheck_mock.call_args_list]
         self.assertEqual({call["issue_key"] for call in precheck_calls}, {"TP-91"})
-        self.assertIn("Old summary | DG clarified", [call["issue_summary"] for call in precheck_calls])
+        self.assertIn("Old summary", [call["issue_summary"] for call in precheck_calls])
         self.assertIn("Run after reply", [call["issue_summary"] for call in precheck_calls])
 
-    def test_reply_replaces_existing_decision_gate_block(self) -> None:
+    def test_reply_without_active_decision_cycle_returns_explicit_conflict(self) -> None:
         oauth_client = SimpleNamespace(
             get_issue_detail=unittest.mock.MagicMock(
                 return_value=SimpleNamespace(
@@ -846,63 +830,12 @@ class DiscordCommandApiTests(unittest.TestCase):
             "access_token": "tok-1",
             "client": oauth_client,
         }
-        runtime = unittest.mock.MagicMock()
-        runtime.run_json.return_value = {
-            "summary": "Updated summary",
-            "objective": "New objective from reply.",
-            "scope": "Updated scope.",
-            "acceptance_criteria": "Updated acceptance criteria.",
-            "how_to_test": "Run listed scenario checks.",
-            "nfr_intent": "MVP-first, scale-aware.",
-        }
 
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
-                return_value=PreRunCheckResult(
-                    outcome="ready_for_agent",
-                    ready_label="agent:ready",
-                    ready_label_present=True,
-                    required_worker_capability="linux",
-                    required_worker_label="worker:linux",
-                    required_worker_label_present=True,
-                    decision_gate=DecisionGateResult(
-                        triggered=False,
-                        reason="Decision Gate not required",
-                        missing_sections=(),
-                        questions=(),
-                        recommendation="Proceed",
-                        tags=(),
-                    ),
-                    gtd=GoodToDoValidationResult(
-                        valid=True,
-                        missing_criteria=(),
-                        clarification_questions=(),
-                    ),
-                ),
-            ),
-            patch(
-                "orchestrator.api.discord.commands.run_controls.enqueue_issue_run_with_precheck",
-                return_value=SimpleNamespace(
-                    enqueued=True,
-                    run=SimpleNamespace(run_id="run-new-2", issue_key="TP-92"),
-                    reason=None,
-                ),
-            ),
-            patch(
-                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-                return_value=JiraIssuePreview(key="TP-92", summary="Run after updated clarification", status="To Do"),
-            ),
-            patch(
-                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
-                return_value=JiraIssueDetail(
-                    key="TP-92",
-                    summary="Run after updated clarification",
-                    status="To Do",
-                    description="Objective: pre-existing run.",
-                ),
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                side_effect=ValueError("No active decision cycle exists for TP-92"),
             ),
         ):
             response = self.client.post(
@@ -914,17 +847,10 @@ class DiscordCommandApiTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["command"], "run")
-        oauth_client.update_issue_summary_and_description.assert_called_once()
-        update_kwargs = oauth_client.update_issue_summary_and_description.call_args.kwargs
-        description = update_kwargs["description"]
-        self.assertIn("<!-- decision-gate-clarifications:start -->", description)
-        self.assertIn("<!-- decision-gate-clarifications:end -->", description)
-        self.assertEqual(description.count("<!-- decision-gate-clarifications:start -->"), 1)
-        self.assertEqual(description.count("<!-- decision-gate-clarifications:end -->"), 1)
-        self.assertIn("objective: new objective from reply.", description.lower())
-        self.assertNotIn("stale objective", description.lower())
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("No active Decision Gate cycle exists for `TP-92`.", response.json()["detail"])
+        self.assertIn("!run TP-92", response.json()["detail"])
+        oauth_client.update_issue_summary_and_description.assert_not_called()
 
     def test_link_rejects_issue_outside_mapped_project_scope(self) -> None:
         self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")

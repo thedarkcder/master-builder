@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from orchestrator.core.decision_engine import (
     DecisionLabelAction,
@@ -136,7 +137,7 @@ class DecisionEngineTests(unittest.TestCase):
 
 class LabelActionServiceTests(unittest.TestCase):
     def test_apply_issue_label_actions_respects_policy_and_dedupes(self) -> None:
-        oauth_client = SimpleNamespace(add_issue_labels=unittest.mock.MagicMock())
+        oauth_client = SimpleNamespace(add_issue_labels=mock.MagicMock())
         oauth_context = {
             "connection": SimpleNamespace(cloud_id="cloud-1"),
             "access_token": "tok-1",
@@ -189,4 +190,3 @@ class LabelActionServiceTests(unittest.TestCase):
         )
         self.assertEqual(result.applied_labels, ())
         self.assertEqual(result.skipped_reason, "label_mutations_disabled")
-
