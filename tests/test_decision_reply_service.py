@@ -191,7 +191,6 @@ class DecisionReplyServiceTests(unittest.TestCase):
 
             capture = capture_decision_reply(
                 session=session,
-                settings=self.settings,
                 tenant=tenant,
                 project=project,
                 issue_key="MAB-173",
@@ -229,7 +228,6 @@ class DecisionReplyServiceTests(unittest.TestCase):
 
             capture = capture_decision_reply(
                 session=session,
-                settings=self.settings,
                 tenant=tenant,
                 project=project,
                 issue_key="MAB-173",

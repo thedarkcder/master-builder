@@ -437,6 +437,7 @@ def dispatch_run_control_command(
         command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
         issue_key = str(command_params.get("issue_key") or "").strip().upper()
         reply_text = str(command_params.get("reply_text") or "").strip()
+        source_ref = str(command_params.get("source_ref") or "").strip() or None
         if not issue_key:
             if arguments:
                 issue_key = arguments[0].strip().upper()
@@ -503,12 +504,12 @@ def dispatch_run_control_command(
             issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
             capture_decision_reply(
                 session=session,
-                settings=settings,
                 tenant=tenant,
                 project=project,
                 issue_key=issue_key,
                 reply_text=reply_text,
                 source_transport="discord",
+                source_ref=source_ref,
                 actor_ref=payload.user_id,
                 metadata={
                     "channel_id": payload.channel_id,

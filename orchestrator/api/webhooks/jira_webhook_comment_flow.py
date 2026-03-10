@@ -154,7 +154,6 @@ def stage_handle_comment_decision_reply(
     try:
         capture_decision_reply(
             session=session,
-            settings=settings,
             tenant=context.tenant,
             project=context.project,
             issue_key=context.issue_key,

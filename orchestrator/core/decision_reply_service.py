@@ -3,16 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
-import json
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
-from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.storage.models import (
     DecisionAnswer,
     DecisionCase,
@@ -22,7 +18,6 @@ from orchestrator.storage.models import (
     Tenant,
 )
 from orchestrator.core.decision_effect_service import enqueue_decision_answer_kb_effects
-from orchestrator.tools.project_repo_checkout import project_repo_dir
 
 DECISION_CYCLE_COMMENT_MARKER = "<!-- decision-cycle:"
 
@@ -171,111 +166,6 @@ def _reply_dedupe_key(
         return f"{source_transport}:{cycle_id}:{source_ref}"
     digest = hashlib.sha256(reply_text.encode("utf-8", errors="ignore")).hexdigest()[:24]
     return f"{source_transport}:{cycle_id}:text:{digest}"
-
-
-def _normalize_question_payload(cycle: DecisionCycle) -> list[dict[str, str]]:
-    unresolved_ids = {
-        str(question_id).strip()
-        for question_id in cycle.unresolved_question_ids_json
-        if str(question_id).strip()
-    }
-    payload: list[dict[str, str]] = []
-    for item in cycle.question_set_json:
-        question_id = str(item.get("id") or "").strip()
-        question_text = str(item.get("text") or "").strip()
-        if not question_id or not question_text:
-            continue
-        if unresolved_ids and question_id not in unresolved_ids:
-            continue
-        payload.append(
-            {
-                "id": question_id,
-                "kind": str(item.get("kind") or "").strip() or "decision_gate",
-                "text": question_text,
-            }
-        )
-    return payload
-
-
-def _extract_reply_matches(
-    *,
-    session: Session,
-    settings,  # noqa: ANN001
-    tenant: Tenant,
-    project: Project | None,
-    issue_key: str,
-    cycle: DecisionCycle,
-    reply_text: str,
-    existing_answers: list[DecisionAnswer],
-) -> list[dict[str, Any]]:
-    questions = _normalize_question_payload(cycle)
-    if not questions:
-        return []
-    runtime = build_codex_runtime(session=session, settings=settings)
-    working_dir = "."
-    if project is not None:
-        try:
-            working_dir = project_repo_dir(project)
-        except Exception:  # noqa: BLE001
-            working_dir = "."
-    payload = invoke_codex_json(
-        runtime=runtime,
-        context=CodexInvocationContext(
-            channel="system",
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id if project is not None else None,
-            command="policy.reply",
-            stage="decision_reply",
-            working_dir=working_dir,
-            issue_key=issue_key,
-            reasoning_effort="low",
-        ),
-        system_prompt=render_prompt("policy/decision_reply_system.j2"),
-        user_prompt=render_prompt(
-            "policy/decision_reply_user.j2",
-            issue_key=issue_key,
-            questions_json=json.dumps(questions),
-            existing_answers_json=json.dumps(
-                [
-                    {
-                        "question_id": answer.question_id,
-                        "status": answer.status,
-                        "answer": answer.normalized_answer,
-                    }
-                    for answer in existing_answers
-                ]
-            ),
-            reply_text=reply_text,
-        ),
-    )
-    answers_raw = payload.get("answers")
-    if not isinstance(answers_raw, list):
-        raise CodexRuntimeError("Decision reply extraction did not return an answers array")
-    normalized: list[dict[str, Any]] = []
-    for item in answers_raw:
-        if not isinstance(item, dict):
-            continue
-        question_id = str(item.get("question_id") or "").strip()
-        if not question_id:
-            continue
-        status = str(item.get("status") or "").strip().lower()
-        if status not in {"ignored", "answered", "accepted"}:
-            status = "answered"
-        answer_text = str(item.get("answer") or "").strip()
-        notes_text = str(item.get("notes") or "").strip()
-        if status in {"answered", "accepted"} and not answer_text and notes_text:
-            answer_text = notes_text
-        if status in {"answered", "accepted"} and not answer_text:
-            continue
-        normalized.append(
-            {
-                "question_id": question_id,
-                "status": status,
-                "answer": answer_text,
-                "notes": notes_text or None,
-            }
-        )
-    return normalized
 
 
 def _question_lookup(cycle: DecisionCycle) -> dict[str, dict[str, str]]:
@@ -452,7 +342,6 @@ def sync_cycle_answers_from_planner(
 def capture_decision_reply(
     *,
     session: Session,
-    settings,  # noqa: ANN001
     tenant: Tenant,
     project: Project | None,
     issue_key: str,
