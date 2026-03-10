@@ -14,6 +14,7 @@ def process_pull_request_targets(
     github_client,
     reviewer_gate,
     allow_auto_merge: bool,
+    allow_pr_remediation: bool,
     max_pr_auto_remediation_loops: int,
     session,
     settings,  # noqa: ANN001
@@ -244,7 +245,7 @@ def process_pull_request_targets(
             )
         try:
             remediation_result = None
-            if not green:
+            if not green and allow_pr_remediation:
                 remediation_result = enqueue_pr_remediation_if_needed_fn(
                     session=session,
                     tenant=tenant,
@@ -274,6 +275,18 @@ def process_pull_request_targets(
                 }
             )
             continue
+        if not green and not allow_pr_remediation:
+            remediation.append(
+                {
+                    "pr_number": pr_number,
+                    "enqueued": False,
+                    "reason": "pr_remediation_disabled",
+                    "run_id": None,
+                    "issue_key": None,
+                    "issue_url": None,
+                    "issue_created": False,
+                }
+            )
         if remediation_result is not None and remediation_result.triggered:
             issue_url = tenant_jira_issue_url_fn(
                 session=session,
@@ -343,6 +356,9 @@ def process_pull_request_targets(
         "auto_merge": {
             "enabled": allow_auto_merge,
             "results": merge_results,
+        },
+        "pr_remediation": {
+            "enabled": allow_pr_remediation,
         },
         "remediation": remediation,
         "remediation_comments": remediation_comments,

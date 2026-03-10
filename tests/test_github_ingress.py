@@ -60,7 +60,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             ),
             "tenant_jira_issue_url": MagicMock(return_value=None),
             "resolve_effective_policy": MagicMock(
-                return_value={"allow_auto_merge": False, "max_pr_auto_remediation_loops": 5}
+                return_value={"allow_auto_merge": False, "allow_pr_remediation": True, "max_pr_auto_remediation_loops": 5}
             ),
         }
         for name, value in overrides.items():
@@ -332,6 +332,42 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"issue_key":"GP-901"', body)
         self.assertIn('"run_id":null', body)
 
+    async def test_pr_remediation_can_be_disabled(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="example",
+            body="desc",
+            head_ref="feature/branch",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=False, state="pending_checks", message="pending")
+        enqueue_remediation = MagicMock()
+        upsert_remediation_comment = MagicMock()
+
+        response = await self._call(
+            payload={"action": "created"},
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_remediation,
+            upsert_sticky_remediation_comment=upsert_remediation_comment,
+            resolve_effective_policy=MagicMock(
+                return_value={"allow_auto_merge": False, "allow_pr_remediation": False, "max_pr_auto_remediation_loops": 5}
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"reason":"pr_remediation_disabled"', body)
+        self.assertIn('"enabled":false', body)
+        enqueue_remediation.assert_not_called()
+        upsert_remediation_comment.assert_not_called()
+
     async def test_fail_closed_when_findings_evaluation_errors(self) -> None:
         github_client = MagicMock()
         github_client.get_pull_request_details.return_value = SimpleNamespace(
@@ -349,7 +385,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             ReviewAgentGate=MagicMock(return_value=gate),
             evaluate_pr_review_findings=MagicMock(side_effect=RuntimeError("codex failed")),
             resolve_effective_policy=MagicMock(
-                return_value={"allow_auto_merge": True, "max_pr_auto_remediation_loops": 5}
+                return_value={"allow_auto_merge": True, "allow_pr_remediation": True, "max_pr_auto_remediation_loops": 5}
             ),
         )
 

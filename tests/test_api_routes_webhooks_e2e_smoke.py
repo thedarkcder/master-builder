@@ -239,6 +239,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             "policy": {
                 "allow_jira_transitions": False,
                 "allow_pr_creation": True,
+                "allow_pr_remediation": True,
                 "allow_label_mutations": True,
                 "max_runtime_minutes": 30,
                 "max_dev_test_review_loops": 2,
@@ -442,6 +443,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "policy": {
                         "allow_jira_transitions": False,
                         "allow_pr_creation": True,
+                        "allow_pr_remediation": True,
                         "allow_label_mutations": True,
                         "max_runtime_minutes": 30,
                         "max_dev_test_review_loops": 2,
@@ -481,6 +483,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "policy": {
                         "allow_jira_transitions": False,
                         "allow_pr_creation": True,
+                        "allow_pr_remediation": True,
                         "allow_label_mutations": True,
                         "max_runtime_minutes": 30,
                         "max_dev_test_review_loops": 2,
