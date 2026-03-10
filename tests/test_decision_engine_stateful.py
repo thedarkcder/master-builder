@@ -57,10 +57,22 @@ def _planner_result(
     questions: tuple[tuple[str, str], ...],
     statuses: dict[str, str] | None = None,
     details: dict[str, str] | None = None,
+    question_states: tuple[tuple[str, str], ...] | None = None,
 ) -> DecisionPlannerResult:
     normalized_statuses = dict(statuses or {})
     normalized_details = dict(details or {})
-    question_states = tuple(
+    state_questions = question_states or questions
+    planner_question_states = tuple(
+        DecisionPlannerQuestion(
+            question_id=question_id,
+            kind="decision_gate",
+            question=question_text,
+            status=normalized_statuses.get(question_id, "open"),
+            detail=normalized_details.get(question_id),
+        )
+        for question_id, question_text in state_questions
+    )
+    planner_questions = tuple(
         DecisionPlannerQuestion(
             question_id=question_id,
             kind="decision_gate",
@@ -75,10 +87,10 @@ def _planner_result(
         reason=reason,
         questions=tuple(
             question
-            for question in question_states
+            for question in planner_questions
             if question.status in {"open", "answered"}
         ),
-        question_states=question_states,
+        question_states=planner_question_states,
         resolved_items=(),
         missing_items=(),
         captured_answer_summary=None,
@@ -219,6 +231,91 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             ("Who owns this decision?",),
         )
         self.assertEqual(precheck_calls, 1)
+
+    def test_open_cycle_uses_planner_narrowed_question_wording(self) -> None:
+        precheck = _precheck_result(
+            outcome="decision_gate_required",
+            decision_gate_triggered=True,
+            decision_gate_reason="Need auth decisions",
+            decision_gate_questions=("Confirm auth configuration.",),
+            decision_gate_missing_sections=("auth configuration",),
+        )
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need auth decisions",
+                    questions=(("dg_auth", "Confirm Apple Sign In and Supabase auth configuration."),),
+                ),
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need auth decisions",
+                    questions=(("dg_auth", "What entitlement/capability values are required for production and staging?"),),
+                    question_states=(("dg_auth", "Confirm Apple Sign In and Supabase auth configuration."),),
+                    statuses={"dg_auth": "answered"},
+                    details={"dg_auth": "Bundle IDs and redirect URI were captured; entitlement values are still missing."},
+                ),
+            ],
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="narrow-1",
+                    issue_key="MAB-171",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=lambda **__: precheck,
+            )
+            second = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_reply",
+                    event_type="reply_added",
+                    idempotency_key="narrow-2",
+                    issue_key="MAB-171",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=lambda **__: precheck,
+            )
+            cycle = session.get(DecisionCycle, second.cycle_id)
+
+        assert cycle is not None
+        self.assertEqual(
+            tuple(second.decision.pre_check.decision_gate.questions),
+            ("What entitlement/capability values are required for production and staging?",),
+        )
+        self.assertEqual(
+            cycle.question_set_json,
+            [
+                {
+                    "id": "dg_auth",
+                    "kind": "decision_gate",
+                    "text": "What entitlement/capability values are required for production and staging?",
+                    "status": "answered",
+                    "detail": "Bundle IDs and redirect URI were captured; entitlement values are still missing.",
+                }
+            ],
+        )
 
     def test_idempotency_key_deduplicates_event_rows(self) -> None:
         precheck = _precheck_result(outcome="ready_for_agent")

@@ -605,7 +605,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 DecisionPlannerQuestion(
                     question_id="dg_1",
                     kind="decision_gate",
-                    question="Objective?",
+                    question="What entitlement/capability values are required for production and staging?",
                     status="open",
                     detail="Config values were captured, but entitlement confirmation is still missing.",
                 ),
@@ -686,14 +686,17 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["command"], "reply")
         self.assertTrue(response.json()["data"]["recheck_required"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-90")
-        self.assertEqual(response.json()["data"]["questions"], ["Objective?"])
+        self.assertEqual(
+            response.json()["data"]["questions"],
+            ["What entitlement/capability values are required for production and staging?"],
+        )
         self.assertEqual(
             response.json()["data"]["question_feedback"],
             [
                 {
                     "note": "Config values were captured, but entitlement confirmation is still missing.",
                     "question_id": "dg_1",
-                    "question_text": "Objective?",
+                    "question_text": "What entitlement/capability values are required for production and staging?",
                     "status": "open",
                 }
             ],
