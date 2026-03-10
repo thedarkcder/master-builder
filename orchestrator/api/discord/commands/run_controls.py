@@ -95,6 +95,30 @@ def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, q
     return "\n".join(lines)
 
 
+def _decision_gate_unresolved_feedback_message(
+    *,
+    issue_key: str,
+    reason: str,
+    question_feedback: list[dict[str, str]],
+) -> tuple[str, list[str]]:
+    lines = [
+        f"Decision Gate still needs clarification for `{issue_key}`.",
+        f"Reason: {reason}",
+    ]
+    questions: list[str] = []
+    if question_feedback:
+        lines.append("Please reply with:")
+    for item in question_feedback[:5]:
+        question_text = str(item.get("question_text") or "").strip()
+        note = str(item.get("note") or "").strip()
+        if question_text:
+            lines.append(f"- {question_text}")
+            questions.append(question_text)
+        if note:
+            lines.append(f"  Missing detail: {note}")
+    return "\n".join(lines), questions
+
+
 def _gtd_missing_message(*, issue_key: str, missing_criteria: tuple[str, ...], questions: tuple[str, ...]) -> str:
     lines = [f"Good To Do still needs clarification for `{issue_key}`."]
     cleaned_missing = [item.strip() for item in missing_criteria if item.strip()]
@@ -578,25 +602,37 @@ def dispatch_run_control_command(
                 for item in getattr(pre_check, "gtd_missing_criteria", ())
                 if str(item).strip()
             ]
-            message, generated_questions = build_precheck_message(
-                runtime=runtime,
-                invocation_context=CodexInvocationContext(
-                    channel="discord",
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                    command="reply",
-                    stage="precheck_message",
-                    working_dir=str(codex_working_dir or "."),
+            unresolved_question_feedback = [
+                item
+                for item in getattr(capture, "unresolved_question_feedback", ())
+                if isinstance(item, dict)
+            ]
+            if unresolved_question_feedback and classification in {"decision_gate", "both"}:
+                message, generated_questions = _decision_gate_unresolved_feedback_message(
                     issue_key=issue_key,
-                ),
-                issue_key=issue_key,
-                classification=classification,
-                decision_gate_reason=locked_decision_gate_reason,
-                decision_gate_questions=decision_gate_questions,
-                gtd_missing_criteria=gtd_missing,
-                gtd_questions=gtd_questions,
-                missing_slots=missing_slots,
-            )
+                    reason=locked_decision_gate_reason or "clarification required",
+                    question_feedback=unresolved_question_feedback,
+                )
+            else:
+                message, generated_questions = build_precheck_message(
+                    runtime=runtime,
+                    invocation_context=CodexInvocationContext(
+                        channel="discord",
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        command="reply",
+                        stage="precheck_message",
+                        working_dir=str(codex_working_dir or "."),
+                        issue_key=issue_key,
+                    ),
+                    issue_key=issue_key,
+                    classification=classification,
+                    decision_gate_reason=locked_decision_gate_reason,
+                    decision_gate_questions=decision_gate_questions,
+                    gtd_missing_criteria=gtd_missing,
+                    gtd_questions=gtd_questions,
+                    missing_slots=missing_slots,
+                )
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
@@ -608,6 +644,7 @@ def dispatch_run_control_command(
                     "decision_gate_reason": locked_decision_gate_reason,
                     "gtd_missing_criteria": gtd_missing,
                     "questions": generated_questions or decision_gate_questions or gtd_questions,
+                    "question_feedback": unresolved_question_feedback,
                     "missing_slots": missing_slots,
                     "auto_resolved_slots": auto_resolved_slots,
                     "knowledge_mode": None,

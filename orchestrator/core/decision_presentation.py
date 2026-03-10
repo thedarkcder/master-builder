@@ -44,8 +44,23 @@ def build_cycle_comment(*, session, case: DecisionCase, cycle: DecisionCycle) ->
                 continue
             if unresolved_ids and question_id and question_id not in unresolved_ids:
                 continue
+            answer = next(
+                (
+                    entry
+                    for entry in answers
+                    if str(entry.question_id or "").strip() == question_id
+                ),
+                None,
+            )
+            note = (
+                str((answer.metadata_json or {}).get("notes") or "").strip()
+                if answer is not None and isinstance(answer.metadata_json, dict)
+                else ""
+            )
             if question_id:
                 lines.append(f"- [{question_id}] {text}")
             else:
                 lines.append(f"- {text}")
+            if note:
+                lines.append(f"  Missing detail: {note}")
     return "\n".join(lines)
