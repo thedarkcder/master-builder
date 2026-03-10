@@ -59,7 +59,6 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         if settings.auto_migrate_on_startup:
             run_migrations()
-        register_discord_command_executor()
         # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
         sync_discord_guild_commands(settings=settings)
         yield
@@ -202,6 +201,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook_discord_router)
     app.include_router(webhook_discord_interactions_router)
     app.include_router(webhook_github_router)
+    register_discord_command_executor()
 
     @app.get("/health")
     def health() -> dict[str, str]:
