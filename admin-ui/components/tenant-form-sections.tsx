@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 
-import type { GitHubRepositoryRecord } from "@/lib/api";
+import type { CodexModelOptionRecord, GitHubRepositoryRecord } from "@/lib/api";
+import { CodexModelSelect } from "@/components/codex-model-select";
 import type { TenantFormValues } from "@/lib/tenant-form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -250,6 +251,10 @@ export function RepositoryMappingSection({
 type PolicySectionProps = {
   policy: TenantFormValues["policy"];
   policyAllowedCommandsText: string;
+  codexModels: CodexModelOptionRecord[];
+  reasoningEfforts: CodexModelOptionRecord[];
+  globalCodexModel: string;
+  globalCodexReasoningEffort: string;
   onPolicyChange: (policy: TenantFormValues["policy"]) => void;
   onPolicyAllowedCommandsTextChange: (value: string) => void;
 };
@@ -257,6 +262,10 @@ type PolicySectionProps = {
 export function PolicySection({
   policy,
   policyAllowedCommandsText,
+  codexModels,
+  reasoningEfforts,
+  globalCodexModel,
+  globalCodexReasoningEffort,
   onPolicyChange,
   onPolicyAllowedCommandsTextChange
 }: PolicySectionProps) {
@@ -284,8 +293,39 @@ export function PolicySection({
         <div className="grid gap-2 md:grid-cols-2">
           <Toggle label="Allow Jira transitions" checked={policy.allow_jira_transitions} onChange={(next) => onPolicyChange({ ...policy, allow_jira_transitions: next })} />
           <Toggle label="Allow PR creation" checked={policy.allow_pr_creation} onChange={(next) => onPolicyChange({ ...policy, allow_pr_creation: next })} />
+          <Toggle label="Allow PR remediation" checked={policy.allow_pr_remediation} onChange={(next) => onPolicyChange({ ...policy, allow_pr_remediation: next })} />
           <Toggle label="Allow label mutations" checked={policy.allow_label_mutations} onChange={(next) => onPolicyChange({ ...policy, allow_label_mutations: next })} />
           <Toggle label="Require AGENTS.md" checked={policy.require_agents_md} onChange={(next) => onPolicyChange({ ...policy, require_agents_md: next })} />
+        </div>
+        <div className="space-y-2">
+          <FieldLabel>Codex model</FieldLabel>
+          <CodexModelSelect
+            value={policy.codex_model ?? null}
+            models={codexModels}
+            inheritLabel={`Use global default (${globalCodexModel})`}
+            helperText="Choose the default Codex model for this tenant. Projects can inherit this or override it."
+            onChange={(next) => onPolicyChange({ ...policy, codex_model: next })}
+          />
+        </div>
+        <div className="space-y-2">
+          <FieldLabel>Reasoning mode</FieldLabel>
+          <select
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            value={policy.codex_reasoning_effort ?? ""}
+            onChange={(event) =>
+              onPolicyChange({
+                ...policy,
+                codex_reasoning_effort: (event.target.value || null) as TenantFormValues["policy"]["codex_reasoning_effort"],
+              })
+            }
+          >
+            <option value="">{`Use global default (${globalCodexReasoningEffort})`}</option>
+            {reasoningEfforts.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="space-y-2">
           <FieldLabel>Allowed commands (one per line)</FieldLabel>
