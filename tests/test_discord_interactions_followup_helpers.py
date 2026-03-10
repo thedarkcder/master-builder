@@ -870,7 +870,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             patch("orchestrator.api.discord.interactions.followup.get_settings", return_value=settings),
             patch("orchestrator.api.discord.interactions.followup.execute_discord_ingress_command", return_value=command_response),
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup.resolve_project_for_discord_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
             patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as send_interaction_followup_mock,
         ):
             client = MagicMock()
@@ -919,8 +919,8 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             }
         )
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_tenant_for_discord_channel", return_value=tenant),
-            patch("orchestrator.api.discord.interactions.followup.resolve_project_for_discord_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel", return_value=tenant),
+            patch("orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel", return_value=project),
         ):
             self.assertEqual(
                 _decision_gate_issue_for_thread(session=session, channel_id="thread-1"),
@@ -941,8 +941,8 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         )
         project = SimpleNamespace(discord_config={})
         with (
-            patch("orchestrator.api.discord.interactions.followup.resolve_tenant_for_discord_channel", return_value=tenant),
-            patch("orchestrator.api.discord.interactions.followup.resolve_project_for_discord_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel", return_value=tenant),
+            patch("orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel", return_value=project),
         ):
             self.assertEqual(
                 _decision_gate_issue_for_thread(session=session, channel_id="thread-2"),

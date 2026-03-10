@@ -9,12 +9,21 @@ from urllib.error import HTTPError
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.ask.context import consume_pending_ask_action
 from orchestrator.api.discord.interactions.parser import _parse_discord_interaction_command
+from orchestrator.api.discord.interactions.followup_state import (
+    ask_thread_message_map_from_config as _ask_thread_message_map_from_config_impl,
+    decision_gate_issue_for_thread as _decision_gate_issue_for_thread_impl,
+    project_ask_thread_channel_ids_for_tenant as _project_ask_thread_channel_ids_for_tenant_impl,
+    project_channel_ids_for_tenant as _project_channel_ids_for_tenant_impl,
+    project_seed_followup_thread_channel_ids_for_tenant as _project_seed_followup_thread_channel_ids_for_tenant_impl,
+    resolve_project_for_channel as _resolve_project_for_channel_impl,
+    resolve_thread_id_by_message_suffix as _resolve_thread_id_by_message_suffix_impl,
+    tenant_discord_channel_ids as _tenant_discord_channel_ids_impl,
+)
 from orchestrator.api.discord.interactions.followup_runtime import (
     build_followup_service,
     resolve_tenant_id_for_followup,
@@ -26,7 +35,6 @@ from orchestrator.api.discord.shared.followup_format import (
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
 )
-from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
@@ -35,7 +43,6 @@ from orchestrator.core.platform_secret_service import (
     resolve_platform_secret_ref,
 )
 from orchestrator.core.discord.thread_context import (
-    get_thread_issue_key,
     normalize_issue_key,
     put_thread_issue_key,
 )
@@ -64,12 +71,7 @@ def _discord_api_client(*, session: Session, settings) -> DiscordApiClient:  # n
 
 
 def _tenant_discord_channel_ids(*, tenant: Tenant, project_channel_ids: set[str]) -> set[str]:
-    discord_config = tenant.discord_config or {}
-    channel_ids: set[str] = set(project_channel_ids)
-    configured_channel_id = str(discord_config.get("channel_id") or "").strip()
-    if configured_channel_id:
-        channel_ids.add(configured_channel_id)
-    return channel_ids
+    return _tenant_discord_channel_ids_impl(tenant=tenant, project_channel_ids=project_channel_ids)
 
 
 def _resolve_project_for_channel(
@@ -78,90 +80,27 @@ def _resolve_project_for_channel(
     tenant: Tenant,
     channel_id: str,
 ) -> Project | None:
-    return resolve_project_for_discord_channel(
+    return _resolve_project_for_channel_impl(
         session=session,
-        tenant_id=tenant.tenant_id,
+        tenant=tenant,
         channel_id=channel_id,
     )
 
 
 def _project_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
-        )
-    ).scalars().all()
-    channel_ids: set[str] = set()
-    for project in projects:
-        discord_config = dict(project.discord_config or {})
-        configured_channel_id = str(discord_config.get("channel_id") or "").strip()
-        if configured_channel_id:
-            channel_ids.add(configured_channel_id)
-        raw_thread_ids = discord_config.get("ask_thread_channel_ids")
-        if isinstance(raw_thread_ids, list):
-            for value in raw_thread_ids:
-                normalized = str(value or "").strip()
-                if normalized:
-                    channel_ids.add(normalized)
-        raw_seed_thread_ids = discord_config.get("seed_followup_thread_channel_ids")
-        if isinstance(raw_seed_thread_ids, list):
-            for value in raw_seed_thread_ids:
-                normalized = str(value or "").strip()
-                if normalized:
-                    channel_ids.add(normalized)
-    return channel_ids
+    return _project_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
 
 
 def _project_ask_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
-        )
-    ).scalars().all()
-    channel_ids: set[str] = set()
-    for project in projects:
-        raw_thread_ids = (project.discord_config or {}).get("ask_thread_channel_ids")
-        if not isinstance(raw_thread_ids, list):
-            continue
-        for value in raw_thread_ids:
-            normalized = str(value or "").strip()
-            if normalized:
-                channel_ids.add(normalized)
-    return channel_ids
+    return _project_ask_thread_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
 
 
 def _project_seed_followup_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
-        )
-    ).scalars().all()
-    channel_ids: set[str] = set()
-    for project in projects:
-        raw_thread_ids = (project.discord_config or {}).get("seed_followup_thread_channel_ids")
-        if not isinstance(raw_thread_ids, list):
-            continue
-        for value in raw_thread_ids:
-            normalized = str(value or "").strip()
-            if normalized:
-                channel_ids.add(normalized)
-    return channel_ids
+    return _project_seed_followup_thread_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
 
 
 def _ask_thread_message_map_from_config(discord_config: dict) -> dict[str, str]:
-    raw_map = discord_config.get("ask_thread_by_message_id")
-    if not isinstance(raw_map, dict):
-        return {}
-    normalized: dict[str, str] = {}
-    for key, value in raw_map.items():
-        message_id = str(key or "").strip()
-        thread_id = str(value or "").strip()
-        if message_id and thread_id:
-            normalized[message_id] = thread_id
-    return normalized
+    return _ask_thread_message_map_from_config_impl(discord_config)
 
 
 def _resolve_thread_id_by_message_suffix(
@@ -170,24 +109,11 @@ def _resolve_thread_id_by_message_suffix(
     thread_ids: list[str],
     message_id: str,
 ) -> str | None:
-    suffix = message_id.strip()[-6:]
-    if not suffix:
-        return None
-    for thread_id in thread_ids:
-        try:
-            channel = client.get_channel(channel_id=thread_id)
-        except (DiscordApiError, ValueError) as exc:
-            logger.exception(
-                "discord_thread_lookup_failed thread_id=%s message_id=%s error=%s",
-                thread_id,
-                message_id,
-                exc,
-            )
-            continue
-        channel_name = str(channel.get("name") or "").strip()
-        if channel_name.endswith(suffix):
-            return thread_id
-    return None
+    return _resolve_thread_id_by_message_suffix_impl(
+        client=client,
+        thread_ids=thread_ids,
+        message_id=message_id,
+    )
 
 
 def _ask_confirmation_components(request_id: str) -> list[dict]:
@@ -211,25 +137,11 @@ def _ask_reply_components() -> list[dict]:
 
 
 def _decision_gate_issue_for_thread(*, session: Session, channel_id: str) -> tuple[str, str] | None:
-    normalized_channel_id = str(channel_id or "").strip()
-    if not normalized_channel_id:
-        return None
-    tenant = resolve_tenant_for_discord_channel(session=session, channel_id=normalized_channel_id)
-    if tenant is None:
-        return None
-    project = resolve_project_for_discord_channel(
+    return _decision_gate_issue_for_thread_impl(
         session=session,
-        tenant_id=tenant.tenant_id,
-        channel_id=normalized_channel_id,
+        channel_id=channel_id,
+        issue_key_pattern=ISSUE_KEY_PATTERN,
     )
-    if project is None:
-        return None
-    issue_key = get_thread_issue_key(discord_config=project.discord_config, channel_id=normalized_channel_id)
-    if not issue_key:
-        issue_key = get_thread_issue_key(discord_config=tenant.discord_config, channel_id=normalized_channel_id)
-    if not issue_key or ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
-        return None
-    return tenant.tenant_id, issue_key
 
 
 def _build_command_followup_message(
