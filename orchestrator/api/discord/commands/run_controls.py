@@ -23,6 +23,11 @@ from orchestrator.core.decision_engine import (
     DecisionSource,
     evaluate_decision_event,
 )
+from orchestrator.core.decision_reply_service import (
+    accepted_cycle_answers,
+    append_decision_answer_context,
+    capture_decision_reply,
+)
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.precheck_question_lock import (
@@ -60,6 +65,7 @@ def _evaluate_precheck_decision_with_labels(
     settings_factory: Callable[[], Any],
     tenant_jira_oauth_context: Callable[..., Any],
     oauth_context: Any | None = None,
+    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
 ) -> DecisionEngineResult:
     settings = settings_factory()
     return evaluate_decision_event(
@@ -78,7 +84,7 @@ def _evaluate_precheck_decision_with_labels(
         settings=settings,
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
         oauth_context=oauth_context,
-        publish_jira_comment_fn=None,
+        publish_jira_comment_fn=publish_jira_comment_fn,
         evaluate_pre_run_check_fn=evaluate_pre_run_check,
     )
 
@@ -562,6 +568,9 @@ def dispatch_run_control_command(
         has_retryable_run = run is not None
         settings = settings_factory()
         issue_labels: list[str] | None = None
+        issue_summary: str | None = None
+        issue_description: str | None = None
+        codex_working_dir: str | None = None
         try:
             oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
             oauth_client = _oauth_context_value(oauth, "client")
@@ -588,29 +597,52 @@ def dispatch_run_control_command(
                 project_id=project.project_id,
                 project_keys=[project.jira_project_key],
             )
-            updated_summary, updated_description = _plan_decision_gate_jira_update(
-                runtime=runtime,
-                invocation_context=CodexInvocationContext(
-                    channel="discord",
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                    command="reply",
-                    stage="decision_gate_normalize",
-                    working_dir=codex_working_dir,
+            issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or None
+            issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
+            try:
+                capture = capture_decision_reply(
+                    session=session,
+                    settings=settings,
+                    tenant=tenant,
+                    project=project,
                     issue_key=issue_key,
-                ),
-                issue_key=issue_key,
-                current_summary=issue_detail.summary,
-                current_description=issue_detail.description,
-                reply_text=reply_text,
-            )
-            oauth_client.update_issue_summary_and_description(
-                access_token=oauth_access_token,
-                cloud_id=str(cloud_id),
-                issue_id_or_key=issue_key,
-                summary=updated_summary,
-                description=updated_description,
-            )
+                    reply_text=reply_text,
+                    source_transport="discord",
+                    actor_ref=payload.user_id,
+                    metadata={
+                        "channel_id": payload.channel_id,
+                        "ingress": "discord",
+                    },
+                )
+                accepted_answers = accepted_cycle_answers(session=session, cycle_id=capture.cycle.cycle_id)
+                issue_description = append_decision_answer_context(
+                    issue_description=issue_description,
+                    answers=accepted_answers,
+                )
+            except ValueError:
+                issue_summary, issue_description = _plan_decision_gate_jira_update(
+                    runtime=runtime,
+                    invocation_context=CodexInvocationContext(
+                        channel="discord",
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        command="reply",
+                        stage="decision_gate_normalize",
+                        working_dir=codex_working_dir,
+                        issue_key=issue_key,
+                    ),
+                    issue_key=issue_key,
+                    current_summary=str(getattr(issue_detail, "summary", "") or ""),
+                    current_description=str(getattr(issue_detail, "description", "") or ""),
+                    reply_text=reply_text,
+                )
+                oauth_client.update_issue_summary_and_description(
+                    access_token=oauth_access_token,
+                    cloud_id=str(cloud_id),
+                    issue_id_or_key=issue_key,
+                    summary=issue_summary,
+                    description=issue_description,
+                )
             labels_raw = getattr(issue_detail, "labels", None)
             issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()] if isinstance(labels_raw, list) else None
         except (HTTPException, CodexRuntimeError, RuntimeError, ValueError) as exc:
@@ -619,18 +651,31 @@ def dispatch_run_control_command(
                 detail=f"Failed to update Jira context for `{issue_key}`: {exc}",
             ) from exc
 
+        def _publish_jira_comment(comment: str) -> tuple[bool, str | None]:
+            try:
+                oauth_client.add_issue_comment(
+                    access_token=oauth_access_token,
+                    cloud_id=str(cloud_id),
+                    issue_id_or_key=issue_key,
+                    comment=comment,
+                )
+                return True, None
+            except Exception as exc:  # noqa: BLE001
+                return False, str(exc)
+
         decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
             tenant=tenant,
             project=project,
             source="discord_reply",
             issue_key=issue_key,
-            issue_summary=updated_summary,
-            issue_description=updated_description,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             oauth_context=oauth,
+            publish_jira_comment_fn=_publish_jira_comment,
         )
         precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
@@ -670,25 +715,6 @@ def dispatch_run_control_command(
                 for item in getattr(pre_check, "gtd_missing_criteria", ())
                 if str(item).strip()
             ]
-            try:
-                updated_description = _persist_precheck_questions_block(
-                    oauth_client=oauth_client,
-                    oauth_access_token=str(oauth_access_token),
-                    cloud_id=str(cloud_id),
-                    issue_key=issue_key,
-                    issue_summary=updated_summary,
-                    current_description=str(updated_description or ""),
-                    decision_gate_reason=locked_decision_gate_reason,
-                    decision_gate_questions=decision_gate_questions,
-                    gtd_questions=gtd_questions,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "discord_reply_precheck_questions_persist_failed tenant_id=%s issue_key=%s error=%s",
-                    tenant.tenant_id,
-                    issue_key,
-                    exc,
-                )
             message, generated_questions = build_precheck_message(
                 runtime=runtime,
                 invocation_context=CodexInvocationContext(
@@ -697,7 +723,7 @@ def dispatch_run_control_command(
                     project_id=project.project_id,
                     command="reply",
                     stage="precheck_message",
-                    working_dir=codex_working_dir,
+                    working_dir=str(codex_working_dir or "."),
                     issue_key=issue_key,
                 ),
                 issue_key=issue_key,
@@ -725,26 +751,6 @@ def dispatch_run_control_command(
                 },
             )
 
-        try:
-            updated_description = _persist_precheck_questions_block(
-                oauth_client=oauth_client,
-                oauth_access_token=str(oauth_access_token),
-                cloud_id=str(cloud_id),
-                issue_key=issue_key,
-                issue_summary=updated_summary,
-                current_description=str(updated_description or ""),
-                decision_gate_reason=None,
-                decision_gate_questions=[],
-                gtd_questions=[],
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "discord_reply_precheck_questions_cleanup_failed tenant_id=%s issue_key=%s error=%s",
-                tenant.tenant_id,
-                issue_key,
-                exc,
-            )
-
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
         ensure_issue_is_executable(
             issue_status=issue_preview.status,
@@ -759,7 +765,7 @@ def dispatch_run_control_command(
             source="discord_retry" if has_retryable_run else "discord_run",
             issue_key=issue_key,
             issue_summary=issue_preview.summary,
-            issue_description=updated_description,
+            issue_description=issue_description,
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,

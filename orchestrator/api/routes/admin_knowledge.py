@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,7 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
     KnowledgeAssetCreate,
     KnowledgeAssetRead,
+    KnowledgeAssetStatusUpdate,
     KnowledgeSyncResultRead,
 )
 from orchestrator.core.config import get_settings
@@ -19,7 +22,7 @@ from orchestrator.core.knowledge_base import (
     sync_project_knowledge_from_jira,
 )
 from orchestrator.core.security import require_admin
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, Project, Tenant
 from orchestrator.api.admin.route_helpers import (
     jira_oauth_client,
     refresh_jira_connection_tokens,
@@ -50,6 +53,19 @@ def _knowledge_asset_to_schema(asset) -> KnowledgeAssetRead:  # noqa: ANN001
         created_at=asset.created_at,
         updated_at=asset.updated_at,
     )
+
+
+def _knowledge_asset_for_project_or_404(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    asset_id: str,
+) -> KnowledgeAsset:
+    asset = session.get(KnowledgeAsset, asset_id)
+    if asset is None or asset.tenant_id != tenant_id or asset.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge asset not found")
+    return asset
 
 
 @router.get(
@@ -118,6 +134,45 @@ def delete_project_knowledge_asset(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge asset not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/status",
+    response_model=KnowledgeAssetRead,
+)
+def update_project_knowledge_asset_status(
+    tenant_id: str,
+    project_id: str,
+    asset_id: str,
+    payload: KnowledgeAssetStatusUpdate,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> KnowledgeAssetRead:
+    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    asset = _knowledge_asset_for_project_or_404(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        asset_id=asset_id,
+    )
+    next_status = str(payload.status or "").strip()
+    allowed_transitions = {
+        "pending_review": {"ready", "rejected"},
+        "rejected": {"pending_review"},
+    }
+    current_status = str(asset.status or "").strip()
+    if current_status == next_status:
+        return _knowledge_asset_to_schema(asset)
+    if next_status not in allowed_transitions.get(current_status, set()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Knowledge asset status cannot transition from '{current_status}' to '{next_status}'",
+        )
+    asset.status = next_status
+    asset.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(asset)
+    return _knowledge_asset_to_schema(asset)
 
 
 @router.post(

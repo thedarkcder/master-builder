@@ -188,6 +188,10 @@ class KnowledgeAssetRead(BaseModel):
     updated_at: datetime
 
 
+class KnowledgeAssetStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(pending_review|ready|rejected)$")
+
+
 class KnowledgeSyncResultRead(BaseModel):
     ok: bool
     synced_assets: int

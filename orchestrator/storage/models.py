@@ -448,6 +448,96 @@ class DecisionCycle(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
+class DecisionAnswer(Base):
+    __tablename__ = "decision_answers"
+    __table_args__ = (
+        UniqueConstraint("cycle_id", "question_id", name="uq_decision_answers_cycle_question"),
+    )
+
+    answer_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("decision_cases.case_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    cycle_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("decision_cycles.cycle_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    question_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    question_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", index=True)
+    normalized_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_transport: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    evidence_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class DecisionEvidence(Base):
+    __tablename__ = "decision_evidence"
+    __table_args__ = (
+        UniqueConstraint("cycle_id", "dedupe_key", name="uq_decision_evidence_cycle_dedupe"),
+    )
+
+    evidence_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    case_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("decision_cases.case_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    cycle_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("decision_cycles.cycle_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_transport: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    actor_ref: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    question_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    normalized_answers_json: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class DecisionEvent(Base):
     __tablename__ = "decision_events"
     __table_args__ = (

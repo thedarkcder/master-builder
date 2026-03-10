@@ -21,7 +21,7 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, RunLock, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, Project, Run, RunLock, Tenant
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -2526,6 +2526,95 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         detail = response.json().get("detail", "")
         self.assertTrue(detail.startswith("Internal server error. Ref: "))
+
+    def test_update_project_knowledge_asset_status_approves_pending_review_asset(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            asset = KnowledgeAsset(
+                asset_id="kb-pending-1",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_type="decision_answer",
+                title="Decision answer candidate",
+                mime_type="text/plain",
+                source_ref="TP-101:dg_abc123",
+                source_timestamp=now,
+                checksum="checksum-1",
+                text_content="Accepted answer text",
+                binary_content=None,
+                chunk_count=0,
+                status="pending_review",
+                metadata_json={"question_id": "dg_abc123"},
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(asset)
+            session.commit()
+
+        response = self.client.patch(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/assets/kb-pending-1/status",
+            json={"status": "ready"},
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ready")
+
+        with session_factory() as session:
+            asset = session.get(KnowledgeAsset, "kb-pending-1")
+            self.assertIsNotNone(asset)
+            self.assertEqual(asset.status, "ready")
+
+    def test_update_project_knowledge_asset_status_rejects_invalid_transition(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            asset = KnowledgeAsset(
+                asset_id="kb-ready-1",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_type="decision_answer",
+                title="Published decision answer",
+                mime_type="text/plain",
+                source_ref="TP-101:dg_xyz789",
+                source_timestamp=now,
+                checksum="checksum-2",
+                text_content="Published answer text",
+                binary_content=None,
+                chunk_count=0,
+                status="ready",
+                metadata_json={"question_id": "dg_xyz789"},
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(asset)
+            session.commit()
+
+        response = self.client.patch(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/assets/kb-ready-1/status",
+            json={"status": "rejected"},
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("cannot transition", response.json()["detail"])
 
 
 if __name__ == "__main__":

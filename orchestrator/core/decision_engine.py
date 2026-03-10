@@ -27,6 +27,12 @@ from orchestrator.core.decision_resolution_service import (
     resolve_slots_with_codex as resolve_slots_with_codex_resolution,
     slot_resolutions_from_case as slot_resolutions_from_case_resolution,
 )
+from orchestrator.core.decision_reply_service import (
+    accepted_cycle_answers,
+    active_case_and_cycle_for_issue,
+    append_decision_answer_context,
+    accepted_question_ids_for_cycle,
+)
 from orchestrator.core.decision_state_repository import (
     active_cycle as active_cycle_state,
     existing_case_for_issue as existing_case_for_issue_state,
@@ -328,6 +334,21 @@ def evaluate_decision_event(
             decision_effect_outbox_type=DecisionEffectOutbox,
         )
 
+    _, existing_cycle = active_case_and_cycle_for_issue(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        issue_key=event.issue_key,
+    )
+    accepted_answers = (
+        accepted_cycle_answers(session=session, cycle_id=existing_cycle.cycle_id)
+        if existing_cycle is not None
+        else []
+    )
+    effective_issue_description = append_decision_answer_context(
+        issue_description=event.issue_description,
+        answers=accepted_answers,
+    )
+
     initial = evaluate_with_labels_state(
         session=session,
         tenant=tenant,
@@ -335,7 +356,7 @@ def evaluate_decision_event(
         source=event.source,
         issue_key=event.issue_key,
         issue_summary=event.issue_summary,
-        issue_description=event.issue_description,
+        issue_description=effective_issue_description,
         issue_labels=event.issue_labels,
         settings=settings,
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
@@ -345,7 +366,7 @@ def evaluate_decision_event(
     )
     decision = initial.decision
     issue_labels = initial.issue_labels
-    issue_description = event.issue_description
+    issue_description = effective_issue_description
     missing_slots = precheck_missing_slots(decision.pre_check) if decision.pre_check is not None else []
     existing_case = existing_case_for_issue_state(
         session=session,
@@ -354,6 +375,11 @@ def evaluate_decision_event(
     )
     persisted_slot_answers = slot_resolutions_from_case_resolution(case=existing_case)
     auto_resolved_answers: dict[str, SlotResolution] = {}
+    accepted_question_ids = (
+        accepted_question_ids_for_cycle(session=session, cycle_id=existing_cycle.cycle_id)
+        if existing_cycle is not None
+        else set()
+    )
 
     if (
         decision.pre_check is not None
@@ -417,6 +443,7 @@ def evaluate_decision_event(
         decision=decision,
         classification=classification,
         auto_resolved_answers=auto_resolved_answers,
+        accepted_question_ids=accepted_question_ids,
         issue_fingerprint_fn=issue_fingerprint_state,
     )
     if publish_jira_comment_fn is not None and outbox_effect_ids:
