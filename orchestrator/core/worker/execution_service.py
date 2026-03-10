@@ -119,6 +119,7 @@ def _process_next_queued_run_impl(
             settings=settings,
             tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
             evaluate_pre_run_check_fn=evaluate_pre_run_check,
+            emit_agent_event_fn=record_agent_lifecycle_event,
             send_discord_message_fn=send_discord_message_fn,
             send_jira_message_fn=send_jira_message_fn,
             ask_reply_components_fn=ask_reply_components_fn,

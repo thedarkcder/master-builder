@@ -100,6 +100,7 @@ class DecisionEventInput:
     issue_summary: str | None
     issue_description: str | None
     issue_labels: list[str] | None
+    run_id: str | None = None
     occurred_at: datetime | None = None
 
 

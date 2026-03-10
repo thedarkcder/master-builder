@@ -1251,6 +1251,23 @@ class AdminApiTests(unittest.TestCase):
                 message="hello from codex",
                 recorded_at=now,
             )
+            record_run_log_event(
+                session=session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id=None,
+                issue_key="TP-503",
+                agent_id="worker-logs",
+                invocation_id="inv-run-log-2",
+                channel="system",
+                command="policy.precheck",
+                working_dir=".",
+                stage="telemetry",
+                attempt=None,
+                stream="system",
+                message='{"event_kind":"stage_invocation_finished","status":"failed","error":"usage limit"}',
+                recorded_at=now,
+            )
             session.commit()
 
         response = self.client.get("/api/admin/runs/run-log-1/logs", auth=("admin", "secret"))

@@ -15,6 +15,45 @@ from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker.stage_events import decision_gate_required_update
 
 
+def _normalize_precheck_policy_error(raw_error: str | None) -> str:
+    normalized = str(raw_error or "").strip()
+    if not normalized:
+        return "Pre-run policy evaluation failed"
+    for prefix in (
+        "Pre-run policy evaluation failed:",
+        "Codex precheck policy evaluation failed:",
+        "Decision Gate configuration error:",
+    ):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :].strip()
+    return f"Pre-run policy evaluation failed: {normalized}" if normalized else "Pre-run policy evaluation failed"
+
+
+def _attach_precheck_failure_diagnostics(*, run, message: str) -> None:  # noqa: ANN001
+    plan = run.plan if isinstance(run.plan, dict) else {}
+    history = []
+    diagnostics = plan.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        history_raw = diagnostics.get("history")
+        if isinstance(history_raw, list):
+            history = [item for item in history_raw if isinstance(item, dict)]
+    history.append(
+        {
+            "stage": "precheck",
+            "attempt": "1",
+            "event": message,
+        }
+    )
+    run.plan = {
+        **plan,
+        "diagnostics": {
+            "stage": "precheck",
+            "message": message,
+            "history": history,
+        },
+    }
+
+
 def apply_decision_gate(
     *,
     session,
@@ -23,6 +62,7 @@ def apply_decision_gate(
     settings,
     tenant_jira_oauth_context_fn,
     evaluate_pre_run_check_fn=evaluate_pre_run_check,
+    emit_agent_event_fn,
     send_discord_message_fn,
     send_jira_message_fn,
     ask_reply_components_fn,
@@ -44,9 +84,20 @@ def apply_decision_gate(
     )
 
     if worker_decision.configuration_error:
+        normalized_error = _normalize_precheck_policy_error(worker_decision.configuration_error)
         run.status = failed_status
-        run.last_error = f"Decision Gate configuration error: {worker_decision.configuration_error}"
+        run.last_error = normalized_error
+        _attach_precheck_failure_diagnostics(run=run, message=normalized_error)
         run.finished_at = datetime.now(timezone.utc)
+        emit_agent_event_fn(
+            session=session,
+            event_type="RUN_FAILED",
+            tenant_id=run.tenant_id,
+            project_id=run.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=getattr(settings, "agent_id", None),
+        )
         session.execute(
             delete(RunLock).where(
                 RunLock.tenant_id == run.tenant_id,

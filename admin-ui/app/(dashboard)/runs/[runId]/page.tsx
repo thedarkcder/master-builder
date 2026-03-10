@@ -25,17 +25,13 @@ import {
   type RunRerunPayload,
   type TokenTimelineRecord
 } from "@/lib/api";
-
-type InvocationTelemetry = {
-  event_kind: string;
-  status?: string;
-  duration_ms?: number;
-  resumed_session?: boolean;
-  codex_session_id?: string;
-  queue_wait_ms?: number;
-  created_at?: string;
-  started_at?: string;
-};
+import {
+  deriveTelemetryDiagnostics,
+  parseRunLogChatText,
+  parseTelemetryPayload,
+  stageFromCommand,
+  type InvocationTelemetry
+} from "@/lib/run-detail-log-parsers";
 
 type InvocationSessionRow = {
   key: string;
@@ -140,34 +136,6 @@ function statusBadge(_status: string) {
   return null;
 }
 
-function parseTelemetryPayload(message: string): InvocationTelemetry | null {
-  try {
-    const payload = JSON.parse(message) as InvocationTelemetry;
-    if (typeof payload !== "object" || payload === null) {
-      return null;
-    }
-    const eventKind = String(payload.event_kind ?? "").trim();
-    if (!eventKind) {
-      return null;
-    }
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-function stageFromCommand(command: string | null | undefined): string {
-  const value = String(command ?? "").trim();
-  if (!value) {
-    return "unknown";
-  }
-  const idx = value.lastIndexOf(".");
-  if (idx < 0 || idx === value.length - 1) {
-    return value;
-  }
-  return value.slice(idx + 1);
-}
-
 function formatDuration(durationMs: number): string {
   const normalized = Math.max(0, Math.floor(durationMs));
   const totalSeconds = Math.floor(normalized / 1000);
@@ -223,10 +191,6 @@ function stageDisplayLabel(stage: string): string {
   return stage;
 }
 
-function normalizeInlineText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
 function logEntryIdentity(entry: RunLogEventRecord): string {
   return [
     entry.recorded_at,
@@ -250,73 +214,6 @@ function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
     ordered.push(entry);
   }
   return ordered;
-}
-
-function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> | null {
-  const raw = String(entry.message ?? "");
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (entry.stream === "stderr") {
-    const lowered = trimmed.toLowerCase();
-    if (
-      lowered.includes("error") ||
-      lowered.includes("failed") ||
-      lowered.includes("fatal") ||
-      lowered.includes("exception")
-    ) {
-      return { speaker: "runtime", text: trimmed, kind: "error" };
-    }
-  }
-
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    parsed = null;
-  }
-  if (!isRecord(parsed)) {
-    return null;
-  }
-
-  const eventType = String(parsed.type ?? "").trim().toLowerCase();
-  if (eventType === "turn.started") {
-    return { speaker: "codex", text: "Turn started", kind: "status" };
-  }
-  if (eventType === "turn.completed") {
-    const usage = isRecord(parsed.usage) ? parsed.usage : null;
-    const inputTokens = usage ? String(usage.input_tokens ?? "").trim() : "";
-    const outputTokens = usage ? String(usage.output_tokens ?? "").trim() : "";
-    const usageSuffix = inputTokens || outputTokens ? ` (in: ${inputTokens || "?"}, out: ${outputTokens || "?"})` : "";
-    return { speaker: "codex", text: `Turn completed${usageSuffix}`, kind: "status" };
-  }
-
-  const item = isRecord(parsed.item) ? parsed.item : null;
-  if (eventType === "item.completed" && item) {
-    const itemType = String(item.type ?? "").trim().toLowerCase();
-    if (itemType === "agent_message") {
-      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "message" };
-    }
-    if (itemType === "reasoning") {
-      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "reasoning" };
-    }
-    if (itemType === "command_execution") {
-      const status = String(item.status ?? "").trim().toLowerCase();
-      const exitCode = item.exit_code;
-      if (status === "failed" || (typeof exitCode === "number" && exitCode !== 0)) {
-        const command = normalizeInlineText(String(item.command ?? ""));
-        const output = normalizeInlineText(String(item.aggregated_output ?? ""));
-        return {
-          speaker: "command",
-          text: `Command failed${typeof exitCode === "number" ? ` (exit ${exitCode})` : ""}: ${command}${output ? ` | ${output}` : ""}`,
-          kind: "error"
-        };
-      }
-    }
-  }
-
-  return null;
 }
 
 export default function RunDetailPage() {
@@ -592,7 +489,7 @@ export default function RunDetailPage() {
       .filter((item): item is OrchestrationWorkstreamTraceEntry => item !== null)
       .sort((a, b) => a.order - b.order);
     return { stageEvents, workstreamEvents };
-  }, [run?.plan]);
+  }, [logs, run?.plan]);
   const invocationSessionRows = useMemo(() => {
     const telemetryRows = logs
       .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
@@ -746,11 +643,11 @@ export default function RunDetailPage() {
   }
   const workflowDiagnostics = useMemo(() => {
     if (!isRecord(run?.plan)) {
-      return null;
+      return deriveTelemetryDiagnostics(logs);
     }
     const diagnosticsRaw = run.plan["diagnostics"];
     if (!isRecord(diagnosticsRaw)) {
-      return null;
+      return deriveTelemetryDiagnostics(logs);
     }
     const historyRaw = Array.isArray(diagnosticsRaw["history"]) ? diagnosticsRaw["history"] : [];
     const history: WorkflowDiagnosticsHistoryEntry[] = historyRaw
@@ -770,7 +667,7 @@ export default function RunDetailPage() {
       message: String(diagnosticsRaw["message"] ?? "").trim(),
       history
     };
-  }, [run?.plan]);
+  }, [logs, run?.plan]);
   const terminalFailureMessage = useMemo(() => {
     // `run.last_error` is the authoritative terminal error persisted by the worker.
     const fromRun = String(run?.last_error ?? "").trim();

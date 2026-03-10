@@ -222,3 +222,40 @@ def test_pre_run_check_passes_recorded_answers_to_policy() -> None:
             "answer": "Production bundle ID is com.example.app.",
         }
     ]
+
+
+def test_pre_run_check_forwards_run_id_to_precheck_policy() -> None:
+    captured: dict[str, object] = {}
+
+    def _capture_policy(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return _policy_result(
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+
+    with patch("orchestrator.core.pre_run_check.evaluate_precheck_policy", side_effect=_capture_policy):
+        result = evaluate_pre_run_check(
+            tenant_id="tenant-1",
+            project_id="project-1",
+            issue_key="TP-1",
+            run_id="run-123",
+            issue_summary="summary",
+            issue_description="desc",
+            issue_labels=["agent:ready"],
+            ready_label="agent:ready",
+        )
+
+    assert result.outcome == "ready_for_agent"
+    assert captured["run_id"] == "run-123"

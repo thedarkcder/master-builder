@@ -69,6 +69,7 @@ def evaluate_pre_run_check(
     tenant_id: str | None = None,
     project_id: str | None = None,
     issue_key: str | None = None,
+    run_id: str | None = None,
     issue_summary: str | None,
     issue_description: str | None,
     recorded_answers: list[dict[str, str]] | None = None,
@@ -142,6 +143,7 @@ def evaluate_pre_run_check(
         tenant_id=tenant_id,
         project_id=project_id,
         issue_key=issue_key,
+        run_id=run_id,
     )
     decision_gate = precheck_policy.decision_gate
     gtd = precheck_policy.gtd

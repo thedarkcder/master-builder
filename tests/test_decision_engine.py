@@ -86,6 +86,29 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(updated.pre_check.outcome, "ready_for_agent")
         self.assertIsNone(updated.block_reason)
 
+    def test_ingress_precheck_forwards_run_id(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _capture_precheck(**kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+            return _precheck()
+
+        decision = evaluate_ingress_precheck(
+            source="worker_execution",
+            tenant_id="t1",
+            project_id="p1",
+            issue_key="TP-1",
+            run_id="run-123",
+            issue_summary="summary",
+            issue_description="desc",
+            issue_labels=[],
+            ready_label="agent:ready",
+            evaluate_pre_run_check_fn=_capture_precheck,
+        )
+
+        self.assertIsNone(decision.block_reason)
+        self.assertEqual(captured["run_id"], "run-123")
+
     def test_resolve_enqueue_precheck_outcome_uses_source_defaults(self) -> None:
         self.assertEqual(
             resolve_enqueue_precheck_outcome(source="admin_rerun"),

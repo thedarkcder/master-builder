@@ -99,3 +99,41 @@ def test_evaluate_precheck_policy_rejects_invalid_gtd_payload() -> None:
                 project_id="project-1",
                 issue_key="TP-1",
             )
+
+
+def test_evaluate_precheck_policy_passes_run_id_into_codex_context() -> None:
+    captured: dict[str, object] = {}
+
+    def _capture_invoke(*, runtime, context, system_prompt, user_prompt, **kwargs):  # noqa: ANN001
+        _ = runtime, system_prompt, user_prompt, kwargs
+        captured["context"] = context
+        return {
+            "triggered": False,
+            "reason": "Decision Gate not required",
+            "missing_sections": [],
+            "questions": [],
+            "recommendation": "Proceed",
+            "tags": [],
+            "gtd_valid": True,
+            "gtd_missing_criteria": [],
+            "gtd_clarification_questions": [],
+        }
+
+    with patch(
+        "orchestrator.core.precheck_policy.invoke_codex_json",
+        side_effect=_capture_invoke,
+    ), patch(
+        "orchestrator.core.precheck_policy.build_codex_runtime",
+        return_value=object(),
+    ):
+        result = evaluate_precheck_policy(
+            issue_summary="TP-1",
+            issue_description="Objective and how to test are clear.",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            issue_key="TP-1",
+            run_id="run-123",
+        )
+
+    assert result.gtd.valid is True
+    assert captured["context"].run_id == "run-123"
