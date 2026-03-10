@@ -293,6 +293,8 @@ def create_knowledge_asset(
     text_content: str | None = None,
     binary_content: bytes | None = None,
     metadata_json: dict[str, Any] | None = None,
+    status: str = "ready",
+    commit: bool = True,
 ) -> KnowledgeAsset:
     now = datetime.now(timezone.utc)
     normalized_title = str(title or "").strip()[:255]
@@ -322,7 +324,7 @@ def create_knowledge_asset(
         text_content=extracted_text or None,
         binary_content=binary_content,
         chunk_count=0,
-        status="ready",
+        status=str(status or "ready").strip() or "ready",
         metadata_json=dict(metadata_json or {}),
         created_at=now,
         updated_at=now,
@@ -368,8 +370,9 @@ def create_knowledge_asset(
         )
         session.add(fact)
 
-    session.commit()
-    session.refresh(asset)
+    if commit:
+        session.commit()
+        session.refresh(asset)
     return asset
 
 
@@ -501,7 +504,7 @@ def resolve_missing_slots_from_knowledge(
                 KnowledgeFact.tenant_id == tenant_id,
                 KnowledgeFact.project_id == project_id,
                 KnowledgeFact.slot_name == slot_name,
-                KnowledgeAsset.status != "deleted",
+                KnowledgeAsset.status == "ready",
             )
             .order_by(
                 desc(func.coalesce(KnowledgeFact.source_timestamp, KnowledgeAsset.source_timestamp)),
@@ -569,7 +572,7 @@ def build_knowledge_prompt_context(
     rows = session.execute(
         select(KnowledgeChunk, KnowledgeAsset)
         .join(KnowledgeAsset, KnowledgeAsset.asset_id == KnowledgeChunk.asset_id)
-        .where(and_(*filters), KnowledgeAsset.status != "deleted")
+        .where(and_(*filters), KnowledgeAsset.status == "ready")
         .order_by(
             desc(func.coalesce(KnowledgeChunk.source_timestamp, KnowledgeAsset.source_timestamp)),
             desc(KnowledgeChunk.updated_at),

@@ -162,6 +162,13 @@ async def ingest_jira_webhook_event(
             context=context,
             session=session,
         )
+        comment_reply_response = jira_webhook_comment_flow.stage_handle_comment_decision_reply(
+            context=context,
+            session=session,
+            settings=settings,
+        )
+        if comment_reply_response is not None:
+            return comment_reply_response
         comment_without_command_response = jira_webhook_comment_flow.stage_handle_comment_without_command(
             context=context,
             removed_history_entries=removed_history_entries,

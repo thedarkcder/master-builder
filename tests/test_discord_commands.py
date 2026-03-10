@@ -646,10 +646,10 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["data"]["recheck_required"])
         self.assertEqual(response.json()["data"]["issue_key"], "TP-90")
         self.assertEqual(response.json()["data"]["questions"], ["Objective?", "How to test?"])
-        self.assertGreaterEqual(oauth_client.update_issue_summary_and_description.call_count, 2)
+        self.assertEqual(oauth_client.update_issue_summary_and_description.call_count, 1)
         latest_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
-        self.assertIn("<!-- precheck-questions:start -->", latest_description)
-        self.assertIn("[decision_gate] Objective?", latest_description)
+        self.assertIn("Decision Gate Clarifications", latest_description)
+        self.assertIn("Objective", latest_description)
         dispatch_mock.assert_not_called()
         preview_mock.assert_not_called()
 
@@ -725,10 +725,10 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("Dependencies and risks identified", response.json()["data"]["gtd_missing_criteria"])
         self.assertIn("Which dependencies or risks may impact delivery?", response.json()["data"]["questions"])
         self.assertNotIn("Decision Gate reason:", response.json()["message"])
-        self.assertGreaterEqual(oauth_client.update_issue_summary_and_description.call_count, 2)
+        self.assertEqual(oauth_client.update_issue_summary_and_description.call_count, 1)
         latest_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
         self.assertNotIn("Decision Gate reason:", latest_description)
-        self.assertIn("[gtd] Which dependencies or risks may impact delivery?", latest_description)
+        self.assertIn("Decision Gate Clarifications", latest_description)
 
     def test_reply_without_retryable_run_queues_initial_run_after_clarification(self) -> None:
         oauth_client = SimpleNamespace(

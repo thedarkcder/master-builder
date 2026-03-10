@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.decision_reply_service import DECISION_ANSWER_CONTEXT_START
 from orchestrator.core.knowledge_base import SlotResolution
 from orchestrator.core.project_policy import resolve_effective_policy
 
@@ -93,6 +94,9 @@ def resolve_slots_with_codex(
         missing_slots=missing_slots,
         project_repo_dir_fn=project_repo_dir_fn,
     )
+    normalized_description = str(issue_description or "")
+    if not repo_evidence.strip() and DECISION_ANSWER_CONTEXT_START not in normalized_description:
+        return {}
     try:
         payload = invoke_codex_json_fn(
             runtime=runtime,

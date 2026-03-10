@@ -16,7 +16,7 @@ from orchestrator.core.decision_precheck_mapping import (
 )
 from orchestrator.core.decision_resolution_service import serialize_slot_resolution
 from orchestrator.core.precheck_decision import precheck_missing_slots
-from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent
+from orchestrator.storage.models import DecisionAnswer, DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent
 
 
 def active_cycle(*, session, case: DecisionCase) -> DecisionCycle | None:
@@ -81,18 +81,34 @@ def existing_case_for_issue(*, session, tenant_id: str, issue_key: str) -> Decis
     ).scalar_one_or_none()
 
 
-def build_cycle_comment(*, case: DecisionCase, cycle: DecisionCycle) -> str:
+def build_cycle_comment(*, session, case: DecisionCase, cycle: DecisionCycle) -> str:
     unresolved_ids = {
         str(question_id).strip()
         for question_id in cycle.unresolved_question_ids_json
         if str(question_id).strip()
     }
+    answers = session.execute(
+        select(DecisionAnswer)
+        .where(
+            DecisionAnswer.cycle_id == cycle.cycle_id,
+            DecisionAnswer.status == "accepted",
+        )
+        .order_by(DecisionAnswer.accepted_at.asc(), DecisionAnswer.created_at.asc())
+    ).scalars().all()
     lines = [
         f"<!-- decision-cycle:{cycle.cycle_id} -->",
         f"Decision state: `{case.state}`",
     ]
     if cycle.reason:
         lines.append(f"Reason: {cycle.reason}")
+    if answers:
+        lines.append("Accepted answers:")
+        for answer in answers:
+            answer_text = str(answer.normalized_answer or "").strip()
+            if not answer_text:
+                continue
+            lines.append(f"- [{answer.question_id}] {answer.question_text}")
+            lines.append(f"  Answer: {answer_text}")
     if cycle.question_set_json:
         lines.append("Outstanding questions:")
         for item in cycle.question_set_json:
@@ -126,6 +142,12 @@ def enqueue_or_get_effect(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        if existing.payload_json != payload:
+            existing.payload_json = payload
+            existing.status = "pending"
+            existing.sent_at = None
+            existing.last_error = None
+            existing.updated_at = now
         return existing
     effect = DecisionEffectOutbox(
         effect_id=uuid4().hex,
@@ -162,6 +184,7 @@ def persist_decision_state(
     decision,
     classification: str,
     auto_resolved_answers,
+    accepted_question_ids: set[str],
     issue_fingerprint_fn,
 ) -> tuple[DecisionCase, DecisionCycle | None, tuple[str, ...]]:
     case = load_or_create_case(
@@ -198,7 +221,7 @@ def persist_decision_state(
                 cycle.unresolved_question_ids_json = [
                     question_id
                     for question_id in cycle.unresolved_question_ids_json
-                    if question_id in current_question_ids
+                    if question_id in current_question_ids and question_id not in accepted_question_ids
                 ]
             cycle.reason = cycle.reason or reason
             cycle.updated_at = occurred_at
@@ -220,7 +243,7 @@ def persist_decision_state(
                 unresolved_question_ids_json=[
                     str(item.get("id") or "")
                     for item in question_set
-                    if str(item.get("id") or "").strip()
+                    if str(item.get("id") or "").strip() and str(item.get("id") or "").strip() not in accepted_question_ids
                 ],
                 metadata_json={},
                 opened_at=occurred_at,
@@ -310,7 +333,7 @@ def persist_decision_state(
             effect_type="jira_comment",
             dedupe_key=f"jira-comment:{tenant.tenant_id}:{event.issue_key}:{cycle.cycle_id}",
             payload={
-                "comment": build_cycle_comment(case=case, cycle=cycle),
+                "comment": build_cycle_comment(session=session, case=case, cycle=cycle),
             },
             now=occurred_at,
         )
