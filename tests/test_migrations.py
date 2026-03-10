@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine, inspect
+from sqlalchemy import text
 
 from orchestrator.storage.migrations import run_migrations
 
@@ -55,3 +56,20 @@ class MigrationTests(unittest.TestCase):
             contents,
         )
         self.assertNotIn('server_default=sa.text("1")', contents)
+
+    def test_decision_state_migration_is_idempotent_when_tables_already_exist(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            run_migrations(database_url=database_url)
+
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("UPDATE alembic_version SET version_num = '20260309_0021'"))
+
+            run_migrations(database_url=database_url)
+
+            inspector = inspect(engine)
+            self.assertIn("decision_cases", inspector.get_table_names())
+            self.assertIn("decision_cycles", inspector.get_table_names())
+            self.assertIn("decision_events", inspector.get_table_names())
+            self.assertIn("decision_effects_outbox", inspector.get_table_names())
