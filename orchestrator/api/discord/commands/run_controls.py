@@ -60,6 +60,7 @@ def _evaluate_precheck_decision_with_labels(
     tenant_jira_oauth_context: Callable[..., Any],
     oauth_context: Any | None = None,
     publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
+    idempotency_key: str | None = None,
 ) -> DecisionEngineResult:
     settings = settings_factory()
     return evaluate_decision_event(
@@ -69,7 +70,7 @@ def _evaluate_precheck_decision_with_labels(
         event=DecisionEventInput(
             source=source,
             event_type=f"discord_{source}",
-            idempotency_key=None,
+            idempotency_key=idempotency_key,
             issue_key=issue_key,
             issue_summary=issue_summary,
             issue_description=issue_description,
@@ -502,7 +503,7 @@ def dispatch_run_control_command(
             )
             issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or None
             issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
-            capture_decision_reply(
+            capture = capture_decision_reply(
                 session=session,
                 tenant=tenant,
                 project=project,
@@ -557,6 +558,7 @@ def dispatch_run_control_command(
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             oauth_context=oauth,
             publish_jira_comment_fn=_publish_jira_comment,
+            idempotency_key=f"decision-reply:{capture.evidence_id}",
         )
         precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:

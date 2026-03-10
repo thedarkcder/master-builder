@@ -516,7 +516,11 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
             patch(
                 "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
-                return_value=SimpleNamespace(cycle=SimpleNamespace(cycle_id="cycle-1"), effect_ids=()),
+                return_value=SimpleNamespace(
+                    cycle=SimpleNamespace(cycle_id="cycle-1"),
+                    effect_ids=(),
+                    evidence_id="evidence-1",
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
@@ -636,6 +640,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value=SimpleNamespace(
                     cycle=SimpleNamespace(cycle_id="cycle-1"),
                     effect_ids=(),
+                    evidence_id="evidence-2",
                     unresolved_question_feedback=(
                         {
                             "question_id": "dg_1",
@@ -707,6 +712,85 @@ class DiscordCommandApiTests(unittest.TestCase):
         preview_mock.assert_not_called()
         build_message_mock.assert_not_called()
 
+    def test_reply_uses_captured_evidence_id_for_decision_event_idempotency(self) -> None:
+        self._queue_run(run_id="run-failed-reply-idempotency", issue_key="TP-90", status="failed")
+        oauth_client = SimpleNamespace(
+            get_issue_detail=unittest.mock.MagicMock(
+                return_value=SimpleNamespace(
+                    summary="Old summary",
+                    description="Objective: old",
+                    labels=["agent:ready"],
+                )
+            ),
+            add_issue_comment=unittest.mock.MagicMock(),
+        )
+        oauth_context = {
+            "connection": SimpleNamespace(cloud_id="cloud-1"),
+            "access_token": "tok-1",
+            "client": oauth_client,
+        }
+        decision_result = SimpleNamespace(
+            decision=SimpleNamespace(
+                pre_check=PreRunCheckResult(
+                    outcome="decision_gate_required",
+                    ready_label="agent:ready",
+                    ready_label_present=True,
+                    required_worker_capability="linux",
+                    required_worker_label="worker:linux",
+                    required_worker_label_present=True,
+                    decision_gate=DecisionGateResult(
+                        triggered=True,
+                        reason="Need config",
+                        missing_sections=(),
+                        questions=("Original question",),
+                        recommendation="Clarification required",
+                        tags=(),
+                    ),
+                    gtd=GoodToDoValidationResult(valid=True, missing_criteria=(), clarification_questions=()),
+                ),
+            ),
+            classification="decision_gate",
+            missing_slots=[],
+            auto_resolved_slots=[],
+            cycle_id="cycle-1",
+        )
+        with (
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                return_value=SimpleNamespace(evidence_id="evidence-123"),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls._evaluate_precheck_decision_with_labels",
+                return_value=decision_result,
+            ) as evaluate_mock,
+            patch(
+                "orchestrator.api.discord.commands.run_controls.unresolved_question_feedback_for_cycle",
+                return_value=[
+                    {
+                        "question_id": "dg_1",
+                        "question_text": "What entitlement/capability values are required for production and staging?",
+                        "note": "Config values were captured, but entitlement confirmation is still missing.",
+                        "status": "open",
+                    }
+                ],
+            ),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!reply TP-90 objective details",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            evaluate_mock.call_args.kwargs["idempotency_key"],
+            "decision-reply:evidence-123",
+        )
+
     def test_reply_when_only_gtd_is_blocking_does_not_surface_decision_gate_reason(self) -> None:
         self._queue_run(run_id="run-failed-reply-gtd", issue_key="TP-90", status="failed")
         oauth_client = SimpleNamespace(
@@ -753,7 +837,11 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
-                return_value=SimpleNamespace(cycle=SimpleNamespace(cycle_id="cycle-1"), effect_ids=()),
+                return_value=SimpleNamespace(
+                    cycle=SimpleNamespace(cycle_id="cycle-1"),
+                    effect_ids=(),
+                    evidence_id="evidence-3",
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
@@ -843,7 +931,11 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
-                return_value=SimpleNamespace(cycle=SimpleNamespace(cycle_id="cycle-1"), effect_ids=()),
+                return_value=SimpleNamespace(
+                    cycle=SimpleNamespace(cycle_id="cycle-1"),
+                    effect_ids=(),
+                    evidence_id="evidence-4",
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",

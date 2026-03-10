@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5.4"
     codex_supported_models: str = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    codex_tool_database_url: str = ""
     codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "errors_only"
     codex_db_log_sampling_interval: int = 100

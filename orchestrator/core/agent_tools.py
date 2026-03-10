@@ -125,6 +125,11 @@ class AgentToolContext:
     repo_dir: Path
 
 
+def _ensure_repo_checkout_exists(repo_dir: Path) -> None:
+    if not (repo_dir / ".git").exists():
+        raise ValueError(f"Repository checkout missing at {repo_dir}")
+
+
 def allowed_tools_for_stage(stage: str) -> set[str]:
     return set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
 
@@ -204,8 +209,6 @@ def _resolve_context(
         tenant_id=tenant.tenant_id,
         project_id=project.project_id,
     )
-    if not (repo_dir / ".git").exists():
-        raise ValueError(f"Repository checkout missing at {repo_dir}")
 
     return AgentToolContext(
         tenant=tenant,
@@ -221,6 +224,7 @@ def _tool_repo_read(*, context: AgentToolContext, args: dict[str, Any]) -> dict[
     command = str(args.get("command") or "").strip()
     if not command:
         raise ValueError("repo.read requires 'command'")
+    _ensure_repo_checkout_exists(context.repo_dir)
     _enforce_repo_command_for_stage(stage=context.stage, command=command)
     process = subprocess.run(  # noqa: S603
         ["/bin/zsh", "-lc", command],
@@ -475,6 +479,7 @@ def _execute_github_tool(
     tool_name: str,
     args: dict[str, Any],  # noqa: ANN401
 ) -> dict[str, Any]:
+    _ensure_repo_checkout_exists(context.repo_dir)
     github_config = context.tenant.github_config or {}
     github_repository = str(context.project.github_repository or "").strip()
     if not github_repository:
