@@ -9,6 +9,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.decision_state_repository import existing_case_for_issue
 from orchestrator.storage.models import (
     DecisionAnswer,
     DecisionCase,
@@ -46,12 +47,11 @@ def active_case_and_cycle_for_issue(
     tenant_id: str,
     issue_key: str,
 ) -> tuple[DecisionCase | None, DecisionCycle | None]:
-    case = session.execute(
-        select(DecisionCase).where(
-            DecisionCase.tenant_id == tenant_id,
-            DecisionCase.issue_key == issue_key,
-        )
-    ).scalar_one_or_none()
+    case = existing_case_for_issue(
+        session=session,
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+    )
     if case is None or not case.active_cycle_id:
         return case, None
     cycle = session.get(DecisionCycle, case.active_cycle_id)
