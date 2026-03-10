@@ -121,6 +121,44 @@ def accepted_question_ids_for_cycle(*, session: Session, cycle_id: str) -> set[s
     }
 
 
+def frozen_question_ids_for_cycle(*, cycle: DecisionCycle) -> list[str]:
+    return [
+        question_id
+        for question_id in (
+            str(item.get("id") or "").strip()
+            for item in cycle.question_set_json
+        )
+        if question_id
+    ]
+
+
+def unresolved_question_ids_for_cycle(*, session: Session, cycle: DecisionCycle) -> tuple[str, ...]:
+    accepted_ids = accepted_question_ids_for_cycle(session=session, cycle_id=cycle.cycle_id)
+    return tuple(
+        question_id
+        for question_id in frozen_question_ids_for_cycle(cycle=cycle)
+        if question_id not in accepted_ids
+    )
+
+
+def classification_for_cycle_questions(*, cycle: DecisionCycle, unresolved_question_ids: tuple[str, ...]) -> str:
+    unresolved = set(unresolved_question_ids)
+    kinds = {
+        str(item.get("kind") or "").strip()
+        for item in cycle.question_set_json
+        if str(item.get("id") or "").strip() in unresolved
+    }
+    has_dg = "decision_gate" in kinds
+    has_gtd = "gtd" in kinds
+    if has_dg and has_gtd:
+        return "both"
+    if has_dg:
+        return "decision_gate"
+    if has_gtd:
+        return "gtd"
+    return "clear"
+
+
 def _reply_dedupe_key(
     *,
     cycle_id: str,
@@ -363,6 +401,15 @@ def capture_decision_reply(
                 updated_at=now,
             )
             session.add(answer_row)
+        existing_ids = [str(value).strip() for value in answer_row.evidence_ids_json if str(value).strip()]
+        if evidence.evidence_id not in existing_ids:
+            answer_row.evidence_ids_json = [*existing_ids, evidence.evidence_id]
+        existing_status = str(answer_row.status or "").strip().lower()
+        if existing_status == "accepted":
+            answer_row.updated_at = now
+            accepted_question_ids.append(question_id)
+            continue
+
         answer_row.status = "accepted" if status == "accepted" else "answered"
         answer_row.normalized_answer = str(item.get("answer") or "").strip()
         answer_row.source_transport = source_transport
@@ -375,9 +422,6 @@ def capture_decision_reply(
         if status == "accepted":
             answer_row.accepted_at = now
         answer_row.updated_at = now
-        existing_ids = [str(value).strip() for value in answer_row.evidence_ids_json if str(value).strip()]
-        if evidence.evidence_id not in existing_ids:
-            answer_row.evidence_ids_json = [*existing_ids, evidence.evidence_id]
         answered_question_ids.append(question_id)
         if status == "accepted":
             accepted_question_ids.append(question_id)

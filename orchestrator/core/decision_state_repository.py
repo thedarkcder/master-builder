@@ -116,23 +116,19 @@ def persist_decision_state(
     current_active_cycle = active_cycle(session=session, case=case)
     cycle: DecisionCycle | None = None
     if question_driven:
-        if (
-            current_active_cycle is not None
-            and current_active_cycle.status == "open"
-            and str(current_active_cycle.classification or "") == classification
-        ):
+        if current_active_cycle is not None and current_active_cycle.status == "open":
             cycle = current_active_cycle
-            current_question_ids = {
+            current_question_ids = [
                 str(item.get("id") or "").strip()
-                for item in question_set
+                for item in cycle.question_set_json
                 if str(item.get("id") or "").strip()
-            }
-            if current_question_ids:
-                cycle.unresolved_question_ids_json = [
-                    question_id
-                    for question_id in cycle.unresolved_question_ids_json
-                    if question_id in current_question_ids and question_id not in accepted_question_ids
-                ]
+            ]
+            cycle.classification = classification
+            cycle.unresolved_question_ids_json = [
+                question_id
+                for question_id in current_question_ids
+                if question_id not in accepted_question_ids
+            ]
             cycle.reason = cycle.reason or reason
             cycle.updated_at = occurred_at
         else:
