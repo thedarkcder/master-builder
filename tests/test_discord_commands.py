@@ -653,6 +653,83 @@ class DiscordCommandApiTests(unittest.TestCase):
         dispatch_mock.assert_not_called()
         preview_mock.assert_not_called()
 
+    def test_reply_when_only_gtd_is_blocking_does_not_surface_decision_gate_reason(self) -> None:
+        self._queue_run(run_id="run-failed-reply-gtd", issue_key="TP-90", status="failed")
+        oauth_client = SimpleNamespace(
+            get_issue_detail=unittest.mock.MagicMock(
+                return_value=SimpleNamespace(
+                    summary="Old summary",
+                    description="Objective: old",
+                    labels=["agent:ready"],
+                )
+            ),
+            update_issue_summary_and_description=unittest.mock.MagicMock(),
+        )
+        oauth_context = {
+            "connection": SimpleNamespace(cloud_id="cloud-1"),
+            "access_token": "tok-1",
+            "client": oauth_client,
+        }
+        runtime = unittest.mock.MagicMock()
+        runtime.run_json.return_value = {
+            "summary": "Updated summary",
+            "objective": "Clear onboarding objective.",
+            "scope": "Splash to onboarding to demo flow.",
+            "acceptance_criteria": "Flow and guards verified.",
+            "how_to_test": "Run listed scenario checks.",
+            "nfr_intent": "MVP-first, scale-aware.",
+        }
+
+        with (
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+                return_value=PreRunCheckResult(
+                    outcome="gtd_required",
+                    ready_label="agent:ready",
+                    ready_label_present=True,
+                    required_worker_capability="linux",
+                    required_worker_label="worker:linux",
+                    required_worker_label_present=True,
+                    decision_gate=DecisionGateResult(
+                        triggered=False,
+                        reason="Decision Gate not required",
+                        missing_sections=(),
+                        questions=(),
+                        recommendation="Proceed",
+                        tags=(),
+                    ),
+                    gtd=GoodToDoValidationResult(
+                        valid=False,
+                        missing_criteria=("Dependencies and risks identified",),
+                        clarification_questions=("Which dependencies or risks may impact delivery?",),
+                    ),
+                ),
+            ),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!reply TP-90 objective details",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["command"], "reply")
+        self.assertEqual(response.json()["data"]["classification"], "gtd")
+        self.assertIsNone(response.json()["data"]["decision_gate_reason"])
+        self.assertIn("Dependencies and risks identified", response.json()["data"]["gtd_missing_criteria"])
+        self.assertIn("Which dependencies or risks may impact delivery?", response.json()["data"]["questions"])
+        self.assertNotIn("Decision Gate reason:", response.json()["message"])
+        self.assertGreaterEqual(oauth_client.update_issue_summary_and_description.call_count, 2)
+        latest_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
+        self.assertNotIn("Decision Gate reason:", latest_description)
+        self.assertIn("[gtd] Which dependencies or risks may impact delivery?", latest_description)
+
     def test_reply_without_retryable_run_queues_initial_run_after_clarification(self) -> None:
         oauth_client = SimpleNamespace(
             get_issue_detail=unittest.mock.MagicMock(
