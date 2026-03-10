@@ -11,8 +11,10 @@ from fastapi import HTTPException
 
 from orchestrator.api.main import create_app
 from orchestrator.api.discord.bug.service import build_discord_bug_description
+from orchestrator.api.discord.ask.context import project_filter_jql
+from orchestrator.api.discord.ingress.ask_runtime import ask_board_message, collect_ask_context, collect_github_ask_context
 from orchestrator.api.discord.ingress.bug_runtime import create_discord_bug_issue
-from orchestrator.api.discord.ingress.executor import _ask_board_message, _collect_ask_context, _collect_github_ask_context, _project_filter_jql, execute_discord_command
+from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_codex
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
@@ -305,7 +307,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "orchestrator.api.discord.ingress.executor._search_jira_issues_for_tenant",
+                "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
                 return_value=[
                     JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
                     JiraIssuePreview(key="TP-21", summary="Sibling ticket A", status="To Do"),
@@ -903,7 +905,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_ask_command_returns_board_answer(self) -> None:
         with patch(
-            "orchestrator.api.discord.ingress.executor._ask_board_message",
+            "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",
             return_value=("Board snapshot", {"status_counts": {"To Do": 2}}),
         ):
             response = self.client.post(
@@ -921,7 +923,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_ask_command_supports_issue_scope(self) -> None:
         with patch(
-            "orchestrator.api.discord.ingress.executor._ask_board_message",
+            "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",
             return_value=("Issue snapshot", {"issue_key": "TP-101"}),
         ) as ask_mock:
             response = self.client.post(
@@ -977,25 +979,25 @@ class DiscordCommandApiTests(unittest.TestCase):
             session.commit()
 
             self.assertEqual(
-                _project_filter_jql(session=session, tenant=tenant, channel_id="discord-channel-1"),
+                project_filter_jql(session=session, tenant=tenant, channel_id="discord-channel-1"),
                 'project = "TP"',
             )
             self.assertEqual(
-                _project_filter_jql(session=session, tenant=tenant, channel_id="discord-channel-2"),
+                project_filter_jql(session=session, tenant=tenant, channel_id="discord-channel-2"),
                 'project = "OTH"',
             )
             with self.assertRaises(HTTPException):
-                _project_filter_jql(session=session, tenant=tenant, channel_id="discord-unmapped")
+                project_filter_jql(session=session, tenant=tenant, channel_id="discord-unmapped")
             self.assertIn(
-                _project_filter_jql(session=session, tenant=tenant, channel_id="__dm__"),
+                project_filter_jql(session=session, tenant=tenant, channel_id="__dm__"),
                 {'project in ("TP", "OTH")', 'project in ("OTH", "TP")'},
             )
             self.assertIn(
-                _project_filter_jql(session=session, tenant=tenant, channel_id="dm"),
+                project_filter_jql(session=session, tenant=tenant, channel_id="dm"),
                 {'project in ("TP", "OTH")', 'project in ("OTH", "TP")'},
             )
             self.assertIn(
-                _project_filter_jql(session=session, tenant=tenant),
+                project_filter_jql(session=session, tenant=tenant),
                 {'project in ("TP", "OTH")', 'project in ("OTH", "TP")'},
             )
 
@@ -1020,7 +1022,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             archived_project.is_archived = True
             session.commit()
 
-            jql = _project_filter_jql(session=session, tenant=tenant, channel_id="dm")
+            jql = project_filter_jql(session=session, tenant=tenant, channel_id="dm")
             self.assertEqual(jql, 'project = "TP"')
             self.assertNotIn("ARC", jql)
 
@@ -1047,8 +1049,8 @@ class DiscordCommandApiTests(unittest.TestCase):
             other_project.discord_config = other_discord
             session.commit()
 
-            with patch("orchestrator.api.discord.ingress.executor._search_jira_issues_for_tenant", return_value=[]) as search_mock:
-                _collect_ask_context(
+            with patch("orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant", return_value=[]) as search_mock:
+                collect_ask_context(
                     session=session,
                     tenant=tenant,
                     channel_id="discord-channel-2",
@@ -1091,7 +1093,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
             with (
                 patch(
-                    "orchestrator.api.discord.ingress.executor._collect_ask_context_with_history_context",
+                    "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                     return_value=(
                         None,
                         None,
@@ -1100,10 +1102,10 @@ class DiscordCommandApiTests(unittest.TestCase):
                         [],
                     ),
                 ),
-                patch("orchestrator.api.discord.ingress.executor.build_codex_runtime"),
-                patch("orchestrator.api.discord.ingress.executor.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+                patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
+                patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
             ):
-                message, _ = _ask_board_message(
+                message, _ = ask_board_message(
                     session=session,
                     tenant=tenant,
                     user_id="u-viewer",
@@ -1138,7 +1140,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             session.commit()
 
             self.assertEqual(
-                _project_filter_jql(session=session, tenant=tenant, channel_id="discord-project-thread-1"),
+                project_filter_jql(session=session, tenant=tenant, channel_id="discord-project-thread-1"),
                 'project = "THR"',
             )
 
@@ -1182,7 +1184,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.executor._collect_ask_context",
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
             ),
             patch(
@@ -1233,7 +1235,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.executor._collect_ask_context",
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
                 return_value=(None, None, [{"key": "OTH-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
@@ -1275,10 +1277,10 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.executor._collect_ask_context",
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
             ),
-            patch("orchestrator.api.discord.ingress.executor._collect_github_ask_context", return_value=github_context),
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_github_ask_context", return_value=github_context),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
@@ -1317,9 +1319,9 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.executor._collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.executor.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer"),
         ):
             first = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1358,10 +1360,10 @@ class DiscordCommandApiTests(unittest.TestCase):
         }
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.executor._collect_ask_context", return_value=(None, None, [], {})),
-            patch("orchestrator.api.discord.ingress.executor._collect_github_ask_context", return_value=github_context),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.executor.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context", return_value=(None, None, [], {})),
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_github_ask_context", return_value=github_context),
+            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
         ):
             response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1402,9 +1404,9 @@ class DiscordCommandApiTests(unittest.TestCase):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
             with (
-                patch("orchestrator.api.discord.ingress.executor.github_client_from_tenant_config", return_value=fake_client),
+                patch("orchestrator.api.discord.ingress.ask_runtime.github_client_from_tenant_config", return_value=fake_client),
                 patch(
-                    "orchestrator.api.discord.ingress.executor.collect_local_repo_context",
+                    "orchestrator.api.discord.ingress.ask_runtime.collect_local_repo_context",
                     return_value=SimpleNamespace(
                         available=True,
                         reason=None,
@@ -1416,7 +1418,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ),
                 ),
             ):
-                context = _collect_github_ask_context(
+                context = collect_github_ask_context(
                     session=session,
                     tenant=tenant,
                     project_keys=["TP"],
@@ -1439,9 +1441,9 @@ class DiscordCommandApiTests(unittest.TestCase):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
             with (
-                patch("orchestrator.api.discord.ingress.executor.github_client_from_tenant_config", return_value=fake_client),
+                patch("orchestrator.api.discord.ingress.ask_runtime.github_client_from_tenant_config", return_value=fake_client),
                 patch(
-                    "orchestrator.api.discord.ingress.executor.collect_local_repo_context",
+                    "orchestrator.api.discord.ingress.ask_runtime.collect_local_repo_context",
                     return_value=SimpleNamespace(
                         available=False,
                         reason="repository_not_cloned",
@@ -1453,7 +1455,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ),
                 ),
             ):
-                context = _collect_github_ask_context(
+                context = collect_github_ask_context(
                     session=session,
                     tenant=tenant,
                     project_keys=["TP"],
@@ -1516,14 +1518,14 @@ class DiscordCommandApiTests(unittest.TestCase):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
             with (
-                patch("orchestrator.api.discord.ingress.executor.resolve_scoped_secret_ref", side_effect=_scoped_secret_lookup),
+                patch("orchestrator.api.discord.ingress.ask_runtime.resolve_scoped_secret_ref", side_effect=_scoped_secret_lookup),
                 patch(
-                    "orchestrator.api.discord.ingress.executor.resolve_platform_secret_ref",
+                    "orchestrator.api.discord.ingress.ask_runtime.resolve_platform_secret_ref",
                     side_effect=_platform_secret_lookup,
                 ),
-                patch("orchestrator.api.discord.ingress.executor.github_client_from_tenant_config", side_effect=_github_client_factory),
+                patch("orchestrator.api.discord.ingress.ask_runtime.github_client_from_tenant_config", side_effect=_github_client_factory),
                 patch(
-                    "orchestrator.api.discord.ingress.executor.collect_local_repo_context",
+                    "orchestrator.api.discord.ingress.ask_runtime.collect_local_repo_context",
                     return_value=SimpleNamespace(
                         available=True,
                         reason=None,
@@ -1535,7 +1537,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ),
                 ),
             ):
-                context = _collect_github_ask_context(
+                context = collect_github_ask_context(
                     session=session,
                     tenant=tenant,
                     project_keys=["TP"],
@@ -1571,9 +1573,9 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.executor._collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.executor.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer"),
         ):
             first = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1676,7 +1678,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_ask_command_surfaces_jira_provider_outage(self) -> None:
         with patch(
-            "orchestrator.api.discord.ingress.executor._search_jira_issues_for_tenant",
+            "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
             side_effect=HTTPException(status_code=502, detail="Failed to query Jira board: Bad Gateway"),
         ):
             response = self.client.post(
@@ -1689,11 +1691,11 @@ class DiscordCommandApiTests(unittest.TestCase):
     def test_ask_command_with_dm_channel_uses_tenant_scope(self) -> None:
         with (
             patch(
-                "orchestrator.api.discord.ingress.executor._search_jira_issues_for_tenant",
+                "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
                 return_value=[JiraIssuePreview(key="TP-50", summary="DM issue", status="To Do")],
             ),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.executor.answer_board_question_with_codex", return_value="DM scoped answer"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="DM scoped answer"),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -1718,11 +1720,11 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.api.discord.ingress.executor._search_jira_issues_for_tenant",
+                "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
                 return_value=[JiraIssuePreview(key="OTH-50", summary="Scoped issue", status="To Do")],
             ) as search_mock,
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.executor.answer_board_question_with_codex", return_value="Scoped answer"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Scoped answer"),
         ):
             mapped = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -1801,10 +1803,10 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.executor._existing_issue_keys_for_tenant", return_value=set()),
-            patch("orchestrator.api.discord.ingress.executor._collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.executor.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.ingress.ask_history_runtime.existing_issue_keys_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context", side_effect=_collect_stub),
+            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer"),
         ):
             response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1836,7 +1838,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.executor._ask_board_message",
+                "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",
                 return_value=("Implicit ask answer", {"status_counts": {"Blocked": 1}}),
             ),
         ):
@@ -2075,7 +2077,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=object()),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=object()),
             patch(
                 "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
@@ -2154,7 +2156,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=object()),
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=object()),
             patch(
                 "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
