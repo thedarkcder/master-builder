@@ -65,6 +65,7 @@ export function defaultTenantFormValues(): TenantFormValues {
     policy: {
       allow_jira_transitions: false,
       allow_pr_creation: true,
+      allow_pr_remediation: true,
       allow_label_mutations: true,
       allow_auto_merge: false,
       max_runtime_minutes: 30,

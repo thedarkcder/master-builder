@@ -53,6 +53,7 @@ type ProjectFormState = {
   codex_reasoning_effort: "low" | "medium" | "high" | null;
   allow_jira_transitions: OverrideToggleValue;
   allow_pr_creation: OverrideToggleValue;
+  allow_pr_remediation: OverrideToggleValue;
   allow_label_mutations: OverrideToggleValue;
   allow_auto_merge: OverrideToggleValue;
   require_agents_md: RequireAgentsValue;
@@ -154,6 +155,7 @@ function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState 
         : null,
     allow_jira_transitions: booleanOverrideToState(overrides.allow_jira_transitions),
     allow_pr_creation: booleanOverrideToState(overrides.allow_pr_creation),
+    allow_pr_remediation: booleanOverrideToState(overrides.allow_pr_remediation),
     allow_label_mutations: booleanOverrideToState(overrides.allow_label_mutations),
     allow_auto_merge: booleanOverrideToState(overrides.allow_auto_merge),
     require_agents_md: requireAgentsOverrideToState(overrides.require_agents_md),
@@ -339,6 +341,7 @@ export function TenantProjectDetailsPage() {
     }
     const allowJiraTransitions = booleanStateToOverride(form.allow_jira_transitions);
     const allowPrCreation = booleanStateToOverride(form.allow_pr_creation);
+    const allowPrRemediation = booleanStateToOverride(form.allow_pr_remediation);
     const allowLabelMutations = booleanStateToOverride(form.allow_label_mutations);
     const allowAutoMerge = booleanStateToOverride(form.allow_auto_merge);
     const knowledgeBaseEnabled = booleanStateToOverride(form.knowledge_base_enabled);
@@ -354,6 +357,11 @@ export function TenantProjectDetailsPage() {
       delete nextPolicyOverrides.allow_pr_creation;
     } else {
       nextPolicyOverrides.allow_pr_creation = allowPrCreation;
+    }
+    if (allowPrRemediation === undefined) {
+      delete nextPolicyOverrides.allow_pr_remediation;
+    } else {
+      nextPolicyOverrides.allow_pr_remediation = allowPrRemediation;
     }
     if (allowLabelMutations === undefined) {
       delete nextPolicyOverrides.allow_label_mutations;
@@ -631,6 +639,10 @@ export function TenantProjectDetailsPage() {
                         <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_creation)}</p>
                       </div>
                       <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation</p>
+                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
+                      </div>
+                      <div className="space-y-1">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Auto merge</p>
                         <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_auto_merge)}</p>
                       </div>
@@ -887,6 +899,18 @@ export function TenantProjectDetailsPage() {
                         disabled={busy}
                       />
                       <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_pr_creation)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        PR remediation
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_pr_remediation}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_pr_remediation: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
