@@ -62,7 +62,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             hdrs=None,
             fp=BytesIO(b"failed"),
         )
-        with patch("orchestrator.api.discord.interactions.followup.urlopen", side_effect=error):
+        with patch("orchestrator.api.discord.interactions.followup_transport.urlopen", side_effect=error):
             with self.assertRaisesRegex(RuntimeError, "500"):
                 _send_discord_interaction_followup(
                     application_id="app",
@@ -77,7 +77,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             hdrs=None,
             fp=BytesIO(b'{"message":"Unknown Webhook","code":10015}'),
         )
-        with patch("orchestrator.api.discord.interactions.followup.urlopen", side_effect=expired_error):
+        with patch("orchestrator.api.discord.interactions.followup_transport.urlopen", side_effect=expired_error):
             with self.assertRaises(DiscordInteractionWebhookExpiredError):
                 _send_discord_interaction_followup(
                     application_id="app",
@@ -102,7 +102,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             captured["timeout"] = timeout
             return _FakeOkResponse()
 
-        with patch("orchestrator.api.discord.interactions.followup.urlopen", side_effect=_fake_urlopen):
+        with patch("orchestrator.api.discord.interactions.followup_transport.urlopen", side_effect=_fake_urlopen):
             _send_discord_interaction_followup(
                 application_id="app",
                 interaction_token="token",
@@ -134,7 +134,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             captured["timeout"] = timeout
             return _FakeOkResponse()
 
-        with patch("orchestrator.api.discord.interactions.followup.urlopen", side_effect=_fake_urlopen):
+        with patch("orchestrator.api.discord.interactions.followup_transport.urlopen", side_effect=_fake_urlopen):
             _send_discord_interaction_followup(
                 application_id="app",
                 interaction_token="token",
@@ -187,7 +187,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         with patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"):
             client = MagicMock()
             with (
-                patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client),
+                patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient", return_value=client),
                 patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value={"thread-chan"}),
                 patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             ):
@@ -205,7 +205,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             client = MagicMock()
             client.ensure_thread_for_message.side_effect = DiscordApiError("no thread")
             with (
-                patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client),
+                patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient", return_value=client),
                 patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
                 patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             ):
@@ -252,7 +252,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
@@ -287,7 +287,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
@@ -325,7 +325,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
@@ -362,7 +362,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
@@ -399,7 +399,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             client = MagicMock()
             client.post_message.side_effect = [{"id": "posted-1"}, {"id": "final-msg"}]
             client.create_thread_from_message.return_value = "thread-1"
-            with patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client):
+            with patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient", return_value=client):
                 _send_discord_ask_response_with_thread(
                     session=session,
                     settings=settings,
@@ -423,7 +423,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
         ):
             client = MagicMock()
             client.post_message.side_effect = [{"id": "posted-1"}, {"id": "final-msg"}]
@@ -462,7 +462,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
         ):
             client = MagicMock()
@@ -493,7 +493,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             ),
         ):
             client = MagicMock()
-            with patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client):
+            with patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient", return_value=client):
                 _send_discord_ask_response_with_thread(
                     session=session,
                     settings=settings,
@@ -518,7 +518,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=None),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
         ):
             client = MagicMock()
             client.post_message.side_effect = [{"id": "msg-1"}, {"id": "final"}]
@@ -554,7 +554,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             client = MagicMock()
             client.post_message.side_effect = [{"id": "seed-msg"}, {"id": "thread-msg"}]
             client.create_thread_from_message.return_value = "thread-2"
-            with patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client):
+            with patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient", return_value=client):
                 _send_discord_seed_followup_with_thread(
                     session=session,
                     settings=settings,
@@ -585,7 +585,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             ),
         ):
             client = MagicMock()
-            with patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client):
+            with patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient", return_value=client):
                 _send_discord_seed_followup_with_thread(
                     session=session,
                     settings=settings,
@@ -622,7 +622,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=None),
         ):
@@ -660,7 +660,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as client_cls,
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
         ):
             client = MagicMock()
             client.post_message.side_effect = [{"id": "seed-msg"}, {"id": "thread-msg"}]
@@ -876,7 +876,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             client = MagicMock()
             client.post_message.side_effect = [{"id": "msg-1"}, None, None]
             client.create_thread_from_message.return_value = "thread-1"
-            with patch("orchestrator.api.discord.interactions.followup.DiscordApiClient", return_value=client):
+            with patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient", return_value=client):
                 asyncio.run(
                     _run_discord_command_followup(
                         tenant_id="t1",

@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from orchestrator.api.discord.ingress import bug_runtime, executor, gap_runtime, jira_runtime
+from orchestrator.api.discord.ingress import ask_history_runtime, bug_runtime, gap_runtime, jira_runtime
 
 
 class DiscordRouteWrapperHelperTests(unittest.TestCase):
@@ -58,27 +58,27 @@ class DiscordRouteWrapperHelperTests(unittest.TestCase):
         session = MagicMock()
 
         self.assertEqual(
-            executor._existing_issue_keys_for_tenant(
+            ask_history_runtime.existing_issue_keys_for_tenant(
                 session=session, tenant=tenant, channel_id="c1", issue_keys=set()
             ),
             set(),
         )
         self.assertEqual(
-            executor._existing_issue_keys_for_tenant(
+            ask_history_runtime.existing_issue_keys_for_tenant(
                 session=session, tenant=tenant, channel_id="c1", issue_keys={" ", ""}
             ),
             set(),
         )
 
         with (
-            patch.object(executor, "_project_filter_jql", return_value='project in ("MAB")'),
+            patch.object(ask_history_runtime, "project_filter_jql", return_value='project in ("MAB")'),
             patch.object(
-                executor,
-                "_search_jira_issues_for_tenant",
+                ask_history_runtime,
+                "search_jira_issues_for_tenant",
                 return_value=[SimpleNamespace(key="mab-1"), SimpleNamespace(key="")],
             ) as search_mock,
         ):
-            result = executor._existing_issue_keys_for_tenant(
+            result = ask_history_runtime.existing_issue_keys_for_tenant(
                 session=session,
                 tenant=tenant,
                 channel_id="c1",
@@ -87,29 +87,29 @@ class DiscordRouteWrapperHelperTests(unittest.TestCase):
         self.assertEqual(result, {"MAB-1"})
         self.assertIn("key in (\"MAB-1\", \"MAB-2\")", search_mock.call_args.kwargs["jql"])
 
-        with patch.object(executor, "_prune_missing_issue_keys_from_ask_history_impl", return_value=4) as impl:
+        with patch.object(ask_history_runtime, "_prune_missing_issue_keys_from_ask_history_impl", return_value=4) as impl:
             self.assertEqual(
-                executor._prune_missing_issue_keys_from_ask_history(
+                ask_history_runtime.prune_missing_issue_keys_from_ask_history(
                     session=session, tenant=tenant, user_id="u1", channel_id="c1"
                 ),
                 4,
             )
             self.assertTrue(callable(impl.call_args.kwargs["existing_issue_keys_fn"]))
 
-        with patch.object(executor, "_consume_pending_ask_action_impl", return_value={"request_id": "r1"}) as impl:
+        with patch.object(ask_history_runtime, "_consume_pending_ask_action_impl", return_value={"request_id": "r1"}) as impl:
             self.assertEqual(
-                executor.consume_pending_ask_action(session=session, tenant=tenant, request_id="r1"),
+                ask_history_runtime.consume_pending_ask_action(session=session, tenant=tenant, request_id="r1"),
                 {"request_id": "r1"},
             )
             impl.assert_called_once()
 
-        with patch.object(executor, "_tenant_ask_history_impl", return_value=[{"a": 1}]) as impl:
-            self.assertEqual(executor._tenant_ask_history(tenant), [{"a": 1}])
+        with patch.object(ask_history_runtime, "_tenant_ask_history_impl", return_value=[{"a": 1}]) as impl:
+            self.assertEqual(ask_history_runtime.tenant_ask_history(tenant=tenant), [{"a": 1}])
             impl.assert_called_once_with(tenant=tenant)
 
-        with patch.object(executor, "_recent_ask_history_impl", return_value=[{"q": "x"}]) as impl:
+        with patch.object(ask_history_runtime, "_recent_ask_history_impl", return_value=[{"q": "x"}]) as impl:
             self.assertEqual(
-                executor._recent_ask_history(tenant=tenant, user_id="u1", channel_id="c1", limit=3),
+                ask_history_runtime.recent_ask_history(tenant=tenant, user_id="u1", channel_id="c1", limit=3),
                 [{"q": "x"}],
             )
             impl.assert_called_once()
