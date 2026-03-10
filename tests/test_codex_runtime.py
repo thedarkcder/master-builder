@@ -238,11 +238,69 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 "json-output",
             )
             self.assertEqual(popen_mock.call_args.kwargs["cwd"], "/tmp/repo")
-            call_args = list(popen_mock.call_args.args[0])
-            sandbox_idx = call_args.index("--sandbox") + 1
-            self.assertEqual(call_args[sandbox_idx], "workspace-write")
-            config_idx = call_args.index("-c") + 1
-            self.assertEqual(call_args[config_idx], 'reasoning.effort="medium"')
+
+    def test_cli_request_uses_model_override_when_provided(self) -> None:
+        settings = self._settings()
+
+        class _FakePipe:
+            def __init__(self, lines: list[str] | None = None) -> None:
+                self._lines = list(lines or [])
+                self._index = 0
+
+            def readline(self) -> str:
+                if self._index >= len(self._lines):
+                    return ""
+                line = self._lines[self._index]
+                self._index += 1
+                return line
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(
+                self,
+                output_path: str,
+                *,
+                stdout_lines: list[str] | None = None,
+                output_text: str = "json-output",
+            ) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe(stdout_lines)
+                self.stderr = _FakePipe()
+                Path(output_path).write_text(output_text, encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args, **kwargs):  # noqa: ANN001, ARG001
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            runtime.run_text(system_prompt="s", user_prompt="u", model_override="gpt-5.3-codex-spark")
+
+        args = popen_mock.call_args.args[0]
+        self.assertEqual(args[args.index("--model") + 1], "gpt-5.3-codex-spark")
+        call_args = list(popen_mock.call_args.args[0])
+        sandbox_idx = call_args.index("--sandbox") + 1
+        self.assertEqual(call_args[sandbox_idx], "workspace-write")
+        config_idx = call_args.index("-c") + 1
+        self.assertEqual(call_args[config_idx], 'reasoning.effort="medium"')
 
         def fake_popen_stdout(args, **kwargs):  # noqa: ANN001
             output_idx = args.index("--output-last-message") + 1

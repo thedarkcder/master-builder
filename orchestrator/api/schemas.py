@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
 from orchestrator.core.guardrails import enforce_safe_command
 
 
@@ -51,6 +52,8 @@ class PolicyConfig(BaseModel):
     require_agents_md: bool = False
     knowledge_base_enabled: bool = True
     knowledge_auto_answer_mode: str = Field(default="aggressive", pattern="^(safe|balanced|aggressive)$")
+    codex_model: str | None = None
+    codex_reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
 
     @field_validator("allowed_commands")
     @classmethod
@@ -61,6 +64,16 @@ class PolicyConfig(BaseModel):
             except (PermissionError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
         return commands
+
+    @field_validator("codex_model")
+    @classmethod
+    def normalize_codex_model(cls, value: str | None) -> str | None:
+        return normalize_codex_model(value)
+
+    @field_validator("codex_reasoning_effort")
+    @classmethod
+    def normalize_codex_reasoning_effort(cls, value: str | None) -> str | None:
+        return normalize_codex_reasoning_effort(value)
 
 
 class DiscordConfig(BaseModel):
@@ -184,6 +197,25 @@ class KnowledgeSyncResultRead(BaseModel):
 class IntegrationTestResult(BaseModel):
     ok: bool
     details: str
+
+
+class CodexModelOptionRead(BaseModel):
+    id: str
+    label: str
+    description: str | None = None
+
+
+class CodexReasoningOptionRead(BaseModel):
+    id: str
+    label: str
+    description: str | None = None
+
+
+class CodexModelCatalogRead(BaseModel):
+    default_model: str
+    default_reasoning_effort: str
+    models: list[CodexModelOptionRead] = Field(default_factory=list)
+    reasoning_efforts: list[CodexReasoningOptionRead] = Field(default_factory=list)
 
 
 class GitHubInstallStart(BaseModel):

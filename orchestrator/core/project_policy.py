@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
+from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
+
 POLICY_OVERRIDE_FIELDS = {
     "allow_jira_transitions",
     "allow_pr_creation",
@@ -16,6 +18,8 @@ POLICY_OVERRIDE_FIELDS = {
     "require_agents_md",
     "knowledge_base_enabled",
     "knowledge_auto_answer_mode",
+    "codex_model",
+    "codex_reasoning_effort",
 }
 
 _BOOLEAN_CAP_FIELDS = {
@@ -68,6 +72,16 @@ def normalize_project_policy_overrides(raw: Mapping[str, Any] | None) -> dict[st
             if normalized_value in _KNOWLEDGE_AUTO_ANSWER_MODES:
                 normalized[key] = normalized_value
             continue
+        if key == "codex_model":
+            normalized_value = normalize_codex_model(value)
+            if normalized_value is not None:
+                normalized[key] = normalized_value
+            continue
+        if key == "codex_reasoning_effort":
+            normalized_value = normalize_codex_reasoning_effort(value)
+            if normalized_value is not None:
+                normalized[key] = normalized_value
+            continue
         if key in _NUMERIC_CAP_FIELDS:
             coerced = _coerce_positive_int(value)
             if coerced is not None:
@@ -83,6 +97,8 @@ def resolve_effective_policy(
     *,
     tenant_policy: Mapping[str, Any],
     project_overrides: Mapping[str, Any] | None,
+    default_codex_model: str | None = None,
+    default_codex_reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     effective = deepcopy(dict(tenant_policy))
     # Runtime limits are no longer policy-managed.
@@ -133,5 +149,25 @@ def resolve_effective_policy(
         effective["knowledge_auto_answer_mode"] = override_mode
     else:
         effective["knowledge_auto_answer_mode"] = tenant_mode
+
+    project_model = normalize_codex_model(overrides.get("codex_model"))
+    tenant_model = normalize_codex_model(effective.get("codex_model"))
+    default_model = normalize_codex_model(default_codex_model)
+    if project_model is not None:
+        effective["codex_model"] = project_model
+    elif tenant_model is not None:
+        effective["codex_model"] = tenant_model
+    elif default_model is not None:
+        effective["codex_model"] = default_model
+
+    project_reasoning_effort = normalize_codex_reasoning_effort(overrides.get("codex_reasoning_effort"))
+    tenant_reasoning_effort = normalize_codex_reasoning_effort(effective.get("codex_reasoning_effort"))
+    default_reasoning_effort = normalize_codex_reasoning_effort(default_codex_reasoning_effort)
+    if project_reasoning_effort is not None:
+        effective["codex_reasoning_effort"] = project_reasoning_effort
+    elif tenant_reasoning_effort is not None:
+        effective["codex_reasoning_effort"] = tenant_reasoning_effort
+    elif default_reasoning_effort is not None:
+        effective["codex_reasoning_effort"] = default_reasoning_effort
 
     return effective
