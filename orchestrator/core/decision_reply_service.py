@@ -323,11 +323,130 @@ def _feedback_for_cycle_questions(
         }
         if note:
             row["note"] = note
+        detail = str(item.get("detail") or "").strip() if isinstance(item, dict) else ""
+        if detail and not note:
+            row["note"] = detail
         answer_text = str(answer.normalized_answer or "").strip() if answer is not None else ""
         if answer_text:
             row["answer"] = answer_text
         feedback.append(row)
     return tuple(feedback)
+
+
+def unresolved_question_feedback_for_cycle(*, session: Session, cycle_id: str) -> tuple[dict[str, str], ...]:
+    cycle = session.get(DecisionCycle, cycle_id)
+    if cycle is None:
+        return ()
+    answers = list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
+    return _feedback_for_cycle_questions(cycle=cycle, answers=answers)
+
+
+def sync_cycle_answers_from_planner(
+    *,
+    session: Session,
+    tenant: Tenant,
+    project: Project | None,
+    case: DecisionCase,
+    cycle: DecisionCycle,
+    planner_question_states: list[dict[str, Any]],
+    now: datetime,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    lookup = _question_lookup(cycle)
+    existing_answers = {
+        str(answer.question_id or "").strip(): answer
+        for answer in list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
+        if str(answer.question_id or "").strip()
+    }
+    latest_evidence = session.execute(
+        select(DecisionEvidence)
+        .where(DecisionEvidence.cycle_id == cycle.cycle_id)
+        .order_by(DecisionEvidence.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    accepted_question_ids: list[str] = []
+    answered_question_ids: list[str] = []
+    newly_accepted_rows: list[DecisionAnswer] = []
+
+    for item in planner_question_states:
+        question_id = str(item.get("question_id") or "").strip()
+        if not question_id or question_id not in lookup:
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status not in {"open", "answered", "accepted"}:
+            status = "open"
+        existing = existing_answers.get(question_id)
+        if existing is None:
+            existing = DecisionAnswer(
+                answer_id=uuid4().hex,
+                case_id=case.case_id,
+                cycle_id=cycle.cycle_id,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id if project is not None else None,
+                issue_key=case.issue_key,
+                question_id=question_id,
+                question_kind=lookup[question_id]["kind"],
+                question_text=lookup[question_id]["text"],
+                status="open",
+                normalized_answer=None,
+                source_transport=None,
+                source_ref=None,
+                evidence_ids_json=[],
+                metadata_json={},
+                answered_at=None,
+                accepted_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(existing)
+            existing_answers[question_id] = existing
+
+        current_status = str(existing.status or "").strip().lower()
+        if current_status == "accepted" and status != "accepted":
+            status = "accepted"
+
+        detail = str(item.get("detail") or "").strip()
+        existing.metadata_json = {
+            **dict(existing.metadata_json or {}),
+            "notes": detail or None,
+        }
+        if latest_evidence is not None:
+            evidence_ids = [str(value).strip() for value in existing.evidence_ids_json if str(value).strip()]
+            if latest_evidence.evidence_id not in evidence_ids:
+                existing.evidence_ids_json = [*evidence_ids, latest_evidence.evidence_id]
+            existing.source_transport = latest_evidence.source_transport
+            existing.source_ref = latest_evidence.source_ref
+
+        if status in {"answered", "accepted"}:
+            answer_text = detail
+            if answer_text:
+                existing.normalized_answer = answer_text
+            existing.answered_at = existing.answered_at or now
+        if status == "accepted":
+            if current_status != "accepted":
+                newly_accepted_rows.append(existing)
+            existing.accepted_at = existing.accepted_at or now
+        existing.status = status
+        existing.updated_at = now
+
+        if status == "accepted":
+            accepted_question_ids.append(question_id)
+        elif status == "answered":
+            answered_question_ids.append(question_id)
+
+    effect_ids = enqueue_decision_answer_kb_effects(
+        session=session,
+        case=case,
+        cycle=cycle,
+        answers=newly_accepted_rows,
+        evidence_id=latest_evidence.evidence_id if latest_evidence is not None else "",
+        now=now,
+    )
+    return (
+        tuple(sorted(set(accepted_question_ids))),
+        tuple(sorted(set(answered_question_ids))),
+        effect_ids,
+    )
 
 
 def capture_decision_reply(
@@ -351,18 +470,6 @@ def capture_decision_reply(
     if case is None or cycle is None:
         raise ValueError(f"No active decision cycle exists for {issue_key}")
     now = datetime.now(timezone.utc)
-    existing_answers = list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
-    extracted_answers = _extract_reply_matches(
-        session=session,
-        settings=settings,
-        tenant=tenant,
-        project=project,
-        issue_key=issue_key,
-        cycle=cycle,
-        reply_text=reply_text,
-        existing_answers=existing_answers,
-    )
-    lookup = _question_lookup(cycle)
     dedupe_key = _reply_dedupe_key(
         cycle_id=cycle.cycle_id,
         source_transport=source_transport,
@@ -388,12 +495,8 @@ def capture_decision_reply(
             source_ref=source_ref,
             actor_ref=actor_ref,
             raw_text=reply_text,
-            question_ids_json=[
-                item["question_id"]
-                for item in extracted_answers
-                if str(item.get("status") or "").strip().lower() in {"answered", "accepted"}
-            ],
-            normalized_answers_json=extracted_answers,
+            question_ids_json=[],
+            normalized_answers_json=[],
             metadata_json=dict(metadata or {}),
             created_at=now,
         )
@@ -402,90 +505,12 @@ def capture_decision_reply(
     else:
         evidence = existing_evidence
 
-    accepted_question_ids: list[str] = []
-    answered_question_ids: list[str] = []
-    accepted_answer_rows: list[DecisionAnswer] = []
-    for item in extracted_answers:
-        question_id = str(item.get("question_id") or "").strip()
-        if not question_id or question_id not in lookup:
-            continue
-        status = str(item.get("status") or "").strip().lower()
-        if status not in {"answered", "accepted"}:
-            continue
-        answer_row = session.execute(
-            select(DecisionAnswer).where(
-                DecisionAnswer.cycle_id == cycle.cycle_id,
-                DecisionAnswer.question_id == question_id,
-            )
-        ).scalar_one_or_none()
-        if answer_row is None:
-            answer_row = DecisionAnswer(
-                answer_id=uuid4().hex,
-                case_id=case.case_id,
-                cycle_id=cycle.cycle_id,
-                tenant_id=tenant.tenant_id,
-                project_id=project.project_id if project is not None else None,
-                issue_key=issue_key,
-                question_id=question_id,
-                question_kind=lookup[question_id]["kind"],
-                question_text=lookup[question_id]["text"],
-                status="open",
-                normalized_answer=None,
-                source_transport=None,
-                source_ref=None,
-                evidence_ids_json=[],
-                metadata_json={},
-                answered_at=None,
-                accepted_at=None,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(answer_row)
-        existing_ids = [str(value).strip() for value in answer_row.evidence_ids_json if str(value).strip()]
-        if evidence.evidence_id not in existing_ids:
-            answer_row.evidence_ids_json = [*existing_ids, evidence.evidence_id]
-        existing_status = str(answer_row.status or "").strip().lower()
-        if existing_status == "accepted":
-            answer_row.updated_at = now
-            accepted_question_ids.append(question_id)
-            continue
-
-        answer_row.status = "accepted" if status == "accepted" else "answered"
-        answer_row.normalized_answer = str(item.get("answer") or "").strip()
-        answer_row.source_transport = source_transport
-        answer_row.source_ref = source_ref
-        answer_row.metadata_json = {
-            **dict(answer_row.metadata_json or {}),
-            "notes": item.get("notes"),
-        }
-        answer_row.answered_at = answer_row.answered_at or now
-        if status == "accepted":
-            answer_row.accepted_at = now
-        answer_row.updated_at = now
-        answered_question_ids.append(question_id)
-        if status == "accepted":
-            accepted_question_ids.append(question_id)
-            accepted_answer_rows.append(answer_row)
-
-    effect_ids = enqueue_decision_answer_kb_effects(
-        session=session,
-        case=case,
-        cycle=cycle,
-        answers=accepted_answer_rows,
-        evidence_id=evidence.evidence_id,
-        now=now,
-    )
-    session.flush()
-    updated_answers = list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
     return DecisionReplyCaptureResult(
         case=case,
         cycle=cycle,
-        accepted_question_ids=tuple(sorted(set(accepted_question_ids))),
-        answered_question_ids=tuple(sorted(set(answered_question_ids))),
+        accepted_question_ids=(),
+        answered_question_ids=(),
         evidence_id=evidence.evidence_id,
-        effect_ids=effect_ids,
-        unresolved_question_feedback=_feedback_for_cycle_questions(
-            cycle=cycle,
-            answers=updated_answers,
-        ),
+        effect_ids=(),
+        unresolved_question_feedback=(),
     )

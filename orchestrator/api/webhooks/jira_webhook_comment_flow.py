@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import logging
 
 from fastapi import HTTPException
@@ -22,8 +21,8 @@ from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
     capture_decision_reply,
     is_machine_generated_decision_comment,
+    unresolved_question_feedback_for_cycle,
 )
-from orchestrator.core.decision_effect_service import publish_decision_effects
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +152,7 @@ def stage_handle_comment_decision_reply(
         return None
     author_account_id = extract_jira_comment_author_account_id(context.payload)
     try:
-        capture = capture_decision_reply(
+        capture_decision_reply(
             session=session,
             settings=settings,
             tenant=context.tenant,
@@ -170,12 +169,6 @@ def stage_handle_comment_decision_reply(
             session=session,
             settings=settings,
         )
-        if capture.effect_ids:
-            publish_decision_effects(
-                session=session,
-                effect_ids=capture.effect_ids,
-                occurred_at=datetime.now(timezone.utc),
-            )
     except (RuntimeError, ValueError, HTTPException) as exc:
         logger.exception(
             "jira_comment_decision_reply_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
@@ -199,7 +192,12 @@ def stage_handle_comment_decision_reply(
         questions=list(getattr(decision_result.decision.pre_check.decision_gate, "questions", ()))
         if decision_result.decision.pre_check is not None and getattr(decision_result.decision.pre_check, "decision_gate", None) is not None
         else [],
-        question_feedback=list(getattr(capture, "unresolved_question_feedback", ())),
+        question_feedback=list(
+            unresolved_question_feedback_for_cycle(
+                session=session,
+                cycle_id=str(decision_result.cycle_id or ""),
+            )
+        ) if decision_result.cycle_id else [],
         webhook_event=context.webhook_event,
     )
 

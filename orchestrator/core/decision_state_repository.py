@@ -93,6 +93,8 @@ def persist_decision_state(
     issue_description: str | None,
     decision,
     classification: str,
+    question_set_override: list[dict] | None,
+    question_reason_override: str | None,
     auto_resolved_answers,
     accepted_question_ids: set[str],
     issue_fingerprint_fn,
@@ -110,26 +112,34 @@ def persist_decision_state(
         "decision_gate_required",
         "gtd_required",
     }
-    question_set = build_question_set(pre_check=pre_check, classification=classification) if question_driven else []
-    reason = decision_reason(pre_check=pre_check, classification=classification) if question_driven else None
+    question_set = (
+        list(question_set_override)
+        if question_driven and isinstance(question_set_override, list)
+        else build_question_set(pre_check=pre_check, classification=classification) if question_driven else []
+    )
+    reason = (
+        str(question_reason_override or "").strip() or decision_reason(pre_check=pre_check, classification=classification)
+    ) if question_driven else None
 
     current_active_cycle = active_cycle(session=session, case=case)
     cycle: DecisionCycle | None = None
     if question_driven:
         if current_active_cycle is not None and current_active_cycle.status == "open":
             cycle = current_active_cycle
+            next_question_set = question_set or list(cycle.question_set_json)
             current_question_ids = [
                 str(item.get("id") or "").strip()
-                for item in cycle.question_set_json
+                for item in next_question_set
                 if str(item.get("id") or "").strip()
             ]
             cycle.classification = classification
+            cycle.question_set_json = next_question_set
             cycle.unresolved_question_ids_json = [
                 question_id
                 for question_id in current_question_ids
                 if question_id not in accepted_question_ids
             ]
-            cycle.reason = cycle.reason or reason
+            cycle.reason = reason or cycle.reason
             cycle.updated_at = occurred_at
         else:
             if current_active_cycle is not None and current_active_cycle.status == "open":

@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_engine import DecisionEventInput, evaluate_decision_event
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
@@ -46,6 +47,41 @@ def _precheck_result(
             missing_criteria=gtd_missing_criteria,
             clarification_questions=gtd_questions,
         ),
+    )
+
+
+def _planner_result(
+    *,
+    gate_status: str,
+    reason: str,
+    questions: tuple[tuple[str, str], ...],
+    statuses: dict[str, str] | None = None,
+    details: dict[str, str] | None = None,
+) -> DecisionPlannerResult:
+    normalized_statuses = dict(statuses or {})
+    normalized_details = dict(details or {})
+    question_states = tuple(
+        DecisionPlannerQuestion(
+            question_id=question_id,
+            kind="decision_gate",
+            question=question_text,
+            status=normalized_statuses.get(question_id, "open"),
+            detail=normalized_details.get(question_id),
+        )
+        for question_id, question_text in questions
+    )
+    return DecisionPlannerResult(
+        gate_status=gate_status,
+        reason=reason,
+        questions=tuple(
+            question
+            for question in question_states
+            if question.status in {"open", "answered"}
+        ),
+        question_states=question_states,
+        resolved_items=(),
+        missing_items=(),
+        captured_answer_summary=None,
     )
 
 
@@ -123,7 +159,21 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             precheck_calls += 1
             return prechecks.pop(0)
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need owner decision",
+                    questions=(("dg_owner", "Who owns this decision?"),),
+                ),
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need owner decision",
+                    questions=(("dg_owner", "Who owns this decision?"),),
+                ),
+            ],
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
@@ -173,7 +223,14 @@ class DecisionEngineStatefulTests(unittest.TestCase):
     def test_idempotency_key_deduplicates_event_rows(self) -> None:
         precheck = _precheck_result(outcome="ready_for_agent")
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            return_value=_planner_result(
+                gate_status="blocked_decision_gate",
+                reason="Need config",
+                questions=(("dg_config", "What config is approved?"),),
+            ),
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
@@ -233,7 +290,14 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
             return prechecks.pop(0)
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            return_value=_planner_result(
+                gate_status="blocked_decision_gate",
+                reason="Need owner decision",
+                questions=(("dg_owner", "Who owns this decision?"),),
+            ),
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
@@ -280,7 +344,7 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         self.assertEqual(first.case_state, "blocked_decision_gate")
         self.assertTrue(second.duplicate_event)
         self.assertEqual(second.case_state, "blocked_decision_gate")
-        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("Who owns this?",))
+        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("Who owns this decision?",))
         self.assertEqual(case_after.updated_at, updated_at_before)
 
     def test_open_cycle_with_answered_reply_does_not_rerun_precheck(self) -> None:
@@ -302,7 +366,23 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
             return prechecks.pop(0)
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need config",
+                    questions=(("dg_config", "What config is approved?"),),
+                ),
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need config",
+                    questions=(("dg_config", "What config is approved?"),),
+                    statuses={"dg_config": "answered"},
+                    details={"dg_config": "Production bundle ID is com.example.app."},
+                ),
+            ],
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
@@ -397,7 +477,23 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
             return prechecks.pop(0)
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need config",
+                    questions=(("dg_config", "What config is approved?"),),
+                ),
+                _planner_result(
+                    gate_status="clear",
+                    reason="Clarification complete",
+                    questions=(("dg_config", "What config is approved?"),),
+                    statuses={"dg_config": "accepted"},
+                    details={"dg_config": "Production bundle ID is com.example.app."},
+                ),
+            ],
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
@@ -502,7 +598,14 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             observed_state["comment"] = comment
             return True, None
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            return_value=_planner_result(
+                gate_status="blocked_decision_gate",
+                reason="Need owner decision",
+                questions=(("dg_owner", "Who owns this decision?"),),
+            ),
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None

@@ -18,6 +18,7 @@ from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_codex
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
@@ -597,6 +598,31 @@ class DiscordCommandApiTests(unittest.TestCase):
             "access_token": "tok-1",
             "client": oauth_client,
         }
+        planner_result = DecisionPlannerResult(
+            gate_status="blocked_decision_gate",
+            reason="Missing GTD sections",
+            questions=(
+                DecisionPlannerQuestion(
+                    question_id="dg_1",
+                    kind="decision_gate",
+                    question="Objective?",
+                    status="open",
+                    detail="Config values were captured, but entitlement confirmation is still missing.",
+                ),
+            ),
+            question_states=(
+                DecisionPlannerQuestion(
+                    question_id="dg_1",
+                    kind="decision_gate",
+                    question="Objective?",
+                    status="answered",
+                    detail="Config values were captured, but entitlement confirmation is still missing.",
+                ),
+            ),
+            resolved_items=(),
+            missing_items=(),
+            captured_answer_summary=None,
+        )
         with (
             patch(
                 "orchestrator.api.discord.commands.run_controls.dispatch_run_control_command"
@@ -643,6 +669,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ),
                 ),
             ),
+            patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
             patch("orchestrator.api.discord.commands.run_controls.build_precheck_message") as build_message_mock,
         ):
             response = self.client.post(
@@ -667,6 +694,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     "note": "Config values were captured, but entitlement confirmation is still missing.",
                     "question_id": "dg_1",
                     "question_text": "Objective?",
+                    "status": "open",
                 }
             ],
         )
@@ -693,6 +721,31 @@ class DiscordCommandApiTests(unittest.TestCase):
             "access_token": "tok-1",
             "client": oauth_client,
         }
+        planner_result = DecisionPlannerResult(
+            gate_status="blocked_gtd",
+            reason="Missing GTD criteria",
+            questions=(
+                DecisionPlannerQuestion(
+                    question_id="gtd_1",
+                    kind="gtd",
+                    question="Which dependencies or risks may impact delivery?",
+                    status="open",
+                    detail="Dependencies and risks identified",
+                ),
+            ),
+            question_states=(
+                DecisionPlannerQuestion(
+                    question_id="gtd_1",
+                    kind="gtd",
+                    question="Which dependencies or risks may impact delivery?",
+                    status="open",
+                    detail="Dependencies and risks identified",
+                ),
+            ),
+            resolved_items=(),
+            missing_items=("Dependencies and risks identified",),
+            captured_answer_summary=None,
+        )
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
@@ -723,6 +776,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     ),
                 ),
             ),
+            patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
