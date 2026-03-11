@@ -495,6 +495,8 @@ def _session_column_for_context(*, context: CodexInvocationContext) -> str | Non
     stage = str(context.stage or "").strip().lower()
     if command != "workflow":
         return None
+    if stage == "orchestrated_run":
+        return "orchestrated_session_id"
     if stage == _WORKFLOW_STAGE_PM:
         return "pm_session_id"
     if stage in _WORKFLOW_EXECUTION_STAGES:

@@ -222,6 +222,31 @@ function clipText(value: string, maxChars = 280): string {
   return `${normalized.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
+function logEntryIdentity(entry: RunLogEventRecord): string {
+  return [
+    entry.recorded_at,
+    entry.stage,
+    entry.stream,
+    String(entry.invocation_id ?? "").trim(),
+    String(entry.command ?? "").trim(),
+    entry.message
+  ].join("::");
+}
+
+function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
+  const seen = new Set<string>();
+  const ordered: RunLogEventRecord[] = [];
+  for (const entry of entries) {
+    const key = logEntryIdentity(entry);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    ordered.push(entry);
+  }
+  return ordered;
+}
+
 function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> | null {
   const raw = String(entry.message ?? "");
   const trimmed = raw.trim();
@@ -336,7 +361,7 @@ export default function RunDetailPage() {
       }
       setRun(runPayload);
       setEvents(runEvents);
-      setLogs(runLogs);
+      setLogs(dedupeRunLogs(runLogs));
       setTokenTimeline(timeline);
       setHasMoreLogs(runLogs.length >= 200);
       setStatusLine("");
@@ -370,19 +395,12 @@ export default function RunDetailPage() {
         if ((event as { event_kind?: string }).event_kind === "run_log" || "message" in event) {
           const logEvent = event as RunLogEventRecord;
           setLogs((prev) => {
-            if (
-              prev.some(
-                (entry) =>
-                  entry.recorded_at === logEvent.recorded_at &&
-                  entry.stage === logEvent.stage &&
-                  entry.stream === logEvent.stream &&
-                  entry.message === logEvent.message
-              )
-            ) {
+            const nextKey = logEntryIdentity(logEvent);
+            if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
               return prev;
             }
             const next = [...prev, logEvent];
-            return next.slice(-800);
+            return dedupeRunLogs(next).slice(-800);
           });
         } else {
           const lifecycleEvent = event as RunEventRecord;
@@ -463,17 +481,7 @@ export default function RunDetailPage() {
         beforeRecordedAt: oldest.recorded_at
       });
       setLogs((prev) => {
-        const dedupe = new Set(prev.map((entry) => `${entry.recorded_at}:${entry.stage}:${entry.stream}:${entry.message}`));
-        const merged = [...prev];
-        for (const candidate of olderLogs) {
-          const key = `${candidate.recorded_at}:${candidate.stage}:${candidate.stream}:${candidate.message}`;
-          if (dedupe.has(key)) {
-            continue;
-          }
-          dedupe.add(key);
-          merged.push(candidate);
-        }
-        return merged;
+        return dedupeRunLogs([...prev, ...olderLogs]);
       });
       setHasMoreLogs(olderLogs.length >= 200);
     } catch (error) {
@@ -709,6 +717,24 @@ export default function RunDetailPage() {
       history
     };
   }, [run?.plan]);
+  const terminalFailureMessage = useMemo(() => {
+    const fromDiagnostics = String(workflowDiagnostics?.message ?? "").trim();
+    if (fromDiagnostics) {
+      return fromDiagnostics;
+    }
+    const fromRun = String(run?.last_error ?? "").trim();
+    if (fromRun) {
+      return fromRun;
+    }
+    return "";
+  }, [run?.last_error, workflowDiagnostics?.message]);
+  const terminalFailureHighlights = useMemo(() => {
+    const items = (workflowDiagnostics?.history ?? [])
+      .filter((entry) => entry.stage.toLowerCase() === "review")
+      .map((entry) => entry.event.trim())
+      .filter((entry) => entry.length > 0);
+    return items.slice(0, 6);
+  }, [workflowDiagnostics?.history]);
   const agentOutcomes = useMemo(() => {
     const planRoot = isRecord(run?.plan) ? run.plan : {};
     const workflowPlan = isRecord(planRoot["plan"]) ? planRoot["plan"] : null;
@@ -966,7 +992,7 @@ export default function RunDetailPage() {
       kind: entry.stage.toLowerCase() === "review" ? "error" : "status"
     }));
 
-    return [...logEntries, ...diagnosticsEntries, ...stageUpdateEntries]
+    const timeline = [...logEntries, ...diagnosticsEntries, ...stageUpdateEntries]
       .map((entry, index) => ({ entry, index }))
       .sort((a, b) => {
         const tsDiff = new Date(a.entry.recordedAt).getTime() - new Date(b.entry.recordedAt).getTime();
@@ -978,6 +1004,22 @@ export default function RunDetailPage() {
       })
       .slice(-160)
       .map((wrapped) => wrapped.entry);
+    const seen = new Set<string>();
+    return timeline.filter((entry) => {
+      const key = [
+        entry.recordedAt,
+        entry.stage,
+        entry.attempt ?? "",
+        entry.speaker,
+        entry.kind,
+        entry.text
+      ].join("::");
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
   }, [logs, run?.created_at, run?.finished_at, run?.plan, run?.started_at, workflowDiagnostics?.history]);
   const visibleChatTimelineEntries = useMemo(
     () => chatTimelineEntries.slice(-Math.max(CHAT_PAGE_SIZE, chatVisibleCount)),
@@ -1093,6 +1135,25 @@ export default function RunDetailPage() {
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {statusLine}
         </div>
+      ) : null}
+      {run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage ? (
+        <Card className="mb-4 border-destructive/30 bg-destructive/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm text-destructive">Failure Reason</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-xs">
+            <p className="whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
+            {terminalFailureHighlights.length > 0 ? (
+              <ul className="list-disc space-y-1 pl-4 text-destructive">
+                {terminalFailureHighlights.map((item, idx) => (
+                  <li key={`failure-highlight-${idx}`} className="whitespace-pre-wrap">
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </CardContent>
+        </Card>
       ) : null}
 
       {run ? (
@@ -1465,14 +1526,14 @@ export default function RunDetailPage() {
           {activePanel === "diagnostics" ? (
             <div className="space-y-4">
               {/* Terminal diagnostics */}
-              {workflowDiagnostics ? (
+              {workflowDiagnostics || terminalFailureMessage ? (
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm">Terminal Diagnostics</CardTitle>
                   </CardHeader>
                   <CardContent className="text-xs space-y-1">
-                    <p><span className="font-medium">Stage:</span> {workflowDiagnostics.stage || "unknown"}</p>
-                    <p><span className="font-medium">Message:</span> {workflowDiagnostics.message || run?.last_error || "No diagnostics message."}</p>
+                    <p><span className="font-medium">Stage:</span> {workflowDiagnostics?.stage || "unknown"}</p>
+                    <p><span className="font-medium">Message:</span> {terminalFailureMessage || "No diagnostics message."}</p>
                   </CardContent>
                 </Card>
               ) : null}

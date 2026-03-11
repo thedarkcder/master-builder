@@ -11,10 +11,12 @@ from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.precheck_decision import precheck_missing_slots
+from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_types import (
     DecisionEventInput,
     DecisionLabelAction,
     IngressDecision,
+    blocking_reason_for_precheck,
 )
 from orchestrator.storage.models import DecisionCase, DecisionCycle
 
@@ -87,6 +89,12 @@ def decision_result_for_duplicate_event(
         cycle=cycle,
         case=case,
     )
+    if classification == "clear":
+        normalize_clear_case_snapshot(
+            case=case,
+            source=str(existing_event.source or "jira_webhook"),
+            occurred_at=getattr(existing_event, "occurred_at", None) or getattr(existing_event, "created_at", None),
+        )
     from sqlalchemy import select
 
     outbox_effect_ids = tuple(
@@ -127,6 +135,45 @@ def decision_from_snapshot(
             cycle=cycle,
             classification=classification,
         )
+    if classification == "clear":
+        normalized_pre_check = pre_check
+        if normalized_pre_check is None:
+            ready_label = str(case.ready_label or "").strip() or None
+            ready_label_present = bool(case.ready_label_present)
+            outcome = "missing_ready_label" if ready_label and not ready_label_present else "ready_for_agent"
+            normalized_pre_check = PreRunCheckResult(
+                outcome=outcome,
+                ready_label=ready_label,
+                ready_label_present=ready_label_present,
+                required_worker_capability=str(case.required_worker_capability or "").strip(),
+                required_worker_label=str(case.required_worker_label or "").strip(),
+                required_worker_label_present=bool(case.required_worker_label_present),
+                decision_gate=DecisionGateResult(
+                    triggered=False,
+                    reason="Decision Gate not required",
+                    missing_sections=(),
+                    questions=(),
+                    recommendation="Proceed with execution.",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
+            )
+        if str(getattr(normalized_pre_check, "outcome", "") or "").strip() == "decision_gate_required":
+            normalized_pre_check = replace(normalized_pre_check, outcome="ready_for_agent")
+        return IngressDecision(
+            source=source,  # type: ignore[arg-type]
+            pre_check=normalized_pre_check,
+            block_reason=blocking_reason_for_precheck(normalized_pre_check),
+            guidance=enqueue_reason_guidance(blocking_reason_for_precheck(normalized_pre_check))
+            if blocking_reason_for_precheck(normalized_pre_check)
+            else None,
+            policy_error=None,
+            label_actions=(),
+        )
     return IngressDecision(
         source=source,  # type: ignore[arg-type]
         pre_check=pre_check,
@@ -135,6 +182,53 @@ def decision_from_snapshot(
         policy_error=str(snapshot.get("policy_error") or "").strip() or None,
         label_actions=(),
     )
+
+
+def normalize_clear_case_snapshot(
+    *,
+    case: DecisionCase,
+    source: str,
+    occurred_at: datetime | None = None,
+) -> bool:
+    classification = str(case.classification or "").strip() or "clear"
+    if classification != "clear":
+        return False
+    metadata = dict(case.metadata_json) if isinstance(case.metadata_json, dict) else {}
+    snapshot = metadata.get("result_snapshot") if isinstance(metadata.get("result_snapshot"), dict) else {}
+    decision = decision_from_snapshot(
+        snapshot=snapshot,
+        source=source,
+        classification="clear",
+        cycle=None,
+        case=case,
+    )
+    issue_labels = [
+        str(label).strip()
+        for label in snapshot.get("issue_labels", [])
+        if str(label).strip()
+    ]
+    auto_resolved_slots = list(string_tuple(snapshot.get("auto_resolved_slots")))
+    normalized_snapshot = serialize_result_snapshot(
+        decision=decision,
+        classification="clear",
+        issue_labels=issue_labels,
+        missing_slots=[],
+        auto_resolved_slots=auto_resolved_slots,
+    )
+    changed = (
+        str(case.blocked_reason or "").strip() != ""
+        or snapshot != normalized_snapshot
+        or str(case.state or "").strip() == "blocked_decision_gate"
+        or str(case.state or "").strip() == "blocked_gtd"
+    )
+    if not changed:
+        return False
+    metadata["result_snapshot"] = normalized_snapshot
+    case.blocked_reason = None
+    case.classification = "clear"
+    case.metadata_json = metadata
+    case.updated_at = occurred_at or datetime.now(timezone.utc)
+    return True
 
 
 def string_tuple(value: object) -> tuple[str, ...]:
@@ -267,8 +361,7 @@ def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, c
             str(item.get("kind") or "").strip() == QUESTION_KIND_DG
             and str(item.get("text") or "").strip()
             and (
-                not unresolved_ids
-                or not str(item.get("id") or "").strip()
+                not str(item.get("id") or "").strip()
                 or str(item.get("id") or "").strip() in unresolved_ids
             )
         )
@@ -280,8 +373,7 @@ def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, c
             str(item.get("kind") or "").strip() == QUESTION_KIND_GTD
             and str(item.get("text") or "").strip()
             and (
-                not unresolved_ids
-                or not str(item.get("id") or "").strip()
+                not str(item.get("id") or "").strip()
                 or str(item.get("id") or "").strip() in unresolved_ids
             )
         )
@@ -293,10 +385,9 @@ def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, c
         next_decision_gate = decision_gate
         if cycle.reason:
             next_decision_gate = replace(next_decision_gate, reason=cycle.reason)
-        if decision_gate_questions:
-            next_decision_gate = replace(next_decision_gate, questions=tuple(decision_gate_questions))
+        next_decision_gate = replace(next_decision_gate, questions=tuple(decision_gate_questions))
         resolved = replace(resolved, decision_gate=next_decision_gate)
-    if classification in {"gtd", "both"} and gtd is not None and gtd_questions:
+    if classification in {"gtd", "both"} and gtd is not None:
         resolved = replace(resolved, gtd=replace(gtd, clarification_questions=tuple(gtd_questions)))
     return resolved
 

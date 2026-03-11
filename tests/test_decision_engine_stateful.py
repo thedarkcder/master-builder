@@ -6,13 +6,15 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
 from orchestrator.core.decision_engine import DecisionEventInput, evaluate_decision_event
+from orchestrator.core.decision_state_repository import existing_case_for_issue
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import DecisionCase, DecisionEffectOutbox, DecisionEvent, Project, Tenant
+from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent, Project, Tenant
 
 
 def _precheck_result(
@@ -46,6 +48,53 @@ def _precheck_result(
             missing_criteria=gtd_missing_criteria,
             clarification_questions=gtd_questions,
         ),
+    )
+
+
+def _planner_result(
+    *,
+    gate_status: str,
+    reason: str,
+    questions: tuple[tuple[str, str], ...],
+    statuses: dict[str, str] | None = None,
+    details: dict[str, str] | None = None,
+    question_states: tuple[tuple[str, str], ...] | None = None,
+) -> DecisionPlannerResult:
+    normalized_statuses = dict(statuses or {})
+    normalized_details = dict(details or {})
+    state_questions = question_states or questions
+    planner_question_states = tuple(
+        DecisionPlannerQuestion(
+            question_id=question_id,
+            kind="decision_gate",
+            question=question_text,
+            status=normalized_statuses.get(question_id, "open"),
+            detail=normalized_details.get(question_id),
+        )
+        for question_id, question_text in state_questions
+    )
+    planner_questions = tuple(
+        DecisionPlannerQuestion(
+            question_id=question_id,
+            kind="decision_gate",
+            question=question_text,
+            status=normalized_statuses.get(question_id, "open"),
+            detail=normalized_details.get(question_id),
+        )
+        for question_id, question_text in questions
+    )
+    return DecisionPlannerResult(
+        gate_status=gate_status,
+        reason=reason,
+        questions=tuple(
+            question
+            for question in planner_questions
+            if question.status in {"open", "answered"}
+        ),
+        question_states=planner_question_states,
+        resolved_items=(),
+        missing_items=(),
+        captured_answer_summary=None,
     )
 
 
@@ -100,6 +149,7 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             return tenant, project
 
     def test_freezes_cycle_questions_while_open(self) -> None:
+        precheck_calls = 0
         prechecks = [
             _precheck_result(
                 outcome="decision_gate_required",
@@ -118,9 +168,25 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         ]
 
         def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
             return prechecks.pop(0)
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need owner decision",
+                    questions=(("dg_owner", "Who owns this decision?"),),
+                ),
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need owner decision",
+                    questions=(("dg_owner", "Who owns this decision?"),),
+                ),
+            ],
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
@@ -165,11 +231,104 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             tuple(second.decision.pre_check.decision_gate.questions),
             ("Who owns this decision?",),
         )
+        self.assertEqual(precheck_calls, 1)
+
+    def test_open_cycle_uses_planner_narrowed_question_wording(self) -> None:
+        precheck = _precheck_result(
+            outcome="decision_gate_required",
+            decision_gate_triggered=True,
+            decision_gate_reason="Need auth decisions",
+            decision_gate_questions=("Confirm auth configuration.",),
+            decision_gate_missing_sections=("auth configuration",),
+        )
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need auth decisions",
+                    questions=(("dg_auth", "Confirm Apple Sign In and Supabase auth configuration."),),
+                ),
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need auth decisions",
+                    questions=(("dg_auth", "What entitlement/capability values are required for production and staging?"),),
+                    question_states=(("dg_auth", "Confirm Apple Sign In and Supabase auth configuration."),),
+                    statuses={"dg_auth": "answered"},
+                    details={"dg_auth": "Bundle IDs and redirect URI were captured; entitlement values are still missing."},
+                ),
+            ],
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="narrow-1",
+                    issue_key="MAB-171",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=lambda **__: precheck,
+            )
+            second = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_reply",
+                    event_type="reply_added",
+                    idempotency_key="narrow-2",
+                    issue_key="MAB-171",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=lambda **__: precheck,
+            )
+            cycle = session.get(DecisionCycle, second.cycle_id)
+
+        assert cycle is not None
+        self.assertEqual(
+            tuple(second.decision.pre_check.decision_gate.questions),
+            ("What entitlement/capability values are required for production and staging?",),
+        )
+        self.assertEqual(
+            cycle.question_set_json,
+            [
+                {
+                    "id": "dg_auth",
+                    "kind": "decision_gate",
+                    "text": "What entitlement/capability values are required for production and staging?",
+                    "status": "answered",
+                    "detail": "Bundle IDs and redirect URI were captured; entitlement values are still missing.",
+                }
+            ],
+        )
 
     def test_idempotency_key_deduplicates_event_rows(self) -> None:
         precheck = _precheck_result(outcome="ready_for_agent")
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            return_value=_planner_result(
+                gate_status="blocked_decision_gate",
+                reason="Need config",
+                questions=(("dg_config", "What config is approved?"),),
+            ),
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
@@ -229,7 +388,14 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
             return prechecks.pop(0)
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            return_value=_planner_result(
+                gate_status="blocked_decision_gate",
+                reason="Need owner decision",
+                questions=(("dg_owner", "Who owns this decision?"),),
+            ),
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
@@ -276,8 +442,438 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         self.assertEqual(first.case_state, "blocked_decision_gate")
         self.assertTrue(second.duplicate_event)
         self.assertEqual(second.case_state, "blocked_decision_gate")
-        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("Who owns this?",))
+        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("Who owns this decision?",))
         self.assertEqual(case_after.updated_at, updated_at_before)
+
+    def test_open_cycle_with_answered_reply_does_not_rerun_precheck(self) -> None:
+        prechecks = [
+            _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Need config",
+                decision_gate_questions=("What config is approved?",),
+                decision_gate_missing_sections=("config",),
+            )
+        ]
+        precheck_calls = 0
+        recorded_answers_seen: list[list[dict[str, str]] | None] = []
+
+        def _evaluate_pre_run_check_stub(**kwargs: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
+            recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
+            return prechecks.pop(0)
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need config",
+                    questions=(("dg_config", "What config is approved?"),),
+                ),
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need config",
+                    questions=(("dg_config", "What config is approved?"),),
+                    statuses={"dg_config": "answered"},
+                    details={"dg_config": "Production bundle ID is com.example.app."},
+                ),
+            ],
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-1",
+                    issue_key="MAB-166",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            self.assertEqual(first.classification, "decision_gate")
+            cycle = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle is not None
+            question_id = str(cycle.question_set_json[0]["id"])
+
+            from orchestrator.storage.models import DecisionAnswer
+
+            session.add(
+                DecisionAnswer(
+                    answer_id="ans-1",
+                    case_id=first.case_id,
+                    cycle_id=str(first.cycle_id),
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key="MAB-166",
+                    question_id=question_id,
+                    question_kind="decision_gate",
+                    question_text="What config is approved?",
+                    status="answered",
+                    normalized_answer="Production bundle ID is com.example.app.",
+                    source_transport="discord",
+                    source_ref=None,
+                    evidence_ids_json=[],
+                    metadata_json={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            second = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-2",
+                    issue_key="MAB-166",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+
+        self.assertEqual(second.classification, "decision_gate")
+        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("What config is approved?",))
+        self.assertEqual(precheck_calls, 1)
+        self.assertEqual(recorded_answers_seen, [[]])
+
+    def test_resolved_cycle_persists_clear_state_without_rerunning_precheck(self) -> None:
+        prechecks = [
+            _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Need config",
+                decision_gate_questions=("What config is approved?",),
+                decision_gate_missing_sections=("config",),
+            ),
+        ]
+        precheck_calls = 0
+        recorded_answers_seen: list[list[dict[str, str]] | None] = []
+
+        def _evaluate_pre_run_check_stub(**kwargs: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
+            recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
+            return prechecks.pop(0)
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need config",
+                    questions=(("dg_config", "What config is approved?"),),
+                ),
+                _planner_result(
+                    gate_status="clear",
+                    reason="Clarification complete",
+                    questions=(("dg_config", "What config is approved?"),),
+                    statuses={"dg_config": "accepted"},
+                    details={"dg_config": "Production bundle ID is com.example.app."},
+                ),
+            ],
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-clear-1",
+                    issue_key="MAB-167",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            self.assertEqual(first.classification, "decision_gate")
+            cycle = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle is not None
+            question_id = str(cycle.question_set_json[0]["id"])
+
+            from orchestrator.storage.models import DecisionAnswer
+
+            session.add(
+                DecisionAnswer(
+                    answer_id="ans-2",
+                    case_id=first.case_id,
+                    cycle_id=str(first.cycle_id),
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key="MAB-167",
+                    question_id=question_id,
+                    question_kind="decision_gate",
+                    question_text="What config is approved?",
+                    status="accepted",
+                    normalized_answer="Production bundle ID is com.example.app.",
+                    source_transport="discord",
+                    source_ref=None,
+                    evidence_ids_json=[],
+                    metadata_json={},
+                    accepted_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            second = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-clear-2",
+                    issue_key="MAB-167",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            case = session.query(DecisionCase).filter_by(issue_key="MAB-167").one()
+
+        self.assertEqual(second.classification, "clear")
+        self.assertEqual(second.case_state, "ready_for_execution")
+        self.assertEqual(precheck_calls, 1)
+        self.assertEqual(recorded_answers_seen, [[]])
+        self.assertIsNone(case.active_cycle_id)
+        self.assertIsNone(case.blocked_reason)
+
+    def test_clear_case_with_same_fingerprint_reuses_persisted_clear_snapshot(self) -> None:
+        prechecks = [
+            _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Need config",
+                decision_gate_questions=("What config is approved?",),
+                decision_gate_missing_sections=("config",),
+            ),
+        ]
+        precheck_calls = 0
+
+        def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
+            return prechecks.pop(0)
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need config",
+                    questions=(("dg_config", "What config is approved?"),),
+                ),
+                _planner_result(
+                    gate_status="clear",
+                    reason="Clarification complete",
+                    questions=(("dg_config", "What config is approved?"),),
+                    statuses={"dg_config": "accepted"},
+                    details={"dg_config": "Production bundle ID is com.example.app."},
+                ),
+            ],
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="clear-snapshot-1",
+                    issue_key="MAB-168",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            cycle = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle is not None
+            question_id = str(cycle.question_set_json[0]["id"])
+
+            from orchestrator.storage.models import DecisionAnswer
+
+            session.add(
+                DecisionAnswer(
+                    answer_id="ans-3",
+                    case_id=first.case_id,
+                    cycle_id=str(first.cycle_id),
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key="MAB-168",
+                    question_id=question_id,
+                    question_kind="decision_gate",
+                    question_text="What config is approved?",
+                    status="accepted",
+                    normalized_answer="Production bundle ID is com.example.app.",
+                    source_transport="discord",
+                    source_ref=None,
+                    evidence_ids_json=[],
+                    metadata_json={},
+                    accepted_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            cleared = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_reply",
+                    event_type="reply_added",
+                    idempotency_key="clear-snapshot-2",
+                    issue_key="MAB-168",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+
+            reused = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_run",
+                    event_type="discord_discord_run",
+                    idempotency_key="clear-snapshot-3",
+                    issue_key="MAB-168",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            case = session.query(DecisionCase).filter_by(issue_key="MAB-168").one()
+
+        self.assertEqual(cleared.classification, "clear")
+        self.assertEqual(reused.classification, "clear")
+        self.assertEqual(reused.case_state, "ready_for_execution")
+        self.assertEqual(precheck_calls, 1)
+        self.assertIsNone(case.active_cycle_id)
+        self.assertIsNone(case.blocked_reason)
+
+    def test_existing_case_load_normalizes_stale_clear_snapshot(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            case = DecisionCase(
+                case_id="case-stale-clear",
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                issue_key="MAB-169",
+                state="clear",
+                blocked_reason="policy_eval_failed",
+                classification="clear",
+                issue_fingerprint="fp-169",
+                active_cycle_id=None,
+                last_source="worker_execution",
+                last_event_type="run_started",
+                last_event_at=datetime.now(timezone.utc),
+                required_worker_capability="linux",
+                required_worker_label="worker:linux",
+                ready_label="agent:ready",
+                ready_label_present=True,
+                metadata_json={
+                    "result_snapshot": {
+                        "classification": "clear",
+                        "issue_labels": [],
+                        "missing_slots": [],
+                        "auto_resolved_slots": [],
+                        "block_reason": "policy_eval_failed",
+                        "guidance": "Pre-run policy evaluation failed.",
+                        "policy_error": "Codex precheck policy evaluation failed",
+                        "pre_check": {
+                            "outcome": "decision_gate_required",
+                            "ready_label": "agent:ready",
+                            "ready_label_present": True,
+                            "required_worker_capability": "linux",
+                            "required_worker_label": "worker:linux",
+                            "required_worker_label_present": True,
+                            "decision_gate": {
+                                "triggered": True,
+                                "reason": "Need config",
+                                "missing_sections": [],
+                                "questions": ["What config is approved?"],
+                                "recommendation": "Clarification required",
+                                "tags": [],
+                            },
+                            "gtd": {
+                                "valid": True,
+                                "missing_criteria": [],
+                                "clarification_questions": [],
+                            },
+                        },
+                    }
+                },
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            session.add(case)
+            session.commit()
+
+            loaded = existing_case_for_issue(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                issue_key="MAB-169",
+            )
+            session.commit()
+            session.refresh(case)
+
+        assert loaded is not None
+        self.assertIsNone(case.blocked_reason)
+        self.assertEqual(case.classification, "clear")
+        snapshot = dict(case.metadata_json.get("result_snapshot") or {})
+        self.assertEqual(snapshot.get("classification"), "clear")
+        self.assertIsNone(snapshot.get("block_reason"))
+        self.assertIsNone(snapshot.get("policy_error"))
 
     def test_jira_comment_effect_is_published_after_state_commit(self) -> None:
         precheck = _precheck_result(
@@ -298,7 +894,14 @@ class DecisionEngineStatefulTests(unittest.TestCase):
             observed_state["comment"] = comment
             return True, None
 
-        with self.session_factory() as session:
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            return_value=_planner_result(
+                gate_status="blocked_decision_gate",
+                reason="Need owner decision",
+                questions=(("dg_owner", "Who owns this decision?"),),
+            ),
+        ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None

@@ -192,6 +192,10 @@ export type ProjectKnowledgeAssetCreatePayload = {
   content_base64?: string;
 };
 
+export type ProjectKnowledgeAssetStatusUpdatePayload = {
+  status: "pending_review" | "ready" | "rejected";
+};
+
 export type ProjectKnowledgeSyncResult = {
   ok: boolean;
   synced_assets: number;
@@ -877,6 +881,23 @@ export async function deleteProjectKnowledgeAsset(
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets/${encodeURIComponent(assetId)}`,
     {
       method: "DELETE"
+    }
+  );
+}
+
+export function updateProjectKnowledgeAssetStatus(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  assetId: string,
+  payload: ProjectKnowledgeAssetStatusUpdatePayload
+): Promise<ProjectKnowledgeAssetRecord> {
+  return request<ProjectKnowledgeAssetRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets/${encodeURIComponent(assetId)}/status`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload)
     }
   );
 }

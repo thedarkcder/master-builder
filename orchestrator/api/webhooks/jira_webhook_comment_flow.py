@@ -12,9 +12,18 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.contracts import (
     JIRA_COMMENT_EVENTS,
     extract_jira_comment_author_account_id,
+    extract_jira_comment_text,
     post_jira_comment,
 )
+from orchestrator.api.webhooks import jira_webhook_precheck
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
+from orchestrator.core.codex_runtime import CodexRuntimeError
+from orchestrator.core.decision_reply_service import (
+    active_case_and_cycle_for_issue,
+    capture_decision_reply,
+    is_machine_generated_decision_comment,
+    unresolved_question_feedback_for_cycle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +130,76 @@ def stage_handle_comment_without_command(
         reason="comment_without_command",
         webhook_event=context.webhook_event,
         removed_history_entries=removed_history_entries,
+    )
+
+
+def stage_handle_comment_decision_reply(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    if context.webhook_event not in JIRA_COMMENT_EVENTS or context.comment_command is not None:
+        return None
+    comment_text = extract_jira_comment_text(context.payload)
+    if not comment_text or is_machine_generated_decision_comment(text=comment_text):
+        return None
+    _, cycle = active_case_and_cycle_for_issue(
+        session=session,
+        tenant_id=context.tenant_id,
+        issue_key=context.issue_key,
+    )
+    if cycle is None:
+        return None
+    author_account_id = extract_jira_comment_author_account_id(context.payload)
+    try:
+        capture = capture_decision_reply(
+            session=session,
+            tenant=context.tenant,
+            project=context.project,
+            issue_key=context.issue_key,
+            reply_text=comment_text,
+            source_transport="jira_comment",
+            source_ref=context.delivery_id,
+            actor_ref=author_account_id,
+            metadata={"webhook_event": context.webhook_event},
+        )
+        decision_result = jira_webhook_precheck.evaluate_precheck_decision_with_labels(
+            context=context,
+            session=session,
+            settings=settings,
+            idempotency_key=f"decision-reply:{capture.evidence_id}",
+        )
+    except (CodexRuntimeError, RuntimeError, ValueError, HTTPException) as exc:
+        logger.exception(
+            "jira_comment_decision_reply_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc,
+        )
+        return jira_webhook_response(
+            context,
+            enqueued=False,
+            reason="decision_reply_failed",
+            webhook_event=context.webhook_event,
+        )
+    return jira_webhook_response(
+        context,
+        enqueued=False,
+        reason="decision_reply_recorded",
+        classification=decision_result.classification,
+        cycle_id=decision_result.cycle_id,
+        questions=list(getattr(decision_result.decision.pre_check.decision_gate, "questions", ()))
+        if decision_result.decision.pre_check is not None and getattr(decision_result.decision.pre_check, "decision_gate", None) is not None
+        else [],
+        question_feedback=list(
+            unresolved_question_feedback_for_cycle(
+                session=session,
+                cycle_id=str(decision_result.cycle_id or ""),
+            )
+        ) if decision_result.cycle_id else [],
+        webhook_event=context.webhook_event,
     )
 
 

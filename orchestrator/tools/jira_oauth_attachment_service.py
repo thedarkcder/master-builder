@@ -7,8 +7,9 @@ from orchestrator.tools.jira_oauth_models import JiraOAuthError
 
 
 class JiraOAuthAttachmentService:
-    def __init__(self, *, post_multipart) -> None:
+    def __init__(self, *, post_multipart, get_bytes) -> None:
         self._post_multipart = post_multipart
+        self._get_bytes = get_bytes
 
     def upload_issue_attachment(
         self,
@@ -42,3 +43,17 @@ class JiraOAuthAttachmentService:
         if not isinstance(parsed, list):
             raise JiraOAuthError("Jira attachment upload response was not a list")
         return [item for item in parsed if isinstance(item, dict)]
+
+    def download_attachment(
+        self,
+        *,
+        access_token: str,
+        content_url: str,
+    ) -> bytes:
+        normalized_url = str(content_url or "").strip()
+        if not normalized_url:
+            raise JiraOAuthError("Missing attachment content url")
+        content = self._get_bytes(url=normalized_url, access_token=access_token)
+        if not isinstance(content, (bytes, bytearray)):
+            raise JiraOAuthError("Jira attachment download response was not bytes")
+        return bytes(content)

@@ -188,10 +188,19 @@ class KnowledgeAssetRead(BaseModel):
     updated_at: datetime
 
 
+class KnowledgeAssetStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(pending_review|ready|rejected)$")
+
+
 class KnowledgeSyncResultRead(BaseModel):
     ok: bool
     synced_assets: int
     skipped_assets: int
+    created_assets: int = 0
+    updated_assets: int = 0
+    unchanged_assets: int = 0
+    deleted_assets: int = 0
+    failed_assets: int = 0
     details: str | None = None
 
 
@@ -324,6 +333,7 @@ class RunRead(BaseModel):
     pr_url: str | None
     dev_session_id: str | None = None
     pm_session_id: str | None = None
+    orchestrated_session_id: str | None = None
     status: str
     last_error: str | None
     plan: dict | None
