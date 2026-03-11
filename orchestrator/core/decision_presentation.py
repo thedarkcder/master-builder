@@ -42,7 +42,7 @@ def build_cycle_comment(*, session, case: DecisionCase, cycle: DecisionCycle) ->
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
-            if unresolved_ids and question_id and question_id not in unresolved_ids:
+            if question_id and question_id not in unresolved_ids:
                 continue
             answer = next(
                 (

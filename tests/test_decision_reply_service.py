@@ -5,6 +5,8 @@ import tempfile
 import unittest
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision_precheck_mapping import apply_frozen_cycle_to_precheck
 from orchestrator.core.decision_reply_service import (
     capture_decision_reply,
     serialize_recorded_answers_for_policy,
@@ -12,6 +14,8 @@ from orchestrator.core.decision_reply_service import (
     unresolved_question_feedback_for_cycle,
 )
 from orchestrator.core.decision_presentation import build_cycle_comment
+from orchestrator.core.gtd import GoodToDoValidationResult
+from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import DecisionAnswer, DecisionCase, DecisionCycle, Project, Tenant
@@ -268,3 +272,56 @@ class DecisionReplyServiceTests(unittest.TestCase):
             question_feedback[0]["note"],
         )
         self.assertIn("Missing detail: Config values were captured, but entitlement confirmation is still missing.", comment)
+
+    def test_all_accepted_cycle_shows_no_outstanding_questions(self) -> None:
+        with self.session_factory() as session:
+            case = session.get(DecisionCase, "case-1")
+            cycle = session.get(DecisionCycle, "cycle-1")
+            answer = session.get(DecisionAnswer, "answer-1")
+            assert case is not None and cycle is not None and answer is not None
+
+            cycle.unresolved_question_ids_json = []
+            answer.status = "accepted"
+            answer.normalized_answer = "Accepted config answer."
+            answer.updated_at = datetime.now(timezone.utc)
+            session.commit()
+
+            comment = build_cycle_comment(session=session, case=case, cycle=cycle)
+            feedback = unresolved_question_feedback_for_cycle(session=session, cycle_id=cycle.cycle_id)
+
+        self.assertIn("Outstanding questions:", comment)
+        self.assertNotIn("[dg_1] What config is approved?", comment.split("Outstanding questions:")[-1])
+        self.assertEqual(feedback, ())
+
+    def test_apply_frozen_cycle_to_precheck_hides_questions_when_none_unresolved(self) -> None:
+        with self.session_factory() as session:
+            cycle = session.get(DecisionCycle, "cycle-1")
+            assert cycle is not None
+            cycle.unresolved_question_ids_json = []
+            session.commit()
+
+            pre_check = PreRunCheckResult(
+                outcome="decision_gate_required",
+                ready_label="agent:ready",
+                ready_label_present=False,
+                required_worker_capability="linux",
+                required_worker_label="worker:linux",
+                required_worker_label_present=False,
+                decision_gate=DecisionGateResult(
+                    triggered=True,
+                    reason="Need config",
+                    missing_sections=(),
+                    questions=("What config is approved?",),
+                    recommendation="Block",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
+            )
+
+            resolved = apply_frozen_cycle_to_precheck(pre_check=pre_check, cycle=cycle, classification="decision_gate")
+
+        self.assertEqual(resolved.decision_gate.questions, ())

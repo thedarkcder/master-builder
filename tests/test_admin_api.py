@@ -2622,6 +2622,48 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("cannot transition", response.json()["detail"])
 
+    def test_update_project_knowledge_asset_status_moves_rejected_asset_back_to_review(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            asset = KnowledgeAsset(
+                asset_id="kb-rejected-1",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_type="decision_answer",
+                title="Rejected decision answer",
+                mime_type="text/plain",
+                source_ref="TP-101:dg_rejected",
+                source_timestamp=now,
+                checksum="checksum-3",
+                text_content="Rejected answer text",
+                binary_content=None,
+                chunk_count=0,
+                status="rejected",
+                metadata_json={"question_id": "dg_rejected"},
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(asset)
+            session.commit()
+
+        response = self.client.patch(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/assets/kb-rejected-1/status",
+            json={"status": "pending_review"},
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "pending_review")
+
 
 if __name__ == "__main__":
     unittest.main()

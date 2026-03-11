@@ -278,6 +278,17 @@ export function ProjectKnowledgeBaseSection({
                         </Button>
                       </>
                     ) : null}
+                    {asset.status === "rejected" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mr-2"
+                        disabled={updatingAssetId === asset.asset_id || deletingAssetId === asset.asset_id}
+                        onClick={() => void updateAssetStatus(asset.asset_id, "pending_review")}
+                      >
+                        {updatingAssetId === asset.asset_id ? "Saving..." : "Move to review"}
+                      </Button>
+                    ) : null}
                     <Button
                       size="sm"
                       variant="outline"

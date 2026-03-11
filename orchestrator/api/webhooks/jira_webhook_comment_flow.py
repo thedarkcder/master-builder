@@ -17,6 +17,7 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.api.webhooks import jira_webhook_precheck
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
     capture_decision_reply,
@@ -169,7 +170,7 @@ def stage_handle_comment_decision_reply(
             settings=settings,
             idempotency_key=f"decision-reply:{capture.evidence_id}",
         )
-    except (RuntimeError, ValueError, HTTPException) as exc:
+    except (CodexRuntimeError, RuntimeError, ValueError, HTTPException) as exc:
         logger.exception(
             "jira_comment_decision_reply_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
             context.request_id,
