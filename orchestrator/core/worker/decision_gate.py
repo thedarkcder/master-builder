@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import delete
 
-from orchestrator.core.decision_engine import DecisionEventInput, evaluate_decision_event
+from orchestrator.core.decision_engine import evaluate_worker_decision
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
@@ -29,28 +29,23 @@ def apply_decision_gate(
     blocked_status: str,
     failed_status: str,
 ) -> tuple[object | None, dict | None]:
-    result = evaluate_decision_event(
+    worker_decision = evaluate_worker_decision(
+        run_plan=run.plan,
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        issue_key=run.issue_key,
+        run_id=run.run_id,
+        issue_summary=run.issue_summary,
+        issue_description=run.issue_description,
         session=session,
         tenant=tenant,
-        project=None,
-        event=DecisionEventInput(
-            source="worker_execution",
-            event_type="worker_execution_gate",
-            idempotency_key=f"worker-execution:{run.run_id}",
-            issue_key=run.issue_key,
-            issue_summary=run.issue_summary,
-            issue_description=run.issue_description,
-            issue_labels=[],
-        ),
-        settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
-        publish_jira_comment_fn=None,
+        issue_labels=[],
         evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
     )
 
-    if result.decision.policy_error:
+    if worker_decision.configuration_error:
         run.status = failed_status
-        run.last_error = f"Decision Gate configuration error: {result.decision.policy_error}"
+        run.last_error = f"Decision Gate configuration error: {worker_decision.configuration_error}"
         run.finished_at = datetime.now(timezone.utc)
         session.execute(
             delete(RunLock).where(
@@ -63,15 +58,15 @@ def apply_decision_gate(
         session.refresh(run)
         return run, None
 
-    if result.decision.block_reason not in {"decision_gate_required", "gtd_required"}:
+    if worker_decision.block_reason not in {"decision_gate_required", "gtd_required"}:
         return None, None
 
-    pre_check = result.decision.pre_check
-    decision_gate = getattr(pre_check, "decision_gate", None)
-    gtd = getattr(pre_check, "gtd", None)
+    pre_check = worker_decision.pre_check
+    decision_gate = getattr(pre_check, "decision_gate", None) if pre_check is not None else None
+    gtd = getattr(pre_check, "gtd", None) if pre_check is not None else None
     reason = ""
     questions: list[str] = []
-    if result.decision.block_reason == "decision_gate_required" and decision_gate is not None:
+    if worker_decision.block_reason == "decision_gate_required" and decision_gate is not None:
         reason = str(getattr(decision_gate, "reason", "") or "").strip()
         questions = [str(question).strip() for question in getattr(decision_gate, "questions", ()) if str(question).strip()]
         decision_gate_payload = decision_gate.to_payload()
@@ -113,7 +108,7 @@ def apply_decision_gate(
         "stage_updates": [stage_update],
         "decision_gate": decision_gate_payload,
         "pre_check": {
-            "outcome": getattr(pre_check, "outcome", None),
+            "outcome": getattr(pre_check, "outcome", None) if pre_check is not None else None,
         },
     }
     terminal_run = mark_run_terminal(

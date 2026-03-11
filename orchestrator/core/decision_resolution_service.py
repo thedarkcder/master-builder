@@ -93,6 +93,16 @@ def resolve_slots_with_codex(
         missing_slots=missing_slots,
         project_repo_dir_fn=project_repo_dir_fn,
     )
+    issue_context = "\n".join(
+        part
+        for part in (
+            str(issue_summary or "").strip(),
+            str(issue_description or "").strip(),
+        )
+        if part
+    ).strip()
+    if not repo_evidence.strip() and not issue_context:
+        return {}
     try:
         payload = invoke_codex_json_fn(
             runtime=runtime,

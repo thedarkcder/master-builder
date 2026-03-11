@@ -162,6 +162,7 @@ export default function TenantRunsPage() {
                 <TableHead>Run</TableHead>
                 <TableHead>Issue</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Failure</TableHead>
                 <TableHead>PR</TableHead>
                 <TableHead>Created</TableHead>
               </TableRow>
@@ -197,6 +198,15 @@ export default function TenantRunsPage() {
                     )}
                   </TableCell>
                   <TableCell><StatusBadge status={run.status} /></TableCell>
+                  <TableCell className="max-w-[340px]">
+                    {run.last_error ? (
+                      <p className="line-clamp-2 text-xs text-destructive" title={run.last_error}>
+                        {run.last_error}
+                      </p>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     {run.pr_url ? (
                       <Link
@@ -217,7 +227,7 @@ export default function TenantRunsPage() {
               ))}
               {runs.length === 0 && !loading ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
                     No runs found for the current filters.
                   </TableCell>
                 </TableRow>

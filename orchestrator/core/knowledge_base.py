@@ -5,14 +5,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import math
+import mimetypes
 import re
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, desc, func, select
+from sqlalchemy import delete, desc, func, select, text
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeChunk, KnowledgeFact
+from orchestrator.storage.vector_type import vector_literal
 
 SLOT_ALIASES: dict[str, tuple[str, ...]] = {
     "objective": ("objective", "goal", "problem"),
@@ -50,6 +52,25 @@ class SlotResolution:
     confidence: float
     citation: dict[str, Any]
     inferred: bool
+
+
+@dataclass(frozen=True)
+class KnowledgeSyncResult:
+    created_assets: int = 0
+    updated_assets: int = 0
+    unchanged_assets: int = 0
+    deleted_assets: int = 0
+    skipped_assets: int = 0
+    failed_assets: int = 0
+    details: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.failed_assets == 0
+
+    @property
+    def synced_assets(self) -> int:
+        return self.created_assets + self.updated_assets
 
 
 def normalize_slot_name(value: str) -> str | None:
@@ -268,6 +289,226 @@ def _embed_texts(texts: list[str]) -> list[list[float] | None]:
     return normalized[: len(texts)]
 
 
+def _asset_checksum(*, text_content: str, binary_content: bytes | None) -> str | None:
+    checksum_input = binary_content if binary_content else text_content.encode("utf-8", errors="ignore")
+    return hashlib.sha256(checksum_input).hexdigest() if checksum_input else None
+
+
+def _attachment_extension(filename: str) -> str:
+    lowered = str(filename or "").strip().lower()
+    if "." not in lowered:
+        return ""
+    return "." + lowered.rsplit(".", 1)[-1]
+
+
+def _is_supported_text_attachment(*, filename: str, mime_type: str | None, size_bytes: int | None) -> bool:
+    if isinstance(size_bytes, int) and size_bytes > 5 * 1024 * 1024:
+        return False
+    normalized_mime = str(mime_type or "").strip().lower()
+    extension = _attachment_extension(filename)
+    if normalized_mime.startswith("text/"):
+        return True
+    if normalized_mime in {
+        "application/pdf",
+        "application/json",
+        "application/yaml",
+        "application/x-yaml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    }:
+        return True
+    if normalized_mime.startswith("image/"):
+        return True
+    return extension in {
+        ".txt",
+        ".md",
+        ".markdown",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+        ".bmp",
+        ".tif",
+        ".tiff",
+    }
+
+
+def _jira_issue_asset_ref(issue_key: str) -> str:
+    return f"issue:{issue_key}"
+
+
+def _jira_comment_asset_ref(issue_key: str, comment_id: str) -> str:
+    return f"comment:{issue_key}:{comment_id}"
+
+
+def _jira_attachment_asset_ref(issue_key: str, attachment_id: str) -> str:
+    return f"attachment:{issue_key}:{attachment_id}"
+
+
+def _refresh_asset_content(
+    *,
+    session: Session,
+    asset: KnowledgeAsset,
+    title: str,
+    mime_type: str | None,
+    source_timestamp: datetime | None,
+    text_content: str | None,
+    binary_content: bytes | None,
+    metadata_json: dict[str, Any],
+) -> None:
+    now = datetime.now(timezone.utc)
+    normalized_title = str(title or "").strip()[:255] or "Untitled asset"
+    normalized_mime_type = str(mime_type or "").strip()[:128] or None
+    extracted_text = str(text_content or "").strip()
+    if not extracted_text:
+        extracted_text = _extract_text_from_binary(
+            content=binary_content,
+            mime_type=normalized_mime_type,
+            title=normalized_title,
+        )
+
+    asset.title = normalized_title
+    asset.mime_type = normalized_mime_type
+    asset.source_timestamp = source_timestamp
+    asset.text_content = extracted_text or None
+    asset.binary_content = binary_content
+    asset.checksum = _asset_checksum(text_content=extracted_text, binary_content=binary_content)
+    asset.metadata_json = dict(metadata_json)
+    asset.status = "ready"
+    asset.updated_at = now
+
+    session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.asset_id == asset.asset_id))
+    session.execute(delete(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id))
+    session.flush()
+
+    chunks = _chunk_text(extracted_text)
+    embeddings = _embed_texts(chunks)
+    for idx, chunk in enumerate(chunks):
+        session.add(
+            KnowledgeChunk(
+                chunk_id=uuid4().hex,
+                asset_id=asset.asset_id,
+                tenant_id=asset.tenant_id,
+                project_id=asset.project_id,
+                chunk_index=idx,
+                content=chunk,
+                token_count=max(1, len(chunk) // 4),
+                embedding=embeddings[idx] if idx < len(embeddings) else None,
+                source_timestamp=source_timestamp,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    asset.chunk_count = len(chunks)
+
+    for slot_name, slot_value in extract_slot_facts(extracted_text).items():
+        session.add(
+            KnowledgeFact(
+                fact_id=uuid4().hex,
+                asset_id=asset.asset_id,
+                chunk_id=None,
+                tenant_id=asset.tenant_id,
+                project_id=asset.project_id,
+                slot_name=slot_name,
+                slot_value=slot_value,
+                confidence=0.95,
+                is_inferred=False,
+                source_timestamp=source_timestamp,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+
+def _upsert_knowledge_asset(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    source_type: str,
+    source_ref: str,
+    title: str,
+    mime_type: str | None,
+    source_timestamp: datetime | None,
+    text_content: str | None,
+    binary_content: bytes | None,
+    metadata_json: dict[str, Any] | None = None,
+) -> str:
+    metadata = dict(metadata_json or {})
+    normalized_source_type = str(source_type or "").strip().lower()
+    normalized_source_ref = str(source_ref or "").strip()
+    if not normalized_source_type or not normalized_source_ref:
+        raise ValueError("Upserted knowledge assets require source_type and source_ref")
+
+    normalized_title = str(title or "").strip()[:255]
+    extracted_text = str(text_content or "").strip()
+    if not extracted_text:
+        extracted_text = _extract_text_from_binary(
+            content=binary_content,
+            mime_type=mime_type,
+            title=normalized_title,
+        )
+    checksum = _asset_checksum(text_content=extracted_text, binary_content=binary_content)
+    existing = session.execute(
+        select(KnowledgeAsset).where(
+            KnowledgeAsset.tenant_id == tenant_id,
+            KnowledgeAsset.project_id == project_id,
+            KnowledgeAsset.source_type == normalized_source_type,
+            KnowledgeAsset.source_ref == normalized_source_ref,
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        create_knowledge_asset(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            source_type=normalized_source_type,
+            title=normalized_title,
+            mime_type=mime_type,
+            source_ref=normalized_source_ref,
+            source_timestamp=source_timestamp,
+            text_content=extracted_text,
+            binary_content=binary_content,
+            metadata_json=metadata,
+            status="ready",
+            commit=False,
+        )
+        return "created"
+
+    if (
+        existing.status != "deleted"
+        and existing.checksum == checksum
+        and dict(existing.metadata_json or {}) == metadata
+        and existing.title == (normalized_title or "Untitled asset")
+        and existing.mime_type == (str(mime_type or "").strip()[:128] or None)
+        and existing.source_timestamp == source_timestamp
+    ):
+        if existing.status != "ready":
+            existing.status = "ready"
+            existing.updated_at = datetime.now(timezone.utc)
+            return "updated"
+        return "unchanged"
+
+    _refresh_asset_content(
+        session=session,
+        asset=existing,
+        title=normalized_title,
+        mime_type=mime_type,
+        source_timestamp=source_timestamp,
+        text_content=extracted_text,
+        binary_content=binary_content,
+        metadata_json=metadata,
+    )
+    return "updated"
+
+
 def list_knowledge_assets(*, session: Session, tenant_id: str, project_id: str) -> list[KnowledgeAsset]:
     return session.execute(
         select(KnowledgeAsset)
@@ -293,6 +534,8 @@ def create_knowledge_asset(
     text_content: str | None = None,
     binary_content: bytes | None = None,
     metadata_json: dict[str, Any] | None = None,
+    status: str = "ready",
+    commit: bool = True,
 ) -> KnowledgeAsset:
     now = datetime.now(timezone.utc)
     normalized_title = str(title or "").strip()[:255]
@@ -306,8 +549,7 @@ def create_knowledge_asset(
             mime_type=normalized_mime_type,
             title=normalized_title,
         )
-    checksum_input = binary_content if binary_content else extracted_text.encode("utf-8", errors="ignore")
-    checksum = hashlib.sha256(checksum_input).hexdigest() if checksum_input else None
+    checksum = _asset_checksum(text_content=extracted_text, binary_content=binary_content)
 
     asset = KnowledgeAsset(
         asset_id=uuid4().hex,
@@ -322,7 +564,7 @@ def create_knowledge_asset(
         text_content=extracted_text or None,
         binary_content=binary_content,
         chunk_count=0,
-        status="ready",
+        status=str(status or "ready").strip() or "ready",
         metadata_json=dict(metadata_json or {}),
         created_at=now,
         updated_at=now,
@@ -368,8 +610,9 @@ def create_knowledge_asset(
         )
         session.add(fact)
 
-    session.commit()
-    session.refresh(asset)
+    if commit:
+        session.commit()
+        session.refresh(asset)
     return asset
 
 
@@ -396,78 +639,217 @@ def sync_project_knowledge_from_jira(
     jira_client,  # noqa: ANN001
     access_token: str,
     cloud_id: str,
-    max_issues: int = 50,
-) -> tuple[int, int]:
+    max_issues: int = 500,
+) -> KnowledgeSyncResult:
     normalized_project_key = str(project_key or "").strip().upper()
     if not normalized_project_key:
-        return (0, 0)
-    previews = jira_client.search_issues_by_jql(
-        access_token=access_token,
-        cloud_id=cloud_id,
-        jql=f'project = "{normalized_project_key}" ORDER BY updated DESC',
-        max_results=max(1, min(max_issues, 200)),
-    )
-    synced = 0
-    skipped = 0
-    for preview in previews:
-        issue_key = str(getattr(preview, "key", "") or "").strip().upper()
-        if not issue_key:
-            skipped += 1
-            continue
-        detail = jira_client.get_issue_detail(
+        return KnowledgeSyncResult(details="Jira project key is not configured")
+
+    counts = {
+        "created": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "deleted": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
+    active_refs: set[str] = set()
+    page_size = max(1, min(max_issues, 50))
+    remaining = max(1, max_issues)
+    start_at = 0
+
+    while remaining > 0:
+        requested = min(page_size, remaining)
+        previews = jira_client.search_issues_by_jql(
             access_token=access_token,
             cloud_id=cloud_id,
-            issue_id_or_key=issue_key,
+            jql=f'project = "{normalized_project_key}" ORDER BY updated DESC',
+            max_results=requested,
+            start_at=start_at,
         )
-        summary = str(getattr(detail, "summary", "") or "").strip()
-        description = str(getattr(detail, "description", "") or "").strip()
-        status = str(getattr(detail, "status", "") or "").strip()
-        body_text = "\n".join(
-            line
-            for line in [
-                f"Issue: {issue_key}",
-                f"Status: {status}",
-                f"Summary: {summary}",
-                "",
-                "Description:",
-                description,
-            ]
-            if line is not None
-        ).strip()
-        checksum = hashlib.sha256(body_text.encode("utf-8", errors="ignore")).hexdigest()
-        existing = session.execute(
-            select(KnowledgeAsset)
-            .where(
-                KnowledgeAsset.tenant_id == tenant_id,
-                KnowledgeAsset.project_id == project_id,
-                KnowledgeAsset.source_type == "jira_issue",
-                KnowledgeAsset.source_ref == issue_key,
-                KnowledgeAsset.checksum == checksum,
-                KnowledgeAsset.status != "deleted",
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        if existing is not None:
-            skipped += 1
+        if not previews:
+            break
+
+        for preview in previews:
+            if remaining <= 0:
+                break
+            remaining -= 1
+            issue_key = str(getattr(preview, "key", "") or "").strip().upper()
+            if not issue_key:
+                counts["skipped"] += 1
+                continue
+            try:
+                detail = jira_client.get_issue_detail(
+                    access_token=access_token,
+                    cloud_id=cloud_id,
+                    issue_id_or_key=issue_key,
+                )
+                comments = jira_client.list_issue_comments(
+                    access_token=access_token,
+                    cloud_id=cloud_id,
+                    issue_id_or_key=issue_key,
+                )
+                attachments = jira_client.list_issue_attachments(
+                    access_token=access_token,
+                    cloud_id=cloud_id,
+                    issue_id_or_key=issue_key,
+                )
+            except Exception:  # noqa: BLE001
+                counts["failed"] += 1
+                continue
+
+            summary = str(getattr(detail, "summary", "") or "").strip()
+            description = str(getattr(detail, "description", "") or "").strip()
+            status = str(getattr(detail, "status", "") or "").strip()
+            labels = [str(label).strip() for label in list(getattr(detail, "labels", []) or []) if str(label).strip()]
+            issue_body_text = "\n".join(
+                line
+                for line in [
+                    f"Issue: {issue_key}",
+                    f"Status: {status}",
+                    f"Summary: {summary}",
+                    f"Labels: {', '.join(labels)}" if labels else None,
+                    "",
+                    "Description:",
+                    description,
+                ]
+                if line is not None
+            ).strip()
+            issue_ref = _jira_issue_asset_ref(issue_key)
+            active_refs.add(issue_ref)
+            counts[_upsert_knowledge_asset(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                source_type="jira_issue",
+                source_ref=issue_ref,
+                title=f"{issue_key}: {summary[:220] if summary else 'Jira issue'}",
+                mime_type="text/plain",
+                source_timestamp=datetime.now(timezone.utc),
+                text_content=issue_body_text,
+                binary_content=None,
+                metadata_json={
+                    "issue_key": issue_key,
+                    "status": status,
+                    "labels": labels,
+                },
+            )] += 1
+
+            for comment in comments:
+                comment_id = str(getattr(comment, "comment_id", "") or "").strip()
+                if not comment_id:
+                    counts["skipped"] += 1
+                    continue
+                comment_body = str(getattr(comment, "body", "") or "").strip()
+                if not comment_body:
+                    counts["skipped"] += 1
+                    continue
+                comment_ref = _jira_comment_asset_ref(issue_key, comment_id)
+                active_refs.add(comment_ref)
+                counts[_upsert_knowledge_asset(
+                    session=session,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    source_type="jira_comment",
+                    source_ref=comment_ref,
+                    title=f"{issue_key} comment {comment_id}",
+                    mime_type="text/plain",
+                    source_timestamp=getattr(comment, "updated_at", None),
+                    text_content=comment_body,
+                    binary_content=None,
+                    metadata_json={
+                        "issue_key": issue_key,
+                        "comment_id": comment_id,
+                        "author_display_name": getattr(comment, "author_display_name", None),
+                    },
+                )] += 1
+
+            for attachment in attachments:
+                attachment_id = str(getattr(attachment, "attachment_id", "") or "").strip()
+                filename = str(getattr(attachment, "filename", "") or "").strip()
+                content_url = str(getattr(attachment, "content_url", "") or "").strip()
+                mime_type = str(getattr(attachment, "mime_type", "") or "").strip() or mimetypes.guess_type(filename)[0]
+                size_bytes = getattr(attachment, "size_bytes", None)
+                if not attachment_id or not filename or not content_url:
+                    counts["skipped"] += 1
+                    continue
+                attachment_ref = _jira_attachment_asset_ref(issue_key, attachment_id)
+                active_refs.add(attachment_ref)
+                if not _is_supported_text_attachment(
+                    filename=filename,
+                    mime_type=mime_type,
+                    size_bytes=size_bytes if isinstance(size_bytes, int) else None,
+                ):
+                    counts["skipped"] += 1
+                    continue
+                try:
+                    content_bytes = jira_client.download_attachment(
+                        access_token=access_token,
+                        content_url=content_url,
+                    )
+                except Exception:  # noqa: BLE001
+                    counts["failed"] += 1
+                    continue
+                extracted_text = _extract_text_from_binary(
+                    content=content_bytes,
+                    mime_type=mime_type,
+                    title=filename,
+                ).strip()
+                if not extracted_text:
+                    counts["skipped"] += 1
+                    continue
+                counts[_upsert_knowledge_asset(
+                    session=session,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    source_type="jira_attachment",
+                    source_ref=attachment_ref,
+                    title=f"{issue_key} attachment {filename}",
+                    mime_type=mime_type,
+                    source_timestamp=getattr(attachment, "created_at", None),
+                    text_content=extracted_text,
+                    binary_content=content_bytes,
+                    metadata_json={
+                        "issue_key": issue_key,
+                        "attachment_id": attachment_id,
+                        "filename": filename,
+                        "content_url": content_url,
+                        "size_bytes": size_bytes,
+                    },
+                )] += 1
+
+        start_at += len(previews)
+        if len(previews) < requested:
+            break
+
+    existing_assets = session.execute(
+        select(KnowledgeAsset).where(
+            KnowledgeAsset.tenant_id == tenant_id,
+            KnowledgeAsset.project_id == project_id,
+            KnowledgeAsset.source_type.in_(("jira_issue", "jira_comment", "jira_attachment")),
+            KnowledgeAsset.status != "deleted",
+        )
+    ).scalars().all()
+    now = datetime.now(timezone.utc)
+    for asset in existing_assets:
+        source_ref = str(asset.source_ref or "").strip()
+        if source_ref and source_ref in active_refs:
             continue
-        create_knowledge_asset(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            source_type="jira_issue",
-            title=f"{issue_key}: {summary[:220] if summary else 'Jira issue'}",
-            mime_type="text/plain",
-            source_ref=issue_key,
-            source_timestamp=datetime.now(timezone.utc),
-            text_content=body_text,
-            binary_content=None,
-            metadata_json={
-                "issue_key": issue_key,
-                "status": status,
-            },
-        )
-        synced += 1
-    return (synced, skipped)
+        asset.status = "deleted"
+        asset.updated_at = now
+        session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.asset_id == asset.asset_id))
+        session.execute(delete(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id))
+        counts["deleted"] += 1
+
+    session.commit()
+    return KnowledgeSyncResult(
+        created_assets=counts["created"],
+        updated_assets=counts["updated"],
+        unchanged_assets=counts["unchanged"],
+        deleted_assets=counts["deleted"],
+        skipped_assets=counts["skipped"],
+        failed_assets=counts["failed"],
+    )
 
 
 def _mode_thresholds(mode: str) -> tuple[float, float]:
@@ -501,7 +883,7 @@ def resolve_missing_slots_from_knowledge(
                 KnowledgeFact.tenant_id == tenant_id,
                 KnowledgeFact.project_id == project_id,
                 KnowledgeFact.slot_name == slot_name,
-                KnowledgeAsset.status != "deleted",
+                KnowledgeAsset.status == "ready",
             )
             .order_by(
                 desc(func.coalesce(KnowledgeFact.source_timestamp, KnowledgeAsset.source_timestamp)),
@@ -542,34 +924,25 @@ def resolve_missing_slots_from_knowledge(
     return results
 
 
-def build_knowledge_prompt_context(
+def _sqlite_fallback_context(
     *,
     session: Session,
     tenant_id: str,
-    project_id: str | None,
-    query: str,
-    max_items: int = 5,
-    max_chars: int = 3200,
+    project_id: str,
+    normalized_query: str,
+    max_items: int,
+    max_chars: int,
 ) -> KnowledgePromptContext:
-    if not tenant_id:
-        return KnowledgePromptContext(text="", citations=[])
-    # KB prompt injection must remain project-scoped; never fall back to tenant-wide retrieval.
-    if not project_id:
-        return KnowledgePromptContext(text="", citations=[])
-    normalized_query = str(query or "").strip()
-    if not normalized_query:
-        return KnowledgePromptContext(text="", citations=[])
     query_tokens = _candidate_tokens(normalized_query)
     query_embedding = _embed_texts([normalized_query])[0]
-
-    filters = [
-        KnowledgeChunk.tenant_id == tenant_id,
-        KnowledgeChunk.project_id == project_id,
-    ]
     rows = session.execute(
         select(KnowledgeChunk, KnowledgeAsset)
         .join(KnowledgeAsset, KnowledgeAsset.asset_id == KnowledgeChunk.asset_id)
-        .where(and_(*filters), KnowledgeAsset.status != "deleted")
+        .where(
+            KnowledgeChunk.tenant_id == tenant_id,
+            KnowledgeChunk.project_id == project_id,
+            KnowledgeAsset.status == "ready",
+        )
         .order_by(
             desc(func.coalesce(KnowledgeChunk.source_timestamp, KnowledgeAsset.source_timestamp)),
             desc(KnowledgeChunk.updated_at),
@@ -596,15 +969,26 @@ def build_knowledge_prompt_context(
         recency_bonus = 0.0
         source_time = chunk.source_timestamp or asset.source_timestamp
         if source_time is not None:
-            age_days = max(0.0, (datetime.now(timezone.utc) - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0)
+            age_days = max(
+                0.0,
+                (datetime.now(timezone.utc) - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0,
+            )
             recency_bonus = 1.0 / (1.0 + age_days / 30.0)
         score = (lexical * 0.55) + (semantic * 0.35) + (recency_bonus * 0.10)
         if score <= 0.0:
             continue
         scored.append((score, chunk, asset))
+    return _format_knowledge_context(scored=scored, max_items=max_items, max_chars=max_chars)
+
+
+def _format_knowledge_context(
+    *,
+    scored: list[tuple[float, KnowledgeChunk, KnowledgeAsset]],
+    max_items: int,
+    max_chars: int,
+) -> KnowledgePromptContext:
     if not scored:
         return KnowledgePromptContext(text="", citations=[])
-
     scored.sort(key=lambda item: item[0], reverse=True)
     selected = scored[: max(1, max_items)]
     lines: list[str] = []
@@ -617,6 +1001,7 @@ def build_knowledge_prompt_context(
             snippet = f"{snippet[:557].rstrip()}..."
         line = (
             f"- [{asset.title}] (asset_id={asset.asset_id}, source_type={asset.source_type}, "
+            f"source_ref={asset.source_ref or 'unknown'}, "
             f"source_timestamp={source_time.isoformat() if source_time else 'unknown'}, score={score:.3f})\n"
             f"  {snippet}"
         )
@@ -630,8 +1015,156 @@ def build_knowledge_prompt_context(
                 "chunk_id": chunk.chunk_id,
                 "title": asset.title,
                 "source_type": asset.source_type,
+                "source_ref": asset.source_ref,
                 "source_timestamp": source_time.isoformat() if source_time else None,
                 "score": round(score, 6),
             }
         )
     return KnowledgePromptContext(text="\n".join(lines), citations=citations)
+
+
+def _postgres_hybrid_context(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    normalized_query: str,
+    max_items: int,
+    max_chars: int,
+) -> KnowledgePromptContext:
+    query_tokens = _candidate_tokens(normalized_query)
+    query_embedding = _embed_texts([normalized_query])[0]
+    candidate_scores: dict[str, dict[str, float]] = {}
+    if query_embedding:
+        embedding_literal = vector_literal(query_embedding)
+        if embedding_literal:
+            vector_rows = session.execute(
+                text(
+                    """
+                    SELECT chunk_id, 1 - (embedding <=> CAST(:embedding AS vector)) AS semantic_score
+                    FROM knowledge_chunks
+                    WHERE tenant_id = :tenant_id
+                      AND project_id = :project_id
+                      AND embedding IS NOT NULL
+                    ORDER BY embedding <=> CAST(:embedding AS vector)
+                    LIMIT :candidate_limit
+                    """
+                ),
+                {
+                    "tenant_id": tenant_id,
+                    "project_id": project_id,
+                    "embedding": embedding_literal,
+                    "candidate_limit": max(20, max_items * 4),
+                },
+            ).mappings().all()
+            for row in vector_rows:
+                chunk_id = str(row.get("chunk_id") or "").strip()
+                if not chunk_id:
+                    continue
+                candidate_scores.setdefault(chunk_id, {})["semantic"] = max(
+                    0.0,
+                    float(row.get("semantic_score") or 0.0),
+                )
+
+    lexical_rows = session.execute(
+        text(
+            """
+            SELECT chunk_id, ts_rank_cd(to_tsvector('simple', content), plainto_tsquery('simple', :query)) AS lexical_score
+            FROM knowledge_chunks
+            WHERE tenant_id = :tenant_id
+              AND project_id = :project_id
+              AND to_tsvector('simple', content) @@ plainto_tsquery('simple', :query)
+            ORDER BY lexical_score DESC, updated_at DESC
+            LIMIT :candidate_limit
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "query": normalized_query,
+            "candidate_limit": max(20, max_items * 4),
+        },
+    ).mappings().all()
+    for row in lexical_rows:
+        chunk_id = str(row.get("chunk_id") or "").strip()
+        if not chunk_id:
+            continue
+        candidate_scores.setdefault(chunk_id, {})["lexical"] = max(
+            0.0,
+            float(row.get("lexical_score") or 0.0),
+        )
+
+    if not candidate_scores:
+        return KnowledgePromptContext(text="", citations=[])
+
+    rows = session.execute(
+        select(KnowledgeChunk, KnowledgeAsset)
+        .join(KnowledgeAsset, KnowledgeAsset.asset_id == KnowledgeChunk.asset_id)
+        .where(
+            KnowledgeChunk.tenant_id == tenant_id,
+            KnowledgeChunk.project_id == project_id,
+            KnowledgeChunk.chunk_id.in_(list(candidate_scores.keys())),
+            KnowledgeAsset.status == "ready",
+        )
+    ).all()
+    if not rows:
+        return KnowledgePromptContext(text="", citations=[])
+
+    scored: list[tuple[float, KnowledgeChunk, KnowledgeAsset]] = []
+    now = datetime.now(timezone.utc)
+    for chunk, asset in rows:
+        signals = candidate_scores.get(chunk.chunk_id, {})
+        lexical = signals.get("lexical")
+        if lexical is None:
+            lexical = _lexical_score(query_tokens=query_tokens, text=chunk.content)
+        semantic = signals.get("semantic", 0.0)
+        source_time = chunk.source_timestamp or asset.source_timestamp
+        recency_bonus = 0.0
+        if source_time is not None:
+            age_days = max(0.0, (now - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0)
+            recency_bonus = 1.0 / (1.0 + age_days / 30.0)
+        score = (float(lexical) * 0.45) + (float(semantic) * 0.45) + (recency_bonus * 0.10)
+        if score <= 0.0:
+            continue
+        scored.append((score, chunk, asset))
+    return _format_knowledge_context(scored=scored, max_items=max_items, max_chars=max_chars)
+
+
+def build_knowledge_prompt_context(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str | None,
+    query: str,
+    max_items: int = 5,
+    max_chars: int = 3200,
+) -> KnowledgePromptContext:
+    if not tenant_id:
+        return KnowledgePromptContext(text="", citations=[])
+    # KB prompt injection must remain project-scoped; never fall back to tenant-wide retrieval.
+    if not project_id:
+        return KnowledgePromptContext(text="", citations=[])
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        return KnowledgePromptContext(text="", citations=[])
+    bind = session.get_bind()
+    if bind.dialect.name == "postgresql":
+        try:
+            return _postgres_hybrid_context(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                normalized_query=normalized_query,
+                max_items=max_items,
+                max_chars=max_chars,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return _sqlite_fallback_context(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        normalized_query=normalized_query,
+        max_items=max_items,
+        max_chars=max_chars,
+    )

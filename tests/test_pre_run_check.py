@@ -179,82 +179,46 @@ def test_pre_run_check_requires_gtd_before_ready_for_agent() -> None:
     assert result.gtd_valid is False
 
 
-def test_pre_run_check_uses_locked_decision_gate_questions_from_issue_description() -> None:
-    locked_block = "\n".join(
-        [
-            "<!-- precheck-questions:start -->",
-            "## Precheck Clarification Questions",
-            "Decision Gate reason: Locked reason",
-            "- [decision_gate] Locked question one?",
-            "- [decision_gate] Locked question two?",
-            "<!-- precheck-questions:end -->",
-        ]
-    )
+def test_pre_run_check_passes_recorded_answers_to_policy() -> None:
     with (
         patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
-        patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
-            return_value=_policy_result(
-                decision_gate=DecisionGateResult(
-                    triggered=True,
-                    reason="Dynamic reason",
-                    missing_sections=("Objective",),
-                    questions=("Dynamic question?",),
-                    recommendation="Decision required before build",
-                    tags=("[NEEDS-PM]",),
-                ),
-                gtd=GoodToDoValidationResult(
-                    valid=True,
-                    missing_criteria=(),
-                    clarification_questions=(),
-                ),
-            ),
-        ),
+        patch("orchestrator.core.pre_run_check.evaluate_precheck_policy") as policy_mock,
     ):
+        policy_mock.return_value = _policy_result(
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
         result = evaluate_pre_run_check(
             issue_summary="GP-80",
-            issue_description=locked_block,
+            issue_description="desc",
+            recorded_answers=[
+                {
+                    "question_id": "dg_1",
+                    "question_text": "What config is approved?",
+                    "status": "answered",
+                    "answer": "Production bundle ID is com.example.app.",
+                }
+            ],
             issue_labels=["agent:ready"],
             ready_label="agent:ready",
         )
-    assert result.decision_gate_reason == "Locked reason"
-    assert result.decision_gate.questions == ("Locked question one?", "Locked question two?")
-
-
-def test_pre_run_check_uses_locked_gtd_questions_from_issue_description() -> None:
-    locked_block = "\n".join(
-        [
-            "<!-- precheck-questions:start -->",
-            "## Precheck Clarification Questions",
-            "- [gtd] Locked GTD question?",
-            "<!-- precheck-questions:end -->",
-        ]
-    )
-    with (
-        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
-        patch(
-            "orchestrator.core.pre_run_check.evaluate_precheck_policy",
-            return_value=_policy_result(
-                decision_gate=DecisionGateResult(
-                    triggered=False,
-                    reason="Decision Gate not required",
-                    missing_sections=(),
-                    questions=(),
-                    recommendation="Proceed",
-                    tags=(),
-                ),
-                gtd=GoodToDoValidationResult(
-                    valid=False,
-                    missing_criteria=("Dependencies and risks identified",),
-                    clarification_questions=("Dynamic GTD question?",),
-                ),
-            ),
-        ),
-    ):
-        result = evaluate_pre_run_check(
-            issue_summary="GP-80",
-            issue_description=locked_block,
-            issue_labels=["agent:ready"],
-            ready_label="agent:ready",
-        )
-    assert result.gtd_clarification_questions == ("Locked GTD question?",)
+    assert result.outcome == "ready_for_agent"
+    assert policy_mock.call_args.kwargs["recorded_answers"] == [
+        {
+            "question_id": "dg_1",
+            "question_text": "What config is approved?",
+            "status": "answered",
+            "answer": "Production bundle ID is com.example.app.",
+        }
+    ]

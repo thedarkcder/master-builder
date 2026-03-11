@@ -580,6 +580,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(204, 404),
             ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/status"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/knowledge/assets/asset-missing/status",
+                auth=admin,
+                json={"status": "ready"},
+                expected_statuses=(200, 404, 409),
+            ),
             ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sync-jira"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/knowledge/sync-jira",
                 auth=admin,

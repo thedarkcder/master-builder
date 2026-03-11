@@ -162,13 +162,6 @@ async def ingest_jira_webhook_event(
             context=context,
             session=session,
         )
-        comment_without_command_response = jira_webhook_comment_flow.stage_handle_comment_without_command(
-            context=context,
-            removed_history_entries=removed_history_entries,
-        )
-        if comment_without_command_response is not None:
-            return comment_without_command_response
-
         comment_ask_response = jira_webhook_comment_flow.stage_handle_comment_ask_command(
             context=context,
             session=session,
@@ -234,6 +227,21 @@ async def ingest_jira_webhook_event(
                 command=context.comment_command,
                 webhook_event=context.webhook_event,
             )
+
+        comment_reply_response = jira_webhook_comment_flow.stage_handle_comment_decision_reply(
+            context=context,
+            session=session,
+            settings=settings,
+        )
+        if comment_reply_response is not None:
+            return comment_reply_response
+
+        comment_without_command_response = jira_webhook_comment_flow.stage_handle_comment_without_command(
+            context=context,
+            removed_history_entries=removed_history_entries,
+        )
+        if comment_without_command_response is not None:
+            return comment_without_command_response
 
         board_gate_response = jira_webhook_board_gate.stage_handle_run_board_gate(
             context=context,

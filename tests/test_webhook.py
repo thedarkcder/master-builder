@@ -30,6 +30,7 @@ from orchestrator.api.routes.webhook import (
 from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.discord.channel_tenant_index import invalidate_discord_channel_tenant_index
 from orchestrator.core.config import get_settings
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
@@ -1105,6 +1106,122 @@ class JiraWebhookTests(unittest.TestCase):
         post_mock.assert_called_once()
         posted_comment = post_mock.call_args.kwargs["comment"]
         self.assertEqual(posted_comment, "Jira ask response")
+
+    def test_webhook_decision_reply_uses_captured_evidence_id_for_decision_event_idempotency(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-906", status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-2"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Decision reply content"}],
+                    }
+                ],
+            },
+        }
+        decision_result = SimpleNamespace(
+            classification="decision_gate",
+            cycle_id="cycle-1",
+            decision=SimpleNamespace(
+                pre_check=SimpleNamespace(
+                    decision_gate=SimpleNamespace(
+                        questions=("Need entitlement confirmation",),
+                    )
+                )
+            ),
+        )
+        with (
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.active_case_and_cycle_for_issue",
+                return_value=(SimpleNamespace(case_id="case-1"), SimpleNamespace(cycle_id="cycle-1")),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.capture_decision_reply",
+                return_value=SimpleNamespace(evidence_id="evidence-jira-1"),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_precheck_decision_with_labels",
+                return_value=decision_result,
+            ) as evaluate_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.unresolved_question_feedback_for_cycle",
+                return_value=[{"question_id": "dg_1", "question_text": "Need entitlement confirmation"}],
+            ),
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            evaluate_mock.call_args.kwargs["idempotency_key"],
+            "decision-reply:evidence-jira-1",
+        )
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "decision_reply_recorded")
+
+    def test_webhook_decision_reply_failure_handles_codex_runtime_error(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-907", status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-3"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Decision reply content"}],
+                    }
+                ],
+            },
+        }
+        with (
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.active_case_and_cycle_for_issue",
+                return_value=(SimpleNamespace(case_id="case-1"), SimpleNamespace(cycle_id="cycle-1")),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.capture_decision_reply",
+                side_effect=CodexRuntimeError("bad structured output"),
+            ),
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "decision_reply_failed")
+
+    def test_webhook_project_not_mapped_does_not_process_decision_reply(self) -> None:
+        payload = self._jira_issue_payload(issue_key="NOPE-1", status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-4"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Decision reply content"}],
+                    }
+                ],
+            },
+        }
+        with patch(
+            "orchestrator.api.webhooks.jira_webhook_comment_flow.stage_handle_comment_decision_reply",
+        ) as reply_stage_mock:
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["enqueued"])
+        self.assertEqual(body["reason"], "project_not_mapped")
+        reply_stage_mock.assert_not_called()
 
     def test_webhook_respects_tenant_concurrency_limit(self) -> None:
         self._create_tenant("tenant-single", max_concurrent_runs=1)

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5.4"
     codex_supported_models: str = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    codex_tool_database_url: str = ""
     codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "errors_only"
     codex_db_log_sampling_interval: int = 100
@@ -40,10 +41,12 @@ class Settings(BaseSettings):
     knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = "aggressive"
     knowledge_context_top_k: int = 5
     knowledge_context_max_chars: int = 3200
-    workflow_max_parallel_workstreams: int = 3
+    knowledge_jira_auto_sync_enabled: bool = True
+    knowledge_jira_sync_interval_seconds: int = 3600
+    knowledge_jira_sync_poll_seconds: int = 30
+    knowledge_jira_sync_lock_key: int = 947102033128
+    knowledge_jira_sync_max_issues: int = 500
     workflow_orchestrated_run_timeout_minutes: int = 90
-    # Deprecated: retained for backward compatibility with existing env vars.
-    workflow_one_shot_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from difflib import SequenceMatcher
 import logging
 from typing import Any
 
@@ -10,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (
@@ -22,6 +21,10 @@ from orchestrator.core.decision_engine import (
     DecisionEventInput,
     DecisionSource,
     evaluate_decision_event,
+)
+from orchestrator.core.decision_reply_service import (
+    capture_decision_reply,
+    unresolved_question_feedback_for_cycle,
 )
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
@@ -36,10 +39,6 @@ from orchestrator.core.runs import cancel_run
 from orchestrator.storage.models import Run, Tenant
 
 logger = logging.getLogger(__name__)
-
-DECISION_GATE_BLOCK_START = "<!-- decision-gate-clarifications:start -->"
-DECISION_GATE_BLOCK_END = "<!-- decision-gate-clarifications:end -->"
-
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
     if isinstance(oauth_context, dict):
@@ -60,6 +59,8 @@ def _evaluate_precheck_decision_with_labels(
     settings_factory: Callable[[], Any],
     tenant_jira_oauth_context: Callable[..., Any],
     oauth_context: Any | None = None,
+    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
+    idempotency_key: str | None = None,
 ) -> DecisionEngineResult:
     settings = settings_factory()
     return evaluate_decision_event(
@@ -69,7 +70,7 @@ def _evaluate_precheck_decision_with_labels(
         event=DecisionEventInput(
             source=source,
             event_type=f"discord_{source}",
-            idempotency_key=None,
+            idempotency_key=idempotency_key,
             issue_key=issue_key,
             issue_summary=issue_summary,
             issue_description=issue_description,
@@ -78,7 +79,7 @@ def _evaluate_precheck_decision_with_labels(
         settings=settings,
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
         oauth_context=oauth_context,
-        publish_jira_comment_fn=None,
+        publish_jira_comment_fn=publish_jira_comment_fn,
         evaluate_pre_run_check_fn=evaluate_pre_run_check,
     )
 
@@ -94,6 +95,30 @@ def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, q
     return "\n".join(lines)
 
 
+def _decision_gate_unresolved_feedback_message(
+    *,
+    issue_key: str,
+    reason: str,
+    question_feedback: list[dict[str, str]],
+) -> tuple[str, list[str]]:
+    lines = [
+        f"Decision Gate still needs clarification for `{issue_key}`.",
+        f"Reason: {reason}",
+    ]
+    questions: list[str] = []
+    if question_feedback:
+        lines.append("Please reply with:")
+    for item in question_feedback[:5]:
+        question_text = str(item.get("question_text") or "").strip()
+        note = str(item.get("note") or "").strip()
+        if question_text:
+            lines.append(f"- {question_text}")
+            questions.append(question_text)
+        if note:
+            lines.append(f"  Missing detail: {note}")
+    return "\n".join(lines), questions
+
+
 def _gtd_missing_message(*, issue_key: str, missing_criteria: tuple[str, ...], questions: tuple[str, ...]) -> str:
     lines = [f"Good To Do still needs clarification for `{issue_key}`."]
     cleaned_missing = [item.strip() for item in missing_criteria if item.strip()]
@@ -105,40 +130,6 @@ def _gtd_missing_message(*, issue_key: str, missing_criteria: tuple[str, ...], q
         lines.extend(f"- {question}" for question in cleaned_questions)
     return "\n".join(lines)
 
-
-def _choose_updated_summary(*, issue_key: str, current_summary: str, suggested_summary: str) -> str:
-    current = str(current_summary or "").strip()
-    suggested = str(suggested_summary or "").strip()[:255]
-    if not current:
-        return suggested or f"{issue_key} - Decision Gate clarified"
-    if not suggested or suggested.lower() == current.lower():
-        return current
-    similarity = SequenceMatcher(None, current.lower(), suggested.lower()).ratio()
-    if similarity >= 0.7 or current.lower() in suggested.lower() or suggested.lower() in current.lower():
-        return suggested
-    if "DG clarified" in current:
-        return current
-    return f"{current} | DG clarified"[:255]
-
-
-def _upsert_decision_gate_clarifications_block(*, current_description: str, block: str) -> str:
-    current = str(current_description or "").strip()
-    if not current:
-        return block
-    start_idx = current.find(DECISION_GATE_BLOCK_START)
-    end_idx = current.find(DECISION_GATE_BLOCK_END)
-    if start_idx >= 0 and end_idx > start_idx:
-        end_of_marker = end_idx + len(DECISION_GATE_BLOCK_END)
-        prefix = current[:start_idx].rstrip()
-        suffix = current[end_of_marker:].lstrip()
-        if prefix and suffix:
-            return f"{prefix}\n\n{block}\n\n{suffix}"
-        if prefix:
-            return f"{prefix}\n\n{block}"
-        if suffix:
-            return f"{block}\n\n{suffix}"
-        return block
-    return f"{current}\n\n{block}"
 
 def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides: dict) -> tuple[bool, str]:
     effective_policy = resolve_effective_policy(
@@ -280,88 +271,6 @@ def _locked_decision_gate_reason(*, classification: str, decision_gate: Any | No
     if classification not in {"decision_gate", "both"}:
         return None
     return str(getattr(decision_gate, "reason", "") or "").strip() or None
-
-
-def _plan_decision_gate_jira_update(
-    *,
-    runtime,  # noqa: ANN001
-    invocation_context: CodexInvocationContext,
-    issue_key: str,
-    current_summary: str,
-    current_description: str,
-    reply_text: str,
-) -> tuple[str, str]:
-    def _normalize_dependencies_and_risks(value: object) -> str:
-        if isinstance(value, list):
-            normalized = [str(item).strip() for item in value if str(item).strip()]
-            return "; ".join(normalized)
-        text = str(value or "").strip()
-        return text
-
-    payload = invoke_codex_json(
-        runtime=runtime,
-        context=invocation_context,
-        system_prompt=(
-            "You extract Decision Gate clarification fields from a user reply. "
-            "Return strict JSON only with keys: "
-            "summary, objective, scope, acceptance_criteria, how_to_test, nfr_intent, "
-            "reliability_security_constraints, out_of_scope, rollout_constraints, decision_owner, "
-            "dependencies_and_risks. "
-            "Do not rewrite the full ticket body."
-        ),
-        user_prompt=(
-            "Stage: decision-gate-reply-normalization\n"
-            f"Issue key: {issue_key}\n"
-            f"Current summary: {current_summary}\n"
-            f"Current description:\n{current_description}\n\n"
-            f"User reply text:\n{reply_text}\n\n"
-            "Constraints:\n"
-            "- Preserve existing ticket format by outputting only extracted field values.\n"
-            "- Include field text only when supported by user reply.\n"
-            "- Keep summary concise (<=255 chars), close to current summary wording.\n"
-        ),
-    )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return JSON object for Decision Gate update")
-    updated_summary = _choose_updated_summary(
-        issue_key=issue_key,
-        current_summary=current_summary,
-        suggested_summary=str(payload.get("summary") or "").strip(),
-    )
-    objective = str(payload.get("objective") or "").strip() or "Provided in thread reply."
-    scope = str(payload.get("scope") or "").strip() or "Provided in thread reply."
-    acceptance_criteria = str(payload.get("acceptance_criteria") or "").strip() or "Provided in thread reply."
-    how_to_test = str(payload.get("how_to_test") or "").strip() or "Provided in thread reply."
-    nfr_intent = str(payload.get("nfr_intent") or "").strip() or "Provided in thread reply."
-    reliability_security = str(payload.get("reliability_security_constraints") or "").strip() or "Not specified."
-    out_of_scope = str(payload.get("out_of_scope") or "").strip() or "Not specified."
-    rollout_constraints = str(payload.get("rollout_constraints") or "").strip() or "Not specified."
-    decision_owner = str(payload.get("decision_owner") or "").strip() or "Not specified."
-    dependencies_and_risks = _normalize_dependencies_and_risks(
-        payload.get("dependencies_and_risks")
-    ) or "Not specified."
-    clarification_block = "\n".join(
-        [
-            DECISION_GATE_BLOCK_START,
-            "## Decision Gate Clarifications",
-            f"Objective: {objective}",
-            f"Scope: {scope}",
-            f"Acceptance Criteria: {acceptance_criteria}",
-            f"How to test: {how_to_test}",
-            f"NFR intent (MVP vs scale-ready): {nfr_intent}",
-            f"Mandatory reliability/security constraints: {reliability_security}",
-            f"Explicitly out of scope: {out_of_scope}",
-            f"Rollout/migration constraints: {rollout_constraints}",
-            f"Dependencies / Risks: {dependencies_and_risks}",
-            f"Decision owner: {decision_owner}",
-            DECISION_GATE_BLOCK_END,
-        ]
-    )
-    updated_description = _upsert_decision_gate_clarifications_block(
-        current_description=current_description,
-        block=clarification_block,
-    )
-    return updated_summary, updated_description
 
 
 def dispatch_run_control_command(
@@ -529,6 +438,7 @@ def dispatch_run_control_command(
         command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
         issue_key = str(command_params.get("issue_key") or "").strip().upper()
         reply_text = str(command_params.get("reply_text") or "").strip()
+        source_ref = str(command_params.get("source_ref") or "").strip() or None
         if not issue_key:
             if arguments:
                 issue_key = arguments[0].strip().upper()
@@ -562,6 +472,9 @@ def dispatch_run_control_command(
         has_retryable_run = run is not None
         settings = settings_factory()
         issue_labels: list[str] | None = None
+        issue_summary: str | None = None
+        issue_description: str | None = None
+        codex_working_dir: str | None = None
         try:
             oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
             oauth_client = _oauth_context_value(oauth, "client")
@@ -588,36 +501,49 @@ def dispatch_run_control_command(
                 project_id=project.project_id,
                 project_keys=[project.jira_project_key],
             )
-            updated_summary, updated_description = _plan_decision_gate_jira_update(
-                runtime=runtime,
-                invocation_context=CodexInvocationContext(
-                    channel="discord",
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                    command="reply",
-                    stage="decision_gate_normalize",
-                    working_dir=codex_working_dir,
-                    issue_key=issue_key,
-                ),
+            issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or None
+            issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
+            capture = capture_decision_reply(
+                session=session,
+                tenant=tenant,
+                project=project,
                 issue_key=issue_key,
-                current_summary=issue_detail.summary,
-                current_description=issue_detail.description,
                 reply_text=reply_text,
-            )
-            oauth_client.update_issue_summary_and_description(
-                access_token=oauth_access_token,
-                cloud_id=str(cloud_id),
-                issue_id_or_key=issue_key,
-                summary=updated_summary,
-                description=updated_description,
+                source_transport="discord",
+                source_ref=source_ref,
+                actor_ref=payload.user_id,
+                metadata={
+                    "channel_id": payload.channel_id,
+                    "ingress": "discord",
+                },
             )
             labels_raw = getattr(issue_detail, "labels", None)
             issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()] if isinstance(labels_raw, list) else None
-        except (HTTPException, CodexRuntimeError, RuntimeError, ValueError) as exc:
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"No active Decision Gate cycle exists for `{issue_key}`. "
+                    f"Run `!run {issue_key}` or `!retry {issue_key}` to reopen clarification first."
+                ),
+            ) from exc
+        except (HTTPException, CodexRuntimeError, RuntimeError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Failed to update Jira context for `{issue_key}`: {exc}",
             ) from exc
+
+        def _publish_jira_comment(comment: str) -> tuple[bool, str | None]:
+            try:
+                oauth_client.add_issue_comment(
+                    access_token=oauth_access_token,
+                    cloud_id=str(cloud_id),
+                    issue_id_or_key=issue_key,
+                    comment=comment,
+                )
+                return True, None
+            except Exception as exc:  # noqa: BLE001
+                return False, str(exc)
 
         decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
@@ -625,12 +551,14 @@ def dispatch_run_control_command(
             project=project,
             source="discord_reply",
             issue_key=issue_key,
-            issue_summary=updated_summary,
-            issue_description=updated_description,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             oauth_context=oauth,
+            publish_jira_comment_fn=_publish_jira_comment,
+            idempotency_key=f"decision-reply:{capture.evidence_id}",
         )
         precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
@@ -670,44 +598,44 @@ def dispatch_run_control_command(
                 for item in getattr(pre_check, "gtd_missing_criteria", ())
                 if str(item).strip()
             ]
-            try:
-                updated_description = _persist_precheck_questions_block(
-                    oauth_client=oauth_client,
-                    oauth_access_token=str(oauth_access_token),
-                    cloud_id=str(cloud_id),
+            unresolved_question_feedback = list(
+                unresolved_question_feedback_for_cycle(
+                    session=session,
+                    cycle_id=str(decision_result.cycle_id or ""),
+                )
+            ) if decision_result.cycle_id else []
+            if classification in {"decision_gate", "both"} and unresolved_question_feedback:
+                message, generated_questions = _decision_gate_unresolved_feedback_message(
                     issue_key=issue_key,
-                    issue_summary=updated_summary,
-                    current_description=str(updated_description or ""),
+                    reason=locked_decision_gate_reason or "clarification required",
+                    question_feedback=unresolved_question_feedback,
+                )
+            elif classification in {"decision_gate", "both"}:
+                message, generated_questions = _decision_gate_remaining_questions_message(
+                    issue_key=issue_key,
+                    reason=locked_decision_gate_reason or "clarification required",
+                    questions=decision_gate_questions,
+                ), decision_gate_questions
+            else:
+                message, generated_questions = build_precheck_message(
+                    runtime=runtime,
+                    invocation_context=CodexInvocationContext(
+                        channel="discord",
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        command="reply",
+                        stage="precheck_message",
+                        working_dir=str(codex_working_dir or "."),
+                        issue_key=issue_key,
+                    ),
+                    issue_key=issue_key,
+                    classification=classification,
                     decision_gate_reason=locked_decision_gate_reason,
                     decision_gate_questions=decision_gate_questions,
+                    gtd_missing_criteria=gtd_missing,
                     gtd_questions=gtd_questions,
+                    missing_slots=missing_slots,
                 )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "discord_reply_precheck_questions_persist_failed tenant_id=%s issue_key=%s error=%s",
-                    tenant.tenant_id,
-                    issue_key,
-                    exc,
-                )
-            message, generated_questions = build_precheck_message(
-                runtime=runtime,
-                invocation_context=CodexInvocationContext(
-                    channel="discord",
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                    command="reply",
-                    stage="precheck_message",
-                    working_dir=codex_working_dir,
-                    issue_key=issue_key,
-                ),
-                issue_key=issue_key,
-                classification=classification,
-                decision_gate_reason=locked_decision_gate_reason,
-                decision_gate_questions=decision_gate_questions,
-                gtd_missing_criteria=gtd_missing,
-                gtd_questions=gtd_questions,
-                missing_slots=missing_slots,
-            )
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
@@ -719,30 +647,11 @@ def dispatch_run_control_command(
                     "decision_gate_reason": locked_decision_gate_reason,
                     "gtd_missing_criteria": gtd_missing,
                     "questions": generated_questions or decision_gate_questions or gtd_questions,
+                    "question_feedback": unresolved_question_feedback,
                     "missing_slots": missing_slots,
                     "auto_resolved_slots": auto_resolved_slots,
                     "knowledge_mode": None,
                 },
-            )
-
-        try:
-            updated_description = _persist_precheck_questions_block(
-                oauth_client=oauth_client,
-                oauth_access_token=str(oauth_access_token),
-                cloud_id=str(cloud_id),
-                issue_key=issue_key,
-                issue_summary=updated_summary,
-                current_description=str(updated_description or ""),
-                decision_gate_reason=None,
-                decision_gate_questions=[],
-                gtd_questions=[],
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "discord_reply_precheck_questions_cleanup_failed tenant_id=%s issue_key=%s error=%s",
-                tenant.tenant_id,
-                issue_key,
-                exc,
             )
 
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
@@ -759,7 +668,7 @@ def dispatch_run_control_command(
             source="discord_retry" if has_retryable_run else "discord_run",
             issue_key=issue_key,
             issue_summary=issue_preview.summary,
-            issue_description=updated_description,
+            issue_description=issue_description,
             issue_labels=issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
