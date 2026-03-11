@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = "aggressive"
     knowledge_context_top_k: int = 5
     knowledge_context_max_chars: int = 3200
+    knowledge_jira_auto_sync_enabled: bool = True
+    knowledge_jira_sync_interval_seconds: int = 3600
+    knowledge_jira_sync_poll_seconds: int = 30
+    knowledge_jira_sync_lock_key: int = 947102033128
+    knowledge_jira_sync_max_issues: int = 500
     workflow_orchestrated_run_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200

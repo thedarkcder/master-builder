@@ -214,7 +214,7 @@ def sync_project_knowledge_from_jira_route(
         tenant_id=tenant_id,
         project_id=project_id,
     )
-    synced, skipped = sync_project_knowledge_from_jira(
+    sync_result = sync_project_knowledge_from_jira(
         session=session,
         tenant_id=tenant_id,
         project_id=project_id,
@@ -224,8 +224,13 @@ def sync_project_knowledge_from_jira_route(
         cloud_id=connection.cloud_id,
     )
     return KnowledgeSyncResultRead(
-        ok=True,
-        synced_assets=synced,
-        skipped_assets=skipped,
-        details=f"Processed Jira project {project.jira_project_key}",
+        ok=sync_result.ok,
+        synced_assets=sync_result.synced_assets,
+        skipped_assets=sync_result.skipped_assets + sync_result.unchanged_assets,
+        created_assets=sync_result.created_assets,
+        updated_assets=sync_result.updated_assets,
+        unchanged_assets=sync_result.unchanged_assets,
+        deleted_assets=sync_result.deleted_assets,
+        failed_assets=sync_result.failed_assets,
+        details=sync_result.details or f"Processed Jira project {project.jira_project_key}",
     )

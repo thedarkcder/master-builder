@@ -67,6 +67,7 @@ def _ask_reply_components() -> list[dict]:
 
 
 def _workflow_request_for_run(
+    session: Session,
     tenant: Tenant,
     run: Run,
     *,

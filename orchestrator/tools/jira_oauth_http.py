@@ -58,6 +58,22 @@ class JiraOAuthHttpClient:
         )
         return self._read_json_response(request=request, error_prefix="Jira API request failed")
 
+    def get_bytes(self, *, url: str, access_token: str) -> bytes:
+        request = Request(
+            url=url,
+            headers={
+                "Accept": "*/*",
+                "Authorization": f"Bearer {access_token}",
+            },
+            method="GET",
+        )
+        try:
+            with self._opener(request, timeout=30) as response:
+                return response.read()
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="ignore")
+            raise JiraOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
+
     def post_multipart(
         self,
         *,

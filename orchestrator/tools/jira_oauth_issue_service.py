@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urlencode
 
 from orchestrator.tools.jira_oauth_models import (
+    JiraIssueAttachment,
     JiraIssueBulkCreateResult,
+    JiraIssueComment,
     JiraIssueCreateInput,
     JiraIssueCreateResult,
     JiraIssueDetail,
@@ -57,12 +60,14 @@ class JiraOAuthIssueService:
         cloud_id: str,
         jql: str,
         max_results: int = 20,
+        start_at: int = 0,
     ) -> list[JiraIssuePreview]:
         bounded_max_results = max(1, min(max_results, 50))
         query = urlencode(
             {
                 "jql": jql,
                 "maxResults": bounded_max_results,
+                "startAt": max(0, int(start_at)),
                 "fields": "summary,status",
             }
         )
@@ -147,6 +152,117 @@ class JiraOAuthIssueService:
             description=description,
             labels=labels,
         )
+
+    def list_issue_comments(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> list[JiraIssueComment]:
+        normalized_issue = issue_id_or_key.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue comments fetch")
+
+        comments: list[JiraIssueComment] = []
+        start_at = 0
+        while True:
+            query = urlencode({"startAt": start_at, "maxResults": 100})
+            payload = self._get_json(
+                url=(
+                    f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
+                    f"{quote(normalized_issue, safe='')}/comment?{query}"
+                ),
+                access_token=access_token,
+            )
+            values = payload.get("comments") if isinstance(payload, dict) else None
+            if not isinstance(values, list):
+                raise JiraOAuthError("Issue comments response missing comments list")
+
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                comment_id = str(item.get("id") or "").strip()
+                if not comment_id:
+                    continue
+                author = item.get("author") if isinstance(item.get("author"), dict) else {}
+                comments.append(
+                    JiraIssueComment(
+                        comment_id=comment_id,
+                        body=_adf_to_plain_text(item.get("body")).strip(),
+                        author_display_name=(
+                            str(author.get("displayName") or "").strip() or None
+                            if isinstance(author, dict)
+                            else None
+                        ),
+                        updated_at=_parse_jira_datetime(item.get("updated")),
+                    )
+                )
+
+            if not values:
+                break
+            total = int(payload.get("total") or 0) if isinstance(payload, dict) else 0
+            batch_size = int(payload.get("maxResults") or len(values)) if isinstance(payload, dict) else len(values)
+            start_at += max(1, batch_size)
+            if total and start_at >= total:
+                break
+            if len(values) < batch_size:
+                break
+
+        return comments
+
+    def list_issue_attachments(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> list[JiraIssueAttachment]:
+        normalized_issue = issue_id_or_key.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue attachments fetch")
+
+        query = urlencode({"fields": "attachment"})
+        payload = self._get_json(
+            url=(
+                f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
+                f"{quote(normalized_issue, safe='')}?{query}"
+            ),
+            access_token=access_token,
+        )
+        if not isinstance(payload, dict):
+            raise JiraOAuthError("Issue attachments response was not an object")
+
+        fields = payload.get("fields")
+        if not isinstance(fields, dict):
+            fields = {}
+        attachments_raw = fields.get("attachment")
+        if attachments_raw is None:
+            return []
+        if not isinstance(attachments_raw, list):
+            raise JiraOAuthError("Issue attachments response missing attachment list")
+
+        attachments: list[JiraIssueAttachment] = []
+        for item in attachments_raw:
+            if not isinstance(item, dict):
+                continue
+            attachment_id = str(item.get("id") or "").strip()
+            filename = str(item.get("filename") or "").strip()
+            content_url = str(item.get("content") or "").strip()
+            if not attachment_id or not filename or not content_url:
+                continue
+            size_raw = item.get("size")
+            attachments.append(
+                JiraIssueAttachment(
+                    attachment_id=attachment_id,
+                    filename=filename,
+                    content_url=content_url,
+                    mime_type=str(item.get("mimeType") or "").strip() or None,
+                    size_bytes=int(size_raw) if isinstance(size_raw, int) else None,
+                    created_at=_parse_jira_datetime(item.get("created")),
+                )
+            )
+        return attachments
 
     def create_issues_bulk(
         self,
@@ -507,6 +623,19 @@ def _adf_to_plain_text(node: object) -> str:
             return " ".join(rendered).strip()
         return " ".join(rendered).strip()
     return ""
+
+
+def _parse_jira_datetime(value: object) -> datetime | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    try:
+        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _parse_issue_type_names_from_payload(payload: dict[str, Any] | list[Any]) -> list[str]:

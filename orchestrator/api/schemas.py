@@ -196,6 +196,11 @@ class KnowledgeSyncResultRead(BaseModel):
     ok: bool
     synced_assets: int
     skipped_assets: int
+    created_assets: int = 0
+    updated_assets: int = 0
+    unchanged_assets: int = 0
+    deleted_assets: int = 0
+    failed_assets: int = 0
     details: str | None = None
 
 

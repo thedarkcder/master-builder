@@ -195,6 +195,50 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertIn("Execution capability mismatch:", result.diagnostics.message)
         self.assertEqual(stage_agents.dev_calls, 0)
 
+    def test_pm_missing_evidence_stops_before_dev(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(
+                plan_steps=["plan"],
+                acceptance_criteria=["ac1"],
+                risks=[],
+                missing_evidence_sources=["decision_state", "knowledge"],
+            ),
+            dev_results=[],
+            test_results=[],
+            review_results=[],
+        )
+
+        result = self._executor(stage_agents).execute(self._request())
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "pm")
+        self.assertEqual(result.diagnostics.classification, "missing_context")
+        self.assertIn("decision_state, knowledge", result.diagnostics.message)
+        self.assertEqual(stage_agents.dev_calls, 0)
+
+    def test_pm_confirmed_external_blocker_stops_before_dev(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(
+                plan_steps=["plan"],
+                acceptance_criteria=["ac1"],
+                risks=[],
+                confirmed_external_blockers=["Apple developer access is not approved for staging"],
+            ),
+            dev_results=[],
+            test_results=[],
+            review_results=[],
+        )
+
+        result = self._executor(stage_agents).execute(self._request())
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "pm")
+        self.assertEqual(result.diagnostics.classification, "external_blocker")
+        self.assertIn("Apple developer access is not approved for staging", result.diagnostics.message)
+        self.assertEqual(stage_agents.dev_calls, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

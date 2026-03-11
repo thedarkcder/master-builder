@@ -17,6 +17,15 @@ def test_allowed_tools_for_stage_dev_contains_github_and_jira() -> None:
     assert "project.get_runtime_values" in tools
 
 
+def test_allowed_tools_for_stage_pm_contains_evidence_tools() -> None:
+    tools = allowed_tools_for_stage("pm")
+    assert "jira.get_issue" in tools
+    assert "decision.read_state" in tools
+    assert "knowledge.read" in tools
+    assert "project.list_runtime_keys" in tools
+    assert "project.get_runtime_values" in tools
+
+
 def test_execute_agent_tool_rejects_disallowed_stage_tool() -> None:
     class _FakeContext:
         stage = "pm"

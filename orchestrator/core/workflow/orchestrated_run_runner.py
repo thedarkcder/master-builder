@@ -153,6 +153,35 @@ class OrchestratedRunWorkflowExecutor:
                 stage="pm",
                 attempts=1,
                 message=capability_mismatch_message,
+                classification="capability_mismatch",
+            )
+
+        missing_evidence_message = _missing_evidence_message(plan)
+        if missing_evidence_message is not None:
+            history.append({"stage": "pm", "attempt": "1", "event": missing_evidence_message})
+            stage_trace[-1]["status"] = "blocked"
+            stage_trace[-1]["summary"] = missing_evidence_message
+            return self._failure_result(
+                request=request,
+                state=state,
+                stage="pm",
+                attempts=1,
+                message=missing_evidence_message,
+                classification="missing_context",
+            )
+
+        external_blocker_message = _external_blocker_message(plan)
+        if external_blocker_message is not None:
+            history.append({"stage": "pm", "attempt": "1", "event": external_blocker_message})
+            stage_trace[-1]["status"] = "blocked"
+            stage_trace[-1]["summary"] = external_blocker_message
+            return self._failure_result(
+                request=request,
+                state=state,
+                stage="pm",
+                attempts=1,
+                message=external_blocker_message,
+                classification="external_blocker",
             )
 
         next_feedback: str | None = None
@@ -167,6 +196,7 @@ class OrchestratedRunWorkflowExecutor:
                     stage="dev",
                     attempts=attempt,
                     message=f"Dev stage failed: {exc}",
+                    classification="implementation_failure",
                 )
 
             last_dev_result = dev_result
@@ -187,6 +217,7 @@ class OrchestratedRunWorkflowExecutor:
                     stage="dev",
                     attempts=attempt,
                     message=dev_result.hard_stop_reason,
+                    classification="implementation_blocked",
                 )
             stage_trace.append(
                 _stage_trace_entry(
@@ -206,6 +237,7 @@ class OrchestratedRunWorkflowExecutor:
                     stage="test",
                     attempts=attempt,
                     message=f"Test stage failed: {exc}",
+                    classification="verification_failure",
                 )
 
             last_test_result = test_result
@@ -230,6 +262,7 @@ class OrchestratedRunWorkflowExecutor:
                         stage="test",
                         attempts=attempt,
                         message=f"Max workflow attempts reached after test failures. Last feedback: {feedback}",
+                        classification="verification_failure",
                     )
                 next_feedback = feedback
                 continue
@@ -251,6 +284,7 @@ class OrchestratedRunWorkflowExecutor:
                     stage="review",
                     attempts=attempt,
                     message=f"Review stage failed: {exc}",
+                    classification="review_failure",
                 )
 
             last_review_result = review_result
@@ -298,6 +332,7 @@ class OrchestratedRunWorkflowExecutor:
                     stage="review",
                     attempts=attempt,
                     message=review_message,
+                    classification="review_blocked",
                 )
 
             stage_trace.append(
@@ -315,6 +350,7 @@ class OrchestratedRunWorkflowExecutor:
                     stage="review",
                     attempts=attempt,
                     message=f"Max workflow attempts reached after review feedback. Last feedback: {review_message}",
+                    classification="review_needs_changes",
                 )
             next_feedback = review_message
 
@@ -324,6 +360,7 @@ class OrchestratedRunWorkflowExecutor:
             stage="workflow",
             attempts=max_loops,
             message="Workflow ended without approval.",
+            classification="workflow_incomplete",
         )
 
     def _failure_result(
@@ -334,6 +371,7 @@ class OrchestratedRunWorkflowExecutor:
         stage: str,
         attempts: int,
         message: str,
+        classification: str = "workflow_failure",
     ) -> WorkflowResult:
         return WorkflowResult(
             succeeded=False,
@@ -350,6 +388,7 @@ class OrchestratedRunWorkflowExecutor:
                 message=message,
                 attempts=attempts,
                 history=list(state.history),
+                classification=classification,
             ),
             orchestration_stage_trace=list(state.stage_trace),
             orchestration_workstream_trace=[],
@@ -374,6 +413,21 @@ def _capability_mismatch_message(*, request: WorkflowRequest, plan: PmPlan) -> s
         f"Execution capability mismatch: PM selected {required} but current worker is {current}. "
         f"Requeue on worker:{required} before dev/test/review."
     )
+
+
+def _missing_evidence_message(plan: PmPlan) -> str | None:
+    missing_sources = [value for value in plan.missing_evidence_sources if str(value).strip()]
+    if not missing_sources:
+        return None
+    joined_sources = ", ".join(missing_sources)
+    return f"PM could not load required evidence sources before implementation: {joined_sources}."
+
+
+def _external_blocker_message(plan: PmPlan) -> str | None:
+    blockers = [value for value in plan.confirmed_external_blockers if str(value).strip()]
+    if not blockers:
+        return None
+    return "; ".join(blockers[:3])
 
 
 def _summarize_pm_plan(plan: PmPlan) -> str:
