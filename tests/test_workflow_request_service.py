@@ -76,6 +76,10 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertEqual(request.execution_repo_dir, str(checkout_dir))
             self.assertEqual(request.current_worker_capability, "linux")
             self.assertEqual(request.available_worker_capabilities, ["linux"])
+            self.assertEqual(request.project_id, "project-1")
+            self.assertEqual(request.project_name, "Project")
+            self.assertEqual(request.github_repository, "https://github.com/example/repo")
+            self.assertEqual(request.jira_project_key, "TP")
 
 
 if __name__ == "__main__":

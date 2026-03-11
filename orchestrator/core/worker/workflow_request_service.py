@@ -55,6 +55,9 @@ def build_workflow_request_for_run(
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
         project_id=project.project_id if project is not None else run.project_id,
+        project_name=project.name if project is not None else None,
+        github_repository=project.github_repository if project is not None else None,
+        jira_project_key=project.jira_project_key if project is not None else None,
         run_id=run.run_id,
         issue_key=run.issue_key,
         issue_summary=run.issue_summary or f"Execute {run.issue_key}",

@@ -93,6 +93,47 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(plan.resolved_prerequisites, ["Supabase redirect URI approved"])
         self.assertEqual(plan.unresolved_prerequisites, ["Provision staging Service ID"])
 
+    def test_pm_prompt_includes_project_metadata_in_context(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = WorkflowRequest(
+            tenant_id="tenant-1",
+            project_id="project-1",
+            project_name="Route25 App",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="GP",
+            run_id="run-1",
+            issue_key="MAB-54",
+            issue_summary="Integrate Codex runtime",
+            issue_description="Objective and acceptance criteria",
+            max_dev_test_review_loops=1,
+            suggested_test_commands=["python -m unittest"],
+            execution_repo_dir="/tmp/test-repo",
+        )
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/pm_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+            agents.pm(request, 1, None, [], None, None, None)
+
+        self.assertEqual(captured["project_id"], "project-1")
+        self.assertEqual(captured["project_name"], "Route25 App")
+        self.assertEqual(captured["github_repository"], "https://github.com/example/repo")
+        self.assertEqual(captured["jira_project_key"], "GP")
+
     def test_review_fallback_does_not_treat_generic_not_as_rejection(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",

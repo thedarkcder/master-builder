@@ -17,6 +17,9 @@ class WorkflowRequest:
     suggested_test_commands: list[str] = field(default_factory=list)
     execution_repo_dir: str | None = None
     project_id: str | None = None
+    project_name: str | None = None
+    github_repository: str | None = None
+    jira_project_key: str | None = None
     current_worker_capability: str = "linux"
     available_worker_capabilities: list[str] = field(default_factory=list)
     base_branch: str | None = None
