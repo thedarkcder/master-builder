@@ -433,8 +433,9 @@ export function TenantProjectDetailsPage() {
     }
   }
 
-  async function saveSecretRefs() {
+  async function saveSecretRefs(nextSecretRefs?: Record<string, string>) {
     if (!credentials || !project) return;
+    const refsToSave = nextSecretRefs ?? secretRefs;
     setSecretsBusy(true);
     try {
       const updated = await updateProject(credentials, params.tenantId, params.projectId, {
@@ -443,7 +444,7 @@ export function TenantProjectDetailsPage() {
         jira_project_key: project.jira_project_key,
         policy_overrides: project.policy_overrides,
         environment: project.environment,
-        secret_refs: secretRefs,
+        secret_refs: refsToSave,
         discord: project.discord,
         is_archived: project.is_archived,
       });
@@ -457,25 +458,27 @@ export function TenantProjectDetailsPage() {
     }
   }
 
-  function addSecretRef() {
+  async function addSecretRef() {
     const key = newSecretKey.trim();
     const ref = newSecretRef.trim();
     if (!key || !ref) {
       setSecretsStatusLine("Both variable name and secret ref path are required.");
       return;
     }
-    setSecretRefs((prev) => ({ ...prev, [key]: ref }));
+    const nextRefs = { ...secretRefs, [key]: ref };
+    setSecretRefs(nextRefs);
     setNewSecretKey("");
     setNewSecretRef("");
     setSecretsStatusLine("");
+    await saveSecretRefs(nextRefs);
   }
 
-  function removeSecretRef(key: string) {
-    setSecretRefs((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
+  async function removeSecretRef(key: string) {
+    const nextRefs = { ...secretRefs };
+    delete nextRefs[key];
+    setSecretRefs(nextRefs);
+    setSecretsStatusLine("");
+    await saveSecretRefs(nextRefs);
   }
 
   return (
@@ -1347,7 +1350,7 @@ export function TenantProjectDetailsPage() {
                   disabled={secretsBusy}
                 />
               </div>
-              <Button size="sm" onClick={addSecretRef} disabled={secretsBusy} className="h-8">
+              <Button size="sm" onClick={() => void addSecretRef()} disabled={secretsBusy} className="h-8">
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
                 Add
               </Button>
@@ -1388,7 +1391,7 @@ export function TenantProjectDetailsPage() {
                             variant="ghost"
                             size="sm"
                             className="h-7 w-7 p-0 opacity-60 hover:opacity-100 hover:text-destructive"
-                            onClick={() => removeSecretRef(key)}
+                            onClick={() => void removeSecretRef(key)}
                             disabled={secretsBusy}
                           >
                             <Trash2 className="h-3.5 w-3.5" />

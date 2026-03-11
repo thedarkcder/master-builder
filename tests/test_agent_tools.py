@@ -14,6 +14,7 @@ def test_allowed_tools_for_stage_dev_contains_github_and_jira() -> None:
     assert "github.create_branch" in tools
     assert "github.open_pr" in tools
     assert "jira.comment" in tools
+    assert "project.get_runtime_values" in tools
 
 
 def test_execute_agent_tool_rejects_disallowed_stage_tool() -> None:
@@ -405,3 +406,222 @@ def test_repo_read_requires_repo_checkout() -> None:
                 tool_name="repo.read",
                 tool_args={"command": "git status -sb"},
             )
+
+
+def test_project_get_runtime_values_returns_environment_value() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {"SUPABASE_URL": "https://example.supabase.co"}
+        secret_refs = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "dev"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+        payload = execute_agent_tool(
+            session=None,  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key=""),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="dev",
+            tool_name="project.get_runtime_values",
+            tool_args={"keys": ["SUPABASE_URL"]},
+        )
+
+    assert payload == {
+        "values": {
+            "SUPABASE_URL": {
+                "source": "environment",
+                "value": "https://example.supabase.co",
+                "secret_ref": None,
+            }
+        }
+    }
+
+
+def test_project_get_runtime_values_resolves_scoped_secret_ref() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {}
+        secret_refs = {"SUPABASE_ANON_KEY": "project/example-default/supabase_anon_key"}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "dev"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with (
+        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.agent_tools.resolve_scoped_secret_ref", return_value="anon-key-value") as scoped_mock,
+    ):
+        payload = execute_agent_tool(
+            session=object(),  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key="enc-key"),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="dev",
+            tool_name="project.get_runtime_values",
+            tool_args={"keys": ["SUPABASE_ANON_KEY"]},
+        )
+
+    assert payload == {
+        "values": {
+            "SUPABASE_ANON_KEY": {
+                "source": "secret_ref",
+                "value": "anon-key-value",
+                "secret_ref": "project/example-default/supabase_anon_key",
+            }
+        }
+    }
+    scoped_mock.assert_called_once()
+
+
+def test_project_get_runtime_values_requires_keys_argument() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {}
+        secret_refs = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "test"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+        with pytest.raises(ValueError, match="requires non-empty 'keys'"):
+            execute_agent_tool(
+                session=None,  # type: ignore[arg-type]
+                settings=SimpleNamespace(secrets_encryption_key=""),
+                tenant_id="example",
+                project_id="example-default",
+                run_id="run-1",
+                issue_key="MAB-1",
+                stage="test",
+                tool_name="project.get_runtime_values",
+                tool_args={},
+            )
+
+
+def test_project_list_runtime_keys_combines_environment_and_secret_refs() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {"SUPABASE_URL": "https://example.supabase.co"}
+        secret_refs = {"SUPABASE_ANON_KEY": "project/example-default/supabase_anon_key"}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "dev"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+        payload = execute_agent_tool(
+            session=None,  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key=""),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="dev",
+            tool_name="project.list_runtime_keys",
+            tool_args={},
+        )
+
+    assert payload == {
+        "keys": ["SUPABASE_ANON_KEY", "SUPABASE_URL"],
+        "environment_keys": ["SUPABASE_URL"],
+        "secret_ref_keys": ["SUPABASE_ANON_KEY"],
+    }
+
+
+def test_project_request_runtime_values_sends_discord_notification() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {}
+        secret_refs = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "test"
+        issue_key = "MAB-1"
+        run_id = "run-42"
+        repo_dir = Path("/tmp/repo")
+
+    fake_send_result = SimpleNamespace(sent=True, reason="sent", channel_id="123")
+    with (
+        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.agent_tools.send_tenant_discord_message", return_value=fake_send_result) as send_mock,
+    ):
+        payload = execute_agent_tool(
+            session=object(),  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key=""),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-42",
+            issue_key="MAB-1",
+            stage="test",
+            tool_name="project.request_runtime_values",
+            tool_args={"keys": ["SUPABASE_URL", "SUPABASE_ANON_KEY"], "reason": "Needed for iOS auth tests"},
+        )
+
+    assert payload == {
+        "requested_keys": ["SUPABASE_URL", "SUPABASE_ANON_KEY"],
+        "reason": "Needed for iOS auth tests",
+        "notification_sent": True,
+        "notification_reason": "sent",
+        "channel_id": "123",
+    }
+    send_mock.assert_called_once()

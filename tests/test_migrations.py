@@ -73,3 +73,20 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("decision_cycles", inspector.get_table_names())
             self.assertIn("decision_events", inspector.get_table_names())
             self.assertIn("decision_effects_outbox", inspector.get_table_names())
+
+    def test_orchestrated_session_migration_is_idempotent_when_column_already_exists(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            run_migrations(database_url=database_url)
+
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("UPDATE alembic_version SET version_num = '20260310_0023'"))
+
+            run_migrations(database_url=database_url)
+
+            inspector = inspect(engine)
+            run_columns = {column["name"] for column in inspector.get_columns("runs")}
+            run_indexes = {index["name"] for index in inspector.get_indexes("runs")}
+            self.assertIn("orchestrated_session_id", run_columns)
+            self.assertIn("ix_runs_orchestrated_session_id", run_indexes)

@@ -919,6 +919,9 @@ class AdminApiTests(unittest.TestCase):
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
+                    dev_session_id="dev-session-123",
+                    pm_session_id="pm-session-456",
+                    orchestrated_session_id="orchestrated-session-789",
                     status="failed",
                     last_error="boom",
                     plan=None,
@@ -936,6 +939,9 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["issue_key"], "TP-999")
         self.assertEqual(body["status"], "queued")
         self.assertNotEqual(body["run_id"], "run-failed-rerun")
+        self.assertEqual(body["dev_session_id"], "dev-session-123")
+        self.assertEqual(body["pm_session_id"], "pm-session-456")
+        self.assertEqual(body["orchestrated_session_id"], "orchestrated-session-789")
 
     def test_cancel_active_run_from_admin(self) -> None:
         payload = self._tenant_payload()

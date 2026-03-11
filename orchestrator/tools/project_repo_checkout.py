@@ -182,13 +182,12 @@ def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:
     raw = config_path.read_text(encoding="utf-8")
     updated = raw
     for server_name, enabled_line in _MCP_SERVER_DISABLED_LINES:
-        section_pattern = (
-            rf"(?ms)(^\[mcp_servers\.{re.escape(server_name)}\]\s*$.*?)(^\[|\Z)"
-        )
+        section_pattern = rf"(?ms)^(\[mcp_servers\.{re.escape(server_name)}\]\s*\n)(.*?)(?=^\[|\Z)"
         section_match = re.search(section_pattern, updated)
         if section_match is None:
             continue
-        section_body = section_match.group(1)
+        section_header = section_match.group(1)
+        section_body = section_match.group(2)
         if re.search(r"(?m)^\s*enabled\s*=\s*(true|false)\s*$", section_body):
             section_body = re.sub(
                 r"(?m)^\s*enabled\s*=\s*(true|false)\s*$",
@@ -200,7 +199,14 @@ def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:
             if not section_body.endswith("\n"):
                 section_body += "\n"
             section_body += f"{enabled_line}\n"
-        updated = f"{updated[:section_match.start(1)]}{section_body}{updated[section_match.end(1):]}"
+        # Keep TOML sections separated even when source file omits trailing newline.
+        if not section_body.endswith("\n"):
+            section_body += "\n"
+        updated = (
+            f"{updated[:section_match.start()]}"
+            f"{section_header}{section_body}"
+            f"{updated[section_match.end():]}"
+        )
     if updated != raw:
         config_path.write_text(updated, encoding="utf-8")
 

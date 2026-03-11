@@ -57,6 +57,7 @@ TestResult.__test__ = False
 class ReviewResult:
     approved: bool
     summary: list[str]
+    outcome: str = "needs_changes"
     feedback: str | None = None
     pr_url: str | None = None
 

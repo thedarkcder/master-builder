@@ -523,6 +523,32 @@ def _emit_orchestrated_trace_logs(
             stream="system",
             message=json.dumps(finished_payload, sort_keys=True),
         )
+        # Persist an explicit stage-scoped row so run logs can be filtered by PM/DEV/TEST/REVIEW
+        # even when orchestration runs as a single top-level invocation.
+        stage_row_payload = {
+            "event_kind": "orchestrated_stage_event",
+            "source": "orchestrated_run_trace",
+            "trace_index": index,
+            "stage": stage,
+            "status": _normalize_terminal_status(status),
+            "summary": summary,
+        }
+        record_run_log_event(
+            session=session,
+            tenant_id=run.tenant_id,
+            project_id=run.project_id,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            agent_id=agent_id,
+            invocation_id=invocation_id,
+            channel="worker",
+            command=f"workflow.{stage}",
+            working_dir=None,
+            stage=stage,
+            attempt=attempt,
+            stream="system",
+            message=json.dumps(stage_row_payload, sort_keys=True),
+        )
 
     for index, item in enumerate(workstream_trace):
         if not isinstance(item, dict):

@@ -64,6 +64,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(dev.pr_url, "https://example/pull/1")
         self.assertTrue(test_result.passed)
         self.assertTrue(review.approved)
+        self.assertEqual(review.outcome, "approved")
 
     def test_review_fallback_does_not_treat_generic_not_as_rejection(self) -> None:
         runtime = CodexRuntime(
@@ -89,6 +90,33 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             review = agents.review(request, plan, dev, test_result, 1)
 
         self.assertTrue(review.approved)
+        self.assertEqual(review.outcome, "approved")
+
+    def test_review_outcome_falls_back_to_blocked_when_feedback_indicates_hard_stop(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
+                    '{"change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
+                    '{"passed":true,"guidance":["run tests"],"feedback":null}',
+                    '{"approved":false,"summary":["Governed runtime unavailable"],"feedback":"Governed runtime unavailable"}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = self._request()
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            plan = agents.pm(request, 1, None, [], None, None, None)
+            dev = agents.dev(request, plan, 1, None)
+            test_result = agents.test(request, plan, dev, 1)
+            review = agents.review(request, plan, dev, test_result, 1)
+
+        self.assertFalse(review.approved)
+        self.assertEqual(review.outcome, "blocked")
 
     def test_pm_fallback_extracts_selected_macos_when_linux_also_present(self) -> None:
         runtime = CodexRuntime(

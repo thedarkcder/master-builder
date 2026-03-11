@@ -1,22 +1,87 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Protocol
 
-from orchestrator.core.agent_tools import allowed_tools_for_stage
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_agents import CodexWorkflowAgents
 from orchestrator.core.codex_runtime import CodexRuntime
-from orchestrator.core.config import get_settings
-from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.workflow.runner import PmPlan, WorkflowRequest, WorkflowResult
+from orchestrator.core.worker_capabilities import normalize_worker_capability
+from orchestrator.core.workflow.runner import (
+    DevResult,
+    PmPlan,
+    ReviewResult,
+    TestResult,
+    WorkflowDiagnostics,
+    WorkflowRequest,
+    WorkflowResult,
+)
 
-_ALLOWED_STAGE_NAMES = {"pm", "dev", "test", "review"}
+
+class StageAgents(Protocol):
+    def pm(
+        self,
+        request: WorkflowRequest,
+        attempt: int,
+        feedback: str | None,
+        history: list[dict[str, str]],
+        last_dev_result: DevResult | None,
+        last_test_result: TestResult | None,
+        last_review_result: ReviewResult | None,
+    ) -> PmPlan:
+        ...
+
+    def dev(
+        self,
+        request: WorkflowRequest,
+        plan: PmPlan,
+        attempt: int,
+        feedback: str | None,
+    ) -> DevResult:
+        ...
+
+    def test(
+        self,
+        request: WorkflowRequest,
+        plan: PmPlan,
+        dev_result: DevResult,
+        attempt: int,
+    ) -> TestResult:
+        ...
+
+    def review(
+        self,
+        request: WorkflowRequest,
+        plan: PmPlan,
+        dev_result: DevResult,
+        test_result: TestResult,
+        attempt: int,
+    ) -> ReviewResult:
+        ...
+
+
+@dataclass
+class _ExecutionState:
+    plan: PmPlan | None
+    stage_trace: list[dict[str, object]]
+    history: list[dict[str, str]]
+    dev_rationale: list[str]
+    review_summary: list[str]
+    review_feedback: str | None
+    test_guidance: list[str]
 
 
 class OrchestratedRunWorkflowExecutor:
-    def __init__(self, *, runtime: CodexRuntime, log_sink: Callable[[dict], None] | None = None):
+    def __init__(
+        self,
+        *,
+        runtime: CodexRuntime,
+        log_sink: Callable[[dict], None] | None = None,
+        stage_agents: StageAgents | None = None,
+    ):
         self._runtime = runtime
         self._log_sink = log_sink
+        self._stage_agents = stage_agents
 
     def execute(
         self,
@@ -24,319 +89,337 @@ class OrchestratedRunWorkflowExecutor:
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
     ) -> WorkflowResult:
-        _ = test_feedback_hook
-        payload = invoke_codex_json(
-            runtime=self._runtime,
-            context=CodexInvocationContext(
-                channel="worker",
-                tenant_id=request.tenant_id,
-                project_id=request.project_id,
-                command="workflow",
-                stage="orchestrated_run",
-                working_dir=request.execution_repo_dir or ".",
-                issue_key=request.issue_key,
-                run_id=request.run_id,
-                attempt=1,
-                reasoning_effort="medium",
-                issue_description_chars=len(request.issue_description or ""),
-            ),
-            system_prompt=render_prompt("workflow/orchestrated_run_system.j2"),
-            user_prompt=render_prompt(
-                "workflow/orchestrated_run_user.j2",
-                tenant_id=request.tenant_id,
-                project_id=request.project_id or "",
-                run_id=request.run_id,
-                issue_key=request.issue_key,
-                issue_summary=request.issue_summary,
-                issue_description=request.issue_description,
-                suggested_test_commands_json=json.dumps(request.suggested_test_commands),
-                base_branch=request.base_branch or "main",
-                integration_branch=request.integration_branch or f"feature/{request.issue_key}",
-                pr_target_branch=request.pr_target_branch or request.base_branch or "main",
-                max_parallel_workstreams=min(
-                    5,
-                    max(1, int(get_settings().workflow_max_parallel_workstreams)),
-                ),
-                current_worker_capability=request.current_worker_capability,
-                available_worker_capabilities_json=json.dumps(request.available_worker_capabilities),
-                pr_number=request.pr_number or 0,
-                trigger_context_json=json.dumps(request.trigger_context or {}),
-                allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("orchestrator"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage orchestrator --tool <tool_name> --args '<json-object>'"
-                ),
-            ),
-            extra_on_log_line=self._stage_log_sink(request=request),
-            require_json=True,
-        )
-        return _payload_to_result(request=request, payload=payload)
+        agents = self._stage_agents or CodexWorkflowAgents(runtime=self._runtime, log_sink=self._log_sink)
+        history: list[dict[str, str]] = []
+        stage_trace: list[dict[str, object]] = []
+        test_guidance = list(request.suggested_test_commands or ["Run relevant project tests"])
+        last_dev_result: DevResult | None = None
+        last_test_result: TestResult | None = None
+        last_review_result: ReviewResult | None = None
 
-    def _stage_log_sink(
+        try:
+            plan = agents.pm(
+                request,
+                1,
+                None,
+                history,
+                last_dev_result,
+                last_test_result,
+                last_review_result,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._failure_result(
+                request=request,
+                state=_ExecutionState(
+                    plan=None,
+                    stage_trace=stage_trace,
+                    history=history,
+                    dev_rationale=[],
+                    review_summary=[],
+                    review_feedback=None,
+                    test_guidance=test_guidance,
+                ),
+                stage="pm",
+                attempts=1,
+                message=f"PM stage failed: {exc}",
+            )
+
+        stage_trace.append(
+            _stage_trace_entry(
+                stage="pm",
+                status="completed",
+                attempt=1,
+                summary=_summarize_pm_plan(plan),
+            )
+        )
+        state = _ExecutionState(
+            plan=plan,
+            stage_trace=stage_trace,
+            history=history,
+            dev_rationale=[],
+            review_summary=[],
+            review_feedback=None,
+            test_guidance=test_guidance,
+        )
+
+        capability_mismatch_message = _capability_mismatch_message(request=request, plan=plan)
+        if capability_mismatch_message is not None:
+            history.append({"stage": "pm", "attempt": "1", "event": capability_mismatch_message})
+            stage_trace[-1]["status"] = "blocked"
+            stage_trace[-1]["summary"] = capability_mismatch_message
+            return self._failure_result(
+                request=request,
+                state=state,
+                stage="pm",
+                attempts=1,
+                message=capability_mismatch_message,
+            )
+
+        next_feedback: str | None = None
+        max_loops = max(1, int(request.max_dev_test_review_loops or 1))
+        for attempt in range(1, max_loops + 1):
+            try:
+                dev_result = agents.dev(request, plan, attempt, next_feedback)
+            except Exception as exc:  # noqa: BLE001
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="dev",
+                    attempts=attempt,
+                    message=f"Dev stage failed: {exc}",
+                )
+
+            last_dev_result = dev_result
+            state.dev_rationale[:] = list(dev_result.change_summary)
+            if dev_result.hard_stop_reason:
+                history.append({"stage": "dev", "attempt": str(attempt), "event": dev_result.hard_stop_reason})
+                stage_trace.append(
+                    _stage_trace_entry(
+                        stage="dev",
+                        status="blocked",
+                        attempt=attempt,
+                        summary=dev_result.hard_stop_reason,
+                    )
+                )
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="dev",
+                    attempts=attempt,
+                    message=dev_result.hard_stop_reason,
+                )
+            stage_trace.append(
+                _stage_trace_entry(
+                    stage="dev",
+                    status="completed",
+                    attempt=attempt,
+                    summary=_summarize_dev_result(dev_result),
+                )
+            )
+
+            try:
+                test_result = agents.test(request, plan, dev_result, attempt)
+            except Exception as exc:  # noqa: BLE001
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="test",
+                    attempts=attempt,
+                    message=f"Test stage failed: {exc}",
+                )
+
+            last_test_result = test_result
+            state.test_guidance[:] = list(test_result.guidance or state.test_guidance)
+            if not test_result.passed:
+                feedback = _summarize_test_feedback(test_result)
+                history.append({"stage": "test", "attempt": str(attempt), "event": feedback})
+                stage_trace.append(
+                    _stage_trace_entry(
+                        stage="test",
+                        status="failed",
+                        attempt=attempt,
+                        summary=feedback,
+                    )
+                )
+                if test_feedback_hook is not None:
+                    test_feedback_hook(attempt, feedback)
+                if attempt >= max_loops:
+                    return self._failure_result(
+                        request=request,
+                        state=state,
+                        stage="test",
+                        attempts=attempt,
+                        message=f"Max workflow attempts reached after test failures. Last feedback: {feedback}",
+                    )
+                next_feedback = feedback
+                continue
+            stage_trace.append(
+                _stage_trace_entry(
+                    stage="test",
+                    status="completed",
+                    attempt=attempt,
+                    summary=_summarize_test_result(test_result),
+                )
+            )
+
+            try:
+                review_result = agents.review(request, plan, dev_result, test_result, attempt)
+            except Exception as exc:  # noqa: BLE001
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="review",
+                    attempts=attempt,
+                    message=f"Review stage failed: {exc}",
+                )
+
+            last_review_result = review_result
+            state.review_summary[:] = list(review_result.summary)
+            state.review_feedback = review_result.feedback
+            review_message = _summarize_review_result(review_result)
+            review_outcome = _normalize_review_outcome(review_result)
+            if review_outcome == "approved":
+                stage_trace.append(
+                    _stage_trace_entry(
+                        stage="review",
+                        status="completed",
+                        attempt=attempt,
+                        summary=review_message,
+                    )
+                )
+                pr_url = review_result.pr_url or dev_result.pr_url
+                return WorkflowResult(
+                    succeeded=True,
+                    plan=plan,
+                    pr_url=pr_url,
+                    summary=list(review_result.summary or dev_result.change_summary or ["Workflow completed"]),
+                    test_guidance=list(state.test_guidance),
+                    attempts=attempt,
+                    dev_rationale=list(state.dev_rationale),
+                    review_summary=list(state.review_summary),
+                    review_feedback=None,
+                    orchestration_stage_trace=list(stage_trace),
+                    orchestration_workstream_trace=[],
+                )
+
+            history.append({"stage": "review", "attempt": str(attempt), "event": review_message})
+            if review_outcome == "blocked":
+                stage_trace.append(
+                    _stage_trace_entry(
+                        stage="review",
+                        status="blocked",
+                        attempt=attempt,
+                        summary=review_message,
+                    )
+                )
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="review",
+                    attempts=attempt,
+                    message=review_message,
+                )
+
+            stage_trace.append(
+                _stage_trace_entry(
+                    stage="review",
+                    status="failed",
+                    attempt=attempt,
+                    summary=review_message,
+                )
+            )
+            if attempt >= max_loops:
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="review",
+                    attempts=attempt,
+                    message=f"Max workflow attempts reached after review feedback. Last feedback: {review_message}",
+                )
+            next_feedback = review_message
+
+        return self._failure_result(
+            request=request,
+            state=state,
+            stage="workflow",
+            attempts=max_loops,
+            message="Workflow ended without approval.",
+        )
+
+    def _failure_result(
         self,
         *,
         request: WorkflowRequest,
-    ) -> Callable[[str, str], None] | None:
-        if self._log_sink is None:
-            return None
-
-        def _emit(stream: str, message: str) -> None:
-            self._log_sink(
-                {
-                    "tenant_id": request.tenant_id,
-                    "project_id": request.project_id,
-                    "run_id": request.run_id,
-                    "issue_key": request.issue_key,
-                    "stage": "orchestrated_run",
-                    "attempt": 1,
-                    "stream": stream,
-                    "message": message,
-                }
-            )
-
-        return _emit
-
-
-def _payload_to_result(*, request: WorkflowRequest, payload: dict) -> WorkflowResult:
-    status = str(payload.get("status") or "").strip().lower()
-    summary = _string_list(payload.get("summary"), fallback=["Orchestrated run completed"])
-    pr_url = _optional_non_empty(payload.get("pr_url"))
-    review_findings = _string_list(payload.get("review_findings"), fallback=[])
-    workstreams = payload.get("workstreams")
-    plan_steps = _string_list(payload.get("plan_steps"), fallback=[])
-    acceptance_criteria = _string_list(payload.get("acceptance_criteria"), fallback=[])
-    risks = _string_list(payload.get("risks"), fallback=[])
-    merge_order = _string_list(payload.get("merge_order"), fallback=[])
-    test_guidance = _string_list(
-        payload.get("test_guidance"),
-        fallback=request.suggested_test_commands or ["Run relevant project tests"],
-    )
-    stage_trace = _normalize_stage_trace(payload)
-    workstream_trace = _normalize_workstream_trace(payload, fallback_workstreams=workstreams)
-    if not stage_trace:
-        stage_trace = _synthesize_stage_trace(status=status, workstream_trace=workstream_trace)
-
-    plan = PmPlan(
-        plan_steps=plan_steps or ["Execute orchestrated multi-agent workflow"],
-        acceptance_criteria=acceptance_criteria or ["Deliver validated PR for ticket scope"],
-        risks=risks,
-        next_stage="dev",
-        execution_worker_capability=request.current_worker_capability,
-    )
-
-    if status == "approved" and pr_url:
+        state: _ExecutionState,
+        stage: str,
+        attempts: int,
+        message: str,
+    ) -> WorkflowResult:
         return WorkflowResult(
-            succeeded=True,
-            plan=plan,
-            pr_url=pr_url,
-            summary=summary,
-            test_guidance=test_guidance,
-            attempts=1,
-            dev_rationale=_extract_workstream_summaries(workstreams),
-            review_summary=review_findings or summary,
-            review_feedback=None,
-            orchestration_stage_trace=stage_trace,
-            orchestration_workstream_trace=workstream_trace,
+            succeeded=False,
+            plan=state.plan,
+            pr_url=None,
+            summary=[],
+            test_guidance=list(state.test_guidance),
+            attempts=attempts,
+            dev_rationale=list(state.dev_rationale),
+            review_summary=list(state.review_summary),
+            review_feedback=state.review_feedback,
+            diagnostics=WorkflowDiagnostics(
+                stage=stage,
+                message=message,
+                attempts=attempts,
+                history=list(state.history),
+            ),
+            orchestration_stage_trace=list(state.stage_trace),
+            orchestration_workstream_trace=[],
         )
 
-    feedback = _optional_non_empty(payload.get("feedback")) or (
-        "Orchestrated run did not produce an approved PR result."
-    )
-    diagnostics_history: list[dict[str, str]] = []
-    if merge_order:
-        diagnostics_history.append({"stage": "integrator", "attempt": "1", "event": f"merge_order={','.join(merge_order)}"})
-    if review_findings:
-        diagnostics_history.extend(
-            {"stage": "review", "attempt": "1", "event": finding} for finding in review_findings
-        )
-    return WorkflowResult(
-        succeeded=False,
-        plan=plan,
-        pr_url=None,
-        summary=[],
-        test_guidance=test_guidance,
-        attempts=1,
-        dev_rationale=_extract_workstream_summaries(workstreams),
-        review_summary=review_findings,
-        review_feedback=feedback,
-        diagnostics=None if status == "approved" else _build_diagnostics(status=status, feedback=feedback, history=diagnostics_history),
-        orchestration_stage_trace=stage_trace,
-        orchestration_workstream_trace=workstream_trace,
-    )
+
+def _stage_trace_entry(*, stage: str, status: str, attempt: int, summary: str) -> dict[str, object]:
+    return {
+        "stage": stage,
+        "status": status,
+        "attempt": attempt,
+        "summary": summary,
+    }
 
 
-def _build_diagnostics(*, status: str, feedback: str, history: list[dict[str, str]]):
-    from orchestrator.core.workflow.runner import WorkflowDiagnostics
-
-    normalized_status = status if status in {"needs_changes", "blocked"} else "workflow"
-    return WorkflowDiagnostics(
-        stage=normalized_status,
-        message=feedback,
-        attempts=1,
-        history=history,
-    )
-
-
-def _extract_workstream_summaries(workstreams: object) -> list[str]:
-    if not isinstance(workstreams, list):
-        return []
-    summaries: list[str] = []
-    for item in workstreams:
-        if not isinstance(item, dict):
-            continue
-        name = _optional_non_empty(item.get("name")) or _optional_non_empty(item.get("branch")) or "workstream"
-        item_summary = _optional_non_empty(item.get("summary")) or _optional_non_empty(item.get("result"))
-        if item_summary:
-            summaries.append(f"{name}: {item_summary}")
-        else:
-            summaries.append(name)
-    return summaries
-
-
-def _string_list(value: object, *, fallback: list[str]) -> list[str]:
-    if isinstance(value, list):
-        normalized = [str(item).strip() for item in value if str(item).strip()]
-        if normalized:
-            return normalized
-    return list(fallback)
-
-
-def _optional_non_empty(value: object) -> str | None:
-    if not isinstance(value, str):
+def _capability_mismatch_message(*, request: WorkflowRequest, plan: PmPlan) -> str | None:
+    required = normalize_worker_capability(plan.execution_worker_capability)
+    current = normalize_worker_capability(request.current_worker_capability)
+    if required is None or current is None or required == current:
         return None
-    normalized = value.strip()
-    return normalized or None
+    return (
+        f"Execution capability mismatch: PM selected {required} but current worker is {current}. "
+        f"Requeue on worker:{required} before dev/test/review."
+    )
 
 
-def _normalize_stage_trace(payload: dict) -> list[dict[str, object]]:
-    raw = payload.get("stage_trace")
-    if not isinstance(raw, list):
-        orchestration_trace = payload.get("orchestration_trace")
-        if isinstance(orchestration_trace, dict):
-            raw = orchestration_trace.get("stage_events")
-    if not isinstance(raw, list):
-        return []
-
-    normalized: list[dict[str, object]] = []
-    for index, item in enumerate(raw):
-        if not isinstance(item, dict):
-            continue
-        stage = str(item.get("stage") or "").strip().lower()
-        if stage not in _ALLOWED_STAGE_NAMES:
-            continue
-        status = str(item.get("status") or "completed").strip().lower() or "completed"
-        event: dict[str, object] = {
-            "order": index,
-            "stage": stage,
-            "status": status,
-            "summary": _optional_non_empty(item.get("summary")) or "",
-        }
-        started_at = _optional_non_empty(item.get("started_at"))
-        finished_at = _optional_non_empty(item.get("finished_at"))
-        invocation_id = _optional_non_empty(item.get("invocation_id"))
-        if started_at:
-            event["started_at"] = started_at
-        if finished_at:
-            event["finished_at"] = finished_at
-        if invocation_id:
-            event["invocation_id"] = invocation_id
-        if isinstance(item.get("attempt"), int):
-            event["attempt"] = int(item["attempt"])
-        if isinstance(item.get("duration_ms"), int):
-            event["duration_ms"] = max(0, int(item["duration_ms"]))
-        normalized.append(event)
-    return normalized
+def _summarize_pm_plan(plan: PmPlan) -> str:
+    if plan.plan_steps:
+        return f"PM produced {len(plan.plan_steps)} execution steps and {len(plan.acceptance_criteria)} acceptance criteria."
+    if plan.acceptance_criteria:
+        return f"PM captured {len(plan.acceptance_criteria)} acceptance criteria."
+    return "PM planning completed."
 
 
-def _normalize_workstream_trace(payload: dict, *, fallback_workstreams: object) -> list[dict[str, object]]:
-    raw = payload.get("workstream_trace")
-    if not isinstance(raw, list):
-        orchestration_trace = payload.get("orchestration_trace")
-        if isinstance(orchestration_trace, dict):
-            raw = orchestration_trace.get("workstream_events")
-
-    normalized: list[dict[str, object]] = []
-    if isinstance(raw, list):
-        for index, item in enumerate(raw):
-            if not isinstance(item, dict):
-                continue
-            name = _optional_non_empty(item.get("name")) or _optional_non_empty(item.get("workstream"))
-            if not name:
-                continue
-            stage = str(item.get("stage") or "dev").strip().lower() or "dev"
-            if stage not in _ALLOWED_STAGE_NAMES:
-                stage = "dev"
-            status = str(item.get("status") or "completed").strip().lower() or "completed"
-            row: dict[str, object] = {
-                "order": index,
-                "name": name,
-                "stage": stage,
-                "status": status,
-                "summary": _optional_non_empty(item.get("summary")) or "",
-            }
-            branch = _optional_non_empty(item.get("branch"))
-            if branch:
-                row["branch"] = branch
-            normalized.append(row)
-
-    if normalized:
-        return normalized
-
-    if not isinstance(fallback_workstreams, list):
-        return []
-
-    for index, item in enumerate(fallback_workstreams):
-        if not isinstance(item, dict):
-            continue
-        name = _optional_non_empty(item.get("name")) or _optional_non_empty(item.get("branch"))
-        if not name:
-            continue
-        status = str(item.get("status") or item.get("result") or "completed").strip().lower() or "completed"
-        normalized.append(
-            {
-                "order": index,
-                "name": name,
-                "stage": "dev",
-                "status": status,
-                "summary": _optional_non_empty(item.get("summary")) or _optional_non_empty(item.get("result")) or "",
-                "branch": _optional_non_empty(item.get("branch")) or "",
-            }
-        )
-    return normalized
+def _summarize_dev_result(result: DevResult) -> str:
+    summary = "; ".join(result.change_summary[:2]).strip()
+    return summary or "Dev stage completed."
 
 
-def _synthesize_stage_trace(*, status: str, workstream_trace: list[dict[str, object]]) -> list[dict[str, object]]:
-    if workstream_trace:
-        dev_status = "completed"
-        blocked_seen = any(str(item.get("status") or "").strip().lower() == "blocked" for item in workstream_trace)
-        needs_changes_seen = any(
-            str(item.get("status") or "").strip().lower() in {"needs_changes", "failed"}
-            for item in workstream_trace
-        )
-        if blocked_seen:
-            dev_status = "blocked"
-        elif needs_changes_seen:
-            dev_status = "failed"
-    else:
-        dev_status = "completed"
-
-    review_status = "completed"
-    if status == "needs_changes":
-        review_status = "failed"
-    elif status == "blocked":
-        review_status = "blocked"
-
-    return [
-        {"order": 0, "stage": "pm", "status": "completed"},
-        {"order": 1, "stage": "dev", "status": dev_status},
-        {"order": 2, "stage": "test", "status": "completed" if dev_status == "completed" else dev_status},
-        {"order": 3, "stage": "review", "status": review_status},
-    ]
+def _summarize_test_result(result: TestResult) -> str:
+    if result.guidance:
+        return "; ".join(result.guidance[:2])
+    return "Test stage passed."
 
 
-# Compatibility alias for previous naming.
-OneShotWorkflowExecutor = OrchestratedRunWorkflowExecutor
+def _summarize_test_feedback(result: TestResult) -> str:
+    feedback = str(result.feedback or "").strip()
+    if feedback:
+        return feedback
+    if result.guidance:
+        return "; ".join(result.guidance[:3])
+    return "Test stage reported failures."
+
+
+def _summarize_review_result(result: ReviewResult) -> str:
+    feedback = str(result.feedback or "").strip()
+    if feedback:
+        return feedback
+    if result.summary:
+        return "; ".join(result.summary[:3])
+    outcome = _normalize_review_outcome(result)
+    if outcome == "blocked":
+        return "Review blocked the workflow."
+    if outcome == "approved":
+        return "Review approved the workflow."
+    return "Review requested changes."
+
+
+def _normalize_review_outcome(result: ReviewResult) -> str:
+    outcome = str(result.outcome or "").strip().lower()
+    if outcome in {"approved", "needs_changes", "blocked"}:
+        return outcome
+    return "approved" if result.approved else "needs_changes"
