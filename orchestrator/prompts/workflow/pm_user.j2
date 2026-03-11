@@ -1,5 +1,9 @@
 Stage: pm
 Tenant ID: {{ tenant_id }}
+Project ID: {{ project_id }}
+Project Name: {{ project_name }}
+GitHub Repository: {{ github_repository }}
+Jira Project Key: {{ jira_project_key }}
 Run ID: {{ run_id }}
 Issue key: {{ issue_key }}
 Attempt: {{ attempt }}
@@ -27,6 +31,7 @@ Required actions:
 2. Convert requirements into observable acceptance criteria.
 3. Surface delivery risks that can block or degrade delivery.
 4. Use allowed tools to gather authoritative evidence before deciding prerequisite state instead of assuming.
+4a. Treat project metadata in this prompt as authoritative routing context. Do not fetch project_id, project_name, github_repository, or jira_project_key via runtime-values tools.
 5. Decide next stage:
    - Use "dev" if code changes are still needed.
    - Use "test" only when prior dev output is sufficient and we should retest/validate.
@@ -39,6 +44,7 @@ Required actions:
    - resolved_prerequisites: concise prerequisite facts that are already satisfied.
    - unresolved_prerequisites: concise prerequisite facts that remain unresolved but are not raw source dumps.
 8. If evidence is missing, prefer missing_evidence_sources over inventing blockers from silence.
+9. Use runtime-values tools only for actual runtime config/secrets (for example SUPABASE_URL, SUPABASE_ANON_KEY), not for stable project metadata already present in context.
 
 Output contract:
 - plan_steps: array of concrete execution steps.
