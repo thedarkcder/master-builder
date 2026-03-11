@@ -7,7 +7,7 @@ from sqlalchemy import select
 from orchestrator.core.run_logs import NormalizedRunLogEvent, materialize_token_usage_from_log_message
 from orchestrator.storage.models import Run, RunLogEvent
 
-_TOKEN_STAGES = ("pm", "dev", "test", "review", "orchestrated_run", "one_shot")
+_TOKEN_STAGES = ("pm", "dev", "test", "review", "orchestrated_run")
 _MAX_BACKFILL_ROWS = 1000
 
 

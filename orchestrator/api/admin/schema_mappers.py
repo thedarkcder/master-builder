@@ -35,6 +35,7 @@ def run_to_schema(run: Run) -> RunRead:
         pr_url=run.pr_url,
         dev_session_id=run.dev_session_id,
         pm_session_id=run.pm_session_id,
+        orchestrated_session_id=run.orchestrated_session_id,
         status=run.status,
         last_error=None if run.status == "succeeded" else run.last_error,
         plan=run.plan,

@@ -41,10 +41,7 @@ class Settings(BaseSettings):
     knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = "aggressive"
     knowledge_context_top_k: int = 5
     knowledge_context_max_chars: int = 3200
-    workflow_max_parallel_workstreams: int = 3
     workflow_orchestrated_run_timeout_minutes: int = 90
-    # Deprecated: retained for backward compatibility with existing env vars.
-    workflow_one_shot_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"

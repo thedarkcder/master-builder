@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.project_policy import resolve_effective_policy
@@ -49,16 +50,25 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "github.push_branch",
         "github.open_pr",
         "repo.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
     },
     "test": {
         "jira.comment",
         "repo.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
     },
     "review": {
         "jira.comment",
         "jira.transition",
         "github.open_pr",
         "repo.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
     },
     "orchestrator": {
         "jira.get_issue",
@@ -75,12 +85,18 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "github.list_pr_issue_comments",
         "github.list_check_suites",
         "repo.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
     },
     "decision_planner": {
         "jira.get_issue",
         "repo.read",
         "decision.read_state",
         "knowledge.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
     },
 }
 
@@ -162,6 +178,14 @@ def execute_agent_tool(
 
     if tool_name == "repo.read":
         return _tool_repo_read(context=context, args=args)
+    if tool_name.startswith("project."):
+        return _execute_project_tool(
+            session=session,
+            settings=settings,
+            context=context,
+            tool_name=tool_name,
+            args=args,
+        )
     if tool_name.startswith("decision."):
         return _execute_decision_tool(session=session, context=context, tool_name=tool_name, args=args)
     if tool_name.startswith("knowledge."):
@@ -469,6 +493,118 @@ def _execute_knowledge_tool(
         "text": payload.text,
         "citations": payload.citations,
     }
+
+
+def _execute_project_tool(
+    *,
+    session: Session,
+    settings,
+    context: AgentToolContext,
+    tool_name: str,
+    args: dict[str, Any],  # noqa: ANN401
+) -> dict[str, Any]:
+    if tool_name == "project.list_runtime_keys":
+        environment_map = context.project.environment if isinstance(context.project.environment, dict) else {}
+        secret_ref_map = context.project.secret_refs if isinstance(context.project.secret_refs, dict) else {}
+        environment_keys = sorted({str(key).strip() for key in environment_map.keys() if str(key).strip()})
+        secret_ref_keys = sorted({str(key).strip() for key in secret_ref_map.keys() if str(key).strip()})
+        all_keys = sorted(set(environment_keys) | set(secret_ref_keys))
+        return {
+            "keys": all_keys,
+            "environment_keys": environment_keys,
+            "secret_ref_keys": secret_ref_keys,
+        }
+
+    if tool_name == "project.request_runtime_values":
+        raw_keys = args.get("keys")
+        if isinstance(raw_keys, str):
+            requested_keys = [raw_keys]
+        elif isinstance(raw_keys, list):
+            requested_keys = [str(item or "").strip() for item in raw_keys]
+        else:
+            requested_keys = []
+        normalized_keys = [key for key in requested_keys if key]
+        if not normalized_keys:
+            raise ValueError("project.request_runtime_values requires non-empty 'keys'")
+        reason = str(args.get("reason") or "").strip()
+        message_lines = [
+            f"Runtime value request for {context.issue_key or 'unknown issue'}",
+            f"- Tenant: {context.tenant.tenant_id}",
+            f"- Project: {context.project.project_id}",
+            f"- Stage: {context.stage}",
+            f"- Run: {context.run_id or 'n/a'}",
+            f"- Keys: {', '.join(normalized_keys)}",
+        ]
+        if reason:
+            message_lines.append(f"- Reason: {reason}")
+        send_result = send_tenant_discord_message(
+            session=session,
+            tenant=context.tenant,
+            project=context.project,
+            message="\n".join(message_lines),
+            settings=settings,
+            event=None,
+        )
+        return {
+            "requested_keys": normalized_keys,
+            "reason": reason or None,
+            "notification_sent": bool(send_result.sent),
+            "notification_reason": send_result.reason,
+            "channel_id": send_result.channel_id,
+        }
+
+    if tool_name != "project.get_runtime_values":
+        raise ValueError(f"Unsupported Project tool '{tool_name}'")
+
+    raw_keys = args.get("keys")
+    if isinstance(raw_keys, str):
+        requested_keys = [raw_keys]
+    elif isinstance(raw_keys, list):
+        requested_keys = [str(item or "").strip() for item in raw_keys]
+    else:
+        requested_keys = []
+    normalized_keys = [key for key in requested_keys if key]
+    if not normalized_keys:
+        raise ValueError("project.get_runtime_values requires non-empty 'keys'")
+
+    environment_map = context.project.environment if isinstance(context.project.environment, dict) else {}
+    secret_ref_map = context.project.secret_refs if isinstance(context.project.secret_refs, dict) else {}
+    encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
+
+    values: dict[str, dict[str, Any]] = {}
+    for key in normalized_keys:
+        if key in environment_map:
+            values[key] = {
+                "source": "environment",
+                "value": str(environment_map.get(key) or ""),
+                "secret_ref": None,
+            }
+            continue
+        secret_ref = str(secret_ref_map.get(key) or "").strip()
+        if not secret_ref:
+            values[key] = {"source": "missing", "value": None, "secret_ref": None}
+            continue
+        if secret_ref.startswith("platform/"):
+            resolved_value = resolve_platform_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                encryption_key=encryption_key,
+            )
+        else:
+            resolved_value = resolve_scoped_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                tenant_id=context.tenant.tenant_id,
+                project_id=context.project.project_id,
+                encryption_key=encryption_key,
+            )
+        values[key] = {
+            "source": "secret_ref" if resolved_value else "missing",
+            "value": resolved_value,
+            "secret_ref": secret_ref,
+        }
+
+    return {"values": values}
 
 
 def _execute_github_tool(

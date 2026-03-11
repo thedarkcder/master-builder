@@ -346,6 +346,33 @@ class CodexWorkflowAgents:
             true_markers=("approved", "pass", "acceptable", "looks good", "go"),
             false_markers=("rejected", "reject", "request changes", "not approved", "blocked", "do not approve"),
         )
+        outcome_raw = str(payload.get("outcome") or "").strip().lower()
+        if outcome_raw not in {"approved", "needs_changes", "blocked"}:
+            fallback_text_parts = [
+                raw_response,
+                str(payload.get("feedback") or ""),
+                " ".join(_string_list(payload.get("summary"), fallback=[])),
+            ]
+            lowered_response = " ".join(part for part in fallback_text_parts if part).lower()
+            if approved:
+                outcome_raw = "approved"
+            elif any(
+                marker in lowered_response
+                for marker in (
+                    "hard stop",
+                    "blocked",
+                    "cannot proceed",
+                    "cannot approve yet",
+                    "governed runtime unavailable",
+                    "governed runtime was unavailable",
+                    "missing approval",
+                    "missing approvals",
+                    "runtime unavailable",
+                )
+            ):
+                outcome_raw = "blocked"
+            else:
+                outcome_raw = "needs_changes"
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
         if feedback is None:
@@ -361,6 +388,7 @@ class CodexWorkflowAgents:
                     or ["No review summary provided by Codex"]
                 ),
             ),
+            outcome=outcome_raw,
             feedback=feedback,
             pr_url=pr_url,
         )

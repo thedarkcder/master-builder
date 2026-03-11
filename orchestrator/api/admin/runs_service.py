@@ -144,6 +144,11 @@ def rerun_run(
                 enqueue_run_obj=enqueue_result.run,
             ),
         )
+    enqueue_result.run.pm_session_id = source_run.pm_session_id
+    enqueue_result.run.dev_session_id = source_run.dev_session_id
+    enqueue_result.run.orchestrated_session_id = source_run.orchestrated_session_id
+    session.commit()
+    session.refresh(enqueue_result.run)
     return run_to_schema_fn(enqueue_result.run)
 
 

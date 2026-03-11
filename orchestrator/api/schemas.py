@@ -328,6 +328,7 @@ class RunRead(BaseModel):
     pr_url: str | None
     dev_session_id: str | None = None
     pm_session_id: str | None = None
+    orchestrated_session_id: str | None = None
     status: str
     last_error: str | None
     plan: dict | None
