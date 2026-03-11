@@ -1,9 +1,22 @@
-from unittest.mock import MagicMock
+from __future__ import annotations
 
-from orchestrator.core.knowledge_base import build_knowledge_prompt_context
+from datetime import datetime, timezone
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+
+from orchestrator.core.knowledge_base import (
+    build_knowledge_prompt_context,
+    create_knowledge_asset,
+    sync_project_knowledge_from_jira,
+)
+from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
+from orchestrator.storage.migrations import run_migrations
+from orchestrator.storage.models import KnowledgeAsset, Project, Tenant
 
 
 def test_build_knowledge_prompt_context_requires_project_scope() -> None:
+    from unittest.mock import MagicMock
+
     session = MagicMock()
 
     context = build_knowledge_prompt_context(
@@ -19,6 +32,8 @@ def test_build_knowledge_prompt_context_requires_project_scope() -> None:
 
 
 def test_build_knowledge_prompt_context_requires_tenant_scope() -> None:
+    from unittest.mock import MagicMock
+
     session = MagicMock()
 
     context = build_knowledge_prompt_context(
@@ -31,3 +46,211 @@ def test_build_knowledge_prompt_context_requires_tenant_scope() -> None:
     assert context.text == ""
     assert context.citations == []
     session.execute.assert_not_called()
+
+
+def test_build_knowledge_prompt_context_returns_project_scoped_match() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_test.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="MAB",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+            create_knowledge_asset(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                source_type="jira_comment",
+                title="GP-122 comment",
+                mime_type="text/plain",
+                source_ref="comment:GP-122:1",
+                text_content="Production Bundle ID is com.route25.girlpower and staging bundle ID is com.route25.girlpower.stage",
+            )
+
+            context = build_knowledge_prompt_context(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                query="What is the production bundle id for GirlPower Apple sign in?",
+            )
+
+        assert "com.route25.girlpower" in context.text
+        assert context.citations
+        assert context.citations[0]["source_type"] == "jira_comment"
+
+
+def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_sync.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            class _JiraClient:
+                def __init__(self) -> None:
+                    self._attachment_body = b"Bundle ID: com.route25.girlpower\nService ID: com.route25.girlpower.auth"
+
+                def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
+                    start_at = int(kwargs.get("start_at", 0) or 0)
+                    if start_at > 0:
+                        return []
+                    return [SimpleNamespace(key="GP-122")]
+
+                def get_issue_detail(self, **_kwargs):
+                    return SimpleNamespace(
+                        key="GP-122",
+                        summary="Auth gate rollout",
+                        status="Blocked",
+                        description="Need Apple Sign In config confirmed.",
+                        labels=["agent:blocked"],
+                    )
+
+                def list_issue_comments(self, **_kwargs):
+                    return [
+                        SimpleNamespace(
+                            comment_id="2001",
+                            body="Production Bundle ID: com.route25.girlpower",
+                            author_display_name="Alice",
+                            updated_at=datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc),
+                        )
+                    ]
+
+                def list_issue_attachments(self, **_kwargs):
+                    return [
+                        SimpleNamespace(
+                            attachment_id="3001",
+                            filename="apple-signin.txt",
+                            content_url="https://jira.test/attachment/3001",
+                            mime_type="text/plain",
+                            size_bytes=len(self._attachment_body),
+                            created_at=datetime(2026, 3, 10, 12, 30, tzinfo=timezone.utc),
+                        ),
+                        SimpleNamespace(
+                            attachment_id="3002",
+                            filename="binary.zip",
+                            content_url="https://jira.test/attachment/3002",
+                            mime_type="application/zip",
+                            size_bytes=100,
+                            created_at=datetime(2026, 3, 10, 12, 31, tzinfo=timezone.utc),
+                        ),
+                    ]
+
+                def download_attachment(self, **kwargs):  # noqa: ANN003
+                    if kwargs["content_url"].endswith("3001"):
+                        return self._attachment_body
+                    raise AssertionError("unexpected attachment download")
+
+            result = sync_project_knowledge_from_jira(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                project_key="GP",
+                jira_client=_JiraClient(),
+                access_token="tok",
+                cloud_id="cloud",
+            )
+
+            assets = session.query(KnowledgeAsset).order_by(KnowledgeAsset.source_type, KnowledgeAsset.source_ref).all()
+            assert result.created_assets == 3
+            assert result.updated_assets == 0
+            assert result.deleted_assets == 0
+            assert result.failed_assets == 0
+            assert result.skipped_assets == 1
+            assert [asset.source_type for asset in assets] == ["jira_attachment", "jira_comment", "jira_issue"]
+
+            class _JiraClientUpdated(_JiraClient):
+                def list_issue_comments(self, **_kwargs):
+                    return [
+                        SimpleNamespace(
+                            comment_id="2001",
+                            body="Production Bundle ID: com.route25.girlpower\nStaging Bundle ID: com.route25.girlpower.stage",
+                            author_display_name="Alice",
+                            updated_at=datetime(2026, 3, 10, 13, 0, tzinfo=timezone.utc),
+                        )
+                    ]
+
+                def list_issue_attachments(self, **_kwargs):
+                    return []
+
+            updated = sync_project_knowledge_from_jira(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                project_key="GP",
+                jira_client=_JiraClientUpdated(),
+                access_token="tok",
+                cloud_id="cloud",
+            )
+
+            active_assets = session.query(KnowledgeAsset).filter(KnowledgeAsset.status != "deleted").all()
+            deleted_assets = session.query(KnowledgeAsset).filter(KnowledgeAsset.status == "deleted").all()
+            assert updated.created_assets == 0
+            assert updated.updated_assets >= 1
+            assert updated.deleted_assets == 1
+            assert updated.failed_assets == 0
+            assert len(active_assets) == 2
+            assert len(deleted_assets) == 1
+            assert any(asset.source_type == "jira_comment" and "com.route25.girlpower.stage" in str(asset.text_content) for asset in active_assets)

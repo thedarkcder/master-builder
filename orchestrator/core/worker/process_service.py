@@ -212,6 +212,7 @@ def process_next_queued_run(
 
     try:
         workflow_request = workflow_request_for_run_fn(
+            session,
             tenant,
             run,
             project=project,

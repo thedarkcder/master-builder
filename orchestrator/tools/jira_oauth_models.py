@@ -48,6 +48,24 @@ class JiraIssueDetail:
 
 
 @dataclass(frozen=True)
+class JiraIssueComment:
+    comment_id: str
+    body: str
+    author_display_name: str | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class JiraIssueAttachment:
+    attachment_id: str
+    filename: str
+    content_url: str
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class JiraIssueCreateInput:
     summary: str
     description: str | dict[str, Any]

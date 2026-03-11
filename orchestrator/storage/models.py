@@ -16,6 +16,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from orchestrator.storage.vector_type import VectorJSONCompat
+
 
 class Base(DeclarativeBase):
     pass
@@ -334,7 +336,7 @@ class KnowledgeChunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(VectorJSONCompat(384), nullable=True)
     source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

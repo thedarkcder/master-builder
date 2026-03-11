@@ -7,7 +7,9 @@ from orchestrator.tools.jira_oauth_callback_flow import JiraOAuthCallbackFlow
 from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
 from orchestrator.tools.jira_oauth_issue_service import JiraOAuthIssueService, _to_adf_description
 from orchestrator.tools.jira_oauth_models import (
+    JiraIssueAttachment,
     JiraIssueBulkCreateResult,
+    JiraIssueComment,
     JiraIssueCreateInput,
     JiraIssueCreateResult,
     JiraIssueDetail,
@@ -29,6 +31,8 @@ __all__ = [
     "JiraProject",
     "JiraIssuePreview",
     "JiraIssueDetail",
+    "JiraIssueComment",
+    "JiraIssueAttachment",
     "JiraIssueCreateInput",
     "JiraIssueCreateResult",
     "JiraIssueBulkCreateResult",
@@ -71,6 +75,7 @@ class JiraOAuthClient:
                 content=content,
                 content_type=content_type,
             ),
+            get_bytes=lambda *, url, access_token: self._get_bytes(url=url, access_token=access_token),
         )
 
     def _post_json(self, url: str, payload: dict) -> dict:
@@ -93,6 +98,9 @@ class JiraOAuthClient:
             access_token=access_token,
             payload=payload,
         )
+
+    def _get_bytes(self, *, url: str, access_token: str) -> bytes:
+        return self._http.get_bytes(url=url, access_token=access_token)
 
     def _post_multipart(
         self,
@@ -133,12 +141,14 @@ class JiraOAuthClient:
         cloud_id: str,
         jql: str,
         max_results: int = 20,
+        start_at: int = 0,
     ) -> list[JiraIssuePreview]:
         return self._issue_service.search_issues_by_jql(
             access_token=access_token,
             cloud_id=cloud_id,
             jql=jql,
             max_results=max_results,
+            start_at=start_at,
         )
 
     def get_issue_detail(
@@ -149,6 +159,32 @@ class JiraOAuthClient:
         issue_id_or_key: str,
     ) -> JiraIssueDetail:
         return self._issue_service.get_issue_detail(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+        )
+
+    def list_issue_comments(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> list[JiraIssueComment]:
+        return self._issue_service.list_issue_comments(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+        )
+
+    def list_issue_attachments(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> list[JiraIssueAttachment]:
+        return self._issue_service.list_issue_attachments(
             access_token=access_token,
             cloud_id=cloud_id,
             issue_id_or_key=issue_id_or_key,
@@ -320,4 +356,15 @@ class JiraOAuthClient:
             filename=filename,
             content=content,
             content_type=content_type,
+        )
+
+    def download_attachment(
+        self,
+        *,
+        access_token: str,
+        content_url: str,
+    ) -> bytes:
+        return self._attachment_service.download_attachment(
+            access_token=access_token,
+            content_url=content_url,
         )

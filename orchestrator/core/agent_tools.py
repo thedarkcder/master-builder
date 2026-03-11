@@ -40,6 +40,11 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "jira.get_issue",
         "jira.comment",
         "jira.transition",
+        "decision.read_state",
+        "knowledge.read",
+        "project.get_runtime_values",
+        "project.list_runtime_keys",
+        "project.request_runtime_values",
         "repo.read",
     },
     "dev": {
@@ -598,6 +603,13 @@ def _execute_project_tool(
                 project_id=context.project.project_id,
                 encryption_key=encryption_key,
             )
+        if resolved_value is None and _looks_like_inline_runtime_value(secret_ref):
+            values[key] = {
+                "source": "literal",
+                "value": secret_ref,
+                "secret_ref": None,
+            }
+            continue
         values[key] = {
             "source": "secret_ref" if resolved_value else "missing",
             "value": resolved_value,
@@ -605,6 +617,23 @@ def _execute_project_tool(
         }
 
     return {"values": values}
+
+
+def _looks_like_inline_runtime_value(value: str) -> bool:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return False
+    if normalized.startswith(("platform/", "tenant/", "project/")):
+        return False
+    if "://" in normalized:
+        return True
+    if normalized.startswith(("sb_publishable_", "sbp_", "eyJ")):
+        return True
+    if re.search(r"\s", normalized):
+        return True
+    if len(normalized) >= 24 and re.search(r"[a-z]", normalized) and re.search(r"\d", normalized):
+        return True
+    return False
 
 
 def _execute_github_tool(

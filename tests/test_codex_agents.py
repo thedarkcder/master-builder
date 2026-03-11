@@ -66,6 +66,33 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertTrue(review.approved)
         self.assertEqual(review.outcome, "approved")
 
+    def test_pm_maps_compact_evidence_ledger_fields(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],'
+                        '"next_stage":"dev","missing_evidence_sources":["knowledge"],'
+                        '"confirmed_external_blockers":["Apple developer access still pending"],'
+                        '"resolved_prerequisites":["Supabase redirect URI approved"],'
+                        '"unresolved_prerequisites":["Provision staging Service ID"]}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            plan = agents.pm(self._request(), 1, None, [], None, None, None)
+
+        self.assertEqual(plan.missing_evidence_sources, ["knowledge"])
+        self.assertEqual(plan.confirmed_external_blockers, ["Apple developer access still pending"])
+        self.assertEqual(plan.resolved_prerequisites, ["Supabase redirect URI approved"])
+        self.assertEqual(plan.unresolved_prerequisites, ["Provision staging Service ID"])
+
     def test_review_fallback_does_not_treat_generic_not_as_rejection(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
