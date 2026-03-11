@@ -10,7 +10,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, desc, func, select, text
+from sqlalchemy import delete, desc, func, select, text
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeChunk, KnowledgeFact
@@ -1035,7 +1035,6 @@ def _postgres_hybrid_context(
     query_tokens = _candidate_tokens(normalized_query)
     query_embedding = _embed_texts([normalized_query])[0]
     candidate_scores: dict[str, dict[str, float]] = {}
-    bind = session.get_bind()
     if query_embedding:
         embedding_literal = vector_literal(query_embedding)
         if embedding_literal:
