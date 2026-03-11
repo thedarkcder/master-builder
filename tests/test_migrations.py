@@ -90,3 +90,17 @@ class MigrationTests(unittest.TestCase):
             run_indexes = {index["name"] for index in inspector.get_indexes("runs")}
             self.assertIn("orchestrated_session_id", run_columns)
             self.assertIn("ix_runs_orchestrated_session_id", run_indexes)
+
+    def test_pgvector_migration_serializes_extension_creation(self) -> None:
+        migration_file = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "storage"
+            / "migrations"
+            / "versions"
+            / "20260311_0025_knowledge_pgvector_and_search.py"
+        )
+        contents = migration_file.read_text(encoding="utf-8")
+
+        self.assertIn("pg_advisory_xact_lock", contents)
+        self.assertIn("CREATE EXTENSION IF NOT EXISTS vector", contents)

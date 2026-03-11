@@ -199,7 +199,7 @@ def _feedback_for_cycle_questions(
     }
     for item in cycle.question_set_json:
         question_id = str(item.get("id") or "").strip()
-        if not question_id or (unresolved_ids and question_id not in unresolved_ids):
+        if not question_id or question_id not in unresolved_ids:
             continue
         question_text = str(item.get("text") or "").strip()
         answer = answer_lookup.get(question_id)

@@ -18,6 +18,7 @@ revision = "20260311_0025"
 down_revision = "20260311_0024"
 branch_labels = None
 depends_on = None
+_VECTOR_EXTENSION_LOCK_KEY = 202603110025
 
 
 def _has_column(table_name: str, column_name: str) -> bool:
@@ -80,6 +81,7 @@ def upgrade() -> None:
     if bind.dialect.name != "postgresql":
         return
 
+    bind.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": _VECTOR_EXTENSION_LOCK_KEY})
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     if _column_type("knowledge_chunks", "embedding") != "vector(384)":

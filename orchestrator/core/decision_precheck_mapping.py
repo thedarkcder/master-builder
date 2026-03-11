@@ -361,8 +361,7 @@ def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, c
             str(item.get("kind") or "").strip() == QUESTION_KIND_DG
             and str(item.get("text") or "").strip()
             and (
-                not unresolved_ids
-                or not str(item.get("id") or "").strip()
+                not str(item.get("id") or "").strip()
                 or str(item.get("id") or "").strip() in unresolved_ids
             )
         )
@@ -374,8 +373,7 @@ def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, c
             str(item.get("kind") or "").strip() == QUESTION_KIND_GTD
             and str(item.get("text") or "").strip()
             and (
-                not unresolved_ids
-                or not str(item.get("id") or "").strip()
+                not str(item.get("id") or "").strip()
                 or str(item.get("id") or "").strip() in unresolved_ids
             )
         )
@@ -387,10 +385,9 @@ def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, c
         next_decision_gate = decision_gate
         if cycle.reason:
             next_decision_gate = replace(next_decision_gate, reason=cycle.reason)
-        if decision_gate_questions:
-            next_decision_gate = replace(next_decision_gate, questions=tuple(decision_gate_questions))
+        next_decision_gate = replace(next_decision_gate, questions=tuple(decision_gate_questions))
         resolved = replace(resolved, decision_gate=next_decision_gate)
-    if classification in {"gtd", "both"} and gtd is not None and gtd_questions:
+    if classification in {"gtd", "both"} and gtd is not None:
         resolved = replace(resolved, gtd=replace(gtd, clarification_questions=tuple(gtd_questions)))
     return resolved
 
