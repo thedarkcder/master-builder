@@ -1,16 +1,36 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
-from orchestrator.core.runs import EnqueueRunResult, enqueue_run
+from orchestrator.api.webhooks.pr_remediation_issue_service import (
+    latest_issue_run as _latest_issue_run,
+    repository_full_name as _repository_full_name,
+)
+from orchestrator.api.webhooks.pr_remediation_enqueue import enqueue_pr_remediation_run
+from orchestrator.api.webhooks.pr_remediation_policy import (
+    coerce_positive_int as _coerce_positive_int,
+    is_remediation_trigger as _is_remediation_trigger,
+    resolve_pr_remediation_issue_key,
+)
 from orchestrator.storage.models import Project, Run, Tenant
-from orchestrator.tools.github_app import GitHubAppClient
+from orchestrator.tools.github_app import GitHubApiError, GitHubAppClient
 
 _ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+
+
+@dataclass(frozen=True)
+class PrRemediationResult:
+    triggered: bool
+    issue_key: str | None
+    issue_created: bool
+    enqueued: bool
+    reason: str | None
+    run: Run | None
+    head_sha: str | None
 
 
 def enqueue_pr_remediation_if_needed(
@@ -24,14 +44,23 @@ def enqueue_pr_remediation_if_needed(
     payload: dict,
     pr_number: int | None = None,
     repo_full_name: str | None = None,
+    settings,  # noqa: ANN001
     max_concurrent_runs: int | None = None,
     max_attempts_per_head: int | None = None,
-) -> EnqueueRunResult | None:
+) -> PrRemediationResult:
     normalized_event = str(event or "").strip().lower()
     normalized_action = str(action or "").strip().lower()
 
     if not _is_remediation_trigger(event=normalized_event, action=normalized_action, payload=payload):
-        return None
+        return PrRemediationResult(
+            triggered=False,
+            issue_key=None,
+            issue_created=False,
+            enqueued=False,
+            reason=None,
+            run=None,
+            head_sha=None,
+        )
 
     pull_request = payload.get("pull_request")
     if isinstance(pull_request, dict):
@@ -42,44 +71,143 @@ def enqueue_pr_remediation_if_needed(
         pr_number if isinstance(pr_number, int) and pr_number > 0 else payload_pr_number
     )
     if not isinstance(resolved_pr_number, int) or resolved_pr_number <= 0:
-        return None
+        return PrRemediationResult(
+            triggered=True,
+            issue_key=None,
+            issue_created=False,
+            enqueued=False,
+            reason="missing_pr_number",
+            run=None,
+            head_sha=None,
+        )
+
+    resolved_repo = str(repo_full_name or "").strip()
+    if not resolved_repo:
+        try:
+            resolved_repo = _repository_full_name(payload)
+        except ValueError:
+            resolved_repo = ""
+    if not resolved_repo:
+        return PrRemediationResult(
+            triggered=True,
+            issue_key=None,
+            issue_created=False,
+            enqueued=False,
+            reason="missing_repository",
+            run=None,
+            head_sha=None,
+        )
 
     details = None
+    pr_url = None
     if isinstance(pull_request, dict):
         head = pull_request.get("head")
         head_sha = head.get("sha") if isinstance(head, dict) else None
         head_ref = head.get("ref") if isinstance(head, dict) else None
         base = pull_request.get("base")
         base_ref = base.get("ref") if isinstance(base, dict) else None
+        pr_url_raw = pull_request.get("html_url")
+        pr_url = str(pr_url_raw or "").strip() or None
         title = str(pull_request.get("title") or "").strip()
         body = str(pull_request.get("body") or "").strip()
     else:
-        resolved_repo = str(repo_full_name or _repository_full_name(payload)).strip()
-        if not resolved_repo:
-            return None
+        head_sha = None
+        head_ref = None
+        base_ref = None
+        title = ""
+        body = ""
+
+    try:
         details = github_client.get_pull_request_details(
             repo_full_name=resolved_repo,
             pr_number=resolved_pr_number,
         )
-        head_sha = details.head_sha
-        head_ref = details.head_ref
-        base_ref = details.base_ref
-        title = details.title
-        body = details.body or ""
+    except (GitHubApiError, ValueError) as exc:
+        return PrRemediationResult(
+            triggered=True,
+            issue_key=None,
+            issue_created=False,
+            enqueued=False,
+            reason=f"pr_details_lookup_failed:{exc}",
+            run=None,
+            head_sha=str(head_sha or "").strip() or None,
+        )
 
-    issue_key = _extract_issue_key(texts=[title, body, str(head_ref or "")])
-    if issue_key is None:
-        return None
+    head_sha = str(details.head_sha or head_sha or "").strip() or None
+    head_ref = str(details.head_ref or head_ref or "").strip() or None
+    base_ref = str(details.base_ref or base_ref or "").strip() or None
+    title = str(details.title or title or "").strip()
+    body = str(details.body or body or "").strip()
+    pr_url = pr_url or str(details.html_url or "").strip() or None
+
+    try:
+        checks = github_client.list_check_suites(
+            repo_full_name=resolved_repo,
+            ref=str(details.head_sha or ""),
+        )
+        reviews = github_client.list_pull_request_reviews(
+            repo_full_name=resolved_repo,
+            pr_number=resolved_pr_number,
+        )
+        review_comments = github_client.list_pull_request_review_comments(
+            repo_full_name=resolved_repo,
+            pr_number=resolved_pr_number,
+        )
+        issue_comments = github_client.list_pull_request_issue_comments(
+            repo_full_name=resolved_repo,
+            pr_number=resolved_pr_number,
+        )
+    except (GitHubApiError, ValueError) as exc:
+        return PrRemediationResult(
+            triggered=True,
+            issue_key=None,
+            issue_created=False,
+            enqueued=False,
+            reason=f"github_context_fetch_failed:{exc}",
+            run=None,
+            head_sha=head_sha,
+        )
+
+    issue_key, issue_created, issue_error = resolve_pr_remediation_issue_key(
+        session=session,
+        tenant=tenant,
+        project=project,
+        github_client=github_client,
+        settings=settings,
+        repo_full_name=resolved_repo,
+        pr_number=resolved_pr_number,
+        head_sha=head_sha,
+        head_ref=head_ref,
+        pr_url=pr_url,
+        title=title,
+        body=body,
+        event=normalized_event,
+        action=normalized_action,
+        checks=checks,
+        reviews=reviews,
+        review_comments=review_comments,
+        issue_comments=issue_comments,
+    )
+    if issue_error is not None:
+        return PrRemediationResult(
+            triggered=True,
+            issue_key=None,
+            issue_created=False,
+            enqueued=False,
+            reason=issue_error,
+            run=None,
+            head_sha=head_sha,
+        )
 
     normalized_max_attempts = _coerce_positive_int(max_attempts_per_head)
-    if normalized_max_attempts is not None and isinstance(head_sha, str) and head_sha.strip():
+    if normalized_max_attempts is not None and head_sha:
         attempt_count = count_pr_remediation_attempts(
             session=session,
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
             issue_key=issue_key,
             pr_number=resolved_pr_number,
-            head_sha=head_sha.strip(),
+            head_sha=head_sha,
         )
         if attempt_count >= normalized_max_attempts:
             latest_run = _latest_issue_run(
@@ -88,96 +216,53 @@ def enqueue_pr_remediation_if_needed(
                 project_id=project.project_id,
                 issue_key=issue_key,
             )
-            if latest_run is not None:
-                return EnqueueRunResult(
-                    enqueued=False,
-                    reason="pr_remediation_attempt_limit_reached",
-                    run=latest_run,
-                )
-            return None
+            return PrRemediationResult(
+                triggered=True,
+                issue_key=issue_key,
+                issue_created=issue_created,
+                enqueued=False,
+                reason="pr_remediation_attempt_limit_reached",
+                run=latest_run,
+                head_sha=head_sha,
+            )
 
-    if details is None:
-        details = github_client.get_pull_request_details(
-            repo_full_name=str(repo_full_name or _repository_full_name(payload)),
+    try:
+        enqueue_result = enqueue_pr_remediation_run(
+            session=session,
+            tenant=tenant,
+            project=project,
+            issue_key=issue_key,
+            issue_created=issue_created,
             pr_number=resolved_pr_number,
+            details=details,
+            normalized_event=normalized_event,
+            normalized_action=normalized_action,
+            checks=checks,
+            reviews=reviews,
+            review_comments=review_comments,
+            issue_comments=issue_comments,
+            max_concurrent_runs=max_concurrent_runs,
         )
-    checks = github_client.list_check_suites(
-        repo_full_name=str(repo_full_name or _repository_full_name(payload)),
-        ref=details.head_sha,
-    )
-    reviews = github_client.list_pull_request_reviews(
-        repo_full_name=str(repo_full_name or _repository_full_name(payload)),
-        pr_number=resolved_pr_number,
-    )
-    review_comments = github_client.list_pull_request_review_comments(
-        repo_full_name=str(repo_full_name or _repository_full_name(payload)),
-        pr_number=resolved_pr_number,
-    )
-    issue_comments = github_client.list_pull_request_issue_comments(
-        repo_full_name=str(repo_full_name or _repository_full_name(payload)),
-        pr_number=resolved_pr_number,
-    )
-
-    trigger_context = {
-        "source": "github_pr_review_feedback",
-        "event": normalized_event,
-        "action": normalized_action,
-        "pr_number": resolved_pr_number,
-        "pr_url": details.html_url,
-        "head_sha": details.head_sha,
-        "head_ref": details.head_ref or str(head_ref or ""),
-        "base_ref": details.base_ref or str(base_ref or ""),
-        "failing_checks": [
-            {"name": check.name, "status": check.status, "conclusion": check.conclusion}
-            for check in checks
-            if check.conclusion not in {None, "success"}
-        ],
-        "changes_requested": [
-            {
-                "id": review.review_id,
-                "state": review.state,
-                "body": review.body,
-                "user_login": review.user_login,
-            }
-            for review in reviews
-            if review.state.strip().upper() == "CHANGES_REQUESTED"
-        ],
-        "review_comments": [
-            {"id": comment.comment_id, "body": comment.body, "path": comment.path, "line": comment.line}
-            for comment in review_comments
-        ],
-        "issue_comments": [
-            {"id": comment.comment_id, "body": comment.body}
-            for comment in issue_comments
-        ],
-    }
-
-    enqueue_result = enqueue_run(
-        session,
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id,
-        issue_key=issue_key,
-        issue_summary=f"{issue_key}: PR remediation for #{resolved_pr_number}",
-        issue_description=(
-            f"Automated remediation run triggered from GitHub PR #{resolved_pr_number} ({details.html_url}).\n"
-            f"Event: {normalized_event}/{normalized_action}\n"
-            f"Head SHA: {details.head_sha}"
-        ),
-        repo_url=project.github_repository,
-        delivery_id=None,
-        precheck_outcome=resolve_enqueue_precheck_outcome(source="github_pr_remediation"),
-        max_concurrent_runs=max_concurrent_runs,
-    )
+    except ValueError as exc:
+        return PrRemediationResult(
+            triggered=True,
+            issue_key=issue_key,
+            issue_created=issue_created,
+            enqueued=False,
+            reason=f"enqueue_failed:{exc}",
+            run=None,
+            head_sha=head_sha,
+        )
     run = enqueue_result.run
-    existing_plan = run.plan if isinstance(run.plan, dict) else {}
-    run.plan = {
-        **existing_plan,
-        "trigger_context": trigger_context,
-        "orchestration_mode": "orchestrated_subagents",
-    }
-    session.commit()
-    session.refresh(run)
-    return enqueue_result
+    return PrRemediationResult(
+        triggered=True,
+        issue_key=issue_key,
+        issue_created=issue_created,
+        enqueued=enqueue_result.enqueued,
+        reason=enqueue_result.reason,
+        run=run,
+        head_sha=head_sha,
+    )
 
 
 def count_pr_remediation_attempts(
@@ -215,69 +300,3 @@ def count_pr_remediation_attempts(
             continue
         total += 1
     return total
-
-
-def _is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
-    if event == "pull_request_review" and action == "submitted":
-        review = payload.get("review")
-        state = str(review.get("state") or "").strip().lower() if isinstance(review, dict) else ""
-        return state == "changes_requested"
-    if event == "pull_request_review_comment" and action in {"created", "edited"}:
-        return True
-    if event == "check_run" and action in {"created", "completed", "rerequested"}:
-        check_run = payload.get("check_run")
-        conclusion = str(check_run.get("conclusion") or "").strip().lower() if isinstance(check_run, dict) else ""
-        return conclusion not in {"", "success", "neutral", "skipped"}
-    if event == "check_suite" and action in {"completed", "requested", "rerequested"}:
-        check_suite = payload.get("check_suite")
-        conclusion = str(check_suite.get("conclusion") or "").strip().lower() if isinstance(check_suite, dict) else ""
-        return conclusion not in {"", "success", "neutral", "skipped"}
-    return False
-
-
-def _extract_issue_key(*, texts: list[str]) -> str | None:
-    for text in texts:
-        match = _ISSUE_KEY_PATTERN.search(str(text or "").upper())
-        if match:
-            return match.group(1)
-    return None
-
-
-def _repository_full_name(payload: dict) -> str:
-    repository = payload.get("repository")
-    if isinstance(repository, dict):
-        full_name = str(repository.get("full_name") or "").strip()
-        if full_name:
-            return full_name
-    raise ValueError("Missing repository full_name for remediation context")
-
-
-def _coerce_positive_int(value: object | None) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return max(1, parsed)
-
-
-def _latest_issue_run(
-    *,
-    session: Session,
-    tenant_id: str,
-    project_id: str | None,
-    issue_key: str,
-) -> Run | None:
-    return (
-        session.execute(
-            select(Run)
-            .where(
-                Run.tenant_id == tenant_id,
-                Run.project_id == project_id,
-                Run.issue_key == issue_key,
-            )
-            .order_by(Run.created_at.desc())
-            .limit(1)
-        )
-        .scalars()
-        .first()
-    )

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import type { GitHubRepositoryRecord, TenantCreatePayload, TenantUpdatePayload } from "@/lib/api";
+import type { CodexModelOptionRecord, GitHubRepositoryRecord, TenantCreatePayload, TenantUpdatePayload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   DiscordSection,
@@ -23,6 +23,10 @@ import {
 type TenantFormProps = {
   submitting?: boolean;
   repositoryOptions?: GitHubRepositoryRecord[];
+  codexModels?: CodexModelOptionRecord[];
+  reasoningEfforts?: CodexModelOptionRecord[];
+  globalCodexModel?: string;
+  globalCodexReasoningEffort?: string;
   repositoriesLoading?: boolean;
   onRefreshRepositoryOptions?: () => void;
   visibleSections?: {
@@ -52,6 +56,10 @@ export function TenantForm({
   onSubmit,
   submitting = false,
   repositoryOptions = [],
+  codexModels = [],
+  reasoningEfforts = [],
+  globalCodexModel = "",
+  globalCodexReasoningEffort = "",
   repositoriesLoading = false,
   onRefreshRepositoryOptions,
   visibleSections
@@ -164,6 +172,10 @@ export function TenantForm({
         <PolicySection
           policy={values.policy}
           policyAllowedCommandsText={textFields.policyAllowedCommandsText}
+          codexModels={codexModels}
+          reasoningEfforts={reasoningEfforts}
+          globalCodexModel={globalCodexModel}
+          globalCodexReasoningEffort={globalCodexReasoningEffort}
           onPolicyChange={(policy) => setValues((prev) => ({ ...prev, policy }))}
           onPolicyAllowedCommandsTextChange={(value) => setTextFields((prev) => ({ ...prev, policyAllowedCommandsText: value }))}
         />

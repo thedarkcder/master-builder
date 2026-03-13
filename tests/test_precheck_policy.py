@@ -36,6 +36,43 @@ def test_evaluate_precheck_policy_returns_decision_gate_and_gtd() -> None:
     assert result.gtd.valid is True
 
 
+def test_evaluate_precheck_policy_passes_recorded_answers_to_prompt() -> None:
+    with patch(
+        "orchestrator.core.precheck_policy.invoke_codex_json",
+        return_value={
+            "triggered": False,
+            "reason": "Decision Gate not required",
+            "missing_sections": [],
+            "questions": [],
+            "recommendation": "Proceed",
+            "tags": [],
+            "gtd_valid": True,
+            "gtd_missing_criteria": [],
+            "gtd_clarification_questions": [],
+        },
+    ) as invoke_mock, patch(
+        "orchestrator.core.precheck_policy.build_codex_runtime",
+        return_value=object(),
+    ):
+        evaluate_precheck_policy(
+            issue_summary="TP-1",
+            issue_description="Description",
+            recorded_answers=[
+                {
+                    "question_id": "dg_1",
+                    "question_text": "What config is approved?",
+                    "status": "answered",
+                    "answer": "Production bundle ID is com.example.app.",
+                }
+            ],
+            tenant_id="tenant-1",
+            project_id="project-1",
+            issue_key="TP-1",
+        )
+
+    assert "Production bundle ID is com.example.app." in invoke_mock.call_args.kwargs["user_prompt"]
+
+
 def test_evaluate_precheck_policy_rejects_invalid_gtd_payload() -> None:
     with patch(
         "orchestrator.core.precheck_policy.invoke_codex_json",

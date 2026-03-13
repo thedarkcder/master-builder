@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from orchestrator.tools.project_repo_checkout import (
     ProjectRepoCheckoutError,
+    _disable_jira_mcp_servers_in_project_codex,
     _github_git_extraheader,
     collect_local_repo_context,
     ensure_project_checkout,
@@ -194,3 +195,32 @@ def test_ensure_project_checkout_seeds_stack_specific_gitignore_defaults() -> No
         assert "# Java" in gitignore
         assert "target/" in gitignore
         run_git_mock.assert_not_called()
+
+
+def test_disable_jira_mcp_servers_preserves_section_boundaries() -> None:
+    with TemporaryDirectory() as tmpdir:
+        repo_dir = Path(tmpdir) / "repo"
+        codex_dir = repo_dir / ".codex"
+        codex_dir.mkdir(parents=True, exist_ok=True)
+        config_path = codex_dir / "config.toml"
+        config_path.write_text(
+            (
+                "[mcp_servers.jira_master_builder]\n"
+                'url = "https://mcp.atlassian.com/v1/mcp"\n'
+                "enabled = true\n"
+                "[mcp_servers.jira_bsktpay]\n"
+                'url = "https://mcp.atlassian.com/v1/mcp"\n'
+                "enabled = true"
+            ),
+            encoding="utf-8",
+        )
+
+        _disable_jira_mcp_servers_in_project_codex(repo_dir=repo_dir)
+
+        updated = config_path.read_text(encoding="utf-8")
+        assert "[mcp_servers.jira_master_builder]" in updated
+        assert "[mcp_servers.jira_bsktpay]" in updated
+        assert "enabled = true" not in updated
+        assert updated.count("enabled = false") == 2
+        assert "enabled = false[mcp_servers.jira_bsktpay]" not in updated
+        assert "enabled = false\n[mcp_servers.jira_bsktpay]" in updated

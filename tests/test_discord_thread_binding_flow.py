@@ -39,8 +39,8 @@ class DiscordThreadBindingFlowTests(unittest.TestCase):
                 ),
             ),
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup.resolve_project_for_discord_channel", return_value=project),
-            patch("orchestrator.api.discord.interactions.followup.DiscordApiClient") as followup_client_cls,
+            patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as followup_client_cls,
             patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as interaction_followup_mock,
         ):
             followup_client = MagicMock()

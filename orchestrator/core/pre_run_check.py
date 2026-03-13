@@ -71,6 +71,7 @@ def evaluate_pre_run_check(
     issue_key: str | None = None,
     issue_summary: str | None,
     issue_description: str | None,
+    recorded_answers: list[dict[str, str]] | None = None,
     issue_labels: list[str] | None,
     ready_label: str | None,
 ) -> PreRunCheckResult:
@@ -137,6 +138,7 @@ def evaluate_pre_run_check(
     precheck_policy = evaluate_precheck_policy(
         issue_summary=issue_summary,
         issue_description=issue_description,
+        recorded_answers=recorded_answers,
         tenant_id=tenant_id,
         project_id=project_id,
         issue_key=issue_key,

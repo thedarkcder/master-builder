@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+
+from orchestrator.api.admin import integration_dependencies as deps
+from orchestrator.api.admin.github_helpers import (
+    github_install_callback as github_install_callback_impl,
+    list_tenant_github_repositories as list_tenant_github_repositories_impl,
+    start_github_install as start_github_install_impl,
+)
+from orchestrator.api.admin.integration_checks import (
+    test_github_connection as test_github_connection_impl,
+)
+from orchestrator.api.dependencies import get_session
+from orchestrator.api.schemas import (
+    GitHubInstallStart,
+    GitHubRepositoryRead,
+    IntegrationTestResult,
+)
+from orchestrator.core.config import get_settings
+from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.security import require_admin
+from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.storage.models import Tenant
+
+router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+@router.post("/tenants/{tenant_id}/github/install/start", response_model=GitHubInstallStart)
+def start_github_install(
+    tenant_id: str,
+    return_to: str = Query(default="edit", pattern="^(edit|wizard)$"),
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> GitHubInstallStart:
+    return start_github_install_impl(
+        tenant=session.get(Tenant, tenant_id),
+        tenant_id=tenant_id,
+        return_to=return_to,
+        session=session,
+        settings=get_settings(),
+        resolve_platform_secret_ref_fn=lambda db_session, secret_ref, encryption_key: resolve_platform_secret_ref(
+            db_session,
+            secret_ref=secret_ref,
+            encryption_key=encryption_key,
+        ),
+    )
+
+
+@router.get("/github/install/callback", include_in_schema=False)
+def github_install_callback(
+    state_token: str = Query(..., alias="state"),
+    installation_id: str = Query(..., min_length=1),
+    setup_action: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> RedirectResponse:
+    redirect_url = github_install_callback_impl(
+        state_token=state_token,
+        installation_id=installation_id,
+        setup_action=setup_action,
+        session=session,
+        settings=get_settings(),
+    )
+    return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/tenants/{tenant_id}/github/repositories", response_model=list[GitHubRepositoryRead])
+def list_tenant_github_repositories(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[GitHubRepositoryRead]:
+    return list_tenant_github_repositories_impl(
+        tenant=session.get(Tenant, tenant_id),
+        tenant_id=tenant_id,
+        session=session,
+        settings=get_settings(),
+        with_managed_github_refs_fn=deps.with_managed_github_refs,
+        resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref,
+        resolve_platform_secret_ref_fn=resolve_platform_secret_ref,
+        github_client_from_tenant_config_fn=deps.github_client_from_tenant_config,
+    )
+
+
+@router.post("/tenants/{tenant_id}/test-github", response_model=IntegrationTestResult)
+def test_github_connection(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> IntegrationTestResult:
+    return test_github_connection_impl(
+        session=session,
+        tenant_id=tenant_id,
+        settings=get_settings(),
+        with_managed_github_refs_fn=deps.with_managed_github_refs,
+        resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref,
+        resolve_platform_secret_ref_fn=resolve_platform_secret_ref,
+        github_client_from_tenant_config_fn=deps.github_client_from_tenant_config,
+    )

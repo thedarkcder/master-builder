@@ -16,40 +16,63 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         session = MagicMock()
         settings = SimpleNamespace(secrets_encryption_key="k")
 
-        base_patches = {
-            "_read_json_payload": AsyncMock(return_value=(payload, b"{}")),
-            "_resolve_global_github_webhook_secret": MagicMock(return_value=None),
-            "_extract_delivery_id": MagicMock(return_value="delivery-1"),
-            "_extract_installation_id": MagicMock(return_value=123),
-            "_find_tenant_by_installation_id": MagicMock(
+        context_patches = {
+            "read_json_payload": AsyncMock(return_value=(payload, b"{}")),
+            "resolve_global_github_webhook_secret": MagicMock(return_value=None),
+            "extract_delivery_id": MagicMock(return_value="delivery-1"),
+            "extract_installation_id": MagicMock(return_value=123),
+            "find_tenant_by_installation_id": MagicMock(
                 return_value=SimpleNamespace(
                     tenant_id="route25",
                     is_enabled=True,
+                    jira_config={},
                     github_config={"installation_id": "123"},
                 )
             ),
-            "_resolve_tenant_github_webhook_secret": MagicMock(return_value=None),
-            "_extract_repository_full_name": MagicMock(return_value="org/repo"),
-            "_extract_pull_request_targets": MagicMock(return_value=[(11, True)]),
-            "_resolve_active_project_for_repo": MagicMock(return_value=SimpleNamespace(project_id="route25-default")),
+            "resolve_tenant_github_webhook_secret": MagicMock(return_value=None),
+            "extract_repository_full_name": MagicMock(return_value="org/repo"),
+            "extract_pull_request_targets": MagicMock(return_value=[(11, True)]),
+            "resolve_active_project_for_repo": MagicMock(
+                return_value=SimpleNamespace(
+                    project_id="route25-default",
+                    jira_project_key="GP",
+                    github_repository="org/repo",
+                )
+            ),
             "github_client_from_tenant_config": MagicMock(return_value=MagicMock()),
             "ReviewAgentGate": MagicMock(),
+            "resolve_scoped_secret_ref": MagicMock(return_value="secret"),
+            "resolve_platform_secret_ref": MagicMock(return_value="platform-secret"),
+            "validate_github_webhook_signature": MagicMock(),
+        }
+        ingress_patches = {
             "send_tenant_discord_message": MagicMock(),
             "enqueue_pr_remediation_if_needed": MagicMock(return_value=None),
-            "resolve_scoped_secret_ref": MagicMock(return_value="secret"),
-            "_validate_github_webhook_signature": MagicMock(),
             "upsert_sticky_review_comment": MagicMock(return_value=SimpleNamespace(action="updated", comment_id=1)),
+            "upsert_sticky_remediation_comment": MagicMock(
+                return_value=SimpleNamespace(action="updated", comment_id=2)
+            ),
             "publish_inline_review_batch": MagicMock(
                 return_value=SimpleNamespace(submitted=False, review_id=None, inline_count=0)
             ),
+            "evaluate_pr_review_findings": MagicMock(
+                return_value=SimpleNamespace(state="reviewed", summary="no findings", findings=())
+            ),
+            "tenant_jira_issue_url": MagicMock(return_value=None),
             "resolve_effective_policy": MagicMock(
-                return_value={"allow_auto_merge": False, "max_pr_auto_remediation_loops": 5}
+                return_value={"allow_auto_merge": False, "allow_pr_remediation": True, "max_pr_auto_remediation_loops": 5}
             ),
         }
-        base_patches.update(overrides)
+        for name, value in overrides.items():
+            if name in context_patches:
+                context_patches[name] = value
+            else:
+                ingress_patches[name] = value
 
         with ExitStack() as stack:
-            for name, value in base_patches.items():
+            for name, value in context_patches.items():
+                stack.enter_context(patch(f"orchestrator.api.webhooks.github_webhook_context.{name}", value))
+            for name, value in ingress_patches.items():
                 stack.enter_context(patch(f"orchestrator.api.webhooks.github_ingress.{name}", value))
             return await ingest_github_webhook_event(request=request, session=session, settings=settings, request_id="req-1")
 
@@ -62,7 +85,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             await self._call(
                 payload={},
                 headers={"X-GitHub-Event": "pull_request"},
-                _extract_installation_id=MagicMock(return_value=None),
+                extract_installation_id=MagicMock(return_value=None),
             )
         self.assertEqual(exc_ctx.exception.status_code, 400)
 
@@ -70,7 +93,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(
             payload={},
             headers={"X-GitHub-Event": "pull_request"},
-            _find_tenant_by_installation_id=MagicMock(return_value=None),
+            find_tenant_by_installation_id=MagicMock(return_value=None),
         )
         self.assertEqual(response.status_code, 202)
         self.assertIn("unknown_installation", response.body.decode())
@@ -79,8 +102,8 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(
             payload={},
             headers={"X-GitHub-Event": "pull_request"},
-            _find_tenant_by_installation_id=MagicMock(
-                return_value=SimpleNamespace(tenant_id="route25", is_enabled=False, github_config={})
+            find_tenant_by_installation_id=MagicMock(
+                return_value=SimpleNamespace(tenant_id="route25", is_enabled=False, jira_config={}, github_config={})
             ),
         )
         self.assertEqual(response.status_code, 202)
@@ -95,8 +118,8 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(
             payload={},
             headers={"X-GitHub-Event": "pull_request"},
-            _extract_repository_full_name=MagicMock(return_value=None),
-            _extract_pull_request_targets=MagicMock(return_value=[]),
+            extract_repository_full_name=MagicMock(return_value=None),
+            extract_pull_request_targets=MagicMock(return_value=[]),
         )
         self.assertEqual(response.status_code, 202)
         self.assertIn("missing_pr_context", response.body.decode())
@@ -104,7 +127,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(
             payload={},
             headers={"X-GitHub-Event": "pull_request"},
-            _resolve_active_project_for_repo=MagicMock(return_value=None),
+            resolve_active_project_for_repo=MagicMock(return_value=None),
         )
         self.assertEqual(response.status_code, 202)
         self.assertIn("project_not_mapped", response.body.decode())
@@ -210,7 +233,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(
             payload={"action": "synchronize"},
             headers={"X-GitHub-Event": "pull_request"},
-            _extract_pull_request_targets=MagicMock(return_value=[(10, True), (11, False)]),
+            extract_pull_request_targets=MagicMock(return_value=[(10, True), (11, False)]),
             ReviewAgentGate=review_gate_cls,
             send_tenant_discord_message=send_discord,
         )
@@ -226,11 +249,124 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(
             payload={},
             headers={"X-GitHub-Event": "issues"},
-            _resolve_global_github_webhook_secret=MagicMock(return_value="global"),
-            _validate_github_webhook_signature=validate,
+            resolve_global_github_webhook_secret=MagicMock(return_value="global"),
+            validate_github_webhook_signature=validate,
         )
         self.assertEqual(response.status_code, 202)
         validate.assert_called_once()
+
+    async def test_remediation_posts_mapping_comment_when_triggered(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="example",
+            body="desc",
+            head_ref="feature/branch",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=False, state="pending_checks", message="pending")
+        remediation_result = SimpleNamespace(
+            triggered=True,
+            issue_key="GP-900",
+            issue_created=True,
+            enqueued=True,
+            reason=None,
+            run=SimpleNamespace(run_id="run-900"),
+            head_sha="abc123",
+        )
+        upsert_remediation_comment = MagicMock(return_value=SimpleNamespace(action="updated", comment_id=77))
+
+        response = await self._call(
+            payload={"action": "created"},
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=MagicMock(return_value=remediation_result),
+            upsert_sticky_remediation_comment=upsert_remediation_comment,
+            tenant_jira_issue_url=MagicMock(return_value="https://jira.example.com/browse/GP-900"),
+        )
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"issue_key":"GP-900"', body)
+        self.assertIn('"remediation_comments"', body)
+        upsert_remediation_comment.assert_called_once()
+
+    async def test_remediation_trigger_with_missing_run_is_null_safe(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="example",
+            body="desc",
+            head_ref="feature/branch",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=False, state="pending_checks", message="pending")
+        remediation_result = SimpleNamespace(
+            triggered=True,
+            issue_key="GP-901",
+            issue_created=False,
+            enqueued=False,
+            reason="jira_bug_create_failed:token",
+            run=None,
+            head_sha="abc123",
+        )
+
+        response = await self._call(
+            payload={"action": "created"},
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=MagicMock(return_value=remediation_result),
+            tenant_jira_issue_url=MagicMock(return_value="https://jira.example.com/browse/GP-901"),
+        )
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"issue_key":"GP-901"', body)
+        self.assertIn('"run_id":null', body)
+
+    async def test_pr_remediation_can_be_disabled(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="example",
+            body="desc",
+            head_ref="feature/branch",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=False, state="pending_checks", message="pending")
+        enqueue_remediation = MagicMock()
+        upsert_remediation_comment = MagicMock()
+
+        response = await self._call(
+            payload={"action": "created"},
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_remediation,
+            upsert_sticky_remediation_comment=upsert_remediation_comment,
+            resolve_effective_policy=MagicMock(
+                return_value={"allow_auto_merge": False, "allow_pr_remediation": False, "max_pr_auto_remediation_loops": 5}
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"reason":"pr_remediation_disabled"', body)
+        self.assertIn('"enabled":false', body)
+        enqueue_remediation.assert_not_called()
+        upsert_remediation_comment.assert_not_called()
 
     async def test_fail_closed_when_findings_evaluation_errors(self) -> None:
         github_client = MagicMock()
@@ -249,7 +385,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             ReviewAgentGate=MagicMock(return_value=gate),
             evaluate_pr_review_findings=MagicMock(side_effect=RuntimeError("codex failed")),
             resolve_effective_policy=MagicMock(
-                return_value={"allow_auto_merge": True, "max_pr_auto_remediation_loops": 5}
+                return_value={"allow_auto_merge": True, "allow_pr_remediation": True, "max_pr_auto_remediation_loops": 5}
             ),
         )
 
@@ -263,9 +399,9 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         response = await self._call(
             payload={},
             headers={"X-GitHub-Event": "issues"},
-            _resolve_global_github_webhook_secret=MagicMock(return_value=None),
-            _resolve_tenant_github_webhook_secret=MagicMock(return_value="tenant"),
-            _validate_github_webhook_signature=validate,
+            resolve_global_github_webhook_secret=MagicMock(return_value=None),
+            resolve_tenant_github_webhook_secret=MagicMock(return_value="tenant"),
+            validate_github_webhook_signature=validate,
         )
         self.assertEqual(response.status_code, 202)
         validate.assert_called_once()

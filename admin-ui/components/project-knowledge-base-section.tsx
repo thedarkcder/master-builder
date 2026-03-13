@@ -9,6 +9,7 @@ import {
   createProjectKnowledgeAsset,
   deleteProjectKnowledgeAsset,
   listProjectKnowledgeAssets,
+  updateProjectKnowledgeAssetStatus,
   type Credentials,
   type ProjectKnowledgeAssetRecord
 } from "@/lib/api";
@@ -58,6 +59,7 @@ export function ProjectKnowledgeBaseSection({
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
+  const [updatingAssetId, setUpdatingAssetId] = useState<string | null>(null);
   const [draggingOver, setDraggingOver] = useState(false);
   const [statusLine, setStatusLine] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -140,6 +142,30 @@ export function ProjectKnowledgeBaseSection({
       setStatusLine(`Unable to delete knowledge asset: ${(error as Error).message}`);
     } finally {
       setDeletingAssetId(null);
+    }
+  }
+
+  async function updateAssetStatus(assetId: string, nextStatus: "pending_review" | "ready" | "rejected") {
+    if (!credentials) {
+      return;
+    }
+    setUpdatingAssetId(assetId);
+    try {
+      const updatedAsset = await updateProjectKnowledgeAssetStatus(credentials, tenantId, projectId, assetId, {
+        status: nextStatus
+      });
+      setStatusLine(
+        nextStatus === "ready"
+          ? `Knowledge asset "${updatedAsset.title}" approved.`
+          : nextStatus === "rejected"
+            ? `Knowledge asset "${updatedAsset.title}" rejected.`
+            : `Knowledge asset "${updatedAsset.title}" moved back to review.`
+      );
+      await loadAssets();
+    } catch (error) {
+      setStatusLine(`Unable to update knowledge asset status: ${(error as Error).message}`);
+    } finally {
+      setUpdatingAssetId(null);
     }
   }
 
@@ -230,6 +256,39 @@ export function ProjectKnowledgeBaseSection({
                   <TableCell>{asset.status}</TableCell>
                   <TableCell>{formatTimestamp(asset.updated_at)}</TableCell>
                   <TableCell className="text-right">
+                    {asset.status === "pending_review" ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mr-2"
+                          disabled={updatingAssetId === asset.asset_id || deletingAssetId === asset.asset_id}
+                          onClick={() => void updateAssetStatus(asset.asset_id, "ready")}
+                        >
+                          {updatingAssetId === asset.asset_id ? "Saving..." : "Approve"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mr-2"
+                          disabled={updatingAssetId === asset.asset_id || deletingAssetId === asset.asset_id}
+                          onClick={() => void updateAssetStatus(asset.asset_id, "rejected")}
+                        >
+                          {updatingAssetId === asset.asset_id ? "Saving..." : "Reject"}
+                        </Button>
+                      </>
+                    ) : null}
+                    {asset.status === "rejected" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mr-2"
+                        disabled={updatingAssetId === asset.asset_id || deletingAssetId === asset.asset_id}
+                        onClick={() => void updateAssetStatus(asset.asset_id, "pending_review")}
+                      >
+                        {updatingAssetId === asset.asset_id ? "Saving..." : "Move to review"}
+                      </Button>
+                    ) : null}
                     <Button
                       size="sm"
                       variant="outline"

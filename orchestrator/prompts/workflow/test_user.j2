@@ -7,6 +7,10 @@ Attempt: {{ attempt }}
 Dev summary: {{ dev_summary_json }}
 PR URL: {{ pr_url }}
 Suggested test commands: {{ suggested_test_commands_json }}
+Resolved prerequisites: {{ resolved_prerequisites_json }}
+Unresolved prerequisites: {{ unresolved_prerequisites_json }}
+Confirmed external blockers: {{ confirmed_external_blockers_json }}
+Missing evidence sources: {{ missing_evidence_sources_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
 Agent tool command: {{ agent_tool_command }}
 
@@ -19,7 +23,8 @@ Required actions:
    - Use concise flags/reporters where possible.
    - For verbose commands, capture full output in an artifact file and summarize key failures in guidance.
 4. Provide concrete guidance for missing verification or failures.
-5. Fail closed when verification cannot be completed.
+5. Treat the PM evidence ledger as the current prerequisite summary; only challenge it if new authoritative tool evidence contradicts it.
+6. Fail closed when verification cannot be completed.
 
 Output contract:
 - passed: boolean readiness signal.
