@@ -200,7 +200,40 @@ export type ProjectKnowledgeSyncResult = {
   ok: boolean;
   synced_assets: number;
   skipped_assets: number;
+  created_assets: number;
+  updated_assets: number;
+  unchanged_assets: number;
+  deleted_assets: number;
+  failed_assets: number;
   details: string | null;
+};
+
+export type KnowledgeJiraSyncProjectStatusRecord = {
+  tenant_id: string;
+  project_id: string;
+  jira_project_key: string;
+  state: string;
+  failure_category: string | null;
+  last_error: string | null;
+  last_attempted_at: string | null;
+  last_successful_sync_at: string | null;
+  next_retry_at: string | null;
+  consecutive_failures: number;
+};
+
+export type KnowledgeJiraSyncRuntimeRecord = {
+  state: string;
+  enabled: boolean;
+  database_backend: string;
+  started_at: string | null;
+  stopped_at: string | null;
+  last_pass_started_at: string | null;
+  last_pass_finished_at: string | null;
+  last_heartbeat_at: string | null;
+  leader_acquired: boolean;
+  service_instance_id: string | null;
+  stale: boolean;
+  projects: KnowledgeJiraSyncProjectStatusRecord[];
 };
 
 export type JiraWebhookActionResult = {
@@ -913,6 +946,15 @@ export function syncProjectKnowledgeFromJira(
     {
       method: "POST"
     }
+  );
+}
+
+export function getKnowledgeJiraSyncRuntimeStatus(
+  credentials: Credentials
+): Promise<KnowledgeJiraSyncRuntimeRecord> {
+  return request<KnowledgeJiraSyncRuntimeRecord>(
+    credentials,
+    "/api/admin/observability/knowledge-jira-sync"
   );
 }
 

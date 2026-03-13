@@ -8,10 +8,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   createProjectKnowledgeAsset,
   deleteProjectKnowledgeAsset,
+  getKnowledgeJiraSyncRuntimeStatus,
   listProjectKnowledgeAssets,
+  syncProjectKnowledgeFromJira,
   updateProjectKnowledgeAssetStatus,
   type Credentials,
-  type ProjectKnowledgeAssetRecord
+  type KnowledgeJiraSyncProjectStatusRecord,
+  type ProjectKnowledgeAssetRecord,
+  type ProjectKnowledgeSyncResult
 } from "@/lib/api";
 
 type ProjectKnowledgeBaseSectionProps = {
@@ -60,9 +64,35 @@ export function ProjectKnowledgeBaseSection({
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
   const [updatingAssetId, setUpdatingAssetId] = useState<string | null>(null);
+  const [syncingJira, setSyncingJira] = useState(false);
+  const [lastSyncResult, setLastSyncResult] = useState<ProjectKnowledgeSyncResult | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<KnowledgeJiraSyncProjectStatusRecord | null>(null);
   const [draggingOver, setDraggingOver] = useState(false);
   const [statusLine, setStatusLine] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const totalChunks = assets.reduce((sum, asset) => sum + asset.chunk_count, 0);
+  const readyAssets = assets.filter((asset) => asset.status === "ready").length;
+  const pendingReviewAssets = assets.filter((asset) => asset.status === "pending_review").length;
+  const rejectedAssets = assets.filter((asset) => asset.status === "rejected").length;
+  const sourceTypeCounts = assets.reduce<Record<string, number>>((counts, asset) => {
+    const sourceType = asset.source_type || "unknown";
+    counts[sourceType] = (counts[sourceType] ?? 0) + 1;
+    return counts;
+  }, {});
+  const sourceSummary = Object.entries(sourceTypeCounts)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([sourceType, count]) => `${sourceType}: ${count}`)
+    .join(" · ");
+  const latestAssetTimestamp = assets.reduce<string | null>((latest, asset) => {
+    if (!asset.updated_at) {
+      return latest;
+    }
+    if (!latest) {
+      return asset.updated_at;
+    }
+    return new Date(asset.updated_at).getTime() > new Date(latest).getTime() ? asset.updated_at : latest;
+  }, null);
 
   const loadAssets = useCallback(async () => {
     if (!credentials) {
@@ -70,8 +100,17 @@ export function ProjectKnowledgeBaseSection({
     }
     setLoadingAssets(true);
     try {
-      const payload = await listProjectKnowledgeAssets(credentials, tenantId, projectId);
+      const [payload, runtime] = await Promise.all([
+        listProjectKnowledgeAssets(credentials, tenantId, projectId),
+        getKnowledgeJiraSyncRuntimeStatus(credentials)
+      ]);
       setAssets(payload);
+      setRuntimeStatus(
+        runtime.projects.find(
+          (projectStatus) =>
+            projectStatus.tenant_id === tenantId && projectStatus.project_id === projectId
+        ) ?? null
+      );
     } catch (error) {
       setStatusLine(`Unable to load knowledge assets: ${(error as Error).message}`);
     } finally {
@@ -169,6 +208,33 @@ export function ProjectKnowledgeBaseSection({
     }
   }
 
+  async function runJiraSync() {
+    if (!credentials) {
+      return;
+    }
+    setSyncingJira(true);
+    setStatusLine("Syncing Jira knowledge...");
+    try {
+      const result = await syncProjectKnowledgeFromJira(credentials, tenantId, projectId);
+      setLastSyncResult(result);
+      setStatusLine(
+        [
+          `Jira sync complete.`,
+          `Created ${result.created_assets}`,
+          `updated ${result.updated_assets}`,
+          `unchanged ${result.unchanged_assets}`,
+          `deleted ${result.deleted_assets}`,
+          `failed ${result.failed_assets}.`
+        ].join(" ")
+      );
+      await loadAssets();
+    } catch (error) {
+      setStatusLine(`Unable to sync Jira knowledge: ${(error as Error).message}`);
+    } finally {
+      setSyncingJira(false);
+    }
+  }
+
   function onFileInputChange(event: ChangeEvent<HTMLInputElement>) {
     void uploadFiles(event.target.files);
     event.target.value = "";
@@ -189,14 +255,98 @@ export function ProjectKnowledgeBaseSection({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <CardTitle>Knowledge Base</CardTitle>
-            <CardDescription>Drop files to upload. Uploaded files are listed below.</CardDescription>
+            <CardDescription>
+              Drop files to upload, review knowledge state, or sync Jira into the project
+              knowledge base.
+            </CardDescription>
           </div>
-          <Button variant="outline" size="sm" onClick={() => void loadAssets()} disabled={loadingAssets}>
-            {loadingAssets ? "Refreshing..." : "Refresh"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void runJiraSync()}
+              disabled={syncingJira || loadingAssets}
+            >
+              {syncingJira ? "Syncing Jira..." : "Sync Jira now"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void loadAssets()}
+              disabled={loadingAssets || syncingJira}
+            >
+              {loadingAssets ? "Refreshing..." : "Refresh"}
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="rounded-md border p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Assets</p>
+            <p className="mt-1 text-2xl font-semibold">{assets.length}</p>
+            <p className="text-sm text-muted-foreground">Total knowledge records</p>
+          </div>
+          <div className="rounded-md border p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Ready</p>
+            <p className="mt-1 text-2xl font-semibold">{readyAssets}</p>
+            <p className="text-sm text-muted-foreground">Approved for retrieval</p>
+          </div>
+          <div className="rounded-md border p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Pending Review</p>
+            <p className="mt-1 text-2xl font-semibold">{pendingReviewAssets}</p>
+            <p className="text-sm text-muted-foreground">Awaiting approval</p>
+          </div>
+          <div className="rounded-md border p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Rejected</p>
+            <p className="mt-1 text-2xl font-semibold">{rejectedAssets}</p>
+            <p className="text-sm text-muted-foreground">Excluded from retrieval</p>
+          </div>
+          <div className="rounded-md border p-3">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Chunks</p>
+            <p className="mt-1 text-2xl font-semibold">{totalChunks}</p>
+            <p className="text-sm text-muted-foreground">Indexed retrieval chunks</p>
+          </div>
+        </div>
+        <div className="rounded-md border p-3 text-sm text-muted-foreground">
+          <p>
+            <span className="font-medium text-foreground">Source mix:</span>{" "}
+            {sourceSummary || "No indexed sources yet."}
+          </p>
+          <p className="mt-1">
+            <span className="font-medium text-foreground">Latest update:</span>{" "}
+            {formatTimestamp(latestAssetTimestamp)}
+          </p>
+          {lastSyncResult ? (
+            <p className="mt-1">
+              <span className="font-medium text-foreground">Last Jira sync:</span>{" "}
+              {`created ${lastSyncResult.created_assets}, updated ${lastSyncResult.updated_assets}, unchanged ${lastSyncResult.unchanged_assets}, deleted ${lastSyncResult.deleted_assets}, failed ${lastSyncResult.failed_assets}`}
+            </p>
+          ) : null}
+          {runtimeStatus ? (
+            <>
+              <p className="mt-1">
+                <span className="font-medium text-foreground">Hourly sync state:</span>{" "}
+                {runtimeStatus.state}
+                {runtimeStatus.failure_category ? ` (${runtimeStatus.failure_category})` : ""}
+              </p>
+              <p className="mt-1">
+                <span className="font-medium text-foreground">Last successful hourly sync:</span>{" "}
+                {formatTimestamp(runtimeStatus.last_successful_sync_at)}
+              </p>
+              <p className="mt-1">
+                <span className="font-medium text-foreground">Next retry:</span>{" "}
+                {formatTimestamp(runtimeStatus.next_retry_at)}
+              </p>
+              {runtimeStatus.last_error ? (
+                <p className="mt-1">
+                  <span className="font-medium text-foreground">Hourly sync error:</span>{" "}
+                  {runtimeStatus.last_error}
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </div>
         <input
           ref={fileInputRef}
           className="hidden"
