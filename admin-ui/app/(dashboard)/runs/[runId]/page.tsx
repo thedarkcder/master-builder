@@ -22,6 +22,7 @@ import {
   type RunEventRecord,
   type RunLogEventRecord,
   type RunRecord,
+  type RunRerunPayload,
   type TokenTimelineRecord
 } from "@/lib/api";
 
@@ -99,6 +100,14 @@ type ChatTimelineEntry = {
 type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
 type AgentStage = "pm" | "dev" | "test" | "review";
 const CHAT_PAGE_SIZE = 40;
+
+type RerunSessionOption = {
+  key: string;
+  label: string;
+  payload: RunRerunPayload;
+  sessionId: string | null;
+  isLastSession: boolean;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -432,22 +441,6 @@ export default function RunDetailPage() {
     };
   }, [run, credentials, params.runId, loadRun]);
 
-  async function handleRerun() {
-    if (!credentials || !run) {
-      return;
-    }
-    setRerunBusy(true);
-    try {
-      const nextRun = await rerunRun(credentials, run.run_id);
-      setStatusLine(`Queued rerun ${nextRun.run_id} for ${nextRun.issue_key}.`);
-      window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
-    } catch (error) {
-      setStatusLine(`Failed to rerun: ${(error as Error).message}`);
-    } finally {
-      setRerunBusy(false);
-    }
-  }
-
   async function handleForceRerun() {
     if (!credentials || !run) {
       return;
@@ -455,7 +448,7 @@ export default function RunDetailPage() {
     setForceRerunBusy(true);
     try {
       const cancelled = await cancelRun(credentials, run.run_id);
-      const nextRun = await rerunRun(credentials, cancelled.run_id);
+      const nextRun = await rerunRun(credentials, cancelled.run_id, { mode: "fresh" });
       setStatusLine(`Force-cancelled ${cancelled.run_id} and queued rerun ${nextRun.run_id}.`);
       window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
     } catch (error) {
@@ -686,6 +679,71 @@ export default function RunDetailPage() {
     }
     return run?.dev_session_id ?? null;
   }, [invocationSessionRows, run?.dev_session_id]);
+  const rerunSessionOptions = useMemo(() => {
+    if (!run) {
+      return [] as RerunSessionOption[];
+    }
+    const recencyBySession = new Map<string, number>();
+    for (const row of invocationSessionRows) {
+      const sessionId = String(row.codexSessionId ?? "").trim();
+      if (!sessionId) {
+        continue;
+      }
+      const rowTime = new Date(row.startedAt ?? row.finishedAt ?? 0).getTime();
+      const current = recencyBySession.get(sessionId) ?? Number.NEGATIVE_INFINITY;
+      if (rowTime > current) {
+        recencyBySession.set(sessionId, rowTime);
+      }
+    }
+    const candidates: Array<Omit<RerunSessionOption, "isLastSession">> = [
+      {
+        key: "orchestrated",
+        label: "Orchestrated",
+        payload: { mode: "resume" as const, resume_stage: "orchestrated" as const },
+        sessionId: run.orchestrated_session_id,
+      },
+      {
+        key: "pm",
+        label: "PM",
+        payload: { mode: "resume" as const, resume_stage: "pm" as const },
+        sessionId: run.pm_session_id,
+      },
+      {
+        key: "dev",
+        label: "Dev",
+        payload: { mode: "resume" as const, resume_stage: "dev" as const },
+        sessionId: run.dev_session_id,
+      },
+    ].filter((option) => Boolean(option.sessionId));
+    const sorted = candidates.sort((a, b) => {
+      const aRank = recencyBySession.get(String(a.sessionId)) ?? Number.NEGATIVE_INFINITY;
+      const bRank = recencyBySession.get(String(b.sessionId)) ?? Number.NEGATIVE_INFINITY;
+      if (aRank !== bRank) {
+        return bRank - aRank;
+      }
+      return a.label.localeCompare(b.label);
+    });
+    return sorted.map((option) => ({
+      ...option,
+      isLastSession: Boolean(latestCodexSessionId) && option.sessionId === latestCodexSessionId,
+    }));
+  }, [invocationSessionRows, latestCodexSessionId, run]);
+
+  async function handleRerunSelection(payload: RunRerunPayload, label: string) {
+    if (!credentials || !run) {
+      return;
+    }
+    setRerunBusy(true);
+    try {
+      const nextRun = await rerunRun(credentials, run.run_id, payload);
+      setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
+      window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
+    } catch (error) {
+      setStatusLine(`Failed to rerun: ${(error as Error).message}`);
+    } finally {
+      setRerunBusy(false);
+    }
+  }
   const workflowDiagnostics = useMemo(() => {
     if (!isRecord(run?.plan)) {
       return null;
@@ -1093,9 +1151,42 @@ export default function RunDetailPage() {
               {busy ? "Refreshing..." : "Refresh"}
             </Button>
             {isRerunnable ? (
-              <Button size="sm" className="h-7 text-xs" onClick={() => void handleRerun()} disabled={rerunBusy}>
-                {rerunBusy ? "Requeueing..." : "Rerun"}
-              </Button>
+              <details className="relative">
+                <summary className="flex h-7 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground">
+                  {rerunBusy ? "Requeueing..." : "Rerun"}
+                </summary>
+                <div className="absolute right-0 z-20 mt-2 min-w-64 rounded-md border border-border bg-background p-1 shadow-lg">
+                  {rerunSessionOptions.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
+                      onClick={() => void handleRerunSelection(option.payload, `resume from ${option.label}`)}
+                      disabled={rerunBusy}
+                    >
+                      <span>{option.label}</span>
+                      <span className="flex items-center gap-2">
+                        {option.isLastSession ? (
+                          <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
+                            Last session
+                          </span>
+                        ) : null}
+                        {option.sessionId ? (
+                          <code className="max-w-28 truncate rounded bg-muted px-1">{option.sessionId}</code>
+                        ) : null}
+                      </span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
+                    onClick={() => void handleRerunSelection({ mode: "fresh" }, "fresh rerun")}
+                    disabled={rerunBusy}
+                  >
+                    <span>Rerun from start</span>
+                  </button>
+                </div>
+              </details>
             ) : null}
             {isActiveRun ? (
               <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => void handleForceRerun()} disabled={forceRerunBusy}>

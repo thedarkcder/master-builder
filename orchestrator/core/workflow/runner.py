@@ -30,6 +30,10 @@ class WorkflowRequest:
     start_point_sha: str | None = None
     pr_number: int | None = None
     trigger_context: dict | None = None
+    resume_mode: str | None = None
+    resume_stage: str | None = None
+    resume_session_id: str | None = None
+    resume_source_plan: dict | None = None
 
 
 @dataclass(frozen=True)

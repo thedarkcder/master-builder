@@ -465,6 +465,21 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class RunRerunRequest(BaseModel):
+    mode: str = Field(default="fresh", pattern="^(fresh|resume)$")
+    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev)$")
+
+    @field_validator("resume_stage")
+    @classmethod
+    def validate_resume_stage(cls, value: str | None, info):  # type: ignore[override]
+        mode = info.data.get("mode")
+        if mode == "resume" and not value:
+            raise ValueError("resume_stage is required when mode=resume")
+        if mode != "resume" and value is not None:
+            raise ValueError("resume_stage is only allowed when mode=resume")
+        return value
+
+
 class RunEventRead(BaseModel):
     event_type: str
     run_id: str

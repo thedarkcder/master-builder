@@ -405,12 +405,18 @@ export type RunRecord = {
   pr_url: string | null;
   dev_session_id: string | null;
   pm_session_id: string | null;
+  orchestrated_session_id: string | null;
   status: string;
   last_error: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
   plan: Record<string, unknown> | null;
+};
+
+export type RunRerunPayload = {
+  mode: "fresh" | "resume";
+  resume_stage?: "orchestrated" | "pm" | "dev";
 };
 
 export type RunEventRecord = {
@@ -1289,9 +1295,14 @@ export function getRun(credentials: Credentials, runId: string): Promise<RunReco
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
 }
 
-export function rerunRun(credentials: Credentials, runId: string): Promise<RunRecord> {
+export function rerunRun(
+  credentials: Credentials,
+  runId: string,
+  payload: RunRerunPayload = { mode: "fresh" }
+): Promise<RunRecord> {
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/rerun`, {
-    method: "POST"
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }
 

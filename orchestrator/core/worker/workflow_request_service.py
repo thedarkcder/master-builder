@@ -63,6 +63,10 @@ def build_workflow_request_for_run(
     current_worker_capability = available_worker_capabilities[0] if available_worker_capabilities else "linux"
     trigger_context = _extract_trigger_context(getattr(run, "plan", None))
     pr_number = _extract_pr_number(trigger_context)
+    resume_mode = _extract_resume_mode(trigger_context)
+    resume_stage = _extract_resume_stage(trigger_context)
+    resume_session_id = _extract_resume_session_id(trigger_context)
+    resume_source_plan = _extract_resume_source_plan(trigger_context)
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
@@ -87,6 +91,10 @@ def build_workflow_request_for_run(
         start_point_sha=start_point_sha,
         pr_number=pr_number,
         trigger_context=trigger_context,
+        resume_mode=resume_mode,
+        resume_stage=resume_stage,
+        resume_session_id=resume_session_id,
+        resume_source_plan=resume_source_plan,
     )
 
 
@@ -158,3 +166,33 @@ def _extract_pr_number(trigger_context: dict | None) -> int | None:
     if isinstance(value, int) and value > 0:
         return value
     return None
+
+
+def _extract_resume_mode(trigger_context: dict | None) -> str | None:
+    if not isinstance(trigger_context, dict):
+        return None
+    value = str(trigger_context.get("rerun_mode") or "").strip().lower()
+    return value if value in {"fresh", "resume"} else None
+
+
+def _extract_resume_stage(trigger_context: dict | None) -> str | None:
+    if not isinstance(trigger_context, dict):
+        return None
+    value = str(trigger_context.get("resume_stage") or "").strip().lower()
+    return value if value in {"orchestrated", "pm", "dev"} else None
+
+
+def _extract_resume_session_id(trigger_context: dict | None) -> str | None:
+    if not isinstance(trigger_context, dict):
+        return None
+    value = str(trigger_context.get("resume_session_id") or "").strip()
+    return value or None
+
+
+def _extract_resume_source_plan(trigger_context: dict | None) -> dict | None:
+    if not isinstance(trigger_context, dict):
+        return None
+    value = trigger_context.get("resume_source_plan")
+    if not isinstance(value, dict):
+        return None
+    return value

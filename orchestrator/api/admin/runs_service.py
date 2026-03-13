@@ -98,6 +98,8 @@ def rerun_run(
     *,
     session,
     run_id: str,
+    mode: str,
+    resume_stage: str | None,
     run_model,
     tenant_model,
     resolve_project_for_run_fn,
@@ -144,9 +146,60 @@ def rerun_run(
                 enqueue_run_obj=enqueue_result.run,
             ),
         )
-    enqueue_result.run.pm_session_id = source_run.pm_session_id
-    enqueue_result.run.dev_session_id = source_run.dev_session_id
-    enqueue_result.run.orchestrated_session_id = source_run.orchestrated_session_id
+    normalized_mode = str(mode or "fresh").strip().lower()
+    normalized_resume_stage = str(resume_stage or "").strip().lower() or None
+    source_plan = source_run.plan if isinstance(source_run.plan, dict) else {}
+    existing_trigger_context = (
+        dict(source_plan.get("trigger_context"))
+        if isinstance(source_plan.get("trigger_context"), dict)
+        else {}
+    )
+    next_trigger_context = dict(existing_trigger_context)
+    next_trigger_context["rerun_mode"] = normalized_mode
+    selected_session_id: str | None = None
+    selected_source_plan: dict | None = None
+
+    if normalized_mode == "resume":
+        session_by_stage = {
+            "orchestrated": str(source_run.orchestrated_session_id or "").strip() or None,
+            "pm": str(source_run.pm_session_id or "").strip() or None,
+            "dev": str(source_run.dev_session_id or "").strip() or None,
+        }
+        if normalized_resume_stage not in session_by_stage:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid resume stage")
+        selected_session_id = session_by_stage[normalized_resume_stage]
+        if not selected_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"No persisted {normalized_resume_stage} session is available for this run",
+            )
+        next_trigger_context["resume_stage"] = normalized_resume_stage
+        next_trigger_context["resume_session_id"] = selected_session_id
+        next_trigger_context["resume_source_run_id"] = source_run.run_id
+        if normalized_resume_stage == "dev":
+            source_plan_payload = source_plan.get("plan")
+            if not isinstance(source_plan_payload, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No persisted PM plan is available for a dev-stage resume",
+                )
+            selected_source_plan = dict(source_plan_payload)
+            next_trigger_context["resume_source_plan"] = selected_source_plan
+        if normalized_resume_stage == "pm":
+            enqueue_result.run.pm_session_id = selected_session_id
+        elif normalized_resume_stage == "dev":
+            enqueue_result.run.dev_session_id = selected_session_id
+        else:
+            enqueue_result.run.orchestrated_session_id = selected_session_id
+    else:
+        next_trigger_context.pop("resume_stage", None)
+        next_trigger_context.pop("resume_session_id", None)
+        next_trigger_context.pop("resume_source_run_id", None)
+        next_trigger_context.pop("resume_source_plan", None)
+
+    next_plan = dict(enqueue_result.run.plan or {})
+    next_plan["trigger_context"] = next_trigger_context
+    enqueue_result.run.plan = next_plan
     session.commit()
     session.refresh(enqueue_result.run)
     return run_to_schema_fn(enqueue_result.run)
