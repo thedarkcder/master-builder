@@ -146,13 +146,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Setup Node (npm/yarn cache)
+      - name: Setup Node (npm/yarn)
         if: needs.detect.outputs.node_pm != 'pnpm' && needs.detect.outputs.node_lockfile != ''
         uses: actions/setup-node@v5
         with:
           node-version: "20"
-          cache: ${{ needs.detect.outputs.node_pm }}
-          cache-dependency-path: ${{ needs.detect.outputs.node_lockfile }}
 
       - name: Setup Node (npm/yarn no-cache fallback)
         if: needs.detect.outputs.node_pm != 'pnpm' && needs.detect.outputs.node_lockfile == ''
