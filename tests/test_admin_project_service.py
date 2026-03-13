@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
@@ -291,3 +292,73 @@ def test_update_project_returns_502_when_jira_board_resolution_fails_with_oauth_
     except HTTPException as exc:
         assert exc.status_code == 502
         assert "Unable to resolve Jira board for project TP: token revoked" == str(exc.detail)
+
+
+def test_update_project_migrates_inline_secret_values_to_project_managed_refs() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    session.set(Tenant, "t1", tenant)
+    existing_project = Project(
+        project_id="p1",
+        tenant_id="t1",
+        name="Existing",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="TP",
+        policy_overrides={},
+        environment={},
+        secret_refs={"SUPABASE_URL": "https://example.supabase.co"},
+        discord_config={},
+        is_archived=False,
+        created_at=None,  # type: ignore[arg-type]
+        updated_at=None,  # type: ignore[arg-type]
+    )
+    session.set(Project, "p1", existing_project)
+    service = AdminProjectService(
+        normalize_project_repo=lambda value: value.strip(),
+        normalize_project_key=lambda value: value.strip().upper(),
+        normalize_project_policy_overrides=lambda value: value or {},
+        normalize_string_map=lambda value: value or {},
+        normalize_project_discord_config=lambda value: value or {},
+        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
+        sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
+        ensure_project_repository_checkout=_ensure_project_repository_checkout,
+        resolve_project_run_board_id=_resolve_project_run_board_id,
+        project_to_schema=_project_to_schema,
+        settings_factory=lambda: SimpleNamespace(secrets_encryption_key="enc-key"),
+    )
+    payload = SimpleNamespace(
+        name="Updated",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="tp",
+        policy_overrides=None,
+        environment=None,
+        secret_refs={
+            "SUPABASE_URL": "https://example.supabase.co",
+            "APPLE_TEST_PASSWORD": "Ft6ygA&aYkf%hy",
+        },
+        discord=None,
+        is_archived=False,
+    )
+
+    upsert_calls: list[tuple[str, str]] = []
+    with (
+        patch("orchestrator.api.admin.project_service.resolve_scoped_secret_ref", return_value=None),
+        patch(
+            "orchestrator.core.tenant_secret_service._upsert_managed_secret",
+            side_effect=lambda session, *, secret_ref, plaintext_value, encryption_key, scope, tenant_id: upsert_calls.append(
+                (secret_ref, plaintext_value)
+            )
+            or SimpleNamespace(secret_ref=secret_ref, source="managed", updated_at=None),
+        ),
+    ):
+        service.update_project(session=session, tenant_id="t1", project_id="p1", payload=payload)
+
+    assert existing_project.secret_refs == {
+        "SUPABASE_URL": "project/t1/p1/SUPABASE_URL",
+        "APPLE_TEST_PASSWORD": "project/t1/p1/APPLE_TEST_PASSWORD",
+    }
+    assert ("project/t1/p1/SUPABASE_URL", "https://example.supabase.co") in upsert_calls
+    assert ("project/t1/p1/APPLE_TEST_PASSWORD", "Ft6ygA&aYkf%hy") in upsert_calls

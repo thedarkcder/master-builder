@@ -84,6 +84,11 @@ class CodexWorkflowAgents:
                 jira_project_key=request.jira_project_key or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
                 issue_summary=request.issue_summary,
                 issue_description=request.issue_description,
                 attempt=attempt,
@@ -202,6 +207,11 @@ class CodexWorkflowAgents:
                 jira_project_key=request.jira_project_key or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
                 attempt=attempt,
                 feedback=feedback or "none",
                 plan_json=json.dumps(plan.plan_steps),
@@ -226,14 +236,23 @@ class CodexWorkflowAgents:
         raw_response = _extract_raw_response(payload)
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
-        hard_stop_raw = payload.get("hard_stop_reason")
-        hard_stop_reason = (
-            str(hard_stop_raw).strip()
-            if isinstance(hard_stop_raw, str) and str(hard_stop_raw).strip()
+        blocker_category_raw = payload.get("blocker_category")
+        blocker_category = (
+            str(blocker_category_raw).strip()
+            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
             else None
         )
-        if hard_stop_reason is None:
-            hard_stop_reason = _extract_prefixed_value(raw_response, keys=("hard_stop_reason", "hard stop", "blocked"))
+        blocker_message_raw = payload.get("blocker_message")
+        blocker_message = (
+            str(blocker_message_raw).strip()
+            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
+            else None
+        )
+        if blocker_message is None:
+            blocker_message = _extract_prefixed_value(
+                raw_response,
+                keys=("blocker_message", "blocked", "hard stop"),
+            )
         return DevResult(
             change_summary=_string_list(
                 payload.get("change_summary"),
@@ -243,7 +262,8 @@ class CodexWorkflowAgents:
                 ),
             ),
             pr_url=pr_url,
-            hard_stop_reason=hard_stop_reason,
+            blocker_category=blocker_category,
+            blocker_message=blocker_message,
         )
 
     def test(
@@ -278,6 +298,11 @@ class CodexWorkflowAgents:
                 jira_project_key=request.jira_project_key or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
                 attempt=attempt,
                 dev_summary_json=json.dumps(dev_result.change_summary),
                 pr_url=dev_result.pr_url or "none",
@@ -311,6 +336,20 @@ class CodexWorkflowAgents:
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
         if feedback is None:
             feedback = _extract_prefixed_value(raw_response, keys=("feedback", "reason", "summary"))
+        blocker_category_raw = payload.get("blocker_category")
+        blocker_category = (
+            str(blocker_category_raw).strip()
+            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
+            else None
+        )
+        blocker_message_raw = payload.get("blocker_message")
+        blocker_message = (
+            str(blocker_message_raw).strip()
+            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
+            else None
+        )
+        if blocker_message is None and passed is False:
+            blocker_message = _extract_prefixed_value(raw_response, keys=("blocker_message", "blocked"))
         guidance = _string_list(
             payload.get("guidance"),
             fallback=(
@@ -319,7 +358,13 @@ class CodexWorkflowAgents:
                 or ["Run project test suite"]
             ),
         )
-        return TestResult(passed=passed, guidance=guidance, feedback=feedback)
+        return TestResult(
+            passed=passed,
+            guidance=guidance,
+            feedback=feedback,
+            blocker_category=blocker_category,
+            blocker_message=blocker_message,
+        )
 
     def review(
         self,
@@ -354,6 +399,11 @@ class CodexWorkflowAgents:
                 jira_project_key=request.jira_project_key or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
                 attempt=attempt,
                 plan_steps_json=json.dumps(plan.plan_steps),
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
@@ -420,6 +470,20 @@ class CodexWorkflowAgents:
             feedback = _extract_prefixed_value(raw_response, keys=("feedback", "summary", "reason"))
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else dev_result.pr_url
+        blocker_category_raw = payload.get("blocker_category")
+        blocker_category = (
+            str(blocker_category_raw).strip()
+            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
+            else None
+        )
+        blocker_message_raw = payload.get("blocker_message")
+        blocker_message = (
+            str(blocker_message_raw).strip()
+            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
+            else None
+        )
+        if blocker_message is None and outcome_raw == "blocked":
+            blocker_message = feedback or _extract_prefixed_value(raw_response, keys=("blocker_message", "blocked"))
         return ReviewResult(
             approved=approved,
             summary=_string_list(
@@ -432,6 +496,8 @@ class CodexWorkflowAgents:
             outcome=outcome_raw,
             feedback=feedback,
             pr_url=pr_url,
+            blocker_category=blocker_category,
+            blocker_message=blocker_message,
         )
 
 

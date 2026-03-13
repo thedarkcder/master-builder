@@ -199,3 +199,35 @@ def requeue_workflow_result_for_capability(
     session.commit()
     session.refresh(run)
     return run
+
+
+def requeue_workflow_result_for_stale_snapshot(
+    session: Session,
+    *,
+    run: Run,
+    workflow_result: WorkflowResult,
+    stage_updates: list[dict[str, str]],
+    error: str,
+) -> Run:
+    plan_payload = workflow_result.to_plan_payload()
+    plan_payload["stage_updates"] = stage_updates
+    plan_payload["requeued"] = True
+    plan_payload["stale_branch_snapshot"] = True
+    plan_payload["requeue_reason"] = error
+    run.plan = plan_payload
+    run.pr_url = None
+    run.status = "queued"
+    run.last_error = None
+    run.started_at = None
+    run.finished_at = None
+    notify_run_enqueued(
+        session,
+        tenant_id=run.tenant_id,
+        project_id=run.project_id,
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+    )
+    _release_run_lock(session, run=run)
+    session.commit()
+    session.refresh(run)
+    return run

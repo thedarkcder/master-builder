@@ -6,6 +6,11 @@ GitHub Repository: {{ github_repository }}
 Jira Project Key: {{ jira_project_key }}
 Run ID: {{ run_id }}
 Issue key: {{ issue_key }}
+Execution worktree: {{ execution_repo_dir }}
+Execution branch: {{ execution_branch }}
+Base branch: {{ base_branch }}
+Integration branch: {{ integration_branch }}
+PR target branch: {{ pr_target_branch }}
 Attempt: {{ attempt }}
 Plan steps: {{ plan_steps_json }}
 Acceptance criteria: {{ acceptance_criteria_json }}
@@ -33,3 +38,5 @@ Output contract:
 - summary: array of review findings/outcome notes.
 - feedback: blocking feedback string or null.
 - pr_url: PR URL string or null.
+- blocker_category: terminal blocker category or null.
+- blocker_message: terminal blocker detail or null.

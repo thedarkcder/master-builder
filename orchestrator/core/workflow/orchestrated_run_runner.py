@@ -71,6 +71,15 @@ class _ExecutionState:
     test_guidance: list[str]
 
 
+_TERMINAL_BLOCKER_CATEGORIES = {
+    "repo_access_failure",
+    "filesystem_unusable",
+    "mandatory_secret_missing",
+    "toolchain_unavailable",
+    "awaiting_human_input",
+}
+
+
 class OrchestratedRunWorkflowExecutor:
     def __init__(
         self,
@@ -201,14 +210,18 @@ class OrchestratedRunWorkflowExecutor:
 
             last_dev_result = dev_result
             state.dev_rationale[:] = list(dev_result.change_summary)
-            if dev_result.hard_stop_reason:
-                history.append({"stage": "dev", "attempt": str(attempt), "event": dev_result.hard_stop_reason})
+            terminal_dev_blocker = _terminal_blocker_message(
+                category=dev_result.blocker_category,
+                message=dev_result.blocker_message,
+            )
+            if terminal_dev_blocker is not None:
+                history.append({"stage": "dev", "attempt": str(attempt), "event": terminal_dev_blocker})
                 stage_trace.append(
                     _stage_trace_entry(
                         stage="dev",
                         status="blocked",
                         attempt=attempt,
-                        summary=dev_result.hard_stop_reason,
+                        summary=terminal_dev_blocker,
                     )
                 )
                 return self._failure_result(
@@ -216,7 +229,7 @@ class OrchestratedRunWorkflowExecutor:
                     state=state,
                     stage="dev",
                     attempts=attempt,
-                    message=dev_result.hard_stop_reason,
+                    message=terminal_dev_blocker,
                     classification="implementation_blocked",
                 )
             stage_trace.append(
@@ -242,6 +255,28 @@ class OrchestratedRunWorkflowExecutor:
 
             last_test_result = test_result
             state.test_guidance[:] = list(test_result.guidance or state.test_guidance)
+            terminal_test_blocker = _terminal_blocker_message(
+                category=test_result.blocker_category,
+                message=test_result.blocker_message,
+            )
+            if terminal_test_blocker is not None:
+                history.append({"stage": "test", "attempt": str(attempt), "event": terminal_test_blocker})
+                stage_trace.append(
+                    _stage_trace_entry(
+                        stage="test",
+                        status="blocked",
+                        attempt=attempt,
+                        summary=terminal_test_blocker,
+                    )
+                )
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="test",
+                    attempts=attempt,
+                    message=terminal_test_blocker,
+                    classification="verification_blocked",
+                )
             if not test_result.passed:
                 feedback = _summarize_test_feedback(test_result)
                 history.append({"stage": "test", "attempt": str(attempt), "event": feedback})
@@ -318,22 +353,28 @@ class OrchestratedRunWorkflowExecutor:
 
             history.append({"stage": "review", "attempt": str(attempt), "event": review_message})
             if review_outcome == "blocked":
-                stage_trace.append(
-                    _stage_trace_entry(
-                        stage="review",
-                        status="blocked",
-                        attempt=attempt,
-                        summary=review_message,
+                terminal_review_blocker = _terminal_blocker_message(
+                    category=review_result.blocker_category,
+                    message=review_result.blocker_message or review_result.feedback or review_message,
+                )
+                if terminal_review_blocker is not None:
+                    stage_trace.append(
+                        _stage_trace_entry(
+                            stage="review",
+                            status="blocked",
+                            attempt=attempt,
+                            summary=terminal_review_blocker,
+                        )
                     )
-                )
-                return self._failure_result(
-                    request=request,
-                    state=state,
-                    stage="review",
-                    attempts=attempt,
-                    message=review_message,
-                    classification="review_blocked",
-                )
+                    return self._failure_result(
+                        request=request,
+                        state=state,
+                        stage="review",
+                        attempts=attempt,
+                        message=terminal_review_blocker,
+                        classification="review_blocked",
+                    )
+                review_message = review_result.feedback or review_message
 
             stage_trace.append(
                 _stage_trace_entry(
@@ -420,7 +461,27 @@ def _missing_evidence_message(plan: PmPlan) -> str | None:
     if not missing_sources:
         return None
     joined_sources = ", ".join(missing_sources)
-    return f"PM could not load required evidence sources before implementation: {joined_sources}."
+    message = f"PM could not load required evidence sources before implementation: {joined_sources}."
+    if "runtime_values" in {source.strip().lower() for source in missing_sources}:
+        unresolved_runtime_details = [
+            value for value in plan.unresolved_prerequisites if str(value).strip()
+        ]
+        if unresolved_runtime_details:
+            message = (
+                f"{message} Missing runtime prerequisites: "
+                f"{'; '.join(unresolved_runtime_details[:3])}."
+            )
+    return message
+
+
+def _terminal_blocker_message(*, category: str | None, message: str | None) -> str | None:
+    normalized_category = str(category or "").strip().lower()
+    normalized_message = str(message or "").strip()
+    if normalized_category not in _TERMINAL_BLOCKER_CATEGORIES:
+        return None
+    if normalized_message:
+        return normalized_message
+    return f"Terminal blocker encountered: {normalized_category}."
 
 
 def _external_blocker_message(plan: PmPlan) -> str | None:

@@ -6,6 +6,11 @@ GitHub Repository: {{ github_repository }}
 Jira Project Key: {{ jira_project_key }}
 Run ID: {{ run_id }}
 Issue key: {{ issue_key }}
+Execution worktree: {{ execution_repo_dir }}
+Execution branch: {{ execution_branch }}
+Base branch: {{ base_branch }}
+Integration branch: {{ integration_branch }}
+PR target branch: {{ pr_target_branch }}
 Attempt: {{ attempt }}
 Summary: {{ issue_summary }}
 Description:
@@ -32,6 +37,7 @@ Required actions:
 3. Surface delivery risks that can block or degrade delivery.
 4. Use allowed tools to gather authoritative evidence before deciding prerequisite state instead of assuming.
 4a. Treat project metadata in this prompt as authoritative routing context. Do not fetch project_id, project_name, github_repository, or jira_project_key via runtime-values tools.
+4b. Treat the run-owned worktree and branches in this prompt as the only authoritative local repository context for this run.
 5. Decide next stage:
    - Use "dev" if code changes are still needed.
    - Use "test" only when prior dev output is sufficient and we should retest/validate.

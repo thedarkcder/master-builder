@@ -214,12 +214,8 @@ function stageDisplayLabel(stage: string): string {
   return stage;
 }
 
-function clipText(value: string, maxChars = 280): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxChars - 1).trimEnd()}…`;
+function normalizeInlineText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function logEntryIdentity(entry: RunLogEventRecord): string {
@@ -261,7 +257,7 @@ function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, 
       lowered.includes("fatal") ||
       lowered.includes("exception")
     ) {
-      return { speaker: "runtime", text: clipText(trimmed), kind: "error" };
+      return { speaker: "runtime", text: trimmed, kind: "error" };
     }
   }
 
@@ -291,17 +287,17 @@ function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, 
   if (eventType === "item.completed" && item) {
     const itemType = String(item.type ?? "").trim().toLowerCase();
     if (itemType === "agent_message") {
-      return { speaker: "codex", text: clipText(String(item.text ?? "")), kind: "message" };
+      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "message" };
     }
     if (itemType === "reasoning") {
-      return { speaker: "codex", text: clipText(String(item.text ?? "")), kind: "reasoning" };
+      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "reasoning" };
     }
     if (itemType === "command_execution") {
       const status = String(item.status ?? "").trim().toLowerCase();
       const exitCode = item.exit_code;
       if (status === "failed" || (typeof exitCode === "number" && exitCode !== 0)) {
-        const command = clipText(String(item.command ?? ""), 160);
-        const output = clipText(String(item.aggregated_output ?? ""), 200);
+        const command = normalizeInlineText(String(item.command ?? ""));
+        const output = normalizeInlineText(String(item.aggregated_output ?? ""));
         return {
           speaker: "command",
           text: `Command failed${typeof exitCode === "number" ? ` (exit ${exitCode})` : ""}: ${command}${output ? ` | ${output}` : ""}`,
@@ -956,7 +952,7 @@ export default function RunDetailPage() {
           stage,
           attempt: null,
           speaker: "system",
-          text: `Stage update: ${stage}. ${clipText(rawMessage, 220)}`,
+          text: `Stage update: ${stage}. ${rawMessage}`,
           kind: "status"
         } satisfies ChatTimelineEntry;
       })
@@ -988,7 +984,7 @@ export default function RunDetailPage() {
       stage: entry.stage || "workflow",
       attempt: Number.isFinite(Number(entry.attempt)) ? Number(entry.attempt) : null,
       speaker: "diagnostics",
-      text: clipText(entry.event, 320),
+      text: entry.event,
       kind: entry.stage.toLowerCase() === "review" ? "error" : "status"
     }));
 
@@ -1470,7 +1466,7 @@ export default function RunDetailPage() {
                           return (
                             <li key={entry.key} className="flex items-center gap-2 py-1">
                               <div className="h-px flex-1 bg-border" />
-                              <span className="rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+                              <span className="max-w-[min(100%,56rem)] whitespace-normal break-words rounded-xl border px-2 py-1 text-center text-[10px] text-muted-foreground">
                                 {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} — {entry.text}
                               </span>
                               <div className="h-px flex-1 bg-border" />
