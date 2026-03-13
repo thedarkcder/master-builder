@@ -49,6 +49,19 @@ class CodexWorkflowAgents:
 
         return _emit
 
+    def _resume_session_id_for_stage(self, *, request: WorkflowRequest, stage: str) -> str | None:
+        if str(request.resume_mode or "").strip().lower() != "resume":
+            return None
+        resume_stage = str(request.resume_stage or "").strip().lower()
+        session_id = str(request.resume_session_id or "").strip() or None
+        if not session_id:
+            return None
+        if resume_stage == stage:
+            return session_id
+        if resume_stage == "orchestrated" and stage == "pm":
+            return session_id
+        return None
+
     def pm(
         self,
         request: WorkflowRequest,
@@ -73,6 +86,7 @@ class CodexWorkflowAgents:
                 attempt=attempt,
                 reasoning_effort="medium",
                 issue_description_chars=len(request.issue_description or ""),
+                codex_session_id=self._resume_session_id_for_stage(request=request, stage="pm"),
             ),
             system_prompt=render_prompt("workflow/pm_system.j2"),
             user_prompt=render_prompt(
@@ -196,6 +210,7 @@ class CodexWorkflowAgents:
                 attempt=attempt,
                 reasoning_effort="medium",
                 issue_description_chars=len(request.issue_description or ""),
+                codex_session_id=self._resume_session_id_for_stage(request=request, stage="dev"),
             ),
             system_prompt=render_prompt("workflow/dev_system.j2"),
             user_prompt=render_prompt(

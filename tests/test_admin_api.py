@@ -974,7 +974,7 @@ class AdminApiTests(unittest.TestCase):
                     orchestrated_session_id="orchestrated-session-789",
                     status="failed",
                     last_error="boom",
-                    plan=None,
+                    plan={"plan": {"plan_steps": ["restore auth flow"], "acceptance_criteria": ["login works"], "risks": []}},
                     created_at=now,
                     started_at=now,
                     finished_at=now,
@@ -982,16 +982,82 @@ class AdminApiTests(unittest.TestCase):
             )
             session.commit()
 
-        response = self.client.post("/api/admin/runs/run-failed-rerun/rerun", auth=("admin", "secret"))
+        response = self.client.post(
+            "/api/admin/runs/run-failed-rerun/rerun",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertEqual(body["tenant_id"], "tenant-a")
         self.assertEqual(body["issue_key"], "TP-999")
         self.assertEqual(body["status"], "queued")
         self.assertNotEqual(body["run_id"], "run-failed-rerun")
+        self.assertIsNone(body["dev_session_id"])
+        self.assertIsNone(body["pm_session_id"])
+        self.assertIsNone(body["orchestrated_session_id"])
+        self.assertEqual(body["plan"]["trigger_context"]["rerun_mode"], "fresh")
+
+    def test_resume_rerun_from_dev_stage_copies_session_and_plan(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-failed-resume",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-1000",
+                    issue_summary="failed run",
+                    issue_description="Objective: resume from dev.",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    dev_session_id="dev-session-123",
+                    pm_session_id="pm-session-456",
+                    orchestrated_session_id="orchestrated-session-789",
+                    status="failed",
+                    last_error="boom",
+                    plan={
+                        "plan": {
+                            "plan_steps": ["restore auth flow"],
+                            "acceptance_criteria": ["login works"],
+                            "risks": ["stale session"],
+                            "resolved_prerequisites": ["supabase configured"],
+                        }
+                    },
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/runs/run-failed-resume/rerun",
+            json={"mode": "resume", "resume_stage": "dev"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body["status"], "queued")
         self.assertEqual(body["dev_session_id"], "dev-session-123")
-        self.assertEqual(body["pm_session_id"], "pm-session-456")
-        self.assertEqual(body["orchestrated_session_id"], "orchestrated-session-789")
+        self.assertIsNone(body["pm_session_id"])
+        self.assertIsNone(body["orchestrated_session_id"])
+        trigger = body["plan"]["trigger_context"]
+        self.assertEqual(trigger["rerun_mode"], "resume")
+        self.assertEqual(trigger["resume_stage"], "dev")
+        self.assertEqual(trigger["resume_session_id"], "dev-session-123")
+        self.assertEqual(trigger["resume_source_run_id"], "run-failed-resume")
+        self.assertEqual(trigger["resume_source_plan"]["plan_steps"], ["restore auth flow"])
 
     def test_cancel_active_run_from_admin(self) -> None:
         payload = self._tenant_payload()

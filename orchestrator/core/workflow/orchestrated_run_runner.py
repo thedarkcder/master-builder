@@ -106,41 +106,69 @@ class OrchestratedRunWorkflowExecutor:
         last_test_result: TestResult | None = None
         last_review_result: ReviewResult | None = None
 
-        try:
-            plan = agents.pm(
-                request,
-                1,
-                None,
-                history,
-                last_dev_result,
-                last_test_result,
-                last_review_result,
+        if _should_resume_from_dev(request):
+            plan = _resume_pm_plan(request.resume_source_plan)
+            if plan is None:
+                return self._failure_result(
+                    request=request,
+                    state=_ExecutionState(
+                        plan=None,
+                        stage_trace=stage_trace,
+                        history=history,
+                        dev_rationale=[],
+                        review_summary=[],
+                        review_feedback=None,
+                        test_guidance=test_guidance,
+                    ),
+                    stage="dev",
+                    attempts=1,
+                    message="Cannot resume dev stage because no persisted PM plan is available.",
+                    classification="resume_invalid",
+                )
+            stage_trace.append(
+                _stage_trace_entry(
+                    stage="pm",
+                    status="completed",
+                    attempt=1,
+                    summary="Resumed from persisted PM plan.",
+                )
             )
-        except Exception as exc:  # noqa: BLE001
-            return self._failure_result(
-                request=request,
-                state=_ExecutionState(
-                    plan=None,
-                    stage_trace=stage_trace,
-                    history=history,
-                    dev_rationale=[],
-                    review_summary=[],
-                    review_feedback=None,
-                    test_guidance=test_guidance,
-                ),
-                stage="pm",
-                attempts=1,
-                message=f"PM stage failed: {exc}",
-            )
+        else:
+            try:
+                plan = agents.pm(
+                    request,
+                    1,
+                    None,
+                    history,
+                    last_dev_result,
+                    last_test_result,
+                    last_review_result,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return self._failure_result(
+                    request=request,
+                    state=_ExecutionState(
+                        plan=None,
+                        stage_trace=stage_trace,
+                        history=history,
+                        dev_rationale=[],
+                        review_summary=[],
+                        review_feedback=None,
+                        test_guidance=test_guidance,
+                    ),
+                    stage="pm",
+                    attempts=1,
+                    message=f"PM stage failed: {exc}",
+                )
 
-        stage_trace.append(
-            _stage_trace_entry(
-                stage="pm",
-                status="completed",
-                attempt=1,
-                summary=_summarize_pm_plan(plan),
+            stage_trace.append(
+                _stage_trace_entry(
+                    stage="pm",
+                    status="completed",
+                    attempt=1,
+                    summary=_summarize_pm_plan(plan),
+                )
             )
-        )
         state = _ExecutionState(
             plan=plan,
             stage_trace=stage_trace,
@@ -434,6 +462,40 @@ class OrchestratedRunWorkflowExecutor:
             orchestration_stage_trace=list(state.stage_trace),
             orchestration_workstream_trace=[],
         )
+
+
+def _should_resume_from_dev(request: WorkflowRequest) -> bool:
+    return (
+        str(request.resume_mode or "").strip().lower() == "resume"
+        and str(request.resume_stage or "").strip().lower() == "dev"
+    )
+
+
+def _resume_pm_plan(payload: dict | None) -> PmPlan | None:
+    if not isinstance(payload, dict):
+        return None
+    return PmPlan(
+        plan_steps=[str(item).strip() for item in payload.get("plan_steps", []) if str(item).strip()],
+        acceptance_criteria=[
+            str(item).strip() for item in payload.get("acceptance_criteria", []) if str(item).strip()
+        ],
+        risks=[str(item).strip() for item in payload.get("risks", []) if str(item).strip()],
+        next_stage=str(payload.get("next_stage") or "dev").strip().lower() or "dev",
+        execution_worker_capability=str(payload.get("execution_worker_capability") or "linux").strip().lower()
+        or "linux",
+        missing_evidence_sources=[
+            str(item).strip() for item in payload.get("missing_evidence_sources", []) if str(item).strip()
+        ],
+        confirmed_external_blockers=[
+            str(item).strip() for item in payload.get("confirmed_external_blockers", []) if str(item).strip()
+        ],
+        resolved_prerequisites=[
+            str(item).strip() for item in payload.get("resolved_prerequisites", []) if str(item).strip()
+        ],
+        unresolved_prerequisites=[
+            str(item).strip() for item in payload.get("unresolved_prerequisites", []) if str(item).strip()
+        ],
+    )
 
 
 def _stage_trace_entry(*, stage: str, status: str, attempt: int, summary: str) -> dict[str, object]:

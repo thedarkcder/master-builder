@@ -145,6 +145,52 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
 
+    def test_resume_session_id_is_applied_to_selected_stage(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue([]),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = WorkflowRequest(
+            tenant_id="tenant-1",
+            run_id="run-1",
+            issue_key="MAB-54",
+            issue_summary="Integrate Codex runtime",
+            issue_description="Objective and acceptance criteria",
+            max_dev_test_review_loops=1,
+            suggested_test_commands=["python -m unittest"],
+            execution_repo_dir="/tmp/test-repo",
+            execution_branch="run/MAB-54/run-1",
+            base_branch="main",
+            integration_branch="feature/MAB-54",
+            pr_target_branch="main",
+            resume_mode="resume",
+            resume_stage="dev",
+            resume_session_id="dev-session-123",
+        )
+        captured_contexts: list[CodexInvocationContext] = []
+
+        def _invoke_codex_json(*, context, **kwargs):  # noqa: ANN001
+            _ = kwargs
+            captured_contexts.append(context)
+            if context.stage == "pm":
+                return {"plan_steps": ["step1"], "acceptance_criteria": ["ac1"], "risks": []}
+            return {"change_summary": ["implemented"], "pr_url": None}
+
+        with (
+            patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch("orchestrator.core.codex_agents.invoke_codex_json", side_effect=_invoke_codex_json),
+        ):
+            plan = agents.pm(request, 1, None, [], None, None, None)
+            agents.dev(request, plan, 1, None)
+
+        self.assertEqual(captured_contexts[0].stage, "pm")
+        self.assertIsNone(captured_contexts[0].codex_session_id)
+        self.assertEqual(captured_contexts[1].stage, "dev")
+        self.assertEqual(captured_contexts[1].codex_session_id, "dev-session-123")
+
     def test_dev_test_and_review_map_structured_blockers(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
