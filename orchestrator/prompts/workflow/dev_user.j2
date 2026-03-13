@@ -6,6 +6,11 @@ GitHub Repository: {{ github_repository }}
 Jira Project Key: {{ jira_project_key }}
 Run ID: {{ run_id }}
 Issue key: {{ issue_key }}
+Execution worktree: {{ execution_repo_dir }}
+Execution branch: {{ execution_branch }}
+Base branch: {{ base_branch }}
+Integration branch: {{ integration_branch }}
+PR target branch: {{ pr_target_branch }}
 Attempt: {{ attempt }}
 Feedback from prior stage: {{ feedback }}
 Plan: {{ plan_json }}
@@ -23,10 +28,12 @@ Required actions:
 3. Run relevant validation commands and use results to refine changes.
 4. An empty repository is valid; scaffold what is required when needed.
 5. Treat the PM evidence ledger as the current ticket prerequisite summary; do not re-classify external blockers from scratch unless you have new authoritative tool evidence.
-6. Use Blocked: only for hard blockers (access/auth/permissions/required tooling), and include exact details in change_summary.
-7. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch/PR actions).
+6. Treat only this run-owned worktree as authoritative local repo state. Do not adapt to unrelated in-flight changes, wrong branches, or shared dirty state.
+7. Use a blocker only for the allowed terminal categories from the system prompt, and include exact details in change_summary.
+8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch/PR actions).
 
 Output contract:
 - change_summary: array of implemented changes (or concrete blocker facts).
 - pr_url: PR URL string or null.
-- hard_stop_reason: null when work can proceed to testing, otherwise a concrete hard-stop reason.
+- blocker_category: terminal blocker category or null.
+- blocker_message: terminal blocker detail or null.

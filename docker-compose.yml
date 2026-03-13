@@ -49,6 +49,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import json,sys,urllib.request; data=json.loads(urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=5).read().decode()); sys.exit(0 if data.get('status') == 'ok' else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     command:
       - /bin/sh
       - -ceu
@@ -135,6 +143,43 @@ services:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
 
+  knowledge-sync:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-knowledge-sync
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INTERVAL_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INTERVAL_SECONDS:-3600}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_POLL_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_POLL_SECONDS:-30}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_LOCK_KEY: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_LOCK_KEY:-947102033128}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_MAX_ISSUES: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_MAX_ISSUES:-500}
+      ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INVALID_TOKEN_BACKOFF_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INVALID_TOKEN_BACKOFF_SECONDS:-21600}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator knowledge-jira-sync
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+
   admin-ui:
     build:
       context: ./admin-ui
@@ -152,7 +197,8 @@ services:
     container_name: master-builder-tailscale
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     network_mode: "service:api"
     entrypoint:
       - /bin/sh
@@ -163,6 +209,8 @@ services:
       TS_USERSPACE: "true"
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---accept-dns=false}
       TS_FUNNEL_PORT: ${TS_FUNNEL_PORT:-4000}
+      TS_FUNNEL_HEALTH_URL: ${TS_FUNNEL_HEALTH_URL:-http://127.0.0.1:4000/health}
+      TS_FUNNEL_HEALTH_TIMEOUT_SECONDS: ${TS_FUNNEL_HEALTH_TIMEOUT_SECONDS:-60}
     volumes:
       - tailscale-state:/var/lib/tailscale
       - ./scripts/tailscale/funnel-bootstrap.sh:/etc/tailscale/funnel-bootstrap.sh:ro

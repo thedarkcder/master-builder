@@ -71,9 +71,12 @@ def process_next_queued_run(
     pr_opened_update_fn,
     run_failed_update_fn,
     run_requeued_capability_update_fn,
+    run_requeued_stale_snapshot_update_fn,
     finalize_cancelled_run_fn,
     finalize_workflow_result_fn,
     requeue_workflow_result_for_capability_fn,
+    requeue_workflow_result_for_stale_snapshot_fn,
+    check_run_snapshot_freshness_fn,
     transition_issue_status_fn,
     emit_agent_event_fn,
     resolve_agent_id_fn,
@@ -290,6 +293,33 @@ def process_next_queued_run(
             issue_key=run.issue_key,
             agent_id=agent_id,
         )
+    if workflow_result.succeeded and workflow_request.start_point_ref and workflow_request.start_point_sha:
+        freshness = check_run_snapshot_freshness_fn(
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=tenant.tenant_id,
+            project=project,
+            start_point_ref=workflow_request.start_point_ref,
+            start_point_sha=workflow_request.start_point_sha,
+        )
+        if freshness.stale:
+            error_text = freshness.message or "Branch snapshot stale; requeueing from latest snapshot."
+            notifier.append(
+                run_requeued_stale_snapshot_update_fn(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    jira_url=jira_issue_url,
+                    run_url=run_dashboard_url,
+                    error=error_text,
+                )
+            )
+            return requeue_workflow_result_for_stale_snapshot_fn(
+                session,
+                run=run,
+                workflow_result=workflow_result,
+                stage_updates=notifier.stage_updates,
+                error=error_text,
+            )
     if workflow_result.pr_url:
         notifier.append(
             pr_opened_update_fn(

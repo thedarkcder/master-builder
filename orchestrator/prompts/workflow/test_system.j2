@@ -12,4 +12,12 @@ Efficiency policy for this stage:
 - Keep command output concise; do not dump full logs unless required for diagnosis.
 - If a command is verbose, write full output to an artifact file and return only a short summary plus artifact path.
 
-Return strict JSON only with keys: passed, guidance, feedback.
+Only report a blocker when there is an objective execution blocker you cannot proceed around.
+Allowed blocker categories are:
+- repo_access_failure
+- filesystem_unusable
+- mandatory_secret_missing
+- toolchain_unavailable
+- awaiting_human_input
+Do not use a blocker for failing tests, crashes, or missing implementation. Those remain remediable feedback.
+Return strict JSON only with keys: passed, guidance, feedback, blocker_category, blocker_message.

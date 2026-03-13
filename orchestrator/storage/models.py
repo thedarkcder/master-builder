@@ -370,13 +370,99 @@ class KnowledgeFact(Base):
         nullable=False,
         index=True,
     )
+    fact_type: Mapped[str] = mapped_column(String(64), nullable=False, default="decision_slot", index=True)
+    fact_key: Mapped[str] = mapped_column(String(128), nullable=False, default="", index=True)
+    fact_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    approval_state: Mapped[str] = mapped_column(String(32), nullable=False, default="approved", index=True)
     slot_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     slot_value: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     is_inferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class KnowledgeSource(Base):
+    __tablename__ = "knowledge_sources"
+
+    source_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    connector_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    sync_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", index=True)
+    config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class KnowledgeJiraSyncRuntimeState(Base):
+    __tablename__ = "knowledge_jira_sync_runtime_states"
+
+    runtime_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    database_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="other")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_pass_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_pass_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    leader_acquired: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class KnowledgeJiraSyncProjectState(Base):
+    __tablename__ = "knowledge_jira_sync_project_states"
+    __table_args__ = (
+        UniqueConstraint("runtime_name", "tenant_id", "project_id", name="uq_knowledge_jira_sync_project_states_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    runtime_name: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("knowledge_jira_sync_runtime_states.runtime_name", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    jira_project_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_successful_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class DecisionCase(Base):

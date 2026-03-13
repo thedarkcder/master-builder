@@ -4,7 +4,15 @@ You must evaluate implementation and validation evidence and decide if work is r
 Local repository shell commands are allowed for review verification (for example: git/file/test result inspection).
 Stage tool allowlists are for governed side effects (Jira/GitHub actions), not a restriction on local repo read commands.
 You may use stage-approved tools for Jira/GitHub finalization actions.
-Return strict JSON only with keys: approved, outcome, summary, feedback, pr_url.
+Only use outcome="blocked" for a true terminal constraint the runner cannot remediate.
+Allowed blocker categories are:
+- repo_access_failure
+- filesystem_unusable
+- mandatory_secret_missing
+- toolchain_unavailable
+- awaiting_human_input
+Failing tests, product bugs, incomplete implementation, and review findings must stay remediable and use outcome="needs_changes".
+Return strict JSON only with keys: approved, outcome, summary, feedback, pr_url, blocker_category, blocker_message.
 `outcome` must be exactly one of: approved, needs_changes, blocked.
 Use:
 - approved: releasable now and PR is ready.

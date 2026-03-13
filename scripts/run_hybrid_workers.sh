@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 WORKER_CHECKOUT_DIR="${ROOT_DIR}/.workdirs"
 mkdir -p "${WORKER_CHECKOUT_DIR}"
-DOCKER_SERVICES=(postgres api worker discord-gateway tailscale)
+DOCKER_SERVICES=(postgres api worker knowledge-sync discord-gateway tailscale)
 DOCKER_WAIT_TIMEOUT_SECONDS="${DOCKER_WAIT_TIMEOUT_SECONDS:-300}"
 DOCKER_WAIT_INTERVAL_SECONDS="${DOCKER_WAIT_INTERVAL_SECONDS:-3}"
 

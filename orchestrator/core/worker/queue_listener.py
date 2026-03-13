@@ -66,7 +66,8 @@ class RunQueueNotificationBridge:
                         break
                     self._loop.call_soon_threadsafe(self._wake_event.set)
         except Exception as exc:
-            self._logger.exception("worker_queue_listener_failed error=%s", exc)
+            if not self._stop_event.is_set():
+                self._logger.exception("worker_queue_listener_failed error=%s", exc)
             self._loop.call_soon_threadsafe(self._wake_event.set)
         finally:
             with self._conn_lock:

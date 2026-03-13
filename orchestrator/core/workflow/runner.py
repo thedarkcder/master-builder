@@ -25,6 +25,9 @@ class WorkflowRequest:
     base_branch: str | None = None
     integration_branch: str | None = None
     pr_target_branch: str | None = None
+    execution_branch: str | None = None
+    start_point_ref: str | None = None
+    start_point_sha: str | None = None
     pr_number: int | None = None
     trigger_context: dict | None = None
 
@@ -46,7 +49,8 @@ class PmPlan:
 class DevResult:
     change_summary: list[str]
     pr_url: str | None
-    hard_stop_reason: str | None = None
+    blocker_category: str | None = None
+    blocker_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,8 @@ class TestResult:
     passed: bool
     guidance: list[str]
     feedback: str | None = None
+    blocker_category: str | None = None
+    blocker_message: str | None = None
 
 
 # Prevent pytest from collecting this dataclass as a test class.
@@ -67,6 +73,8 @@ class ReviewResult:
     outcome: str = "needs_changes"
     feedback: str | None = None
     pr_url: str | None = None
+    blocker_category: str | None = None
+    blocker_message: str | None = None
 
 
 @dataclass(frozen=True)

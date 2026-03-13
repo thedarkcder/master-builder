@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   ExternalLink,
   KeyRound,
+  Library,
   Plus,
   RefreshCw,
   SlidersHorizontal,
@@ -15,7 +16,6 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
-import { ProjectKnowledgeBaseSection } from "@/components/project-knowledge-base-section";
 import { ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
@@ -38,7 +38,7 @@ import {
   type RunRecord,
 } from "@/lib/api";
 
-type Tab = "overview" | "settings" | "runs" | "knowledge-base" | "notifications" | "secrets";
+type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
 type OverrideToggleValue = "inherit" | "enabled" | "disabled";
 type RequireAgentsValue = "inherit" | "required";
@@ -70,7 +70,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "settings", label: "Settings" },
   { id: "runs", label: "Runs" },
-  { id: "knowledge-base", label: "Knowledge Base" },
   { id: "notifications", label: "Notifications" },
   { id: "secrets", label: "Secrets" },
 ];
@@ -450,7 +449,7 @@ export function TenantProjectDetailsPage() {
       });
       setProject(updated);
       setSecretRefs(updated.secret_refs ?? {});
-      setSecretsStatusLine("Secret references saved.");
+      setSecretsStatusLine("Project secrets saved as managed refs.");
     } catch (error) {
       setSecretsStatusLine(`Save failed: ${(error as Error).message}`);
     } finally {
@@ -462,7 +461,7 @@ export function TenantProjectDetailsPage() {
     const key = newSecretKey.trim();
     const ref = newSecretRef.trim();
     if (!key || !ref) {
-      setSecretsStatusLine("Both variable name and secret ref path are required.");
+      setSecretsStatusLine("Both variable name and a secret value or existing secret ref are required.");
       return;
     }
     const nextRefs = { ...secretRefs, [key]: ref };
@@ -538,9 +537,16 @@ export function TenantProjectDetailsPage() {
                           Core project identity and the main places operators will go next.
                         </p>
                       </div>
-                      <Button size="sm" onClick={() => setActiveTab("settings")}>
-                        Open settings
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" onClick={() => setActiveTab("settings")}>
+                          Open settings
+                        </Button>
+                        <Button asChild size="sm" variant="outline">
+                          <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
+                            Browse knowledge
+                          </Link>
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="grid gap-4 md:grid-cols-2">
@@ -587,8 +593,15 @@ export function TenantProjectDetailsPage() {
                     <Button variant="outline" size="sm" onClick={() => setActiveTab("settings")}>
                       Settings
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setActiveTab("knowledge-base")}>
-                      Knowledge Base
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
+                        Browse knowledge
+                      </Link>
+                    </Button>
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
+                        Add knowledge
+                      </Link>
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => setActiveTab("notifications")}>
                       Notifications
@@ -685,20 +698,52 @@ export function TenantProjectDetailsPage() {
 
                 <Card className="xl:col-span-1">
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-base">Governance</CardTitle>
+                    <div className="flex items-center gap-2">
+                      <Library className="h-4 w-4 text-primary" />
+                      <CardTitle className="text-base">Knowledge</CardTitle>
+                    </div>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge browser</p>
+                      <p className="text-sm text-muted-foreground">
+                        Inspect indexed assets, metadata, and retrieval chunks from the dedicated browser page.
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add knowledge</p>
+                      <p className="text-sm text-muted-foreground">
+                        Upload files directly into the knowledge store from the Add Knowledge tab.
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Sources</p>
+                      <p className="text-sm text-muted-foreground">
+                        Manage Jira, Google Drive, and Discord connectors from the Sources tab.
+                      </p>
+                    </div>
                     <div className="space-y-1">
                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AGENTS.md requirement</p>
                       <p className="text-sm font-medium text-foreground">
                         {project.effective_policy.require_agents_md ? "Required" : "Not required"}
                       </p>
                     </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notifications</p>
-                      <p className="text-sm text-muted-foreground">
-                        Manage channel routing and project alerts from the Notifications tab.
-                      </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button asChild size="sm" variant="outline">
+                        <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
+                          Browse knowledge
+                        </Link>
+                      </Button>
+                      <Button asChild size="sm" variant="outline">
+                        <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
+                          Add knowledge
+                        </Link>
+                      </Button>
+                      <Button asChild size="sm" variant="outline">
+                        <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=sources`}>
+                          Sources
+                        </Link>
+                      </Button>
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Secrets</p>
@@ -1282,15 +1327,6 @@ export function TenantProjectDetailsPage() {
         </Card>
       ) : null}
 
-      {/* ── Knowledge Base tab ───────────────────────────────────────────── */}
-      {activeTab === "knowledge-base" && project ? (
-        <ProjectKnowledgeBaseSection
-          credentials={credentials}
-          tenantId={params.tenantId}
-          projectId={params.projectId}
-        />
-      ) : null}
-
       {/* ── Notifications tab ────────────────────────────────────────────── */}
       {activeTab === "notifications" ? (
         <ProjectNotificationsContent
@@ -1309,10 +1345,10 @@ export function TenantProjectDetailsPage() {
                 <KeyRound className="h-4 w-4 text-primary" />
               </div>
               <div>
-                <CardTitle className="text-base">Secret References</CardTitle>
+                <CardTitle className="text-base">Project Secrets</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Map variable names to platform or tenant secret refs. These are resolved at runtime and injected into
-                  the project environment.
+                  Map variable names to secret values or existing managed refs. Secret values are stored in the managed
+                  secret provider and persisted here as refs for runtime resolution.
                 </p>
               </div>
             </div>
@@ -1340,13 +1376,13 @@ export function TenantProjectDetailsPage() {
               </div>
               <div className="space-y-1 flex-[2] min-w-48">
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Secret ref path
+                  Secret value or ref
                 </label>
                 <Input
                   className="h-8 text-sm font-mono"
                   value={newSecretRef}
                   onChange={(e) => setNewSecretRef(e.target.value)}
-                  placeholder="e.g. platform/OPENAI_KEY or tenant/acme/MY_SECRET"
+                  placeholder="e.g. platform/OPENAI_KEY or an actual secret value"
                   disabled={secretsBusy}
                 />
               </div>
@@ -1362,7 +1398,7 @@ export function TenantProjectDetailsPage() {
                 <KeyRound className="h-6 w-6 text-muted-foreground" />
                 <p className="text-sm font-medium">No secret references configured</p>
                 <p className="text-xs text-muted-foreground">
-                  Add a variable name and secret ref path above to get started.
+                  Add a variable name and secret value or ref above to get started.
                 </p>
               </div>
             ) : (

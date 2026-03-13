@@ -21,6 +21,7 @@ def test_allowed_tools_for_stage_pm_contains_evidence_tools() -> None:
     tools = allowed_tools_for_stage("pm")
     assert "jira.get_issue" in tools
     assert "decision.read_state" in tools
+    assert "knowledge.exact_read" in tools
     assert "knowledge.read" in tools
     assert "project.list_runtime_keys" in tools
     assert "project.get_runtime_values" in tools
@@ -417,6 +418,61 @@ def test_repo_read_requires_repo_checkout() -> None:
             )
 
 
+def test_resolve_context_prefers_run_worktree_for_run_scoped_tools() -> None:
+    from orchestrator.storage.models import Project, Tenant
+
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        tenant_id = "route25"
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        is_archived = False
+
+    class _FakeQuery:
+        def filter(self, *_args, **_kwargs):  # noqa: ANN001
+            return self
+
+        def first(self):
+            return None
+
+    class _FakeSession:
+        def get(self, cls, key):  # noqa: ANN001
+            if cls is Tenant and key == "route25":
+                return _FakeTenant()
+            if cls is Project and key == "route25-default":
+                return _FakeProject()
+            return None
+
+        def query(self, _cls):  # noqa: ANN001
+            return _FakeQuery()
+
+    settings = SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs")
+
+    with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
+        with patch(
+            "orchestrator.core.agent_tools.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="ok", stderr=""),
+        ) as run_mock:
+            execute_agent_tool(
+                session=_FakeSession(),  # type: ignore[arg-type]
+                settings=settings,
+                tenant_id="route25",
+                project_id="route25-default",
+                run_id="run-123",
+                issue_key="MAB-1",
+                stage="test",
+                tool_name="repo.read",
+                tool_args={"command": "git status -sb"},
+            )
+
+    assert run_mock.call_args.kwargs["cwd"] == "/tmp/workdirs/route25/route25-default/runs/run-123/repo"
+
+
 def test_project_get_runtime_values_returns_environment_value() -> None:
     class _FakeTenant:
         tenant_id = "route25"
@@ -634,3 +690,46 @@ def test_project_request_runtime_values_sends_discord_notification() -> None:
         "channel_id": "123",
     }
     send_mock.assert_called_once()
+
+
+def test_knowledge_exact_read_returns_stored_asset_payload() -> None:
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {}
+        policy_config = {}
+        jira_config = {}
+
+    class _FakeProject:
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "pm"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with (
+        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch(
+            "orchestrator.core.agent_tools.exact_read_knowledge_source",
+            return_value={"ok": True, "connector": "stored_asset", "layer": "exact_read"},
+        ) as exact_read_mock,
+    ):
+        payload = execute_agent_tool(
+            session=object(),  # type: ignore[arg-type]
+            settings=SimpleNamespace(),
+            tenant_id="route25",
+            project_id="route25-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="pm",
+            tool_name="knowledge.exact_read",
+            tool_args={"asset_id": "kb-1"},
+        )
+
+    assert payload == {"ok": True, "connector": "stored_asset", "layer": "exact_read"}
+    exact_read_mock.assert_called_once()

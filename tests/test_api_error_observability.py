@@ -20,6 +20,19 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         register_mock.assert_called_once()
 
+    def test_create_app_does_not_start_knowledge_jira_sync_runtime(self) -> None:
+        with (
+            patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.register_discord_command_executor"),
+            patch("orchestrator.api.main.sync_discord_guild_commands"),
+            patch("orchestrator.core.knowledge_jira_sync_runtime.run_knowledge_jira_sync") as sync_runtime_mock,
+        ):
+            app = create_app()
+            with TestClient(app, raise_server_exceptions=False):
+                pass
+
+        sync_runtime_mock.assert_not_called()
+
     def test_unhandled_exception_logs_and_returns_error_ref(self) -> None:
         app = create_app()
 

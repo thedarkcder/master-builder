@@ -397,6 +397,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/observability/platform",
                 auth=admin,
             ),
+            ("GET", "/api/admin/observability/knowledge-jira-sync"): RouteScenario(
+                path="/api/admin/observability/knowledge-jira-sync",
+                auth=admin,
+            ),
             ("GET", "/api/admin/observability/tenants/{tenant_id}"): RouteScenario(
                 path="/api/admin/observability/tenants/route25",
                 auth=admin,
@@ -564,6 +568,29 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets",
                 auth=admin,
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/sources",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/stats"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/stats",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets/asset-missing",
+                auth=admin,
+                expected_statuses=(200, 404),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/chunks"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets/asset-missing/chunks",
+                auth=admin,
+                expected_statuses=(200, 404),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/debug-search"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/debug-search?query=test",
+                auth=admin,
+                expected_statuses=(200,),
+            ),
             ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets",
                 auth=admin,
@@ -575,16 +602,42 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(201,),
             ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/sources",
+                auth=admin,
+                json={
+                    "connector_type": "discord",
+                    "display_name": "Support Threads",
+                    "config_json": {"thread_ids": ["1234567890"]},
+                },
+                expected_statuses=(201, 409),
+            ),
             ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets/asset-missing",
                 auth=admin,
                 expected_statuses=(204, 404),
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/sources/source-missing",
+                auth=admin,
+                json={"status": "disabled"},
+                expected_statuses=(200, 404, 409),
             ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/status"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets/asset-missing/status",
                 auth=admin,
                 json={"status": "ready"},
                 expected_statuses=(200, 404, 409),
+            ),
+            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/sources/source-missing",
+                auth=admin,
+                expected_statuses=(204, 404),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}/sync"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/knowledge/sources/source-missing/sync",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 409, 502),
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sync-jira"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/knowledge/sync-jira",

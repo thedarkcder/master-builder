@@ -177,6 +177,40 @@ class QueueListenerTests(unittest.IsolatedAsyncioTestCase):
             bridge.stop()
             bridge._conn.close.assert_called_once()
 
+    def test_run_queue_notification_bridge_suppresses_shutdown_exception_logging(self) -> None:
+        wake_event = SimpleNamespace(set=MagicMock())
+        loop = SimpleNamespace(call_soon_threadsafe=MagicMock())
+        logger = MagicMock()
+
+        class FakeConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, _sql):
+                return None
+
+            def notifies(self):
+                bridge._stop_event.set()
+                raise RuntimeError("connection pointer is NULL")
+
+            def close(self):
+                return None
+
+        psycopg = SimpleNamespace(connect=lambda *_args, **_kwargs: FakeConn())
+        bridge = queue_listener.RunQueueNotificationBridge(
+            postgres_dsn="dsn",
+            wake_event=wake_event,
+            loop=loop,
+            logger=logger,
+            notify_channel="run_queue",
+            psycopg_module=psycopg,
+        )
+        bridge._run()
+        logger.exception.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

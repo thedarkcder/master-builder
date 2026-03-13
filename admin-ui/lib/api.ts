@@ -182,6 +182,114 @@ export type ProjectKnowledgeAssetRecord = {
   created_at: string;
 };
 
+export type ProjectKnowledgeSourceRecord = {
+  source_id: string;
+  tenant_id: string;
+  project_id: string;
+  connector_type: string;
+  display_name: string;
+  status: "active" | "disabled";
+  sync_mode: "manual" | "scheduled";
+  config_json: Record<string, unknown>;
+  config_summary: string;
+  supports_sync_now: boolean;
+  supports_scheduled_sync: boolean;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectKnowledgeAssetDetailRecord = ProjectKnowledgeAssetRecord & {
+  text_content: string | null;
+  metadata_json: Record<string, unknown>;
+  facts: ProjectKnowledgeFactRecord[];
+};
+
+export type ProjectKnowledgeChunkRecord = {
+  chunk_id: string;
+  asset_id: string;
+  tenant_id: string;
+  project_id: string;
+  chunk_index: number;
+  content: string;
+  token_count: number;
+  source_timestamp: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectKnowledgeFactRecord = {
+  fact_id: string;
+  asset_id: string;
+  chunk_id: string | null;
+  tenant_id: string;
+  project_id: string;
+  fact_type: string;
+  fact_key: string;
+  fact_value: string;
+  approval_state: string;
+  confidence: number;
+  is_inferred: boolean;
+  metadata_json: Record<string, unknown>;
+  source_timestamp: string | null;
+  superseded_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectKnowledgeAssetPageRecord = {
+  items: ProjectKnowledgeAssetRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ProjectKnowledgeSourcePageRecord = {
+  items: ProjectKnowledgeSourceRecord[];
+  total: number;
+};
+
+export type ProjectKnowledgeChunkPageRecord = {
+  items: ProjectKnowledgeChunkRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ProjectKnowledgeDebugMatchRecord = {
+  layer: string;
+  score: number;
+  asset_id: string;
+  source_type: string;
+  title: string;
+  source_ref: string | null;
+  source_timestamp: string | null;
+  fact_id: string | null;
+  chunk_id: string | null;
+  snippet: string;
+  metadata: Record<string, unknown>;
+};
+
+export type ProjectKnowledgeDebugSearchRecord = {
+  query: string;
+  items: ProjectKnowledgeDebugMatchRecord[];
+};
+
+export type ProjectKnowledgeStatsRecord = {
+  total_assets: number;
+  total_chunks: number;
+  total_facts: number;
+  approved_facts: number;
+  pending_review_facts: number;
+  superseded_facts: number;
+  ready_assets: number;
+  pending_review_assets: number;
+  rejected_assets: number;
+  latest_asset_updated_at: string | null;
+  source_type_counts: Record<string, number>;
+};
+
 export type ProjectKnowledgeAssetCreatePayload = {
   title: string;
   mime_type?: string | null;
@@ -194,6 +302,21 @@ export type ProjectKnowledgeAssetCreatePayload = {
 
 export type ProjectKnowledgeAssetStatusUpdatePayload = {
   status: "pending_review" | "ready" | "rejected";
+};
+
+export type ProjectKnowledgeSourceCreatePayload = {
+  connector_type: "jira" | "google_drive" | "discord";
+  display_name?: string | null;
+  status?: "active" | "disabled";
+  sync_mode?: "manual" | "scheduled";
+  config_json?: Record<string, unknown>;
+};
+
+export type ProjectKnowledgeSourceUpdatePayload = {
+  display_name?: string | null;
+  status?: "active" | "disabled";
+  sync_mode?: "manual" | "scheduled";
+  config_json?: Record<string, unknown>;
 };
 
 export type ProjectKnowledgeSyncResult = {
@@ -879,11 +1002,35 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
 export function listProjectKnowledgeAssets(
   credentials: Credentials,
   tenantId: string,
-  projectId: string
-): Promise<ProjectKnowledgeAssetRecord[]> {
-  return request<ProjectKnowledgeAssetRecord[]>(
+  projectId: string,
+  options?: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    sourceType?: string;
+    query?: string;
+  }
+): Promise<ProjectKnowledgeAssetPageRecord> {
+  const query = new URLSearchParams();
+  if (options?.limit !== undefined) {
+    query.set("limit", String(options.limit));
+  }
+  if (options?.offset !== undefined) {
+    query.set("offset", String(options.offset));
+  }
+  if (options?.status) {
+    query.set("status", options.status);
+  }
+  if (options?.sourceType) {
+    query.set("source_type", options.sourceType);
+  }
+  if (options?.query) {
+    query.set("q", options.query);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<ProjectKnowledgeAssetPageRecord>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets`
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets${suffix}`
   );
 }
 
@@ -931,6 +1078,140 @@ export function updateProjectKnowledgeAssetStatus(
     {
       method: "PATCH",
       body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function getProjectKnowledgeAsset(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  assetId: string
+): Promise<ProjectKnowledgeAssetDetailRecord> {
+  return request<ProjectKnowledgeAssetDetailRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets/${encodeURIComponent(assetId)}`
+  );
+}
+
+export function getProjectKnowledgeStats(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectKnowledgeStatsRecord> {
+  return request<ProjectKnowledgeStatsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/stats`
+  );
+}
+
+export function listProjectKnowledgeChunks(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  assetId: string,
+  options?: { limit?: number; offset?: number }
+): Promise<ProjectKnowledgeChunkPageRecord> {
+  const query = new URLSearchParams();
+  if (options?.limit !== undefined) {
+    query.set("limit", String(options.limit));
+  }
+  if (options?.offset !== undefined) {
+    query.set("offset", String(options.offset));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<ProjectKnowledgeChunkPageRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets/${encodeURIComponent(assetId)}/chunks${suffix}`
+  );
+}
+
+export function debugProjectKnowledgeSearch(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  queryText: string,
+  limit = 5
+): Promise<ProjectKnowledgeDebugSearchRecord> {
+  const query = new URLSearchParams();
+  query.set("query", queryText);
+  query.set("limit", String(limit));
+  return request<ProjectKnowledgeDebugSearchRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/debug-search?${query.toString()}`
+  );
+}
+
+export function listProjectKnowledgeSources(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectKnowledgeSourcePageRecord> {
+  return request<ProjectKnowledgeSourcePageRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/sources`
+  );
+}
+
+export function createProjectKnowledgeSource(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectKnowledgeSourceCreatePayload
+): Promise<ProjectKnowledgeSourceRecord> {
+  return request<ProjectKnowledgeSourceRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/sources`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function updateProjectKnowledgeSource(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  sourceId: string,
+  payload: ProjectKnowledgeSourceUpdatePayload
+): Promise<ProjectKnowledgeSourceRecord> {
+  return request<ProjectKnowledgeSourceRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/sources/${encodeURIComponent(sourceId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function deleteProjectKnowledgeSource(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  sourceId: string
+): Promise<void> {
+  return request<void>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/sources/${encodeURIComponent(sourceId)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
+export function syncProjectKnowledgeSource(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  sourceId: string
+): Promise<ProjectKnowledgeSyncResult> {
+  return request<ProjectKnowledgeSyncResult>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/sources/${encodeURIComponent(sourceId)}/sync`,
+    {
+      method: "POST"
     }
   );
 }
