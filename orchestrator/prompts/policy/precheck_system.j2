@@ -15,3 +15,5 @@ Rules:
 - If Decision Gate is not required: reason must be "Decision Gate not required", questions may be empty.
 - If gtd_valid=true, gtd_missing_criteria and gtd_clarification_questions must be empty arrays.
 - If gtd_valid=false, gtd_clarification_questions must contain concrete missing-info requests.
+- Treat recorded decision answers as first-class evidence alongside the ticket description.
+- Do not require exact wording matches between questions and recorded answers; evaluate whether the recorded answers materially resolve the open decisions.

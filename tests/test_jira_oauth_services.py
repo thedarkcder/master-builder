@@ -116,6 +116,7 @@ class JiraOAuthHttpClientTests(unittest.TestCase):
         self.assertEqual(client.post_json(url="https://x", payload={"a": 1}), {"ok": True})
         self.assertEqual(client.get_json(url="https://x", access_token="tok"), {"ok": True})
         self.assertEqual(client.request_json(method="PUT", url="https://x", access_token="tok", payload={"b": 2}), {"ok": True})
+        self.assertEqual(client.get_bytes(url="https://x/file.txt", access_token="tok"), b'{"ok":true}')
         self.assertEqual(captured[0][0], "POST")
         self.assertEqual(captured[1][0], "GET")
         self.assertEqual(captured[2][0], "PUT")
@@ -166,6 +167,19 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
                 return {"values": [{"key": "B", "name": "Beta"}, {"key": "A", "name": ""}]}
             if "search/jql" in url:
                 return {"issues": [{"key": "MAB-1", "fields": {"summary": "", "status": {}}}]}
+            if url.endswith("/comment?startAt=0&maxResults=100"):
+                return {
+                    "comments": [
+                        {
+                            "id": "10001",
+                            "author": {"displayName": "Alice"},
+                            "updated": "2026-03-10T12:00:00.000+0000",
+                            "body": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "comment body"}]}]},
+                        }
+                    ],
+                    "maxResults": 100,
+                    "total": 1,
+                }
             return {"key": "MAB-1", "fields": {"summary": "Summary", "status": {"name": "Done"}, "description": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}]}}}
 
         def _request_json(**kwargs):  # noqa: ANN003
@@ -186,6 +200,11 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         detail = service.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key=" MAB-1 ")
         self.assertEqual(detail.summary, "Summary")
         self.assertEqual(detail.description, "hello")
+
+        comments = service.list_issue_comments(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1")
+        self.assertEqual(comments[0].comment_id, "10001")
+        self.assertEqual(comments[0].author_display_name, "Alice")
+        self.assertEqual(comments[0].body, "comment body")
 
         comment = service.add_issue_comment(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1", comment="hi")
         self.assertEqual(comment["id"], "c1")

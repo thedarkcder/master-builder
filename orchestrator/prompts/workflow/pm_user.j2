@@ -26,13 +26,19 @@ Required actions:
 1. Produce concrete, ordered execution steps.
 2. Convert requirements into observable acceptance criteria.
 3. Surface delivery risks that can block or degrade delivery.
-4. Use allowed tools when needed to verify Jira context instead of assuming.
+4. Use allowed tools to gather authoritative evidence before deciding prerequisite state instead of assuming.
 5. Decide next stage:
    - Use "dev" if code changes are still needed.
    - Use "test" only when prior dev output is sufficient and we should retest/validate.
 6. Choose execution worker capability for implementation stages (dev/test/review):
    - Output "macos" for iOS/macOS/Xcode/Simulator execution needs.
    - Output "linux" for backend/web/infra work that does not need macOS tooling.
+7. Output only compact evidence conclusions:
+   - missing_evidence_sources: source names you could not load or validate (for example: jira_issue, decision_state, knowledge, runtime_values).
+   - confirmed_external_blockers: only evidence-backed external blockers that should stop implementation now.
+   - resolved_prerequisites: concise prerequisite facts that are already satisfied.
+   - unresolved_prerequisites: concise prerequisite facts that remain unresolved but are not raw source dumps.
+8. If evidence is missing, prefer missing_evidence_sources over inventing blockers from silence.
 
 Output contract:
 - plan_steps: array of concrete execution steps.
@@ -40,3 +46,7 @@ Output contract:
 - risks: array of explicit risks.
 - next_stage: "dev" or "test".
 - execution_worker_capability: "linux" or "macos".
+- missing_evidence_sources: array of source names.
+- confirmed_external_blockers: array of concise blocker statements.
+- resolved_prerequisites: array of concise satisfied prerequisite statements.
+- unresolved_prerequisites: array of concise unresolved prerequisite statements.

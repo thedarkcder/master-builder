@@ -7,6 +7,10 @@ Attempt: {{ attempt }}
 Feedback from prior stage: {{ feedback }}
 Plan: {{ plan_json }}
 Acceptance criteria: {{ acceptance_criteria_json }}
+Resolved prerequisites: {{ resolved_prerequisites_json }}
+Unresolved prerequisites: {{ unresolved_prerequisites_json }}
+Confirmed external blockers: {{ confirmed_external_blockers_json }}
+Missing evidence sources: {{ missing_evidence_sources_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
 Agent tool command: {{ agent_tool_command }}
 
@@ -15,8 +19,9 @@ Required actions:
 2. Keep scope tight to this issue.
 3. Run relevant validation commands and use results to refine changes.
 4. An empty repository is valid; scaffold what is required when needed.
-5. Use Blocked: only for hard blockers (access/auth/permissions/required tooling), and include exact details in change_summary.
-6. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch/PR actions).
+5. Treat the PM evidence ledger as the current ticket prerequisite summary; do not re-classify external blockers from scratch unless you have new authoritative tool evidence.
+6. Use Blocked: only for hard blockers (access/auth/permissions/required tooling), and include exact details in change_summary.
+7. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch/PR actions).
 
 Output contract:
 - change_summary: array of implemented changes (or concrete blocker facts).

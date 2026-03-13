@@ -33,6 +33,10 @@ class PmPlan:
     risks: list[str]
     next_stage: str = "dev"
     execution_worker_capability: str = "linux"
+    missing_evidence_sources: list[str] = field(default_factory=list)
+    confirmed_external_blockers: list[str] = field(default_factory=list)
+    resolved_prerequisites: list[str] = field(default_factory=list)
+    unresolved_prerequisites: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,7 @@ TestResult.__test__ = False
 class ReviewResult:
     approved: bool
     summary: list[str]
+    outcome: str = "needs_changes"
     feedback: str | None = None
     pr_url: str | None = None
 
@@ -67,6 +72,7 @@ class WorkflowDiagnostics:
     message: str
     attempts: int
     history: list[dict[str, str]]
+    classification: str = "workflow_failure"
 
 
 @dataclass(frozen=True)
@@ -160,6 +166,7 @@ class WorkflowRunner:
         dev_rationale: list[str] | None = None,
         review_summary: list[str] | None = None,
         review_feedback: str | None = None,
+        classification: str = "workflow_failure",
     ) -> WorkflowResult:
         if follow_up_issue is None and request is not None and not skip_auto_follow_up:
             draft = build_backlog_follow_up_draft(
@@ -190,5 +197,6 @@ class WorkflowRunner:
                 message=message,
                 attempts=attempts,
                 history=history,
+                classification=classification,
             ),
         )

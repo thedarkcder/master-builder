@@ -148,6 +148,22 @@ class CodexWorkflowAgents:
             ),
             next_stage=next_stage,
             execution_worker_capability=execution_worker_capability,
+            missing_evidence_sources=_string_list(
+                payload.get("missing_evidence_sources"),
+                fallback=[],
+            ),
+            confirmed_external_blockers=_string_list(
+                payload.get("confirmed_external_blockers"),
+                fallback=[],
+            ),
+            resolved_prerequisites=_string_list(
+                payload.get("resolved_prerequisites"),
+                fallback=[],
+            ),
+            unresolved_prerequisites=_string_list(
+                payload.get("unresolved_prerequisites"),
+                fallback=[],
+            ),
         )
 
     def dev(
@@ -183,6 +199,10 @@ class CodexWorkflowAgents:
                 feedback=feedback or "none",
                 plan_json=json.dumps(plan.plan_steps),
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
+                resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
+                unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
+                confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
+                missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("dev"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -252,6 +272,10 @@ class CodexWorkflowAgents:
                 dev_summary_json=json.dumps(dev_result.change_summary),
                 pr_url=dev_result.pr_url or "none",
                 suggested_test_commands_json=json.dumps(request.suggested_test_commands),
+                resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
+                unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
+                confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
+                missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("test"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -325,6 +349,10 @@ class CodexWorkflowAgents:
                 test_guidance_json=json.dumps(test_result.guidance),
                 test_feedback=test_result.feedback or "none",
                 pr_url=dev_result.pr_url or "none",
+                resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
+                unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
+                confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
+                missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -346,6 +374,33 @@ class CodexWorkflowAgents:
             true_markers=("approved", "pass", "acceptable", "looks good", "go"),
             false_markers=("rejected", "reject", "request changes", "not approved", "blocked", "do not approve"),
         )
+        outcome_raw = str(payload.get("outcome") or "").strip().lower()
+        if outcome_raw not in {"approved", "needs_changes", "blocked"}:
+            fallback_text_parts = [
+                raw_response,
+                str(payload.get("feedback") or ""),
+                " ".join(_string_list(payload.get("summary"), fallback=[])),
+            ]
+            lowered_response = " ".join(part for part in fallback_text_parts if part).lower()
+            if approved:
+                outcome_raw = "approved"
+            elif any(
+                marker in lowered_response
+                for marker in (
+                    "hard stop",
+                    "blocked",
+                    "cannot proceed",
+                    "cannot approve yet",
+                    "governed runtime unavailable",
+                    "governed runtime was unavailable",
+                    "missing approval",
+                    "missing approvals",
+                    "runtime unavailable",
+                )
+            ):
+                outcome_raw = "blocked"
+            else:
+                outcome_raw = "needs_changes"
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
         if feedback is None:
@@ -361,6 +416,7 @@ class CodexWorkflowAgents:
                     or ["No review summary provided by Codex"]
                 ),
             ),
+            outcome=outcome_raw,
             feedback=feedback,
             pr_url=pr_url,
         )

@@ -11,16 +11,22 @@ Test passed: {{ test_passed }}
 Test guidance: {{ test_guidance_json }}
 Test feedback: {{ test_feedback }}
 PR URL: {{ pr_url }}
+Resolved prerequisites: {{ resolved_prerequisites_json }}
+Unresolved prerequisites: {{ unresolved_prerequisites_json }}
+Confirmed external blockers: {{ confirmed_external_blockers_json }}
+Missing evidence sources: {{ missing_evidence_sources_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
 Agent tool command: {{ agent_tool_command }}
 
 Required actions:
 1. Decide if this run can be accepted now.
 2. Provide concise findings and unresolved blockers.
-3. Preserve fail-closed behavior when verification is incomplete.
+3. Treat the PM evidence ledger as the current ticket prerequisite summary; do not invent new external blockers from missing repo evidence alone.
+4. Preserve fail-closed behavior when verification is incomplete.
 
 Output contract:
 - approved: boolean decision.
+- outcome: "approved" | "needs_changes" | "blocked".
 - summary: array of review findings/outcome notes.
 - feedback: blocking feedback string or null.
 - pr_url: PR URL string or null.

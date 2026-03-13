@@ -1,0 +1,28 @@
+Tenant ID: {{ tenant_id }}
+Project ID: {{ project_id }}
+Issue key: {{ issue_key }}
+Event source: {{ source }}
+Current blocked classification: {{ classification }}
+Current blocked reason: {{ block_reason }}
+Current case state: {{ case_state }}
+Current cycle id: {{ cycle_id }}
+Current cycle questions JSON:
+{{ current_questions_json }}
+
+Current cycle metadata JSON:
+{{ current_cycle_metadata_json }}
+
+Allowed tools for this stage: {{ allowed_tools_json }}
+Agent tool command: {{ agent_tool_command }}
+
+Required process:
+1. Use `decision.read_state` to inspect persisted decision answers/evidence before asking new questions.
+2. Use `jira.get_issue` to inspect the latest issue description/comment context when needed.
+3. Use `knowledge.read` when prior decisions or project knowledge may answer the question.
+4. Use `repo.read` only if repository context is needed to clarify implementation constraints.
+5. Decide whether the gate is now clear or still blocked.
+6. Return `question_states` for the full current cycle, including accepted, answered, and open items.
+7. If blocked, return only the exact currently open questions in `questions`.
+8. Treat the current cycle questions as historical context, not wording that must be preserved. If the remaining gap is narrower now, rewrite the open question text accordingly while keeping the same `question_id`.
+
+Output JSON only.

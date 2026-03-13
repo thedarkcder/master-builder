@@ -250,7 +250,6 @@ def materialize_token_usage_from_log_message(
         "test",
         "review",
         "orchestrated_run",
-        "one_shot",
     }:
         return False
     parsed = extract_turn_completed_usage(run_log_row.message)

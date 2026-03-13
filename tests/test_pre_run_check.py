@@ -177,3 +177,48 @@ def test_pre_run_check_requires_gtd_before_ready_for_agent() -> None:
         )
     assert result.outcome == "gtd_required"
     assert result.gtd_valid is False
+
+
+def test_pre_run_check_passes_recorded_answers_to_policy() -> None:
+    with (
+        patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"),
+        patch("orchestrator.core.pre_run_check.evaluate_precheck_policy") as policy_mock,
+    ):
+        policy_mock.return_value = _policy_result(
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        result = evaluate_pre_run_check(
+            issue_summary="GP-80",
+            issue_description="desc",
+            recorded_answers=[
+                {
+                    "question_id": "dg_1",
+                    "question_text": "What config is approved?",
+                    "status": "answered",
+                    "answer": "Production bundle ID is com.example.app.",
+                }
+            ],
+            issue_labels=["agent:ready"],
+            ready_label="agent:ready",
+        )
+    assert result.outcome == "ready_for_agent"
+    assert policy_mock.call_args.kwargs["recorded_answers"] == [
+        {
+            "question_id": "dg_1",
+            "question_text": "What config is approved?",
+            "status": "answered",
+            "answer": "Production bundle ID is com.example.app.",
+        }
+    ]

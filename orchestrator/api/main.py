@@ -8,13 +8,23 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from orchestrator.api.routes.admin import router as admin_router
+from orchestrator.api.discord.ingress.executor import register_discord_command_executor
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
-from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
-from orchestrator.api.routes.discord import (
-    register_discord_command_executor,
-    router as discord_router,
+from orchestrator.api.routes.admin_codex import router as admin_codex_router
+from orchestrator.api.routes.admin_discord_allowlist import (
+    router as admin_discord_allowlist_router,
 )
+from orchestrator.api.routes.admin_github import router as admin_github_router
+from orchestrator.api.routes.admin_jira import router as admin_jira_router
+from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_router
+from orchestrator.api.routes.admin_observability import router as admin_observability_router
+from orchestrator.api.routes.admin_ready import router as admin_ready_router
+from orchestrator.api.routes.admin_release import router as admin_release_router
+from orchestrator.api.routes.admin_runs import router as admin_runs_router
+from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
+from orchestrator.api.routes.admin_tenants import router as admin_tenants_router
+from orchestrator.api.routes.admin_tokens import router as admin_tokens_router
+from orchestrator.api.routes.discord import router as discord_router
 from orchestrator.api.routes.runs import router as runs_router
 from orchestrator.api.routes.webhook import router as webhook_router
 from orchestrator.api.routes.webhook_discord import router as webhook_discord_router
@@ -25,6 +35,7 @@ from orchestrator.api.routes.webhook_github import router as webhook_github_rout
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.error_observability import emit_hard_error
+from orchestrator.core.knowledge_jira_sync_runtime import build_knowledge_jira_sync_runtime
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.platform_metrics import platform_metrics
 from orchestrator.core.observability import reset_log_context, set_log_context
@@ -50,10 +61,14 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         if settings.auto_migrate_on_startup:
             run_migrations()
-        register_discord_command_executor()
         # Best-effort: failures are logged by sync_discord_guild_commands and must not block API startup.
         sync_discord_guild_commands(settings=settings)
-        yield
+        knowledge_sync_runtime = build_knowledge_jira_sync_runtime(settings=settings)
+        knowledge_sync_runtime.start()
+        try:
+            yield
+        finally:
+            knowledge_sync_runtime.stop()
 
     app = FastAPI(title="master-builder orchestrator", lifespan=lifespan)
     app.add_middleware(
@@ -175,9 +190,19 @@ def create_app() -> FastAPI:
             headers=exc.headers,
         )
 
-    app.include_router(admin_router)
+    app.include_router(admin_knowledge_router)
+    app.include_router(admin_observability_router)
+    app.include_router(admin_runs_router)
+    app.include_router(admin_tenants_router)
     app.include_router(admin_auth_router)
+    app.include_router(admin_codex_router)
+    app.include_router(admin_discord_allowlist_router)
+    app.include_router(admin_github_router)
+    app.include_router(admin_jira_router)
+    app.include_router(admin_ready_router)
+    app.include_router(admin_release_router)
     app.include_router(admin_secrets_router)
+    app.include_router(admin_tokens_router)
     app.include_router(discord_router)
     app.include_router(runs_router)
     app.include_router(webhook_router)
@@ -185,6 +210,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook_discord_interactions_router)
     app.include_router(webhook_github_router)
     register_discord_command_executor()
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}

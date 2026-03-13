@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+import logging
+from urllib.parse import quote_plus
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.webhooks.jira_webhook_precheck import (
+    build_backlog_pre_run_check,
+    evaluate_precheck_decision_with_labels,
+    notify_backlog_pre_run_check,
+    notify_jira_enqueue_skipped,
+)
+from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
+from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
+from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
+
+logger = logging.getLogger(__name__)
+
+
+def stage_handle_backlog_followup_issue_created(
+    *,
+    context: JiraWebhookContext,
+) -> dict | None:
+    if context.webhook_event != "issue_created":
+        return None
+    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels}
+    if "backlog-only" not in normalized_labels:
+        return None
+    logger.info(
+        "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=backlog_followup_issue_created",
+        context.request_id,
+        context.tenant_id,
+        context.issue_key,
+    )
+    return jira_webhook_response(
+        context,
+        enqueued=False,
+        reason="backlog_followup_issue_created",
+        webhook_event=context.webhook_event,
+    )
+
+
+def _issues_payload_contains_issue(*, payload: object, issue_key: str) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    issues = payload.get("issues")
+    if not isinstance(issues, list):
+        return False
+    normalized_issue_key = issue_key.strip().upper()
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        candidate_key = str(issue.get("key") or "").strip().upper()
+        if candidate_key == normalized_issue_key:
+            return True
+    return False
+
+
+def _fetch_issue_board_location(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+    board_id: int,
+) -> tuple[str, str | None]:
+    try:
+        oauth_context = tenant_jira_oauth_context(
+            session=session,
+            tenant=context.tenant,
+            settings=settings,
+        )
+    except HTTPException as exc:
+        return "error", str(exc.detail)
+    issue_jql = quote_plus(f'key = "{context.issue_key}"')
+    base_url = f"https://api.atlassian.com/ex/jira/{oauth_context.connection.cloud_id}/rest/agile/1.0"
+    backlog_url = f"{base_url}/board/{board_id}/backlog?jql={issue_jql}&maxResults=1"
+    board_url = f"{base_url}/board/{board_id}/issue?jql={issue_jql}&maxResults=1"
+    http_client = JiraOAuthHttpClient()
+    backlog_error_detail: str | None = None
+    try:
+        backlog_payload = http_client.get_json(
+            url=backlog_url,
+            access_token=oauth_context.access_token,
+        )
+        if _issues_payload_contains_issue(payload=backlog_payload, issue_key=context.issue_key):
+            return "backlog", None
+    except (JiraOAuthError, ValueError) as exc:
+        backlog_error_detail = f"backlog lookup failed: {exc}"
+    try:
+        board_payload = http_client.get_json(
+            url=board_url,
+            access_token=oauth_context.access_token,
+        )
+        if _issues_payload_contains_issue(payload=board_payload, issue_key=context.issue_key):
+            return "board", None
+    except (JiraOAuthError, ValueError) as exc:
+        board_error_detail = f"board lookup failed: {exc}"
+        if backlog_error_detail:
+            return "error", f"{backlog_error_detail}; {board_error_detail}"
+        return "error", board_error_detail
+    if backlog_error_detail:
+        return "not_on_board", backlog_error_detail
+    return "not_on_board", None
+
+
+def stage_handle_run_board_gate(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    raw_board_id = None
+    if context.project is not None:
+        raw_board_id = (context.project.policy_overrides or {}).get("run_board_id")
+    if raw_board_id is None:
+        return None
+    try:
+        board_id = int(raw_board_id)
+    except (TypeError, ValueError):
+        board_id = 0
+    if board_id <= 0:
+        logger.info(
+            "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=board_gate_unconfigured board_id=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            raw_board_id,
+        )
+        return jira_webhook_response(
+            context,
+            enqueued=False,
+            reason="board_gate_unconfigured",
+            guidance=enqueue_reason_guidance("board_gate_unconfigured"),
+            board_id=raw_board_id,
+            webhook_event=context.webhook_event,
+        )
+    location, detail = _fetch_issue_board_location(
+        context=context,
+        session=session,
+        settings=settings,
+        board_id=board_id,
+    )
+    if location == "board":
+        return None
+    if location == "backlog":
+        reason = "issue_in_backlog"
+        decision_result = evaluate_precheck_decision_with_labels(
+            context=context,
+            session=session,
+            settings=settings,
+        )
+        pre_run_check = build_backlog_pre_run_check(
+            context=context,
+            decision_result=decision_result,
+        )
+        if context.webhook_event == "issue_created":
+            notify_backlog_pre_run_check(
+                context=context,
+                session=session,
+                settings=settings,
+                board_id=board_id,
+                pre_run_check=pre_run_check,
+            )
+        logger.info(
+            "jira_webhook_backlog_pre_run_check request_id=%s tenant_id=%s issue_key=%s board_id=%s outcome=%s decision_gate_triggered=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            board_id,
+            pre_run_check.get("outcome"),
+            pre_run_check.get("decision_gate_triggered"),
+        )
+        return jira_webhook_response(
+            context,
+            enqueued=False,
+            reason=reason,
+            guidance=enqueue_reason_guidance(reason),
+            board_id=board_id,
+            webhook_event=context.webhook_event,
+            detail=detail,
+            pre_run_check=pre_run_check,
+        )
+    reason = "issue_not_on_board" if location == "not_on_board" else "board_gate_check_failed"
+    logger.info(
+        "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=%s board_id=%s detail=%s",
+        context.request_id,
+        context.tenant_id,
+        context.issue_key,
+        reason,
+        board_id,
+        detail,
+    )
+    notify_jira_enqueue_skipped(
+        context=context,
+        session=session,
+        settings=settings,
+        reason=reason,
+        extra_detail=f"board_id={board_id}" if detail is None else f"board_id={board_id}; detail={detail}",
+    )
+    return jira_webhook_response(
+        context,
+        enqueued=False,
+        reason=reason,
+        guidance=enqueue_reason_guidance(reason),
+        board_id=board_id,
+        webhook_event=context.webhook_event,
+        detail=detail,
+    )

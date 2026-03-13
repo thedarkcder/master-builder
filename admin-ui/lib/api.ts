@@ -22,12 +22,19 @@ export type ReposConfig = {
 export type PolicyConfig = {
   allow_jira_transitions: boolean;
   allow_pr_creation: boolean;
+  allow_pr_remediation: boolean;
   allow_label_mutations: boolean;
+  allow_auto_merge: boolean;
   max_runtime_minutes: number;
   max_dev_test_review_loops: number;
+  max_pr_auto_remediation_loops: number;
   max_concurrent_runs: number;
   allowed_commands: string[];
   require_agents_md: boolean;
+  knowledge_base_enabled: boolean;
+  knowledge_auto_answer_mode: "safe" | "balanced" | "aggressive";
+  codex_model?: string | null;
+  codex_reasoning_effort?: "low" | "medium" | "high" | null;
 };
 
 export type DiscordConfig = {
@@ -88,14 +95,33 @@ export type ProjectPolicyOverrides = Partial<
     PolicyConfig,
     | "allow_jira_transitions"
     | "allow_pr_creation"
+    | "allow_pr_remediation"
     | "allow_label_mutations"
-    | "max_runtime_minutes"
+    | "allow_auto_merge"
     | "max_dev_test_review_loops"
+    | "max_pr_auto_remediation_loops"
     | "max_concurrent_runs"
     | "allowed_commands"
     | "require_agents_md"
+    | "knowledge_base_enabled"
+    | "knowledge_auto_answer_mode"
+    | "codex_model"
+    | "codex_reasoning_effort"
   >
 >;
+
+export type CodexModelOptionRecord = {
+  id: string;
+  label: string;
+  description?: string | null;
+};
+
+export type CodexModelCatalogRecord = {
+  default_model: string;
+  default_reasoning_effort: "low" | "medium" | "high";
+  models: CodexModelOptionRecord[];
+  reasoning_efforts: CodexModelOptionRecord[];
+};
 
 export type ProjectDiscordConfig = {
   channel_id?: string | null;
@@ -164,6 +190,10 @@ export type ProjectKnowledgeAssetCreatePayload = {
   source_timestamp?: string;
   text_content?: string;
   content_base64?: string;
+};
+
+export type ProjectKnowledgeAssetStatusUpdatePayload = {
+  status: "pending_review" | "ready" | "rejected";
 };
 
 export type ProjectKnowledgeSyncResult = {
@@ -596,6 +626,10 @@ export function getTenant(credentials: Credentials, tenantId: string): Promise<T
   return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`);
 }
 
+export function listCodexModels(credentials: Credentials): Promise<CodexModelCatalogRecord> {
+  return request<CodexModelCatalogRecord>(credentials, "/api/admin/codex/models");
+}
+
 export function createTenant(
   credentials: Credentials,
   payload: TenantCreatePayload
@@ -816,7 +850,7 @@ export function listProjectKnowledgeAssets(
 ): Promise<ProjectKnowledgeAssetRecord[]> {
   return request<ProjectKnowledgeAssetRecord[]>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets`
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets`
   );
 }
 
@@ -828,7 +862,7 @@ export function createProjectKnowledgeAsset(
 ): Promise<ProjectKnowledgeAssetRecord> {
   return request<ProjectKnowledgeAssetRecord>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets`,
     {
       method: "POST",
       body: JSON.stringify(payload)
@@ -844,9 +878,26 @@ export async function deleteProjectKnowledgeAsset(
 ): Promise<void> {
   await request<void>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets/${encodeURIComponent(assetId)}`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets/${encodeURIComponent(assetId)}`,
     {
       method: "DELETE"
+    }
+  );
+}
+
+export function updateProjectKnowledgeAssetStatus(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  assetId: string,
+  payload: ProjectKnowledgeAssetStatusUpdatePayload
+): Promise<ProjectKnowledgeAssetRecord> {
+  return request<ProjectKnowledgeAssetRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/assets/${encodeURIComponent(assetId)}/status`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload)
     }
   );
 }
@@ -858,7 +909,7 @@ export function syncProjectKnowledgeFromJira(
 ): Promise<ProjectKnowledgeSyncResult> {
   return request<ProjectKnowledgeSyncResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge-assets/sync-jira`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/knowledge/sync-jira`,
     {
       method: "POST"
     }

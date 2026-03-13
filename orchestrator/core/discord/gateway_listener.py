@@ -148,9 +148,11 @@ class DiscordGatewayListener:
             self._thread.join(timeout=2.0)
 
     def _run_thread(self) -> None:
+        run_loop = self._run_loop()
         try:
-            asyncio.run(self._run_loop())
+            asyncio.run(run_loop)
         except Exception as exc:  # pragma: no cover - defensive
+            run_loop.close()
             logger.exception("discord_gateway_listener_stopped_unexpectedly error=%s", exc)
 
     async def _run_loop(self) -> None:
@@ -323,6 +325,7 @@ class DiscordGatewayListener:
                 command_params = {
                     "issue_key": decision_gate_issue_key,
                     "reply_text": content,
+                    "source_ref": str(payload.get("id") or "").strip(),
                 }
             else:
                 command_text = content

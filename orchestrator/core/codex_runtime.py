@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -20,7 +21,6 @@ _URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
 _UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -102,6 +102,7 @@ class CodexRuntime:
             str | None,
             Callable[[str], None] | None,
             Callable[[dict[str, int]], None] | None,
+            str | None,
         ],
         str,
     ]
@@ -114,6 +115,7 @@ class CodexRuntime:
         working_dir: str | None = None,
         on_log_line: Callable[[str, str], None] | None = None,
         reasoning_effort: str | None = None,
+        model_override: str | None = None,
         resume_session_id: str | None = None,
         on_session_id: Callable[[str], None] | None = None,
         on_usage: Callable[[dict[str, int]], None] | None = None,
@@ -128,6 +130,7 @@ class CodexRuntime:
                 resume_session_id,
                 on_session_id,
                 on_usage,
+                model_override,
             ).strip()
         except TypeError:
             try:
@@ -139,9 +142,21 @@ class CodexRuntime:
                     reasoning_effort,
                     resume_session_id,
                     on_session_id,
+                    on_usage,
                 ).strip()
             except TypeError:
-                output = self._request(system_prompt, user_prompt, working_dir, on_log_line).strip()  # type: ignore[misc]
+                try:
+                    output = self._request(  # type: ignore[misc]
+                        system_prompt,
+                        user_prompt,
+                        working_dir,
+                        on_log_line,
+                        reasoning_effort,
+                        resume_session_id,
+                        on_session_id,
+                    ).strip()
+                except TypeError:
+                    output = self._request(system_prompt, user_prompt, working_dir, on_log_line).strip()  # type: ignore[misc]
         if not output:
             raise CodexRuntimeError("Codex runtime returned an empty response")
         return output
@@ -154,6 +169,7 @@ class CodexRuntime:
         working_dir: str | None = None,
         on_log_line: Callable[[str, str], None] | None = None,
         reasoning_effort: str | None = None,
+        model_override: str | None = None,
         resume_session_id: str | None = None,
         on_session_id: Callable[[str], None] | None = None,
         on_usage: Callable[[dict[str, int]], None] | None = None,
@@ -164,6 +180,7 @@ class CodexRuntime:
             working_dir=working_dir,
             on_log_line=on_log_line,
             reasoning_effort=reasoning_effort,
+            model_override=model_override,
             resume_session_id=resume_session_id,
             on_session_id=on_session_id,
             on_usage=on_usage,
@@ -358,7 +375,6 @@ def _coerce_token_count(value: object) -> int | None:
         return candidate if candidate >= 0 else None
     return None
 
-
 def _extract_token_usage_from_dict(payload: dict[str, object]) -> dict[str, int] | None:
     prompt_tokens = _coerce_token_count(payload.get("prompt_tokens"))
     completion_tokens = _coerce_token_count(payload.get("completion_tokens"))
@@ -414,6 +430,29 @@ def _extract_usage_from_json_stdout(lines: list[str]) -> dict[str, int] | None:
     return best_usage
 
 
+def _resolve_codex_tool_database_url(
+    *,
+    database_url: str | None,
+    tool_database_url: str | None,
+) -> str | None:
+    explicit_tool_database_url = str(tool_database_url or "").strip()
+    if explicit_tool_database_url:
+        return explicit_tool_database_url
+    normalized_database_url = str(database_url or "").strip()
+    return normalized_database_url or None
+
+
+def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
+    env = os.environ.copy()
+    tool_database_url = _resolve_codex_tool_database_url(
+        database_url=str(getattr(settings, "database_url", "") or "").strip(),
+        tool_database_url=str(getattr(settings, "codex_tool_database_url", "") or "").strip(),
+    )
+    if tool_database_url:
+        env["ORCHESTRATOR_DATABASE_URL"] = tool_database_url
+    return env
+
+
 def build_codex_runtime(
     *,
     session: Session | None = None,
@@ -430,6 +469,7 @@ def build_codex_runtime(
             resume_session_id: str | None,
             on_session_id: Callable[[str], None] | None,
             on_usage: Callable[[dict[str, int]], None] | None,
+            model_override: str | None,
         ) -> str:
             _ = on_log_line
             _ = working_dir
@@ -437,6 +477,7 @@ def build_codex_runtime(
             _ = resume_session_id
             _ = on_session_id
             _ = on_usage
+            _ = model_override
             try:
                 return request_override(system_prompt, user_prompt, working_dir)
             except TypeError:
@@ -456,6 +497,7 @@ def build_codex_runtime(
         raise CodexRuntimeError(
             f"Codex CLI command '{codex_command}' was not found in PATH"
         )
+    subprocess_env = _build_codex_subprocess_env(settings=settings)
 
     def _request(
         system_prompt: str,
@@ -466,6 +508,7 @@ def build_codex_runtime(
         resume_session_id: str | None,
         on_session_id: Callable[[str], None] | None,
         on_usage: Callable[[dict[str, int]], None] | None,
+        model_override: str | None,
     ) -> str:
         combined_prompt = (
             "You are the Codex orchestration runtime. "
@@ -480,6 +523,7 @@ def build_codex_runtime(
         if normalized_reasoning_effort not in {"low", "medium", "high"}:
             normalized_reasoning_effort = settings.codex_reasoning_effort
         normalized_resume_session_id = str(resume_session_id or "").strip()
+        resolved_model = str(model_override or settings.codex_model).strip() or settings.codex_model
         session_callback_invoked = False
         command: list[str]
         normalized_sandbox_mode = str(settings.codex_sandbox_mode or "").strip().lower()
@@ -501,7 +545,7 @@ def build_codex_runtime(
                         "-c",
                         f'reasoning.effort="{normalized_reasoning_effort}"',
                         "--model",
-                        settings.codex_model,
+                        resolved_model,
                         "--json",
                         "-",
                     ]
@@ -518,7 +562,7 @@ def build_codex_runtime(
                     "--color",
                     "never",
                     "--model",
-                    settings.codex_model,
+                    resolved_model,
                     "--json",
                     "--output-last-message",
                     output_file.name,
@@ -531,6 +575,7 @@ def build_codex_runtime(
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=command_cwd or None,
+                env=subprocess_env,
             )
             stdout_lines: list[str] = []
             stderr_lines: list[str] = []

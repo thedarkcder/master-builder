@@ -50,7 +50,7 @@ class JiraOAuthTests(unittest.TestCase):
 
         self.assertEqual(issues, [])
         mocked.assert_called_once_with(
-            "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/search/jql?jql=project+%3D+%22MAB%22&maxResults=25&fields=summary%2Cstatus",
+            "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/search/jql?jql=project+%3D+%22MAB%22&maxResults=25&startAt=0&fields=summary%2Cstatus",
             access_token="token",
         )
 
@@ -214,18 +214,29 @@ class JiraOAuthTests(unittest.TestCase):
             patch.object(client._callback_flow, "list_accessible_resources", return_value=["resource"]) as resources_mock,
             patch.object(client._issue_service, "list_projects", return_value=["project"]) as list_projects_mock,
             patch.object(client._issue_service, "get_issue_detail", return_value="detail") as issue_detail_mock,
+            patch.object(client._issue_service, "list_issue_comments", return_value=["comment"]) as issue_comments_mock,
+            patch.object(client._issue_service, "list_issue_attachments", return_value=["attachment"]) as issue_attachments_mock,
             patch.object(client._issue_service, "update_issue_fields") as update_mock,
             patch.object(client._issue_service, "add_issue_labels") as add_labels_mock,
             patch.object(client._issue_service, "add_issue_comment", return_value={"id": "c1"}) as comment_mock,
             patch.object(client._webhook_manager, "register_webhook", return_value=[1]) as register_mock,
             patch.object(client._webhook_manager, "list_webhooks", return_value=[{"id": 1}]) as list_webhooks_mock,
             patch.object(client._webhook_manager, "delete_webhooks") as delete_mock,
+            patch.object(client._attachment_service, "download_attachment", return_value=b"bytes") as download_attachment_mock,
         ):
             self.assertEqual(client.exchange_code(code="abc"), "tokens")
             self.assertEqual(client.refresh_tokens(refresh_token="r1"), "refreshed")
             self.assertEqual(client.list_accessible_resources(access_token="tok"), ["resource"])
             self.assertEqual(client.list_projects(access_token="tok", cloud_id="cloud"), ["project"])
             self.assertEqual(client.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"), "detail")
+            self.assertEqual(
+                client.list_issue_comments(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"),
+                ["comment"],
+            )
+            self.assertEqual(
+                client.list_issue_attachments(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"),
+                ["attachment"],
+            )
             client.update_issue_fields(
                 access_token="tok",
                 cloud_id="cloud",
@@ -256,18 +267,22 @@ class JiraOAuthTests(unittest.TestCase):
             )
             self.assertEqual(client.list_webhooks(access_token="tok", cloud_id="cloud"), [{"id": 1}])
             client.delete_webhooks(access_token="tok", cloud_id="cloud", webhook_ids=[1])
+            self.assertEqual(client.download_attachment(access_token="tok", content_url="https://jira/attachment/1"), b"bytes")
 
         exchange_mock.assert_called_once()
         refresh_mock.assert_called_once()
         resources_mock.assert_called_once()
         list_projects_mock.assert_called_once()
         issue_detail_mock.assert_called_once()
+        issue_comments_mock.assert_called_once()
+        issue_attachments_mock.assert_called_once()
         update_mock.assert_called_once()
         add_labels_mock.assert_called_once()
         comment_mock.assert_called_once()
         register_mock.assert_called_once()
         list_webhooks_mock.assert_called_once()
         delete_mock.assert_called_once()
+        download_attachment_mock.assert_called_once()
 
 
 if __name__ == "__main__":

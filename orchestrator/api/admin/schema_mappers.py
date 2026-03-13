@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orchestrator.api.admin.project_normalization import normalize_project_discord_config
 from orchestrator.api.schemas import ProjectRead, RunRead, TenantRead
+from orchestrator.core.config import get_settings
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.storage.models import Project, Run, Tenant
 
@@ -34,6 +35,7 @@ def run_to_schema(run: Run) -> RunRead:
         pr_url=run.pr_url,
         dev_session_id=run.dev_session_id,
         pm_session_id=run.pm_session_id,
+        orchestrated_session_id=run.orchestrated_session_id,
         status=run.status,
         last_error=None if run.status == "succeeded" else run.last_error,
         plan=run.plan,
@@ -45,6 +47,7 @@ def run_to_schema(run: Run) -> RunRead:
 
 def project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
     normalized_project_discord = normalize_project_discord_config(project.discord_config)
+    settings = get_settings()
     return ProjectRead(
         project_id=project.project_id,
         tenant_id=project.tenant_id,
@@ -55,6 +58,8 @@ def project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         effective_policy=resolve_effective_policy(
             tenant_policy=tenant_policy,
             project_overrides=project.policy_overrides,
+            default_codex_model=settings.codex_model,
+            default_codex_reasoning_effort=settings.codex_reasoning_effort,
         ),
         environment=project.environment,
         secret_refs=project.secret_refs,

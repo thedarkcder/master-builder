@@ -34,6 +34,16 @@ def build_review_marker(
     return f"<!-- codex:pr-review:{tenant_id}:{project_id}:{repo_full_name}:{pr_number} -->"
 
 
+def build_remediation_marker(
+    *,
+    tenant_id: str,
+    project_id: str,
+    repo_full_name: str,
+    pr_number: int,
+) -> str:
+    return f"<!-- codex:pr-remediation:{tenant_id}:{project_id}:{repo_full_name}:{pr_number} -->"
+
+
 def format_sticky_review_comment(
     *,
     signal: ReviewerSignal,
@@ -62,6 +72,41 @@ def format_sticky_review_comment(
     return "\n".join(lines).strip()
 
 
+def format_sticky_remediation_comment(
+    *,
+    issue_key: str | None,
+    issue_url: str | None,
+    issue_created: bool,
+    enqueued: bool,
+    reason: str | None,
+    run_id: str | None,
+    head_sha: str | None,
+    event: str,
+    action: str | None,
+    marker: str,
+) -> str:
+    status = "ENQUEUED" if enqueued else ("PENDING" if issue_key else "BLOCKED")
+    issue_reference = issue_key or "none"
+    if issue_key and issue_url:
+        issue_reference = f"[{issue_key}]({issue_url})"
+
+    lines = [
+        "## Codex PR Remediation",
+        "",
+        f"Status: {status}",
+        f"Issue: {issue_reference}",
+        f"Issue created: {'yes' if issue_created else 'no'}",
+        f"Event: {event}/{str(action or 'none').strip() or 'none'}",
+        f"Head SHA: {str(head_sha or '').strip() or 'unknown'}",
+    ]
+    if run_id:
+        lines.append(f"Run ID: {run_id}")
+    if reason:
+        lines.append(f"Reason: {reason}")
+    lines.extend(["", marker])
+    return "\n".join(lines).strip()
+
+
 def upsert_sticky_review_comment(
     *,
     github_client: GitHubAppClient,
@@ -83,6 +128,61 @@ def upsert_sticky_review_comment(
     body = format_sticky_review_comment(
         signal=signal,
         findings_result=findings_result,
+        event=event,
+        action=action,
+        marker=marker,
+    )
+    comments = github_client.list_pull_request_issue_comments(
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+    )
+    existing = next((comment for comment in comments if marker in comment.body), None)
+    if existing is None:
+        created = github_client.create_pull_request_issue_comment(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            body=body,
+        )
+        return StickyReviewCommentResult(action="created", comment_id=created.comment_id)
+    updated = github_client.update_issue_comment(
+        repo_full_name=repo_full_name,
+        comment_id=existing.comment_id,
+        body=body,
+    )
+    return StickyReviewCommentResult(action="updated", comment_id=updated.comment_id)
+
+
+def upsert_sticky_remediation_comment(
+    *,
+    github_client: GitHubAppClient,
+    repo_full_name: str,
+    pr_number: int,
+    tenant_id: str,
+    project_id: str,
+    issue_key: str | None,
+    issue_url: str | None,
+    issue_created: bool,
+    enqueued: bool,
+    reason: str | None,
+    run_id: str | None,
+    head_sha: str | None,
+    event: str,
+    action: str | None,
+) -> StickyReviewCommentResult:
+    marker = build_remediation_marker(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+    )
+    body = format_sticky_remediation_comment(
+        issue_key=issue_key,
+        issue_url=issue_url,
+        issue_created=issue_created,
+        enqueued=enqueued,
+        reason=reason,
+        run_id=run_id,
+        head_sha=head_sha,
         event=event,
         action=action,
         marker=marker,

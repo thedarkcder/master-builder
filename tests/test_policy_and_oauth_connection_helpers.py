@@ -17,6 +17,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             {
                 "allow_jira_transitions": True,
                 "allow_pr_creation": False,
+                "allow_pr_remediation": False,
                 "allow_label_mutations": "nope",
                 "allow_auto_merge": True,
                 "max_dev_test_review_loops": 0,
@@ -24,11 +25,14 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "max_concurrent_runs": "bad",
                 "allowed_commands": [" run ", "", "  ", "retry"],
                 "require_agents_md": True,
+                "codex_model": " gpt-5.3-codex-spark ",
+                "codex_reasoning_effort": " high ",
                 "ignored": "x",
             }
         )
         self.assertEqual(normalized["allow_jira_transitions"], True)
         self.assertEqual(normalized["allow_pr_creation"], False)
+        self.assertEqual(normalized["allow_pr_remediation"], False)
         self.assertEqual(normalized["allow_auto_merge"], True)
         self.assertNotIn("allow_label_mutations", normalized)
         self.assertEqual(normalized["max_dev_test_review_loops"], 1)
@@ -36,12 +40,15 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertNotIn("max_concurrent_runs", normalized)
         self.assertEqual(normalized["allowed_commands"], ["run", "retry"])
         self.assertEqual(normalized["require_agents_md"], True)
+        self.assertEqual(normalized["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(normalized["codex_reasoning_effort"], "high")
 
     def test_resolve_effective_policy_caps_and_intersections(self) -> None:
         effective = project_policy.resolve_effective_policy(
             tenant_policy={
                 "allow_jira_transitions": True,
                 "allow_pr_creation": True,
+                "allow_pr_remediation": True,
                 "allow_label_mutations": True,
                 "allow_auto_merge": True,
                 "max_dev_test_review_loops": 10,
@@ -49,24 +56,34 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "max_concurrent_runs": 8,
                 "allowed_commands": ["run", "retry"],
                 "require_agents_md": False,
+                "codex_model": "gpt-5.4",
+                "codex_reasoning_effort": "medium",
             },
             project_overrides={
                 "allow_pr_creation": False,
+                "allow_pr_remediation": False,
                 "allow_auto_merge": False,
                 "max_dev_test_review_loops": 999,
                 "max_pr_auto_remediation_loops": 999,
                 "max_concurrent_runs": 3,
                 "allowed_commands": ["retry", "cancel"],
                 "require_agents_md": True,
+                "codex_model": "gpt-5.3-codex-spark",
+                "codex_reasoning_effort": "high",
             },
+            default_codex_model="gpt-5.4",
+            default_codex_reasoning_effort="medium",
         )
         self.assertEqual(effective["allow_pr_creation"], False)
+        self.assertEqual(effective["allow_pr_remediation"], False)
         self.assertEqual(effective["allow_auto_merge"], False)
         self.assertEqual(effective["max_dev_test_review_loops"], 10)
         self.assertEqual(effective["max_pr_auto_remediation_loops"], 5)
         self.assertEqual(effective["max_concurrent_runs"], 3)
         self.assertEqual(effective["allowed_commands"], ["retry"])
         self.assertEqual(effective["require_agents_md"], True)
+        self.assertEqual(effective["codex_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(effective["codex_reasoning_effort"], "high")
 
 
 class JiraConnectionServiceTests(unittest.TestCase):

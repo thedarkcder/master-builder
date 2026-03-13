@@ -96,6 +96,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
         os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
         os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
@@ -111,37 +112,37 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         self.addCleanup(self.patch_stack.close)
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin._jira_oauth_client",
+                "orchestrator.api.admin.integration_dependencies.jira_oauth_client",
                 side_effect=lambda **_: _FakeJiraClient(),
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin._refresh_jira_connection_tokens",
+                "orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens",
                 return_value="access-token",
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin.github_client_from_tenant_config",
+                "orchestrator.api.admin.integration_dependencies.github_client_from_tenant_config",
                 side_effect=lambda *_, **__: _FakeGitHubClient(),
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin.ensure_project_checkout",
+                "orchestrator.api.admin.route_helpers.ensure_project_checkout",
                 return_value=None,
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.admin._resolve_project_discord_channel_binding",
+                "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
                 side_effect=lambda **kwargs: dict(kwargs.get("discord_config") or {}),
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.discord.execute_tenant_command_ingress",
+                "orchestrator.api.discord.ingress.executor.execute_tenant_command_ingress",
                 return_value=DiscordCommandResponse(ok=True, command="ask", message="ok", data=None),
             )
         )
@@ -201,6 +202,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.client.close()
         self.temp_dir.cleanup()
+        os.environ.pop("ORCHESTRATOR_ADMIN_TOKEN_SECRET", None)
         get_settings.cache_clear()
         reset_db_engine_cache()
 
@@ -237,6 +239,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             "policy": {
                 "allow_jira_transitions": False,
                 "allow_pr_creation": True,
+                "allow_pr_remediation": True,
                 "allow_label_mutations": True,
                 "max_runtime_minutes": 30,
                 "max_dev_test_review_loops": 2,
@@ -413,6 +416,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(204,),
             ),
+            ("GET", "/api/admin/codex/models"): RouteScenario(
+                path="/api/admin/codex/models",
+                auth=admin,
+            ),
             ("PUT", "/api/admin/secrets/{secret_ref:path}"): RouteScenario(
                 path="/api/admin/secrets/platform%2FE2E_SET",
                 auth=admin,
@@ -436,6 +443,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "policy": {
                         "allow_jira_transitions": False,
                         "allow_pr_creation": True,
+                        "allow_pr_remediation": True,
                         "allow_label_mutations": True,
                         "max_runtime_minutes": 30,
                         "max_dev_test_review_loops": 2,
@@ -475,6 +483,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "policy": {
                         "allow_jira_transitions": False,
                         "allow_pr_creation": True,
+                        "allow_pr_remediation": True,
                         "allow_label_mutations": True,
                         "max_runtime_minutes": 30,
                         "max_dev_test_review_loops": 2,
@@ -570,6 +579,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/projects/example-default/knowledge/assets/asset-missing",
                 auth=admin,
                 expected_statuses=(204, 404),
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/status"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/knowledge/assets/asset-missing/status",
+                auth=admin,
+                json={"status": "ready"},
+                expected_statuses=(200, 404, 409),
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sync-jira"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/knowledge/sync-jira",
