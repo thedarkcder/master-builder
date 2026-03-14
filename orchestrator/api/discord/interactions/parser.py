@@ -210,6 +210,13 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, di
             command_text = f"{command_text} @{issue_key}"
         if question:
             command_text = f"{command_text} {question}"
+    elif normalized_command == "pm":
+        action = (_discord_option_value(options, name="action") or "").lower()
+        question = _discord_option_value(options, name="question")
+        if action == "approve":
+            command_text = f"{command_text} approve"
+        if question:
+            command_text = f"{command_text} {question}"
     elif normalized_command in {"run", "link", "gap"}:
         issue_key = _discord_option_value(options, name="issue_key")
         if issue_key:

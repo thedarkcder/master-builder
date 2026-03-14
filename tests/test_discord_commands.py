@@ -1078,6 +1078,113 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !ask", response.json()["detail"])
 
+    def test_pm_command_requires_question(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!pm"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !pm", response.json()["detail"])
+
+    def test_pm_command_returns_product_first_answer_and_stores_minimal_history(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_pm_question_with_codex",
+                return_value={
+                    "message": "PM guidance",
+                    "brief": {
+                        "objective": "Improve checkout recovery",
+                        "recommendation": "Ship in one sprint",
+                        "scope_in": ["Retry flow"],
+                        "scope_out": ["Payments provider migration"],
+                        "risks": ["Missing telemetry"],
+                        "open_questions": ["Fallback copy approval"],
+                        "next_steps": ["Draft implementation tickets"],
+                    },
+                },
+            ) as answer_mock,
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!pm shape a rollout narrative for TP-20",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "pm")
+        self.assertEqual(command_response.message, "PM guidance")
+        self.assertTrue(command_response.data["pm_mode"])
+        self.assertEqual(command_response.data["approve_command"], "!pm approve <handoff request>")
+        self.assertEqual(answer_mock.call_args.kwargs["action"], "ask")
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            history = list((tenant.discord_config or {}).get("ask_history") or [])
+            self.assertTrue(history)
+            latest_entry = history[-1]
+            self.assertTrue(str(latest_entry.get("question") or "").startswith("pm "))
+            self.assertEqual(latest_entry.get("answer"), "PM guidance")
+
+    def test_pm_approve_returns_technical_handoff_and_seeds_jira_tasks(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_pm_question_with_codex",
+                return_value={
+                    "message": "Approved for implementation handoff.",
+                    "brief": {
+                        "objective": "Ship checkout recovery",
+                        "recommendation": "Approved",
+                        "scope_in": ["Retry telemetry", "Fallback UX"],
+                        "scope_out": ["Provider migration"],
+                        "risks": ["Analytics gap"],
+                        "open_questions": [],
+                        "next_steps": ["Create implementation tasks"],
+                    },
+                },
+            ) as answer_mock,
+            patch(
+                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                return_value=(
+                    "Seeded issues.",
+                    {"created_issue_keys": ["TP-501", "TP-502"]},
+                ),
+            ),
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!pm approve final handoff for TP-20 checkout reliability",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "pm")
+        self.assertTrue(command_response.data["approved"])
+        self.assertIn("## Approved Product Brief", str(command_response.data["technical_handoff_markdown"]))
+        self.assertEqual(command_response.data["jira_write_hook"]["status"], "completed")
+        self.assertEqual(command_response.data["jira_seed_result"]["created_issue_keys"], ["TP-501", "TP-502"])
+        self.assertEqual(answer_mock.call_args.kwargs["action"], "approve")
+
     def test_ask_command_returns_board_answer(self) -> None:
         with patch(
             "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",

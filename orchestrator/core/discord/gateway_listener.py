@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 from uuid import uuid4
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import HTTPException
@@ -31,6 +32,8 @@ from orchestrator.core.platform_secret_service import (
     resolve_platform_secret_ref,
 )
 from orchestrator.core.discord.thread_context import get_thread_issue_key
+from orchestrator.core.voice import VoiceTranscriptionError, download_audio_bytes, transcribe_audio_bytes
+from orchestrator.core.voice.tts import VoiceReplyError, synthesize_reply_audio
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -48,6 +51,18 @@ INTENT_GUILDS = 1 << 0
 INTENT_GUILD_MESSAGES = 1 << 9
 INTENT_MESSAGE_CONTENT = 1 << 15
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+_PM_ROOM_LIST_KEYS = (
+    "pm_room_channel_ids",
+    "pm_room_thread_channel_ids",
+    "pm_thread_channel_ids",
+)
+_PM_ROOM_SINGLE_KEYS = (
+    "pm_room_channel_id",
+    "pm_room_thread_channel_id",
+    "pm_thread_channel_id",
+)
+_AUDIO_CONTENT_TYPE_PREFIX = "audio/"
+_AUDIO_FILENAME_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".mp4")
 
 
 def _ask_reply_components() -> list[dict]:
@@ -64,6 +79,46 @@ def _ask_reply_components() -> list[dict]:
             ],
         }
     ]
+
+
+def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    config = dict(discord_config or {})
+    channel_ids: set[str] = set()
+    for key in _PM_ROOM_LIST_KEYS:
+        raw_values = config.get(key)
+        if not isinstance(raw_values, list):
+            continue
+        for value in raw_values:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
+    for key in _PM_ROOM_SINGLE_KEYS:
+        normalized = str(config.get(key) or "").strip()
+        if normalized:
+            channel_ids.add(normalized)
+    return channel_ids
+
+
+def _project_pm_room_channel_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        channel_ids.update(_pm_room_channel_ids_from_discord_config(project.discord_config or {}))
+    return channel_ids
+
+
+def _is_audio_attachment(attachment: dict[str, str]) -> bool:
+    content_type = str(attachment.get("content_type") or "").strip().lower()
+    if content_type.startswith(_AUDIO_CONTENT_TYPE_PREFIX):
+        return True
+    filename = str(attachment.get("filename") or "").strip().lower()
+    return any(filename.endswith(extension) for extension in _AUDIO_FILENAME_EXTENSIONS)
+
 
 def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
     projects = session.execute(
@@ -130,9 +185,15 @@ def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str)
 
 
 class DiscordGatewayListener:
-    def __init__(self, *, settings: Settings) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        transcribe_audio_attachment: Callable[[dict[str, str]], str] | None = None,
+    ) -> None:
         self._settings = settings
         self._session_factory = create_session_factory()
+        self._transcribe_audio_attachment = transcribe_audio_attachment
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._sequence: int | None = None
@@ -293,7 +354,7 @@ class DiscordGatewayListener:
         if not user_id:
             return
         content = str(payload.get("content") or "").strip()
-        if not content or content.startswith("/"):
+        if content.startswith("/"):
             return
         raw_attachments = payload.get("attachments")
         attachments: list[dict[str, str]] = []
@@ -314,10 +375,51 @@ class DiscordGatewayListener:
                     }
                 )
         attachments = attachments[:5]
+        should_send_pm_voice_reply = False
+        pm_voice_reply_text: str | None = None
 
         with self._session_factory() as session:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
             if tenant is None:
+                return
+            pm_room_channel_ids = _project_pm_room_channel_ids(
+                session=session,
+                tenant_id=tenant.tenant_id,
+            )
+            pm_room_channel_ids.update(
+                _pm_room_channel_ids_from_discord_config(getattr(tenant, "discord_config", None) or {})
+            )
+            if (
+                not content
+                and channel_id in pm_room_channel_ids
+                and len(attachments) == 1
+                and _is_audio_attachment(attachments[0])
+            ):
+                transcript, error_message = self._transcribe_pm_audio_attachment(
+                    attachment=attachments[0],
+                    bot_token=bot_token,
+                )
+                if transcript:
+                    content = transcript
+                else:
+                    graceful_message = error_message or (
+                        "I detected an audio attachment but couldn't transcribe it. "
+                        "Please send text or configure voice transcription."
+                    )
+                    try:
+                        DiscordApiClient(bot_token=bot_token).post_message(
+                            channel_id=channel_id,
+                            content=f"<@{user_id}> {graceful_message}",
+                        )
+                    except DiscordApiError as exc:
+                        logger.exception(
+                            "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
+                            user_id,
+                            channel_id,
+                            exc,
+                        )
+                    return
+            if not content:
                 return
             pending_human_input = pending_human_input_for_thread(
                 session=session,
@@ -401,6 +503,8 @@ class DiscordGatewayListener:
                 and not command_text.startswith("!")
             ):
                 command_text = f"!issues followup {command_text}"
+            if channel_id in pm_room_channel_ids and not command_text.startswith("!"):
+                command_text = f"!pm {command_text}"
 
             message_content = f"<@{user_id}> Command failed due to an internal error."
             components: list[dict] | None = None
@@ -438,6 +542,9 @@ class DiscordGatewayListener:
                         components = build_ask_confirmation_components(request_id)
                 elif command_response.command == "reply" and bool(data.get("recheck_required")):
                     components = _ask_reply_components()
+                elif command_response.command == "pm" and channel_id in pm_room_channel_ids:
+                    should_send_pm_voice_reply = True
+                    pm_voice_reply_text = str(command_response.message or "").strip() or None
             except HTTPException as exc:
                 logger.exception(
                     "discord_gateway_command_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
@@ -483,6 +590,102 @@ class DiscordGatewayListener:
                 channel_id,
                 exc,
             )
+        if should_send_pm_voice_reply and pm_voice_reply_text:
+            self._post_pm_voice_reply(
+                bot_token=bot_token,
+                user_id=user_id,
+                channel_id=channel_id,
+                text=pm_voice_reply_text,
+            )
+
+    def _transcribe_pm_audio_attachment(
+        self,
+        *,
+        attachment: dict[str, str],
+        bot_token: str,
+    ) -> tuple[str | None, str | None]:
+        if self._transcribe_audio_attachment is None:
+            provider = str(getattr(self._settings, "voice_transcription_provider", "disabled") or "").strip().lower()
+            if provider in {"", "disabled"}:
+                return (
+                    None,
+                    (
+                        "I detected an audio attachment, but voice transcription isn't configured. "
+                        "Please share text or enable transcription settings."
+                    ),
+                )
+            try:
+                audio_bytes, downloaded_content_type = download_audio_bytes(
+                    url=str(attachment.get("url") or ""),
+                    bot_token=bot_token,
+                )
+                transcript = transcribe_audio_bytes(
+                    settings=self._settings,
+                    audio_bytes=audio_bytes,
+                    filename=str(attachment.get("filename") or "").strip() or "voice-note.ogg",
+                    content_type=str(attachment.get("content_type") or "").strip() or downloaded_content_type,
+                )
+            except VoiceTranscriptionError as exc:
+                logger.exception("discord_gateway_pm_audio_transcription_failed error=%s", exc)
+                return None, "I couldn't transcribe that audio attachment. Please retry with text."
+            if not transcript:
+                return None, "I couldn't transcribe that audio attachment. Please retry with text."
+            return transcript, None
+        try:
+            transcript = str(self._transcribe_audio_attachment(attachment) or "").strip()
+        except Exception as exc:
+            logger.exception("discord_gateway_pm_audio_transcription_failed error=%s", exc)
+            return None, "I couldn't transcribe that audio attachment. Please retry with text."
+        if not transcript:
+            return None, "I couldn't transcribe that audio attachment. Please retry with text."
+        return transcript, None
+
+    def _post_pm_voice_reply(
+        self,
+        *,
+        bot_token: str,
+        user_id: str,
+        channel_id: str,
+        text: str,
+    ) -> None:
+        if not bool(getattr(self._settings, "voice_reply_enabled_default", False)):
+            return
+        try:
+            audio = synthesize_reply_audio(settings=self._settings, text=text)
+        except VoiceReplyError as exc:
+            logger.info("discord_gateway_pm_voice_reply_skipped channel_id=%s reason=%s", channel_id, exc)
+            return
+        try:
+            DiscordApiClient(bot_token=bot_token).post_message_with_attachment(
+                channel_id=channel_id,
+                content=f"<@{user_id}> Voice reply",
+                filename=audio.filename,
+                file_bytes=audio.audio_bytes,
+                content_type=audio.content_type,
+            )
+        except (DiscordApiError, ValueError) as exc:
+            logger.exception(
+                "discord_gateway_pm_voice_reply_post_failed user_id=%s channel_id=%s error=%s",
+                user_id,
+                channel_id,
+                exc,
+            )
 
     def _find_tenant_for_channel(self, *, session, channel_id: str) -> Tenant | None:  # noqa: ANN001
-        return resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
+        tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
+        if tenant is not None:
+            return tenant
+        projects = session.execute(
+            select(Project).where(Project.is_archived.is_(False))
+        ).scalars().all()
+        matched_tenant_ids = {
+            str(project.tenant_id)
+            for project in projects
+            if channel_id in _pm_room_channel_ids_from_discord_config(project.discord_config or {})
+        }
+        if len(matched_tenant_ids) != 1:
+            return None
+        candidate_tenant = session.get(Tenant, next(iter(matched_tenant_ids)))
+        if candidate_tenant is None or not candidate_tenant.is_enabled:
+            return None
+        return candidate_tenant

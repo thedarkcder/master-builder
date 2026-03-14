@@ -106,6 +106,33 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         self.assertIsNone(command_params)
         self.assertEqual(attachments, [])
 
+        payload_pm = {
+            "data": {
+                "name": "pm",
+                "options": [
+                    {"type": 3, "name": "question", "value": "what should we ship first?"},
+                ],
+            },
+            "channel_id": "c1",
+            "user": {"id": "u1"},
+        }
+        parsed_pm = _parse_discord_interaction_command(payload_pm)
+        self.assertEqual(parsed_pm[2], "!pm what should we ship first?")
+
+        payload_pm_approve = {
+            "data": {
+                "name": "pm",
+                "options": [
+                    {"type": 3, "name": "action", "value": "approve"},
+                    {"type": 3, "name": "question", "value": "approve rollout to beta?"},
+                ],
+            },
+            "channel_id": "c1",
+            "user": {"id": "u1"},
+        }
+        parsed_pm_approve = _parse_discord_interaction_command(payload_pm_approve)
+        self.assertEqual(parsed_pm_approve[2], "!pm approve approve rollout to beta?")
+
         payload_run = {
             "data": {"name": "run", "options": [{"type": 3, "name": "issue_key", "value": "MAB-2"}]},
             "channel_id": "c1",

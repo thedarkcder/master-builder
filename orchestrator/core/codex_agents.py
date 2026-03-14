@@ -673,6 +673,54 @@ def answer_board_question_with_codex(
     return message
 
 
+def answer_pm_question_with_codex(
+    *,
+    runtime: CodexRuntime,
+    question: str,
+    action: str | None,
+    project_keys: list[str],
+    issues: list[dict],
+    status_counts: dict[str, int],
+    invocation_context: CodexInvocationContext,
+    history: list[dict] | None = None,
+    github_context: dict | None = None,
+) -> dict:
+    normalized_action = str(action or "ask").strip().lower()
+    if normalized_action not in {"ask", "approve"}:
+        normalized_action = "ask"
+    normalized_history = history if isinstance(history, list) else []
+    normalized_github_context = github_context or {}
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/pm_answer_system.j2"),
+        user_prompt=render_prompt(
+            "discord/pm_answer_user.j2",
+            action=normalized_action,
+            question=question,
+            project_keys_json=json.dumps(project_keys),
+            status_counts_json=json.dumps(status_counts),
+            github_context_json=json.dumps(normalized_github_context),
+            history_json=json.dumps(normalized_history[-25:]),
+            issues_json=json.dumps(issues[:40]),
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return a pm JSON object")
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        raise CodexRuntimeError("Codex did not return a pm message")
+    brief = payload.get("brief")
+    if brief is None:
+        brief = {}
+    if not isinstance(brief, dict):
+        raise CodexRuntimeError("Codex did not return a pm brief object")
+    normalized_payload = dict(payload)
+    normalized_payload["message"] = message
+    normalized_payload["brief"] = brief
+    return normalized_payload
+
+
 def plan_discord_ask_intent_with_codex(
     *,
     runtime: CodexRuntime,
