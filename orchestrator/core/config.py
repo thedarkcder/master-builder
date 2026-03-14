@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     sentry_traces_sample_rate: float = 0.0
     agent_id: str = "worker-linux-local"
     worker_capabilities: str = "linux"
+    worker_workspace_key: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",

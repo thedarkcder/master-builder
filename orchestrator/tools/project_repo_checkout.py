@@ -115,8 +115,61 @@ def project_repo_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
     return Path(base_dir) / tenant_id / project_id / "repo"
 
 
-def project_run_repo_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
-    return Path(base_dir) / tenant_id / project_id / "runs" / run_id / "repo"
+def project_run_root_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
+    return Path(base_dir) / tenant_id / project_id / "runs" / run_id
+
+
+def _normalize_workspace_key(value: object) -> str:
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value or "").strip().lower()).strip("-.")
+    if not normalized:
+        raise ProjectRepoCheckoutError("Worker workspace key must not be empty for run worktree setup")
+    return normalized[:128]
+
+
+def project_run_workspace_root_dir(
+    *,
+    base_dir: str,
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    workspace_key: str,
+) -> Path:
+    return (
+        project_run_root_dir(
+            base_dir=base_dir,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+        )
+        / "workspaces"
+        / _normalize_workspace_key(workspace_key)
+    )
+
+
+def project_run_repo_dir(
+    *,
+    base_dir: str,
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    workspace_key: str,
+) -> Path:
+    return project_run_workspace_root_dir(
+        base_dir=base_dir,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        run_id=run_id,
+        workspace_key=workspace_key,
+    ) / "repo"
+
+
+def project_legacy_run_repo_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
+    return project_run_root_dir(
+        base_dir=base_dir,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        run_id=run_id,
+    ) / "repo"
 
 
 def execution_branch_name(*, issue_key: str, run_id: str) -> str:
@@ -219,6 +272,7 @@ def _write_run_metadata(
     execution_branch: str,
     base_branch: str,
     integration_branch: str,
+    workspace_key: str,
     start_point_ref: str,
     start_point_sha: str,
 ) -> None:
@@ -230,6 +284,7 @@ def _write_run_metadata(
                 "execution_branch": execution_branch,
                 "base_branch": base_branch,
                 "integration_branch": integration_branch,
+                "workspace_key": workspace_key,
                 "start_point_ref": start_point_ref,
                 "start_point_sha": start_point_sha,
             },
@@ -296,6 +351,67 @@ def _remove_run_worktree(*, repo_dir: Path, run_repo_dir: Path) -> None:
         shutil.rmtree(run_root, ignore_errors=True)
 
 
+def _is_worktree_checkout_usable(*, run_repo_dir: Path) -> bool:
+    if not (run_repo_dir / ".git").exists():
+        return False
+    process = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=str(run_repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        return False
+    return process.stdout.strip().lower() == "true"
+
+
+def cleanup_run_workspaces(
+    *,
+    base_dir: str,
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    workspace_key: str | None = None,
+) -> None:
+    repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project_id)
+    run_root = project_run_root_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project_id, run_id=run_id)
+    if workspace_key is not None:
+        workspace_root = project_run_workspace_root_dir(
+            base_dir=base_dir,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+            workspace_key=workspace_key,
+        )
+        if workspace_root.exists():
+            shutil.rmtree(workspace_root, ignore_errors=True)
+    else:
+        workspaces_root = run_root / "workspaces"
+        if workspaces_root.exists():
+            shutil.rmtree(workspaces_root, ignore_errors=True)
+        legacy_repo = project_legacy_run_repo_dir(
+            base_dir=base_dir,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+        )
+        if legacy_repo.exists():
+            _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=legacy_repo)
+
+    if run_root.exists():
+        try:
+            run_root.rmdir()
+        except OSError:
+            pass
+    if not (repo_dir / ".git").exists():
+        return
+    try:
+        _run_git(["worktree", "prune"], cwd=repo_dir)
+    except ProjectRepoCheckoutError:
+        return
+
+
 @dataclass(frozen=True)
 class RunSnapshotFreshness:
     start_point_ref: str
@@ -354,14 +470,23 @@ def ensure_run_worktree(
     issue_key: str,
     base_branch: str,
     integration_branch: str,
+    workspace_key: str,
 ) -> tuple[Path, str]:
     repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
     if not (repo_dir / ".git").exists():
         raise ProjectRepoCheckoutError(
             f"Project repository checkout is missing for run worktree creation (repo_dir={repo_dir})"
         )
+    normalized_workspace_key = _normalize_workspace_key(workspace_key)
 
     run_repo = project_run_repo_dir(
+        base_dir=base_dir,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+        run_id=run_id,
+        workspace_key=normalized_workspace_key,
+    )
+    legacy_run_repo = project_legacy_run_repo_dir(
         base_dir=base_dir,
         tenant_id=tenant_id,
         project_id=project.project_id,
@@ -369,25 +494,34 @@ def ensure_run_worktree(
     )
     execution_branch = execution_branch_name(issue_key=issue_key, run_id=run_id)
     _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
+    if legacy_run_repo.exists():
+        _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=legacy_run_repo)
+        _run_git(["worktree", "prune"], cwd=repo_dir)
     start_point_ref = _resolve_worktree_start_point(
         repo_dir=repo_dir,
         base_branch=base_branch,
         integration_branch=integration_branch,
     )
     start_point_sha = _resolve_ref_commit_sha(repo_dir=repo_dir, ref=start_point_ref)
-    metadata = _read_run_metadata(repo_dir=run_repo) if run_repo.exists() else None
-    if (run_repo / ".git").exists() and metadata is not None:
-        if (
-            str(metadata.get("run_id") or "") == run_id
-            and str(metadata.get("execution_branch") or "") == execution_branch
-            and str(metadata.get("base_branch") or "") == base_branch
-            and str(metadata.get("integration_branch") or "") == integration_branch
-            and str(metadata.get("start_point_ref") or "") == start_point_ref
-            and str(metadata.get("start_point_sha") or "") == start_point_sha
-        ):
-            _sync_agent_workspace_files(repo_dir=run_repo)
-            return run_repo, execution_branch
-        _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=run_repo)
+    if (run_repo / ".git").exists():
+        if not _is_worktree_checkout_usable(run_repo_dir=run_repo):
+            _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=run_repo)
+            _run_git(["worktree", "prune"], cwd=repo_dir)
+        else:
+            metadata = _read_run_metadata(repo_dir=run_repo)
+            if metadata is not None and (
+                str(metadata.get("run_id") or "") == run_id
+                and str(metadata.get("execution_branch") or "") == execution_branch
+                and str(metadata.get("base_branch") or "") == base_branch
+                and str(metadata.get("integration_branch") or "") == integration_branch
+                and str(metadata.get("workspace_key") or "") == normalized_workspace_key
+                and str(metadata.get("start_point_ref") or "") == start_point_ref
+                and str(metadata.get("start_point_sha") or "") == start_point_sha
+            ):
+                _sync_agent_workspace_files(repo_dir=run_repo)
+                return run_repo, execution_branch
+            _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=run_repo)
+            _run_git(["worktree", "prune"], cwd=repo_dir)
     elif run_repo.exists():
         shutil.rmtree(run_repo.parent, ignore_errors=True)
 
@@ -404,6 +538,7 @@ def ensure_run_worktree(
         execution_branch=execution_branch,
         base_branch=base_branch,
         integration_branch=integration_branch,
+        workspace_key=normalized_workspace_key,
         start_point_ref=start_point_ref,
         start_point_sha=start_point_sha,
     )
@@ -415,6 +550,7 @@ def validate_run_worktree(
     repo_dir: Path,
     run_id: str,
     execution_branch: str,
+    workspace_key: str | None = None,
 ) -> str | None:
     if not (repo_dir / ".git").exists():
         return "run worktree is missing its git metadata"
@@ -423,6 +559,14 @@ def validate_run_worktree(
         return "run worktree metadata is missing"
     if str(metadata.get("run_id") or "") != run_id:
         return f"run worktree metadata does not match run_id={run_id}"
+    if workspace_key is not None:
+        normalized_workspace_key = _normalize_workspace_key(workspace_key)
+        actual_workspace_key = str(metadata.get("workspace_key") or "").strip()
+        if actual_workspace_key != normalized_workspace_key:
+            return (
+                "run worktree metadata workspace_key mismatch: "
+                f"expected {normalized_workspace_key}, found {actual_workspace_key or '<missing>'}"
+            )
     expected_branch = str(metadata.get("execution_branch") or "").strip() or execution_branch
     current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir).strip()
     if current_branch != expected_branch:

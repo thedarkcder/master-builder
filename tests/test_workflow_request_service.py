@@ -25,6 +25,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
         settings = SimpleNamespace(
             project_repo_checkout_base_dir=checkout_base_dir,
             worker_capabilities="linux",
+            worker_workspace_key="worker-a",
         )
         return tenant, run, effective_policy, settings
 
@@ -99,7 +100,16 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 jira_project_key="TP",
                 environment={},
             )
-            checkout_dir = Path(tmp_dir) / "tenant-1" / "project-1" / "runs" / "run-1" / "repo"
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
@@ -126,6 +136,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
 
             self.assertEqual(request.execution_repo_dir, str(checkout_dir))
             self.assertEqual(request.execution_branch, "run/tp-1/run-1")
+            self.assertEqual(request.workspace_key, "worker-a")
             self.assertEqual(request.start_point_ref, "origin/main")
             self.assertEqual(request.start_point_sha, "abc123")
             self.assertEqual(request.current_worker_capability, "linux")
@@ -158,7 +169,16 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 jira_project_key="TP",
                 environment={},
             )
-            checkout_dir = Path(tmp_dir) / "tenant-1" / "project-1" / "runs" / "run-1" / "repo"
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
@@ -199,7 +219,16 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 jira_project_key="TP",
                 environment={},
             )
-            checkout_dir = Path(tmp_dir) / "tenant-1" / "project-1" / "runs" / "run-1" / "repo"
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(

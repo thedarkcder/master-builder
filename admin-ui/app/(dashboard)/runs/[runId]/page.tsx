@@ -772,15 +772,27 @@ export default function RunDetailPage() {
     };
   }, [run?.plan]);
   const terminalFailureMessage = useMemo(() => {
-    const fromDiagnostics = String(workflowDiagnostics?.message ?? "").trim();
-    if (fromDiagnostics) {
-      return fromDiagnostics;
-    }
+    // `run.last_error` is the authoritative terminal error persisted by the worker.
     const fromRun = String(run?.last_error ?? "").trim();
     if (fromRun) {
       return fromRun;
     }
+    const fromDiagnostics = String(workflowDiagnostics?.message ?? "").trim();
+    if (fromDiagnostics) {
+      return fromDiagnostics;
+    }
     return "";
+  }, [run?.last_error, workflowDiagnostics?.message]);
+  const secondaryFailureDetail = useMemo(() => {
+    const fromRun = String(run?.last_error ?? "").trim();
+    const fromDiagnostics = String(workflowDiagnostics?.message ?? "").trim();
+    if (!fromRun || !fromDiagnostics) {
+      return "";
+    }
+    if (fromRun === fromDiagnostics) {
+      return "";
+    }
+    return fromDiagnostics;
   }, [run?.last_error, workflowDiagnostics?.message]);
   const terminalFailureHighlights = useMemo(() => {
     const items = (workflowDiagnostics?.history ?? [])
@@ -1211,6 +1223,11 @@ export default function RunDetailPage() {
             <span><span className="font-medium text-foreground">Created</span> {new Date(run.created_at).toLocaleString()}</span>
             {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {new Date(run.started_at).toLocaleString()}</span> : null}
             {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {new Date(run.finished_at).toLocaleString()}</span> : null}
+            {run.status !== "queued" && run.status !== "running" ? (
+              <span className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
+                Not active
+              </span>
+            ) : null}
             {latestCodexSessionId ? (
               <span><span className="font-medium text-foreground">Session</span> <code className="rounded bg-muted px-1">{latestCodexSessionId}</code></span>
             ) : null}
@@ -1230,6 +1247,12 @@ export default function RunDetailPage() {
           </CardHeader>
           <CardContent className="space-y-2 text-xs">
             <p className="whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
+            {secondaryFailureDetail ? (
+              <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-destructive">
+                <p className="font-medium">Additional diagnostic context</p>
+                <p className="mt-1 whitespace-pre-wrap">{secondaryFailureDetail}</p>
+              </div>
+            ) : null}
             {terminalFailureHighlights.length > 0 ? (
               <ul className="list-disc space-y-1 pl-4 text-destructive">
                 {terminalFailureHighlights.map((item, idx) => (
