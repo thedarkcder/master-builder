@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 
 revision = "20260313_0029"
-down_revision = "20260311_0025"
+down_revision = "20260313_0028"
 branch_labels = None
 depends_on = None
 _RUN_HUMAN_INPUT_REQUESTS_LOCK_KEY = 202603130029
