@@ -1,0 +1,46 @@
+Stage: review
+Tenant ID: {{ tenant_id }}
+Project ID: {{ project_id }}
+Project Name: {{ project_name }}
+GitHub Repository: {{ github_repository }}
+Jira Project Key: {{ jira_project_key }}
+Run ID: {{ run_id }}
+Issue key: {{ issue_key }}
+Execution worktree: {{ execution_repo_dir }}
+Execution branch: {{ execution_branch }}
+Base branch: {{ base_branch }}
+Integration branch: {{ integration_branch }}
+PR target branch: {{ pr_target_branch }}
+PR creation required by policy: {{ allow_pr_creation }}
+Attempt: {{ attempt }}
+Plan steps: {{ plan_steps_json }}
+Acceptance criteria: {{ acceptance_criteria_json }}
+Dev summary: {{ dev_summary_json }}
+Test passed: {{ test_passed }}
+Test guidance: {{ test_guidance_json }}
+Test feedback: {{ test_feedback }}
+PR URL: {{ pr_url }}
+Resolved prerequisites: {{ resolved_prerequisites_json }}
+Unresolved prerequisites: {{ unresolved_prerequisites_json }}
+Confirmed external blockers: {{ confirmed_external_blockers_json }}
+Missing evidence sources: {{ missing_evidence_sources_json }}
+Answered transient human inputs for this run: {{ human_inputs_json }}
+Allowed tools for this stage: {{ allowed_tools_json }}
+Agent tool command: {{ agent_tool_command }}
+
+Required actions:
+1. Decide if this run can be accepted now.
+2. Provide concise findings and unresolved blockers.
+3. Treat the PM evidence ledger as the current ticket prerequisite summary; do not invent new external blockers from missing repo evidence alone.
+4. Preserve fail-closed behavior when verification is incomplete.
+5. If a one-time transient human input can unblock the remaining verification, request it with `run.request_human_input` before using outcome="blocked" with blocker_category="awaiting_human_input".
+6. If PR creation required by policy is `true`, you must not approve the run unless a PR exists and `pr_url` is set.
+
+Output contract:
+- approved: boolean decision.
+- outcome: "approved" | "needs_changes" | "blocked".
+- summary: array of review findings/outcome notes.
+- feedback: blocking feedback string or null.
+- pr_url: PR URL string or null.
+- blocker_category: terminal blocker category or null.
+- blocker_message: terminal blocker detail or null.

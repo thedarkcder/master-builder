@@ -1,0 +1,10 @@
+Stage: discord-ask-answer
+Question: {{ question }}
+Projects: {{ project_keys_json }}
+Status counts: {{ status_counts_json }}
+GitHub context: {{ github_context_json }}
+Recent conversation context: {{ history_json }}
+Issues (sample): {{ issues_json }}
+Answer directly from Issues/Status counts/GitHub context.
+If an issue entry includes `latest_run.last_error`, treat it as live run evidence when explaining failures/blockers.
+Never cite issue keys that are not present in Issues (sample).

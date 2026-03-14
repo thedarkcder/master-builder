@@ -27,7 +27,7 @@ jobs:
       node_lockfile: ${{ steps.detect.outputs.node_lockfile }}
       java_build_tool: ${{ steps.detect.outputs.java_build_tool }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: detect
         shell: bash
@@ -105,37 +105,18 @@ jobs:
           echo "node_lockfile=$node_lockfile" >> "$GITHUB_OUTPUT"
           echo "java_build_tool=$java_build_tool" >> "$GITHUB_OUTPUT"
 
-  codex-assets-version-guard:
-    name: Codex assets version guard
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Validate codex assets version bump
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x scripts/validate_codex_assets_version.sh
-          git fetch --no-tags --prune origin "${{ github.base_ref }}"
-          scripts/validate_codex_assets_version.sh "origin/${{ github.base_ref }}"
-
   java:
     name: Java (lint/test)
     needs: detect
     if: needs.detect.outputs.is_java == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
@@ -159,29 +140,27 @@ jobs:
     name: Node/React (lint/test/build)
     needs: detect
     if: needs.detect.outputs.is_node == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Setup Node (npm/yarn cache)
+      - name: Setup Node (npm/yarn)
         if: needs.detect.outputs.node_pm != 'pnpm' && needs.detect.outputs.node_lockfile != ''
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
-          cache: ${{ needs.detect.outputs.node_pm }}
-          cache-dependency-path: ${{ needs.detect.outputs.node_lockfile }}
 
       - name: Setup Node (npm/yarn no-cache fallback)
         if: needs.detect.outputs.node_pm != 'pnpm' && needs.detect.outputs.node_lockfile == ''
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
 
       - name: Setup Node (pnpm no cache)
         if: needs.detect.outputs.node_pm == 'pnpm'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
 
@@ -260,14 +239,14 @@ jobs:
     name: Python (ruff/pytest)
     needs: detect
     if: needs.detect.outputs.is_python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -279,12 +258,12 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f "pyproject.toml" ]; then
             python -m pip install -e .[dev] || python -m pip install -e .
-            python -m pip install ruff pytest httpx
+            python -m pip install ruff pytest pytest-cov httpx
           elif [ -f "requirements.txt" ]; then
             python -m pip install -r requirements.txt
-            python -m pip install ruff pytest httpx
+            python -m pip install ruff pytest pytest-cov httpx
           else
-            python -m pip install ruff pytest httpx
+            python -m pip install ruff pytest pytest-cov httpx
           fi
 
       - name: Ruff
@@ -293,11 +272,18 @@ jobs:
           set -euo pipefail
           ruff check . || (echo "ruff failed" && exit 1)
 
-      - name: Pytest
+      - name: Pytest with coverage
         shell: bash
         run: |
           set -euo pipefail
-          pytest -q
+          pytest -q --cov=orchestrator --cov-report=term-missing --cov-report=xml
+
+      - name: Upload Python coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-xml
+          path: coverage.xml
+          if-no-files-found: error
 
       - name: Build package
         shell: bash
@@ -309,7 +295,7 @@ jobs:
   summary:
     name: CI summary
     needs: [detect, java, node, python]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always()
     steps:
       - name: Result

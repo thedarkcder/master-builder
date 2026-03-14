@@ -39,27 +39,6 @@ function parseMultiLine(value: string): string[] {
     .filter(Boolean);
 }
 
-function parseRules(value: string): Record<string, string> {
-  return parseMultiLine(value).reduce<Record<string, string>>((acc, line) => {
-    const separator = line.indexOf("=");
-    if (separator <= 0) {
-      return acc;
-    }
-    const key = line.slice(0, separator).trim();
-    const url = line.slice(separator + 1).trim();
-    if (key && url) {
-      acc[key] = url;
-    }
-    return acc;
-  }, {});
-}
-
-export function formatRules(rules: Record<string, string>): string {
-  return Object.entries(rules)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
-}
-
 export function defaultTenantFormValues(): TenantFormValues {
   return {
     tenantId: "",
@@ -77,30 +56,31 @@ export function defaultTenantFormValues(): TenantFormValues {
       webhook_secret_ref: null
     },
     github: {
-      mode: "github_app",
       webhook_secret_ref: null,
       installation_id: null
     },
     repos: {
-      allowlist: [],
-      mapping_rules_by_project_key: {},
-      mapping_rules_by_component: {},
-      fallback_repo: null
+      github_repository: null
     },
     policy: {
       allow_jira_transitions: false,
       allow_pr_creation: true,
+      allow_pr_remediation: true,
       allow_label_mutations: true,
+      allow_auto_merge: false,
       max_runtime_minutes: 30,
       max_dev_test_review_loops: 2,
+      max_pr_auto_remediation_loops: 5,
       max_concurrent_runs: 2,
       allowed_commands: [],
-      require_agents_md: false
+      require_agents_md: false,
+      knowledge_base_enabled: true,
+      knowledge_auto_answer_mode: "aggressive",
+      codex_model: null,
+      codex_reasoning_effort: null
     },
     discordEnabled: false,
     discord: {
-      channel_id: null,
-      channel_name_template: "proj-{tenant_id}",
       notify_events: []
     }
   };
@@ -118,8 +98,6 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
     discordEnabled: Boolean(record.discord),
     discord:
       record.discord ?? {
-        channel_id: null,
-        channel_name_template: "proj-{tenant_id}",
         notify_events: []
       }
   };
@@ -128,22 +106,16 @@ export function recordToFormValues(record: TenantRecord): TenantFormValues {
 export type TenantFormTextFields = {
   projectKeysText: string;
   readyStatusesText: string;
-  allowlistText: string;
+  githubRepositoryText: string;
   policyAllowedCommandsText: string;
-  notifyEventsText: string;
-  mappingByProjectText: string;
-  mappingByComponentText: string;
 };
 
 export function formValuesToTextFields(values: TenantFormValues): TenantFormTextFields {
   return {
     projectKeysText: joinCsv(values.jira.project_keys),
     readyStatusesText: joinCsv(values.jira.ready_statuses),
-    allowlistText: values.repos.allowlist.join("\n"),
-    policyAllowedCommandsText: values.policy.allowed_commands.join("\n"),
-    notifyEventsText: values.discord.notify_events.join("\n"),
-    mappingByProjectText: formatRules(values.repos.mapping_rules_by_project_key),
-    mappingByComponentText: formatRules(values.repos.mapping_rules_by_component)
+    githubRepositoryText: values.repos.github_repository ?? "",
+    policyAllowedCommandsText: values.policy.allowed_commands.join("\n")
   };
 }
 
@@ -151,13 +123,16 @@ export function toCreatePayload(
   values: TenantFormValues,
   textFields: TenantFormTextFields
 ): TenantCreatePayload {
+  const githubRepository = textFields.githubRepositoryText.trim();
+  const projectKeys = splitCsv(textFields.projectKeysText);
+
   return {
     name: values.name.trim(),
     is_enabled: values.isEnabled,
     jira: {
       ...values.jira,
       connection_id: values.jira.connection_id?.trim() || null,
-      project_keys: splitCsv(textFields.projectKeysText),
+      project_keys: projectKeys,
       ready_statuses: splitCsv(textFields.readyStatusesText),
       ready_jql: values.jira.ready_jql?.trim() || null,
       ready_label: values.jira.ready_label.trim(),
@@ -168,29 +143,29 @@ export function toCreatePayload(
     },
     github: {
       ...values.github,
-      mode: values.github.mode.trim(),
       webhook_secret_ref: values.github.webhook_secret_ref?.trim() || null,
       installation_id: values.github.installation_id?.trim() || null
     },
     repos: {
-      ...values.repos,
-      allowlist: parseMultiLine(textFields.allowlistText),
-      mapping_rules_by_project_key: parseRules(textFields.mappingByProjectText),
-      mapping_rules_by_component: parseRules(textFields.mappingByComponentText),
-      fallback_repo: values.repos.fallback_repo?.trim() || null
+      github_repository: githubRepository || null
     },
     policy: {
       ...values.policy,
       allowed_commands: parseMultiLine(textFields.policyAllowedCommandsText),
       max_runtime_minutes: Number(values.policy.max_runtime_minutes),
       max_dev_test_review_loops: Number(values.policy.max_dev_test_review_loops),
-      max_concurrent_runs: Number(values.policy.max_concurrent_runs)
+      max_pr_auto_remediation_loops: Number(values.policy.max_pr_auto_remediation_loops),
+      max_concurrent_runs: Number(values.policy.max_concurrent_runs),
+      codex_model: values.policy.codex_model?.trim() || null,
+      codex_reasoning_effort:
+        (values.policy.codex_reasoning_effort?.trim() || null) as PolicyConfig["codex_reasoning_effort"]
     },
     discord: values.discordEnabled
       ? {
-          channel_id: values.discord.channel_id?.trim() || null,
-          channel_name_template: values.discord.channel_name_template.trim() || "proj-{tenant_id}",
-          notify_events: parseMultiLine(textFields.notifyEventsText)
+          ...values.discord,
+          notify_events: values.discord.notify_events
+            .map((value) => value.trim())
+            .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index)
         }
       : null
   };

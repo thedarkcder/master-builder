@@ -1,8 +1,0 @@
-tunnel: c271e6bf-ad68-4406-a174-c2b7892050c5
-credentials-file: /etc/cloudflared/c271e6bf-ad68-4406-a174-c2b7892050c5.json
-
-ingress:
-  - hostname: api.route25.co.uk
-    service: http://api:4000
-
-  - service: http_status:404

@@ -7,6 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from orchestrator.cli import main as cli_main
 from orchestrator.core.config import get_settings
@@ -57,10 +58,7 @@ class CliEntrypointTests(unittest.TestCase):
                         "installation_id": "12345",
                     },
                     repos_config={
-                        "allowlist": ["https://github.com/example/repo"],
-                        "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
-                        "mapping_rules_by_component": {},
-                        "fallback_repo": None,
+                        "github_repository": "https://github.com/example/repo",
                     },
                     policy_config={
                         "allow_jira_transitions": False,
@@ -112,3 +110,15 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(payload["tenant_filter"], "all")
         self.assertEqual(len(payload["tenants"]), 1)
         self.assertEqual(payload["tenants"][0]["tenant_id"], "tenant-cli")
+
+    def test_discord_gateway_command_invokes_runtime(self) -> None:
+        with patch("orchestrator.cli.run_discord_gateway") as gateway_mock:
+            exit_code = cli_main(["discord-gateway"])
+        self.assertEqual(exit_code, 0)
+        gateway_mock.assert_called_once_with()
+
+    def test_knowledge_jira_sync_command_invokes_runtime(self) -> None:
+        with patch("orchestrator.cli.run_knowledge_jira_sync") as sync_mock:
+            exit_code = cli_main(["knowledge-jira-sync"])
+        self.assertEqual(exit_code, 0)
+        sync_mock.assert_called_once_with()

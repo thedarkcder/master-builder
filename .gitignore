@@ -4,5 +4,13 @@ __pycache__/
 .ruff_cache/
 .venv/
 *.db
+.env
+dist/
+*.egg-info/
+*.egg-info
+.coverage
+coverage.xml
 .cloudflared/*.json
 !.cloudflared/config.yml
+.workdirs/
+admin-ui/tsconfig.tsbuildinfo

@@ -11,6 +11,9 @@ def run_migrations(database_url: str | None = None) -> None:
     root = Path(__file__).resolve().parents[2]
 
     config = Config(str(root / "alembic.ini"))
+    # Keep application logging configuration intact; Alembic's default fileConfig
+    # would otherwise reset handlers/levels (which hides request logs).
+    config.attributes["configure_logger"] = False
     config.set_main_option(
         "script_location",
         str(root / "orchestrator" / "storage" / "migrations"),

@@ -1,0 +1,86 @@
+<mxfile host="app.diagrams.net" modified="2026-02-15T00:00:00.000Z" agent="codex" version="24.7.17">
+  <diagram id="seedFollowupFlow" name="Seed + Follow-up Flow">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="start" value="Discord user: !issues seed &lt;spec&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="260" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="ingress" value="Discord ingress + permission gate + scope resolution" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="340" y="60" width="300" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="seedService" value="seed_issues_with_codex()\n- build Codex runtime\n- invoke plan_seed_issues_with_codex" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="700" y="40" width="320" height="110" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="codexPayload" value="Codex JSON payload:\nproject_key, issues[], questions[]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="60" width="280" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="jiraUpsert" value="Jira upsert\n- match existing issue(s)\n- update matched\n- create new (if allowed)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1380" y="40" width="300" height="110" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="needsInput" value="questions[] non-empty?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="520" y="260" width="190" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="storeContext" value="Store seed follow-up context\n(request_id, issue_keys, project_key,\nchannel_ids, questions, prompt_markdown)\nPost follow-up thread questions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="780" y="240" width="360" height="140" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="doneNoQuestions" value="Send upsert complete\n(no follow-up needed)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="260" y="270" width="220" height="80" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="threadReply" value="User replies in follow-up thread" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="270" width="240" height="80" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="gatewayMap" value="Gateway maps thread reply to seed context\n(channel match, or user+project unique match)\nRewrites to !issues followup &lt;reply text&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="1460" y="240" width="340" height="140" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="followupSeed" value="follow-up seed_issues_with_codex()\n- allow_create=false\n- force_issue_keys=context.issue_keys\n- prompt = prior prompt + reply" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="1840" y="240" width="330" height="140" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="reeval" value="Codex re-evaluates completeness\nvia updated questions[]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="2220" y="270" width="250" height="80" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="loopDecision" value="questions[] still non-empty?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="2520" y="260" width="220" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="loopBack" value="Refresh context + ask remaining questions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="2800" y="250" width="260" height="120" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="complete" value="Update complete\nClear follow-up context\nSend completion message" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="2800" y="70" width="260" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" edge="1" parent="1" source="start" target="ingress" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e2" edge="1" parent="1" source="ingress" target="seedService" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e3" edge="1" parent="1" source="seedService" target="codexPayload" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e4" edge="1" parent="1" source="codexPayload" target="jiraUpsert" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e5" edge="1" parent="1" source="jiraUpsert" target="needsInput" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e6" value="No" edge="1" parent="1" source="needsInput" target="doneNoQuestions" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e7" value="Yes" edge="1" parent="1" source="needsInput" target="storeContext" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e8" edge="1" parent="1" source="storeContext" target="threadReply" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e9" edge="1" parent="1" source="threadReply" target="gatewayMap" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e10" edge="1" parent="1" source="gatewayMap" target="followupSeed" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e11" edge="1" parent="1" source="followupSeed" target="reeval" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e12" edge="1" parent="1" source="reeval" target="loopDecision" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e13" value="Yes" edge="1" parent="1" source="loopDecision" target="loopBack" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e14" value="No" edge="1" parent="1" source="loopDecision" target="complete" style="endArrow=block;html=1;rounded=0;"/>
+        <mxCell id="e15" edge="1" parent="1" source="loopBack" target="threadReply" style="endArrow=block;html=1;rounded=0;"/>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

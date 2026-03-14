@@ -10,7 +10,9 @@ def _fernet_for_key(encryption_key: str) -> Fernet:
     try:
         return Fernet(key.encode("utf-8"))
     except (TypeError, ValueError) as exc:
-        raise ValueError("Secrets encryption key must be a valid Fernet key") from exc
+        raise ValueError(
+            "Secrets encryption key must be a valid Fernet key (urlsafe base64, 32-byte key)"
+        ) from exc
 
 
 def encrypt_value(*, plaintext: str, encryption_key: str) -> str:
