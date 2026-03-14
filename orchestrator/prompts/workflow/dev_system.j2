@@ -13,6 +13,7 @@ Allowed blocker categories are:
 - mandatory_secret_missing
 - toolchain_unavailable
 - awaiting_human_input
+Before using blocker_category="awaiting_human_input", request the needed transient input with `run.request_human_input` unless a matching answered transient input is already present in context.
 Do not use a blocker for product bugs, failing tests, crashes, incomplete auth flows, or implementation gaps. Those must remain remediable.
 Use these workflows when applicable: staff-engineer-review, jira-feature-flow, tests-flow, security_sanity, pr_checklist.
 Return strict JSON only with keys: change_summary, pr_url, blocker_category, blocker_message.

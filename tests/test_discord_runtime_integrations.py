@@ -176,6 +176,43 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertIn("internal error. Ref:", error_content)
         self.assertIs(session, session)
 
+    def test_handle_message_create_resumes_pending_human_input_request(self) -> None:
+        listener, session = self._listener()
+        tenant = SimpleNamespace(tenant_id="route25")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        request = SimpleNamespace(
+            request_id="request-1",
+            issue_key="GP-122",
+        )
+        resumed_run = SimpleNamespace(run_id="run-2")
+
+        with (
+            patch(
+                "orchestrator.core.discord.gateway_listener.pending_human_input_for_thread",
+                return_value=request,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resume_run_from_human_input_reply",
+                return_value=resumed_run,
+            ) as resume_mock,
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "id": "msg-1",
+                    "channel_id": "thread-1",
+                    "content": "123456",
+                    "attachments": [],
+                },
+                bot_token="token",
+            )
+
+        resume_mock.assert_called_once()
+        post_kwargs = client_cls.return_value.post_message.call_args.kwargs
+        self.assertIn("queued resumed run `run-2`", post_kwargs["content"])
+        self.assertIn("GP-122", post_kwargs["content"])
+
     def test_handle_message_create_seed_followup_rewrites_command_and_sets_components(self) -> None:
         listener, _session = self._listener()
         tenant = SimpleNamespace(tenant_id="route25")

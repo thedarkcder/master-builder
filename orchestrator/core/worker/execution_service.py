@@ -78,6 +78,7 @@ def _workflow_request_for_run(
     effective_policy: dict,
 ) -> WorkflowRequest:
     return _build_workflow_request_for_run(
+        session=session,
         tenant=tenant,
         run=run,
         project=project,

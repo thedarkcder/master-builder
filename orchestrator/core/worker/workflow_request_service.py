@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from orchestrator.core.guardrails import enforce_safe_command
+from orchestrator.core.run_human_input_service import answered_human_inputs_for_request
 from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.worker_capabilities import parse_worker_capabilities
 from orchestrator.core.workflow.runner import WorkflowRequest
@@ -16,6 +17,7 @@ from orchestrator.tools.project_repo_checkout import (
 
 def build_workflow_request_for_run(
     *,
+    session,
     tenant: Tenant,
     run: Run,
     project: Project | None,
@@ -67,6 +69,12 @@ def build_workflow_request_for_run(
     resume_stage = _extract_resume_stage(trigger_context)
     resume_session_id = _extract_resume_session_id(trigger_context)
     resume_source_plan = _extract_resume_source_plan(trigger_context)
+    human_input_request_ids = _extract_human_input_request_ids(trigger_context)
+    human_inputs = answered_human_inputs_for_request(
+        session=session,
+        settings=settings,
+        request_ids=human_input_request_ids,
+    ) if human_input_request_ids else []
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
@@ -95,6 +103,7 @@ def build_workflow_request_for_run(
         resume_stage=resume_stage,
         resume_session_id=resume_session_id,
         resume_source_plan=resume_source_plan,
+        human_inputs=human_inputs,
     )
 
 
@@ -196,3 +205,12 @@ def _extract_resume_source_plan(trigger_context: dict | None) -> dict | None:
     if not isinstance(value, dict):
         return None
     return value
+
+
+def _extract_human_input_request_ids(trigger_context: dict | None) -> list[str]:
+    if not isinstance(trigger_context, dict):
+        return []
+    value = trigger_context.get("human_input_request_ids")
+    if not isinstance(value, list):
+        return []
+    return [str(item or "").strip() for item in value if str(item or "").strip()]

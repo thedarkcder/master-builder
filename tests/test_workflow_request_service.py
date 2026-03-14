@@ -31,6 +31,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
             with self.assertRaisesRegex(ValueError, "project routing is required"):
                 build_workflow_request_for_run(
+                    session=SimpleNamespace(),
                     tenant=tenant,
                     run=run,
                     project=None,
@@ -53,6 +54,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "checkout is missing"):
                     build_workflow_request_for_run(
+                        session=SimpleNamespace(),
                         tenant=tenant,
                         run=run,
                         project=project,
@@ -75,6 +77,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "Run worktree bootstrap failed"):
                     build_workflow_request_for_run(
+                        session=SimpleNamespace(),
                         tenant=tenant,
                         run=run,
                         project=project,
@@ -111,6 +114,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 ),
             ):
                 request = build_workflow_request_for_run(
+                    session=SimpleNamespace(),
                     tenant=tenant,
                     run=run,
                     project=project,
@@ -166,6 +170,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 ),
             ):
                 request = build_workflow_request_for_run(
+                    session=SimpleNamespace(),
                     tenant=tenant,
                     run=run,
                     project=project,
@@ -176,6 +181,58 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertEqual(request.resume_stage, "dev")
             self.assertEqual(request.resume_session_id, "dev-session-123")
             self.assertEqual(request.resume_source_plan, run.plan["trigger_context"]["resume_source_plan"])
+
+    def test_build_workflow_request_includes_answered_human_inputs(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            run.plan = {
+                "trigger_context": {
+                    "human_input_request_ids": ["request-1"],
+                }
+            }
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+            )
+            checkout_dir = Path(tmp_dir) / "tenant-1" / "project-1" / "runs" / "run-1" / "repo"
+            checkout_dir.mkdir(parents=True, exist_ok=True)
+            with (
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+                    return_value=(checkout_dir, "run/TP-1/run-1"),
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
+                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
+                    return_value=None,
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.answered_human_inputs_for_request",
+                    return_value=[
+                        {
+                            "request_id": "request-1",
+                            "request_type": "verification_code",
+                            "prompt": "Enter the Apple verification code",
+                            "value": "123456",
+                        }
+                    ],
+                ),
+            ):
+                request = build_workflow_request_for_run(
+                    session=SimpleNamespace(),
+                    tenant=tenant,
+                    run=run,
+                    project=project,
+                    effective_policy=effective_policy,
+                    settings=settings,
+                )
+            self.assertEqual(request.human_inputs[0]["request_type"], "verification_code")
+            self.assertEqual(request.human_inputs[0]["value"], "123456")
 
 
 if __name__ == "__main__":
