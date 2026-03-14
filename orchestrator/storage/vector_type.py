@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import json
 from typing import Any
 
 from sqlalchemy import JSON
@@ -12,6 +13,26 @@ def vector_literal(values: Sequence[float] | None) -> str | None:
         return None
     normalized = [float(value) for value in values]
     return "[" + ",".join(f"{value:.12g}" for value in normalized) + "]"
+
+
+def normalize_vector_values(value: Sequence[float] | str | None) -> list[float] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [float(item) for item in parsed]
+        parsed_literal = parse_vector_value(text)
+        if parsed_literal is not None:
+            return parsed_literal
+        raise ValueError(f"invalid vector value: {value!r}")
+    return [float(item) for item in value]
 
 
 def parse_vector_value(value: Any) -> list[float] | None:
@@ -41,7 +62,7 @@ class _PostgresVectorType(UserDefinedType):
 
     def bind_processor(self, _dialect):  # noqa: ANN001
         def _process(value: Sequence[float] | None) -> str | None:
-            return vector_literal(value)
+            return vector_literal(normalize_vector_values(value))
 
         return _process
 
@@ -66,13 +87,10 @@ class VectorJSONCompat(TypeDecorator):
         return dialect.type_descriptor(JSON())
 
     def process_bind_param(self, value: Sequence[float] | None, dialect):  # noqa: ANN001
-        if value is None:
+        normalized = normalize_vector_values(value)
+        if normalized is None:
             return None
-        normalized = [float(item) for item in value]
-        if dialect.name == "postgresql":
-            return vector_literal(normalized)
         return normalized
 
     def process_result_value(self, value: Any, _dialect) -> list[float] | None:
         return parse_vector_value(value)
-

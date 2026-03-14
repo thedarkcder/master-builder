@@ -17,13 +17,24 @@ class WorkflowRequest:
     suggested_test_commands: list[str] = field(default_factory=list)
     execution_repo_dir: str | None = None
     project_id: str | None = None
+    project_name: str | None = None
+    github_repository: str | None = None
+    jira_project_key: str | None = None
     current_worker_capability: str = "linux"
     available_worker_capabilities: list[str] = field(default_factory=list)
     base_branch: str | None = None
     integration_branch: str | None = None
     pr_target_branch: str | None = None
+    execution_branch: str | None = None
+    start_point_ref: str | None = None
+    start_point_sha: str | None = None
     pr_number: int | None = None
     trigger_context: dict | None = None
+    resume_mode: str | None = None
+    resume_stage: str | None = None
+    resume_session_id: str | None = None
+    resume_source_plan: dict | None = None
+    human_inputs: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -43,7 +54,8 @@ class PmPlan:
 class DevResult:
     change_summary: list[str]
     pr_url: str | None
-    hard_stop_reason: str | None = None
+    blocker_category: str | None = None
+    blocker_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +63,8 @@ class TestResult:
     passed: bool
     guidance: list[str]
     feedback: str | None = None
+    blocker_category: str | None = None
+    blocker_message: str | None = None
 
 
 # Prevent pytest from collecting this dataclass as a test class.
@@ -64,6 +78,8 @@ class ReviewResult:
     outcome: str = "needs_changes"
     feedback: str | None = None
     pr_url: str | None = None
+    blocker_category: str | None = None
+    blocker_message: str | None = None
 
 
 @dataclass(frozen=True)

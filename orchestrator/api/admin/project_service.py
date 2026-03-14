@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import re
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -9,6 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.storage.models import Project, Tenant
+from orchestrator.core.secret_manager import normalize_secret_ref
+from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref, tenant_secret_service
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.jira_oauth import JiraOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
@@ -44,6 +47,101 @@ class AdminProjectService:
         self._project_to_schema = project_to_schema
         self._settings_factory = settings_factory
 
+    def _project_secret_ref(self, *, tenant_id: str, project_id: str, secret_key: str) -> str:
+        normalized_key = normalize_secret_ref(secret_key)
+        if normalized_key.startswith(("platform/", "tenant/", "project/")):
+            raise ValueError("Project secret variable names must not include a scope prefix")
+        return f"project/{tenant_id}/{project_id}/{normalized_key}"
+
+    def _looks_like_inline_secret_value(self, value: str) -> bool:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return False
+        if normalized.startswith(("platform/", "tenant/", "project/")):
+            return False
+        if "://" in normalized:
+            return True
+        if normalized.startswith(("sb_publishable_", "sbp_", "eyJ")):
+            return True
+        if re.search(r"\s", normalized):
+            return True
+        if any(char in normalized for char in ("@", "&", "%", "=")):
+            return True
+        if len(normalized) >= 24 and re.search(r"[a-z]", normalized) and re.search(r"\d", normalized):
+            return True
+        return False
+
+    def _materialize_project_secret_refs(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        raw_secret_refs: dict | None,
+        encryption_key: str,
+    ) -> dict[str, str]:
+        normalized_map = self._normalize_string_map(raw_secret_refs)
+        materialized: dict[str, str] = {}
+        for key, raw_value in normalized_map.items():
+            variable_name = str(key or "").strip()
+            candidate = str(raw_value or "").strip()
+            if not variable_name or not candidate:
+                continue
+
+            normalized_candidate: str | None
+            try:
+                normalized_candidate = normalize_secret_ref(candidate)
+            except ValueError:
+                normalized_candidate = None
+
+            if normalized_candidate is not None:
+                if normalized_candidate.startswith(("platform/", "tenant/", "project/")):
+                    materialized[variable_name] = normalized_candidate
+                    continue
+                resolved_value = resolve_scoped_secret_ref(
+                    session,
+                    secret_ref=normalized_candidate,
+                    encryption_key=encryption_key,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                )
+                if resolved_value is not None or not self._looks_like_inline_secret_value(normalized_candidate):
+                    materialized[variable_name] = normalized_candidate
+                    continue
+
+            managed_ref = self._project_secret_ref(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                secret_key=variable_name,
+            )
+            tenant_secret_service.upsert_secret(
+                session=session,
+                secret_ref=managed_ref,
+                plaintext_value=candidate,
+                encryption_key=encryption_key,
+                tenant_id=tenant_id,
+            )
+            materialized[variable_name] = managed_ref
+        return materialized
+
+    def _repair_project_secret_refs(self, *, session, project: Project) -> bool:
+        settings = self._settings_factory()
+        encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
+        materialized = self._materialize_project_secret_refs(
+            session=session,
+            tenant_id=project.tenant_id,
+            project_id=project.project_id,
+            raw_secret_refs=project.secret_refs,
+            encryption_key=encryption_key,
+        )
+        if materialized == (project.secret_refs or {}):
+            return False
+        project.secret_refs = materialized
+        project.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(project)
+        return True
+
     def list_projects(self, *, session, tenant_id: str) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
@@ -61,6 +159,7 @@ class AdminProjectService:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        self._repair_project_secret_refs(session=session, project=project)
         return self._project_to_schema(project, tenant_policy=tenant.policy_config)
 
     def create_project(self, *, session, tenant_id: str, payload) -> object:  # noqa: ANN001
@@ -94,6 +193,7 @@ class AdminProjectService:
         if run_board_id is not None:
             normalized_policy_overrides["run_board_id"] = run_board_id
 
+        settings = self._settings_factory()
         project = Project(
             project_id=str(uuid4()),
             tenant_id=tenant_id,
@@ -102,15 +202,24 @@ class AdminProjectService:
             jira_project_key=normalized_jira_key,
             policy_overrides=normalized_policy_overrides,
             environment=self._normalize_string_map(payload.environment),
-            secret_refs=self._normalize_string_map(payload.secret_refs),
+            secret_refs={},
             discord_config={},
             is_archived=False,
             created_at=now,
             updated_at=now,
         )
+        try:
+            project.secret_refs = self._materialize_project_secret_refs(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project.project_id,
+                raw_secret_refs=payload.secret_refs,
+                encryption_key=str(getattr(settings, "secrets_encryption_key", "") or "").strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         normalized_discord = self._normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
         if payload.discord is not None:
-            settings = self._settings_factory()
             try:
                 normalized_discord = self._resolve_project_discord_channel_binding(
                     session=session,
@@ -177,12 +286,13 @@ class AdminProjectService:
         project.github_repository = normalized_repo
         project.jira_project_key = normalized_jira_key
         normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+        settings = self._settings_factory()
         try:
             run_board_id = self._resolve_project_run_board_id(
                 session=session,
                 tenant=tenant,
                 jira_project_key=normalized_jira_key,
-                settings=self._settings_factory(),
+                settings=settings,
             )
         except (ValueError, JiraOAuthError) as exc:
             raise HTTPException(
@@ -193,13 +303,21 @@ class AdminProjectService:
             normalized_policy_overrides["run_board_id"] = run_board_id
         project.policy_overrides = normalized_policy_overrides
         project.environment = self._normalize_string_map(payload.environment)
-        project.secret_refs = self._normalize_string_map(payload.secret_refs)
+        try:
+            project.secret_refs = self._materialize_project_secret_refs(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project.project_id,
+                raw_secret_refs=payload.secret_refs,
+                encryption_key=str(getattr(settings, "secrets_encryption_key", "") or "").strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         normalized_discord = self._with_preserved_discord_system_fields(
             existing=dict(project.discord_config or {}),
             proposed=self._normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None),
         )
         if payload.discord is not None:
-            settings = self._settings_factory()
             try:
                 normalized_discord = self._resolve_project_discord_channel_binding(
                     session=session,

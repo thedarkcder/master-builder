@@ -25,6 +25,8 @@ class DiscordSendResult:
     sent: bool
     reason: str
     channel_id: str | None = None
+    message_id: str | None = None
+    thread_channel_id: str | None = None
 
 
 def _event_enabled_for_project(*, project: Project | None, event: str | None) -> bool:
@@ -82,8 +84,9 @@ def send_tenant_discord_message(
     try:
         client = DiscordApiClient(bot_token=bot_token)
         posted = client.post_message(channel_id=channel_id, content=message)
+        posted_message_id = str(posted.get("id") or "").strip() or None
+        thread_channel_id: str | None = None
         if open_thread:
-            posted_message_id = str(posted.get("id") or "").strip()
             if not posted_message_id:
                 raise ValueError("Discord message post succeeded but response did not include message ID")
             safe_thread_name = (thread_name or f"{tenant.tenant_id}-update-{posted_message_id[-6:]}").replace(" ", "-")[:100]
@@ -132,4 +135,10 @@ def send_tenant_discord_message(
         )
         return DiscordSendResult(sent=False, reason=f"send_failed:{exc}", channel_id=channel_id)
 
-    return DiscordSendResult(sent=True, reason="sent", channel_id=channel_id)
+    return DiscordSendResult(
+        sent=True,
+        reason="sent",
+        channel_id=channel_id,
+        message_id=posted_message_id,
+        thread_channel_id=thread_channel_id,
+    )

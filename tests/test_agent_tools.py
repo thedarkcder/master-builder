@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,9 +22,16 @@ def test_allowed_tools_for_stage_pm_contains_evidence_tools() -> None:
     tools = allowed_tools_for_stage("pm")
     assert "jira.get_issue" in tools
     assert "decision.read_state" in tools
+    assert "knowledge.exact_read" in tools
     assert "knowledge.read" in tools
     assert "project.list_runtime_keys" in tools
     assert "project.get_runtime_values" in tools
+    assert "run.request_human_input" in tools
+
+
+def test_allowed_tools_for_stage_dev_contains_human_input_request_tool() -> None:
+    tools = allowed_tools_for_stage("dev")
+    assert "run.request_human_input" in tools
 
 
 def test_execute_agent_tool_rejects_disallowed_stage_tool() -> None:
@@ -100,6 +108,68 @@ def test_github_create_branch_uses_remote_default_when_base_omitted() -> None:
         (["checkout", "-B", "main", "origin/main"], None),
         (["checkout", "-B", "jira/MAB-1-test"], None),
     ]
+
+
+def test_run_request_human_input_creates_request() -> None:
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "test"
+        issue_key = "GP-122"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    fake_run = SimpleNamespace(run_id="run-1")
+    fake_request = SimpleNamespace(
+        request_id="request-1",
+        request_type="verification_code",
+        resume_stage="dev",
+        thread_channel_id="thread-1",
+        expires_at=SimpleNamespace(isoformat=lambda: "2026-03-13T12:00:00+00:00"),
+    )
+    fake_session = MagicMock()
+    fake_session.get.return_value = fake_run
+
+    with (
+        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.agent_tools.create_human_input_request", return_value=fake_request) as create_mock,
+    ):
+        payload = execute_agent_tool(
+            session=fake_session,
+            settings=SimpleNamespace(),
+            tenant_id="route25",
+            project_id="route25-default",
+            run_id="run-1",
+            issue_key="GP-122",
+            stage="test",
+            tool_name="run.request_human_input",
+            tool_args={
+                "request_type": "verification_code",
+                "prompt": "Reply with the 2FA code",
+                "instructions": "Use the latest code only.",
+                "expected_reply_format": "6 digits",
+                "request_context": {"provider": "apple"},
+            },
+        )
+
+    assert payload == {
+        "request_id": "request-1",
+        "request_type": "verification_code",
+        "resume_stage": "dev",
+        "thread_channel_id": "thread-1",
+        "expires_at": "2026-03-13T12:00:00+00:00",
+    }
+    create_mock.assert_called_once()
 
 
 def test_github_create_branch_uses_supplied_base_branch_for_sync() -> None:
@@ -417,6 +487,61 @@ def test_repo_read_requires_repo_checkout() -> None:
             )
 
 
+def test_resolve_context_prefers_run_worktree_for_run_scoped_tools() -> None:
+    from orchestrator.storage.models import Project, Tenant
+
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        tenant_id = "route25"
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        is_archived = False
+
+    class _FakeQuery:
+        def filter(self, *_args, **_kwargs):  # noqa: ANN001
+            return self
+
+        def first(self):
+            return None
+
+    class _FakeSession:
+        def get(self, cls, key):  # noqa: ANN001
+            if cls is Tenant and key == "route25":
+                return _FakeTenant()
+            if cls is Project and key == "route25-default":
+                return _FakeProject()
+            return None
+
+        def query(self, _cls):  # noqa: ANN001
+            return _FakeQuery()
+
+    settings = SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs")
+
+    with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
+        with patch(
+            "orchestrator.core.agent_tools.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="ok", stderr=""),
+        ) as run_mock:
+            execute_agent_tool(
+                session=_FakeSession(),  # type: ignore[arg-type]
+                settings=settings,
+                tenant_id="route25",
+                project_id="route25-default",
+                run_id="run-123",
+                issue_key="MAB-1",
+                stage="test",
+                tool_name="repo.read",
+                tool_args={"command": "git status -sb"},
+            )
+
+    assert run_mock.call_args.kwargs["cwd"] == "/tmp/workdirs/route25/route25-default/runs/run-123/repo"
+
+
 def test_project_get_runtime_values_returns_environment_value() -> None:
     class _FakeTenant:
         tenant_id = "route25"
@@ -634,3 +759,46 @@ def test_project_request_runtime_values_sends_discord_notification() -> None:
         "channel_id": "123",
     }
     send_mock.assert_called_once()
+
+
+def test_knowledge_exact_read_returns_stored_asset_payload() -> None:
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {}
+        policy_config = {}
+        jira_config = {}
+
+    class _FakeProject:
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "pm"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with (
+        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch(
+            "orchestrator.core.agent_tools.exact_read_knowledge_source",
+            return_value={"ok": True, "connector": "stored_asset", "layer": "exact_read"},
+        ) as exact_read_mock,
+    ):
+        payload = execute_agent_tool(
+            session=object(),  # type: ignore[arg-type]
+            settings=SimpleNamespace(),
+            tenant_id="route25",
+            project_id="route25-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="pm",
+            tool_name="knowledge.exact_read",
+            tool_args={"asset_id": "kb-1"},
+        )
+
+    assert payload == {"ok": True, "connector": "stored_asset", "layer": "exact_read"}
+    exact_read_mock.assert_called_once()

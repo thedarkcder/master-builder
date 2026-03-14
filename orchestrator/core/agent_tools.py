@@ -15,9 +15,11 @@ from sqlalchemy import select
 
 from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
 from orchestrator.core.discord.notifications import send_tenant_discord_message
+from orchestrator.core.knowledge_exact_read import ExactReadRequest, exact_read_knowledge_source
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.run_human_input_service import create_human_input_request
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import (
     DecisionAnswer,
@@ -31,7 +33,7 @@ from orchestrator.storage.models import (
 )
 from orchestrator.tools.git_ops import build_branch_name
 from orchestrator.tools.github_app import github_client_from_tenant_config
-from orchestrator.tools.project_repo_checkout import project_repo_dir
+from orchestrator.tools.project_repo_checkout import project_repo_dir, project_run_repo_dir
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
 
@@ -41,13 +43,16 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "jira.comment",
         "jira.transition",
         "decision.read_state",
+        "knowledge.exact_read",
         "knowledge.read",
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
         "repo.read",
     },
     "dev": {
+        "knowledge.exact_read",
         "jira.comment",
         "jira.transition",
         "github.create_branch",
@@ -58,15 +63,19 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
     "test": {
+        "knowledge.exact_read",
         "jira.comment",
         "repo.read",
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
     "review": {
+        "knowledge.exact_read",
         "jira.comment",
         "jira.transition",
         "github.open_pr",
@@ -74,8 +83,10 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
     "orchestrator": {
+        "knowledge.exact_read",
         "jira.get_issue",
         "jira.comment",
         "jira.transition",
@@ -93,15 +104,18 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
     "decision_planner": {
         "jira.get_issue",
         "repo.read",
         "decision.read_state",
+        "knowledge.exact_read",
         "knowledge.read",
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
 }
 
@@ -191,10 +205,24 @@ def execute_agent_tool(
             tool_name=tool_name,
             args=args,
         )
+    if tool_name.startswith("run."):
+        return _execute_run_tool(
+            session=session,
+            settings=settings,
+            context=context,
+            tool_name=tool_name,
+            args=args,
+        )
     if tool_name.startswith("decision."):
         return _execute_decision_tool(session=session, context=context, tool_name=tool_name, args=args)
     if tool_name.startswith("knowledge."):
-        return _execute_knowledge_tool(session=session, context=context, tool_name=tool_name, args=args)
+        return _execute_knowledge_tool(
+            session=session,
+            settings=settings,
+            context=context,
+            tool_name=tool_name,
+            args=args,
+        )
     if tool_name.startswith("jira."):
         return _execute_jira_tool(session=session, settings=settings, context=context, tool_name=tool_name, args=args)
     if tool_name.startswith("github."):
@@ -233,11 +261,19 @@ def _resolve_context(
     if project is None:
         raise ValueError(f"No project mapping available for tenant '{tenant.tenant_id}'")
 
-    repo_dir = project_repo_dir(
-        base_dir=settings.project_repo_checkout_base_dir,
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id,
-    )
+    if run_id:
+        repo_dir = project_run_repo_dir(
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            run_id=run_id,
+        )
+    else:
+        repo_dir = project_repo_dir(
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        )
 
     return AgentToolContext(
         tenant=tenant,
@@ -474,10 +510,25 @@ def _execute_decision_tool(
 def _execute_knowledge_tool(
     *,
     session: Session,
+    settings,
     context: AgentToolContext,
     tool_name: str,
     args: dict[str, Any],  # noqa: ANN401
 ) -> dict[str, Any]:
+    if tool_name == "knowledge.exact_read":
+        payload = exact_read_knowledge_source(
+            session=session,
+            settings=settings,
+            request=ExactReadRequest(
+                tenant=context.tenant,
+                project=context.project,
+                issue_key=context.issue_key,
+                source_type=str(args.get("source_type") or "").strip() or None,
+                source_ref=str(args.get("source_ref") or "").strip() or None,
+                asset_id=str(args.get("asset_id") or "").strip() or None,
+            ),
+        )
+        return payload
     if tool_name != "knowledge.read":
         raise ValueError(f"Unsupported Knowledge tool '{tool_name}'")
     query = str(args.get("query") or context.issue_key).strip()
@@ -589,27 +640,23 @@ def _execute_project_tool(
         if not secret_ref:
             values[key] = {"source": "missing", "value": None, "secret_ref": None}
             continue
-        if secret_ref.startswith("platform/"):
-            resolved_value = resolve_platform_secret_ref(
-                session,
-                secret_ref=secret_ref,
-                encryption_key=encryption_key,
-            )
-        else:
-            resolved_value = resolve_scoped_secret_ref(
-                session,
-                secret_ref=secret_ref,
-                tenant_id=context.tenant.tenant_id,
-                project_id=context.project.project_id,
-                encryption_key=encryption_key,
-            )
-        if resolved_value is None and _looks_like_inline_runtime_value(secret_ref):
-            values[key] = {
-                "source": "literal",
-                "value": secret_ref,
-                "secret_ref": None,
-            }
-            continue
+        try:
+            if secret_ref.startswith("platform/"):
+                resolved_value = resolve_platform_secret_ref(
+                    session,
+                    secret_ref=secret_ref,
+                    encryption_key=encryption_key,
+                )
+            else:
+                resolved_value = resolve_scoped_secret_ref(
+                    session,
+                    secret_ref=secret_ref,
+                    tenant_id=context.tenant.tenant_id,
+                    project_id=context.project.project_id,
+                    encryption_key=encryption_key,
+                )
+        except ValueError as exc:
+            raise ValueError(f"Invalid secret ref for {key}: {exc}") from exc
         values[key] = {
             "source": "secret_ref" if resolved_value else "missing",
             "value": resolved_value,
@@ -619,21 +666,56 @@ def _execute_project_tool(
     return {"values": values}
 
 
-def _looks_like_inline_runtime_value(value: str) -> bool:
-    normalized = str(value or "").strip()
-    if not normalized:
-        return False
-    if normalized.startswith(("platform/", "tenant/", "project/")):
-        return False
-    if "://" in normalized:
-        return True
-    if normalized.startswith(("sb_publishable_", "sbp_", "eyJ")):
-        return True
-    if re.search(r"\s", normalized):
-        return True
-    if len(normalized) >= 24 and re.search(r"[a-z]", normalized) and re.search(r"\d", normalized):
-        return True
-    return False
+def _execute_run_tool(
+    *,
+    session: Session,
+    settings,
+    context: AgentToolContext,
+    tool_name: str,
+    args: dict[str, Any],  # noqa: ANN401
+) -> dict[str, Any]:
+    if tool_name != "run.request_human_input":
+        raise ValueError(f"Unsupported Run tool '{tool_name}'")
+    if not context.run_id:
+        raise ValueError("run.request_human_input requires an active run context")
+    run = session.get(Run, context.run_id)
+    if run is None:
+        raise ValueError(f"Run '{context.run_id}' was not found")
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("run.request_human_input requires non-empty 'prompt'")
+    request_type = str(args.get("request_type") or "").strip().lower()
+    if not request_type:
+        raise ValueError("run.request_human_input requires non-empty 'request_type'")
+    expected_reply_format = str(args.get("expected_reply_format") or "").strip() or None
+    instructions = str(args.get("instructions") or "").strip() or None
+    expires_in_minutes_raw = args.get("expires_in_minutes")
+    expires_in_minutes = int(expires_in_minutes_raw) if expires_in_minutes_raw is not None else None
+    request_context = args.get("request_context")
+    if request_context is not None and not isinstance(request_context, dict):
+        raise ValueError("run.request_human_input request_context must be a JSON object when provided")
+    request = create_human_input_request(
+        session=session,
+        settings=settings,
+        tenant=context.tenant,
+        project=context.project,
+        run=run,
+        issue_key=context.issue_key,
+        source_stage=context.stage,
+        request_type=request_type,
+        prompt=prompt,
+        instructions=instructions,
+        expected_reply_format=expected_reply_format,
+        request_context=request_context if isinstance(request_context, dict) else None,
+        expires_in_minutes=expires_in_minutes,
+    )
+    return {
+        "request_id": request.request_id,
+        "request_type": request.request_type,
+        "resume_stage": request.resume_stage,
+        "thread_channel_id": request.thread_channel_id,
+        "expires_at": request.expires_at.isoformat() if request.expires_at else None,
+    }
 
 
 def _execute_github_tool(

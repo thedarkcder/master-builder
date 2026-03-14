@@ -39,6 +39,8 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("repo_bootstrap_states", inspector.get_table_names())
             self.assertIn("managed_secrets", inspector.get_table_names())
             self.assertIn("agent_lifecycle_events", inspector.get_table_names())
+            self.assertIn("knowledge_jira_sync_runtime_states", inspector.get_table_names())
+            self.assertIn("knowledge_jira_sync_project_states", inspector.get_table_names())
 
     def test_initial_migration_uses_boolean_default_for_tenants_enabled(self) -> None:
         migration_file = (

@@ -1,7 +1,10 @@
+import json
 import os
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.core.decision_gate import DecisionGateResult
@@ -174,6 +177,21 @@ class WorkerWorkflowTests(unittest.TestCase):
             "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
         )
         self.checkout_mock = self.checkout_patcher.start()
+        self.worktree_patcher = patch(
+            "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+            side_effect=self._ensure_run_worktree_stub,
+        )
+        self.worktree_patcher.start()
+        self.worktree_validate_patcher = patch(
+            "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
+            return_value=None,
+        )
+        self.worktree_validate_patcher.start()
+        self.freshness_patcher = patch(
+            "orchestrator.core.worker.execution_service.check_run_snapshot_freshness",
+            return_value=SimpleNamespace(stale=False, message=None),
+        )
+        self.freshness_patcher.start()
         self.decision_gate_patcher = patch(
             "orchestrator.core.worker.execution_service.evaluate_pre_run_check",
             new=_evaluate_pre_run_check_test_stub,
@@ -184,6 +202,9 @@ class WorkerWorkflowTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.checkout_patcher.stop()
+        self.worktree_patcher.stop()
+        self.worktree_validate_patcher.stop()
+        self.freshness_patcher.stop()
         self.temp_dir.cleanup()
         os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
         self.decision_gate_patcher.stop()
@@ -292,6 +313,44 @@ class WorkerWorkflowTests(unittest.TestCase):
         )
         os.makedirs(repo_git_dir, exist_ok=True)
 
+    def _ensure_run_worktree_stub(
+        self,
+        *,
+        base_dir: str,
+        tenant_id: str,
+        project,
+        run_id: str,
+        issue_key: str,
+        base_branch: str,
+        integration_branch: str,
+    ) -> tuple[str, str]:
+        _ = (issue_key, base_branch, integration_branch)
+        worktree_dir = (
+            Path(base_dir)
+            / tenant_id
+            / project.project_id
+            / "runs"
+            / run_id
+            / "repo"
+        )
+        (worktree_dir / ".git").mkdir(parents=True, exist_ok=True)
+        (worktree_dir / ".master-builder-run.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "issue_key": issue_key,
+                    "execution_branch": f"run/{issue_key}/{run_id}",
+                    "base_branch": base_branch,
+                    "integration_branch": integration_branch,
+                    "start_point_ref": "origin/main",
+                    "start_point_sha": "startsha123",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return str(worktree_dir), f"run/{issue_key}/{run_id}"
+
     def test_process_next_queued_run_marks_success_and_persists_plan(self) -> None:
         run_id = self._queue_run("TP-300")
         runner = _SuccessRunner()
@@ -317,7 +376,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNotNone(runner.last_request)
             self.assertTrue(
                 str(runner.last_request.execution_repo_dir).endswith(
-                    "/tenant-worker/tenant-worker-default/repo"
+                    "/tenant-worker/tenant-worker-default/runs/run-TP-300/repo"
                 )
             )
 
@@ -326,6 +385,39 @@ class WorkerWorkflowTests(unittest.TestCase):
         self.assertIn("ISSUE_ASSIGNED", event_types)
         self.assertIn("TASK_STARTED", event_types)
         self.assertIn("TASK_COMPLETED", event_types)
+
+    def test_process_next_queued_run_requeues_when_branch_snapshot_is_stale(self) -> None:
+        run_id = self._queue_run("TP-3001")
+        runner = _SuccessRunner()
+
+        with (
+            patch(
+                "orchestrator.core.worker.execution_service.check_run_snapshot_freshness",
+                return_value=SimpleNamespace(
+                    stale=True,
+                    message="Branch snapshot stale: origin/main moved from startsha123 to newsha456.",
+                ),
+            ),
+            self.session_factory() as session,
+        ):
+            processed = process_next_queued_run(session, runner)
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "queued")
+            self.assertIsNone(processed.last_error)
+            self.assertIsNone(processed.started_at)
+            self.assertIsNone(processed.finished_at)
+            self.assertIsNone(processed.pr_url)
+            self.assertTrue(processed.plan["requeued"])
+            self.assertTrue(processed.plan["stale_branch_snapshot"])
+            self.assertIn("Branch snapshot stale", processed.plan["requeue_reason"])
+            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(
+                [entry["stage"] for entry in stage_updates],
+                ["lock_acquired", "plan_posted", "run_requeued_stale_snapshot"],
+            )
+            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3001"})
+            self.assertIsNone(lock)
 
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
         run_id = self._queue_run("TP-301")

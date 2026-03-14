@@ -49,6 +49,19 @@ class CodexWorkflowAgents:
 
         return _emit
 
+    def _resume_session_id_for_stage(self, *, request: WorkflowRequest, stage: str) -> str | None:
+        if str(request.resume_mode or "").strip().lower() != "resume":
+            return None
+        resume_stage = str(request.resume_stage or "").strip().lower()
+        session_id = str(request.resume_session_id or "").strip() or None
+        if not session_id:
+            return None
+        if resume_stage == stage:
+            return session_id
+        if resume_stage == "orchestrated" and stage == "pm":
+            return session_id
+        return None
+
     def pm(
         self,
         request: WorkflowRequest,
@@ -73,13 +86,23 @@ class CodexWorkflowAgents:
                 attempt=attempt,
                 reasoning_effort="medium",
                 issue_description_chars=len(request.issue_description or ""),
+                codex_session_id=self._resume_session_id_for_stage(request=request, stage="pm"),
             ),
             system_prompt=render_prompt("workflow/pm_system.j2"),
             user_prompt=render_prompt(
                 "workflow/pm_user.j2",
                 tenant_id=request.tenant_id,
+                project_id=request.project_id or "",
+                project_name=request.project_name or "",
+                github_repository=request.github_repository or "",
+                jira_project_key=request.jira_project_key or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
                 issue_summary=request.issue_summary,
                 issue_description=request.issue_description,
                 attempt=attempt,
@@ -107,6 +130,7 @@ class CodexWorkflowAgents:
                 last_review_summary_json=json.dumps(last_review_result.summary if last_review_result else []),
                 current_worker_capability=request.current_worker_capability,
                 available_worker_capabilities_json=json.dumps(request.available_worker_capabilities),
+                human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("pm"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -187,14 +211,23 @@ class CodexWorkflowAgents:
                 attempt=attempt,
                 reasoning_effort="medium",
                 issue_description_chars=len(request.issue_description or ""),
+                codex_session_id=self._resume_session_id_for_stage(request=request, stage="dev"),
             ),
             system_prompt=render_prompt("workflow/dev_system.j2"),
             user_prompt=render_prompt(
                 "workflow/dev_user.j2",
                 tenant_id=request.tenant_id,
                 project_id=request.project_id or "",
+                project_name=request.project_name or "",
+                github_repository=request.github_repository or "",
+                jira_project_key=request.jira_project_key or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
                 attempt=attempt,
                 feedback=feedback or "none",
                 plan_json=json.dumps(plan.plan_steps),
@@ -203,6 +236,7 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
+                human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("dev"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -219,14 +253,23 @@ class CodexWorkflowAgents:
         raw_response = _extract_raw_response(payload)
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else None
-        hard_stop_raw = payload.get("hard_stop_reason")
-        hard_stop_reason = (
-            str(hard_stop_raw).strip()
-            if isinstance(hard_stop_raw, str) and str(hard_stop_raw).strip()
+        blocker_category_raw = payload.get("blocker_category")
+        blocker_category = (
+            str(blocker_category_raw).strip()
+            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
             else None
         )
-        if hard_stop_reason is None:
-            hard_stop_reason = _extract_prefixed_value(raw_response, keys=("hard_stop_reason", "hard stop", "blocked"))
+        blocker_message_raw = payload.get("blocker_message")
+        blocker_message = (
+            str(blocker_message_raw).strip()
+            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
+            else None
+        )
+        if blocker_message is None:
+            blocker_message = _extract_prefixed_value(
+                raw_response,
+                keys=("blocker_message", "blocked", "hard stop"),
+            )
         return DevResult(
             change_summary=_string_list(
                 payload.get("change_summary"),
@@ -236,7 +279,8 @@ class CodexWorkflowAgents:
                 ),
             ),
             pr_url=pr_url,
-            hard_stop_reason=hard_stop_reason,
+            blocker_category=blocker_category,
+            blocker_message=blocker_message,
         )
 
     def test(
@@ -266,8 +310,16 @@ class CodexWorkflowAgents:
                 "workflow/test_user.j2",
                 tenant_id=request.tenant_id,
                 project_id=request.project_id or "",
+                project_name=request.project_name or "",
+                github_repository=request.github_repository or "",
+                jira_project_key=request.jira_project_key or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
                 attempt=attempt,
                 dev_summary_json=json.dumps(dev_result.change_summary),
                 pr_url=dev_result.pr_url or "none",
@@ -276,6 +328,7 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
+                human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("test"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -301,6 +354,20 @@ class CodexWorkflowAgents:
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
         if feedback is None:
             feedback = _extract_prefixed_value(raw_response, keys=("feedback", "reason", "summary"))
+        blocker_category_raw = payload.get("blocker_category")
+        blocker_category = (
+            str(blocker_category_raw).strip()
+            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
+            else None
+        )
+        blocker_message_raw = payload.get("blocker_message")
+        blocker_message = (
+            str(blocker_message_raw).strip()
+            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
+            else None
+        )
+        if blocker_message is None and passed is False:
+            blocker_message = _extract_prefixed_value(raw_response, keys=("blocker_message", "blocked"))
         guidance = _string_list(
             payload.get("guidance"),
             fallback=(
@@ -309,7 +376,13 @@ class CodexWorkflowAgents:
                 or ["Run project test suite"]
             ),
         )
-        return TestResult(passed=passed, guidance=guidance, feedback=feedback)
+        return TestResult(
+            passed=passed,
+            guidance=guidance,
+            feedback=feedback,
+            blocker_category=blocker_category,
+            blocker_message=blocker_message,
+        )
 
     def review(
         self,
@@ -339,8 +412,16 @@ class CodexWorkflowAgents:
                 "workflow/review_user.j2",
                 tenant_id=request.tenant_id,
                 project_id=request.project_id or "",
+                project_name=request.project_name or "",
+                github_repository=request.github_repository or "",
+                jira_project_key=request.jira_project_key or "",
                 run_id=request.run_id,
                 issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
                 attempt=attempt,
                 plan_steps_json=json.dumps(plan.plan_steps),
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
@@ -353,6 +434,7 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
+                human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -407,6 +489,20 @@ class CodexWorkflowAgents:
             feedback = _extract_prefixed_value(raw_response, keys=("feedback", "summary", "reason"))
         pr_url_raw = payload.get("pr_url")
         pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else dev_result.pr_url
+        blocker_category_raw = payload.get("blocker_category")
+        blocker_category = (
+            str(blocker_category_raw).strip()
+            if isinstance(blocker_category_raw, str) and str(blocker_category_raw).strip()
+            else None
+        )
+        blocker_message_raw = payload.get("blocker_message")
+        blocker_message = (
+            str(blocker_message_raw).strip()
+            if isinstance(blocker_message_raw, str) and str(blocker_message_raw).strip()
+            else None
+        )
+        if blocker_message is None and outcome_raw == "blocked":
+            blocker_message = feedback or _extract_prefixed_value(raw_response, keys=("blocker_message", "blocked"))
         return ReviewResult(
             approved=approved,
             summary=_string_list(
@@ -419,6 +515,8 @@ class CodexWorkflowAgents:
             outcome=outcome_raw,
             feedback=feedback,
             pr_url=pr_url,
+            blocker_category=blocker_category,
+            blocker_message=blocker_message,
         )
 
 

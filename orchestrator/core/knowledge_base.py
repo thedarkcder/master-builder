@@ -10,7 +10,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, desc, func, select, text
+from sqlalchemy import case, delete, desc, func, select, text
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeChunk, KnowledgeFact
@@ -36,6 +36,24 @@ SLOT_ALIASES: dict[str, tuple[str, ...]] = {
 FACT_SLOT_ORDER = tuple(SLOT_ALIASES.keys())
 _WORD_PATTERN = re.compile(r"[a-z0-9]{2,}")
 _SECTION_PATTERN = re.compile(r"(?im)^\s*#+\s*(.+?)\s*$")
+_LABELED_FACT_PATTERN = re.compile(r"(?i)^(?P<label>[a-z0-9][a-z0-9 /_().-]{1,96})\s*:\s*(?P<value>.+)$")
+
+_FACT_TYPE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("configuration", ("bundle id", "service id", "redirect uri", "url scheme", "project id", "callback", "client id", "endpoint", "host")),
+    ("ownership", ("owner", "approver", "approval", "sign-off", "responsible")),
+    ("rollout_constraint", ("rollout", "migration", "release", "deploy", "cutover", "rollback")),
+    ("security_policy", ("session", "token", "auth", "security", "revocation", "expiration", "rotation")),
+    ("merge_policy", ("merge", "duplicate", "stale", "conflict", "retry", "failure policy")),
+)
+_INLINE_CONFIGURATION_ALIASES: dict[str, tuple[str, ...]] = {
+    "production_bundle_id": ("production bundle id",),
+    "staging_bundle_id": ("staging bundle id",),
+    "bundle_id": ("bundle id",),
+    "service_id": ("service id",),
+    "redirect_uri": ("redirect uri", "callback url"),
+    "url_scheme": ("url scheme",),
+    "project_id": ("project id",),
+}
 
 
 @dataclass(frozen=True)
@@ -71,6 +89,144 @@ class KnowledgeSyncResult:
     @property
     def synced_assets(self) -> int:
         return self.created_assets + self.updated_assets
+
+
+@dataclass(frozen=True)
+class KnowledgeDebugMatch:
+    layer: str
+    score: float
+    asset_id: str
+    source_type: str
+    title: str
+    source_ref: str | None
+    source_timestamp: str | None
+    fact_id: str | None = None
+    chunk_id: str | None = None
+    snippet: str = ""
+    metadata: dict[str, Any] | None = None
+
+
+def approval_state_for_asset_status(status: str) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized == "ready":
+        return "approved"
+    if normalized == "rejected":
+        return "rejected"
+    return "pending_review"
+
+
+def _normalize_fact_key(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return normalized[:128] or "fact"
+
+
+def _classify_fact_type(*, label: str) -> str:
+    normalized = str(label or "").strip().lower()
+    for fact_type, keywords in _FACT_TYPE_KEYWORDS:
+        if any(keyword in normalized for keyword in keywords):
+            return fact_type
+    return "reference_fact"
+
+
+def extract_decision_facts(text: str) -> list[dict[str, Any]]:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return []
+
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_fact(
+        *,
+        fact_type: str,
+        fact_key: str,
+        fact_value: str,
+        confidence: float,
+        is_inferred: bool,
+        metadata_json: dict[str, Any] | None = None,
+        slot_name: str | None = None,
+    ) -> None:
+        clean_key = _normalize_fact_key(fact_key)
+        clean_value = str(fact_value or "").strip()
+        if not clean_key or not clean_value:
+            return
+        dedupe_key = (fact_type, clean_key, clean_value)
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+        facts.append(
+            {
+                "fact_type": fact_type,
+                "fact_key": clean_key,
+                "fact_value": clean_value,
+                "confidence": confidence,
+                "is_inferred": is_inferred,
+                "slot_name": slot_name or normalize_slot_name(clean_key) or clean_key,
+                "slot_value": clean_value,
+                "metadata_json": dict(metadata_json or {}),
+            }
+        )
+
+    for slot_name, slot_value in extract_slot_facts(normalized).items():
+        add_fact(
+            fact_type="decision_slot",
+            fact_key=slot_name,
+            fact_value=slot_value,
+            confidence=0.95,
+            is_inferred=False,
+            metadata_json={"extraction_method": "slot_alias"},
+            slot_name=slot_name,
+        )
+
+    lines = [line.strip() for line in normalized.splitlines()]
+    for line in lines:
+        match = _LABELED_FACT_PATTERN.match(line)
+        if not match:
+            continue
+        label = str(match.group("label") or "").strip()
+        value = str(match.group("value") or "").strip()
+        if not label or not value:
+            continue
+        slot_name = normalize_slot_name(label)
+        generic_fact_type = _classify_fact_type(label=label)
+        if slot_name:
+            add_fact(
+                fact_type="decision_slot",
+                fact_key=slot_name,
+                fact_value=value,
+                confidence=0.88,
+                is_inferred=False,
+                metadata_json={"label": label, "extraction_method": "labeled_line"},
+                slot_name=slot_name,
+            )
+        add_fact(
+            fact_type=generic_fact_type,
+            fact_key=label,
+            fact_value=value,
+            confidence=0.78,
+            is_inferred=False,
+            metadata_json={"label": label, "extraction_method": "labeled_line"},
+            slot_name=slot_name,
+        )
+
+    for fact_key, aliases in _INLINE_CONFIGURATION_ALIASES.items():
+        for alias in aliases:
+            pattern = re.compile(rf"(?i)\b{re.escape(alias)}\b\s*(?:is|=)\s*([^\n.;]+)")
+            match = pattern.search(normalized)
+            if not match:
+                continue
+            add_fact(
+                fact_type="configuration",
+                fact_key=fact_key,
+                fact_value=match.group(1).strip(),
+                confidence=0.74,
+                is_inferred=False,
+                metadata_json={"label": alias, "extraction_method": "inline_is"},
+                slot_name=normalize_slot_name(fact_key),
+            )
+            break
+
+    return facts
 
 
 def normalize_slot_name(value: str) -> str | None:
@@ -352,6 +508,55 @@ def _jira_attachment_asset_ref(issue_key: str, attachment_id: str) -> str:
     return f"attachment:{issue_key}:{attachment_id}"
 
 
+def _store_asset_facts(
+    *,
+    session: Session,
+    asset: KnowledgeAsset,
+    extracted_text: str,
+    source_timestamp: datetime | None,
+    now: datetime,
+) -> None:
+    approval_state = approval_state_for_asset_status(asset.status)
+    for fact_payload in extract_decision_facts(extracted_text):
+        session.add(
+            KnowledgeFact(
+                fact_id=uuid4().hex,
+                asset_id=asset.asset_id,
+                chunk_id=None,
+                tenant_id=asset.tenant_id,
+                project_id=asset.project_id,
+                fact_type=str(fact_payload["fact_type"]),
+                fact_key=str(fact_payload["fact_key"]),
+                fact_value=str(fact_payload["fact_value"]),
+                approval_state=approval_state,
+                slot_name=str(fact_payload["slot_name"]),
+                slot_value=str(fact_payload["slot_value"]),
+                confidence=float(fact_payload["confidence"]),
+                is_inferred=bool(fact_payload["is_inferred"]),
+                metadata_json=dict(fact_payload.get("metadata_json") or {}),
+                source_timestamp=source_timestamp,
+                superseded_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+
+def sync_knowledge_fact_approval_state_for_asset(*, session: Session, asset: KnowledgeAsset) -> None:
+    approval_state = approval_state_for_asset_status(asset.status)
+    now = datetime.now(timezone.utc)
+    facts = session.execute(
+        select(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id)
+    ).scalars().all()
+    for fact in facts:
+        fact.approval_state = approval_state
+        if approval_state == "rejected":
+            fact.superseded_at = fact.superseded_at or now
+        else:
+            fact.superseded_at = None
+        fact.updated_at = now
+
+
 def _refresh_asset_content(
     *,
     session: Session,
@@ -407,24 +612,13 @@ def _refresh_asset_content(
             )
         )
     asset.chunk_count = len(chunks)
-
-    for slot_name, slot_value in extract_slot_facts(extracted_text).items():
-        session.add(
-            KnowledgeFact(
-                fact_id=uuid4().hex,
-                asset_id=asset.asset_id,
-                chunk_id=None,
-                tenant_id=asset.tenant_id,
-                project_id=asset.project_id,
-                slot_name=slot_name,
-                slot_value=slot_value,
-                confidence=0.95,
-                is_inferred=False,
-                source_timestamp=source_timestamp,
-                created_at=now,
-                updated_at=now,
-            )
-        )
+    _store_asset_facts(
+        session=session,
+        asset=asset,
+        extracted_text=extracted_text,
+        source_timestamp=source_timestamp,
+        now=now,
+    )
 
 
 def _upsert_knowledge_asset(
@@ -521,6 +715,156 @@ def list_knowledge_assets(*, session: Session, tenant_id: str, project_id: str) 
     ).scalars().all()
 
 
+def list_knowledge_assets_page(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    status: str | None = None,
+    source_type: str | None = None,
+    query: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[list[KnowledgeAsset], int]:
+    normalized_status = str(status or "").strip().lower() or None
+    normalized_source_type = str(source_type or "").strip().lower() or None
+    normalized_query = str(query or "").strip().lower() or None
+    safe_limit = max(1, min(limit, 100))
+    safe_offset = max(0, offset)
+
+    filters = [
+        KnowledgeAsset.tenant_id == tenant_id,
+        KnowledgeAsset.project_id == project_id,
+        KnowledgeAsset.status != "deleted",
+    ]
+    if normalized_status:
+        filters.append(KnowledgeAsset.status == normalized_status)
+    if normalized_source_type:
+        filters.append(KnowledgeAsset.source_type == normalized_source_type)
+    if normalized_query:
+        wildcard_query = f"%{normalized_query}%"
+        filters.append(
+            func.lower(func.coalesce(KnowledgeAsset.title, "")).like(wildcard_query)
+            | func.lower(func.coalesce(KnowledgeAsset.source_ref, "")).like(wildcard_query)
+        )
+
+    total = session.execute(select(func.count()).select_from(KnowledgeAsset).where(*filters)).scalar_one()
+    items = session.execute(
+        select(KnowledgeAsset)
+        .where(*filters)
+        .order_by(desc(KnowledgeAsset.updated_at), desc(KnowledgeAsset.created_at))
+        .limit(safe_limit)
+        .offset(safe_offset)
+    ).scalars().all()
+    return items, int(total)
+
+
+def list_knowledge_chunks_page(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    asset_id: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[KnowledgeChunk], int]:
+    safe_limit = max(1, min(limit, 100))
+    safe_offset = max(0, offset)
+    filters = [
+        KnowledgeChunk.tenant_id == tenant_id,
+        KnowledgeChunk.project_id == project_id,
+        KnowledgeChunk.asset_id == asset_id,
+    ]
+    total = session.execute(select(func.count()).select_from(KnowledgeChunk).where(*filters)).scalar_one()
+    items = session.execute(
+        select(KnowledgeChunk)
+        .where(*filters)
+        .order_by(KnowledgeChunk.chunk_index.asc())
+        .limit(safe_limit)
+        .offset(safe_offset)
+    ).scalars().all()
+    return items, int(total)
+
+
+def list_knowledge_facts_for_asset(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    asset_id: str,
+) -> list[KnowledgeFact]:
+    return session.execute(
+        select(KnowledgeFact)
+        .where(
+            KnowledgeFact.tenant_id == tenant_id,
+            KnowledgeFact.project_id == project_id,
+            KnowledgeFact.asset_id == asset_id,
+        )
+        .order_by(
+            case((KnowledgeFact.superseded_at.is_(None), 0), else_=1),
+            KnowledgeFact.approval_state.asc(),
+            KnowledgeFact.fact_type.asc(),
+            KnowledgeFact.fact_key.asc(),
+            desc(KnowledgeFact.source_timestamp),
+            desc(KnowledgeFact.updated_at),
+        )
+    ).scalars().all()
+
+
+def get_knowledge_asset_stats(*, session: Session, tenant_id: str, project_id: str) -> dict[str, Any]:
+    filters = [
+        KnowledgeAsset.tenant_id == tenant_id,
+        KnowledgeAsset.project_id == project_id,
+        KnowledgeAsset.status != "deleted",
+    ]
+    totals = session.execute(
+        select(
+            func.count(KnowledgeAsset.asset_id),
+            func.coalesce(func.sum(KnowledgeAsset.chunk_count), 0),
+            func.max(KnowledgeAsset.updated_at),
+        ).where(*filters)
+    ).one()
+    status_counts = dict(
+        session.execute(
+            select(KnowledgeAsset.status, func.count(KnowledgeAsset.asset_id))
+            .where(*filters)
+            .group_by(KnowledgeAsset.status)
+        ).all()
+    )
+    source_type_counts = dict(
+        session.execute(
+            select(KnowledgeAsset.source_type, func.count(KnowledgeAsset.asset_id))
+            .where(*filters)
+            .group_by(KnowledgeAsset.source_type)
+        ).all()
+    )
+    fact_totals = session.execute(
+        select(
+            func.count(KnowledgeFact.fact_id),
+            func.coalesce(func.sum(case((KnowledgeFact.approval_state == "approved", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((KnowledgeFact.approval_state == "pending_review", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((KnowledgeFact.superseded_at.is_not(None), 1), else_=0)), 0),
+        )
+        .where(
+            KnowledgeFact.tenant_id == tenant_id,
+            KnowledgeFact.project_id == project_id,
+        )
+    ).one()
+    return {
+        "total_assets": int(totals[0] or 0),
+        "total_chunks": int(totals[1] or 0),
+        "total_facts": int(fact_totals[0] or 0),
+        "approved_facts": int(fact_totals[1] or 0),
+        "pending_review_facts": int(fact_totals[2] or 0),
+        "superseded_facts": int(fact_totals[3] or 0),
+        "latest_asset_updated_at": totals[2],
+        "ready_assets": int(status_counts.get("ready", 0)),
+        "pending_review_assets": int(status_counts.get("pending_review", 0)),
+        "rejected_assets": int(status_counts.get("rejected", 0)),
+        "source_type_counts": {str(key): int(value) for key, value in source_type_counts.items()},
+    }
+
+
 def create_knowledge_asset(
     *,
     session: Session,
@@ -591,24 +935,13 @@ def create_knowledge_asset(
         session.add(chunk_model)
     asset.chunk_count = len(chunks)
     asset.updated_at = now
-
-    extracted_facts = extract_slot_facts(extracted_text)
-    for slot_name, slot_value in extracted_facts.items():
-        fact = KnowledgeFact(
-            fact_id=uuid4().hex,
-            asset_id=asset.asset_id,
-            chunk_id=None,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            slot_name=slot_name,
-            slot_value=slot_value,
-            confidence=0.95,
-            is_inferred=False,
-            source_timestamp=source_timestamp,
-            created_at=now,
-            updated_at=now,
-        )
-        session.add(fact)
+    _store_asset_facts(
+        session=session,
+        asset=asset,
+        extracted_text=extracted_text,
+        source_timestamp=source_timestamp,
+        now=now,
+    )
 
     if commit:
         session.commit()
@@ -861,6 +1194,194 @@ def _mode_thresholds(mode: str) -> tuple[float, float]:
     return (0.55, 0.50)
 
 
+def _match_facts(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    normalized_query: str,
+    max_items: int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    query_tokens = _candidate_tokens(normalized_query)
+    if not query_tokens:
+        return [], []
+    rows = session.execute(
+        select(KnowledgeFact, KnowledgeAsset)
+        .join(KnowledgeAsset, KnowledgeAsset.asset_id == KnowledgeFact.asset_id)
+        .where(
+            KnowledgeFact.tenant_id == tenant_id,
+            KnowledgeFact.project_id == project_id,
+            KnowledgeFact.approval_state == "approved",
+            KnowledgeFact.superseded_at.is_(None),
+            KnowledgeAsset.status == "ready",
+        )
+        .order_by(
+            desc(func.coalesce(KnowledgeFact.source_timestamp, KnowledgeAsset.source_timestamp)),
+            desc(KnowledgeFact.updated_at),
+        )
+        .limit(max(20, max_items * 10))
+    ).all()
+    if not rows:
+        return [], []
+
+    now = datetime.now(timezone.utc)
+    scored: list[tuple[float, KnowledgeFact, KnowledgeAsset]] = []
+    for fact, asset in rows:
+        candidate_text = " ".join(
+            part
+            for part in (
+                str(fact.fact_type or "").strip(),
+                str(fact.fact_key or fact.slot_name or "").strip(),
+                str(fact.fact_value or fact.slot_value or "").strip(),
+                str(asset.title or "").strip(),
+                str(asset.source_ref or "").strip(),
+            )
+            if part
+        )
+        lexical = _lexical_score(query_tokens=query_tokens, text=candidate_text)
+        if lexical <= 0.0:
+            continue
+        source_time = fact.source_timestamp or asset.source_timestamp
+        recency_bonus = 0.0
+        if source_time is not None:
+            age_days = max(0.0, (now - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0)
+            recency_bonus = 1.0 / (1.0 + age_days / 30.0)
+        approval_bonus = 0.05 if str(fact.approval_state or "") == "approved" else 0.0
+        score = (lexical * 0.85) + (recency_bonus * 0.10) + approval_bonus
+        if score <= 0.0:
+            continue
+        scored.append((score, fact, asset))
+
+    if not scored:
+        return [], []
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    lines: list[str] = []
+    citations: list[dict[str, Any]] = []
+    for score, fact, asset in scored[:max(1, max_items)]:
+        source_time = fact.source_timestamp or asset.source_timestamp
+        lines.append(
+            (
+                f"- Fact [{fact.fact_type}] {fact.fact_key} = {fact.fact_value} "
+                f"(asset_id={asset.asset_id}, fact_id={fact.fact_id}, source_type={asset.source_type}, "
+                f"source_ref={asset.source_ref or 'unknown'}, "
+                f"source_timestamp={source_time.isoformat() if source_time else 'unknown'}, score={score:.3f})"
+            )
+        )
+        citations.append(
+            {
+                "asset_id": asset.asset_id,
+                "fact_id": fact.fact_id,
+                "title": asset.title,
+                "source_type": asset.source_type,
+                "source_ref": asset.source_ref,
+                "source_timestamp": source_time.isoformat() if source_time else None,
+                "score": round(score, 6),
+                "layer": "knowledge_fact",
+            }
+        )
+    return lines, citations
+
+
+def _match_chunk_debug(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    normalized_query: str,
+    max_items: int,
+) -> list[KnowledgeDebugMatch]:
+    context = build_knowledge_prompt_context(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        query=normalized_query,
+        max_items=max_items,
+        max_chars=4000,
+    )
+    chunk_matches: list[KnowledgeDebugMatch] = []
+    for citation in context.citations:
+        if citation.get("layer") != "knowledge_chunk":
+            continue
+        chunk_id = str(citation.get("chunk_id") or "").strip() or None
+        asset_id = str(citation.get("asset_id") or "").strip()
+        if not asset_id:
+            continue
+        chunk = session.get(KnowledgeChunk, chunk_id) if chunk_id else None
+        snippet = str(chunk.content or "").strip() if chunk is not None else ""
+        if len(snippet) > 400:
+            snippet = f"{snippet[:397].rstrip()}..."
+        chunk_matches.append(
+            KnowledgeDebugMatch(
+                layer="knowledge_chunk",
+                score=float(citation.get("score") or 0.0),
+                asset_id=asset_id,
+                chunk_id=chunk_id,
+                source_type=str(citation.get("source_type") or ""),
+                title=str(citation.get("title") or ""),
+                source_ref=str(citation.get("source_ref") or "").strip() or None,
+                source_timestamp=str(citation.get("source_timestamp") or "").strip() or None,
+                snippet=snippet,
+                metadata={},
+            )
+        )
+    return chunk_matches[:max_items]
+
+
+def search_knowledge_debug(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    query: str,
+    limit: int = 5,
+) -> list[KnowledgeDebugMatch]:
+    normalized_query = str(query or "").strip()
+    if not tenant_id or not project_id or not normalized_query:
+        return []
+    fact_lines, fact_citations = _match_facts(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        normalized_query=normalized_query,
+        max_items=limit,
+    )
+    del fact_lines
+    fact_matches = [
+        KnowledgeDebugMatch(
+            layer="knowledge_fact",
+            score=float(citation.get("score") or 0.0),
+            asset_id=str(citation.get("asset_id") or ""),
+            fact_id=str(citation.get("fact_id") or "").strip() or None,
+            source_type=str(citation.get("source_type") or ""),
+            title=str(citation.get("title") or ""),
+            source_ref=str(citation.get("source_ref") or "").strip() or None,
+            source_timestamp=str(citation.get("source_timestamp") or "").strip() or None,
+            snippet=str(
+                (
+                    session.get(KnowledgeFact, str(citation.get("fact_id") or "").strip()).fact_value
+                    if citation.get("fact_id")
+                    else ""
+                )
+                or ""
+            ),
+            metadata={},
+        )
+        for citation in fact_citations
+        if str(citation.get("asset_id") or "").strip()
+    ]
+    chunk_matches = _match_chunk_debug(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        normalized_query=normalized_query,
+        max_items=limit,
+    )
+    combined = [*fact_matches, *chunk_matches]
+    combined.sort(key=lambda item: item.score, reverse=True)
+    return combined[: max(1, limit * 2)]
+
+
 def resolve_missing_slots_from_knowledge(
     *,
     session: Session,
@@ -882,7 +1403,10 @@ def resolve_missing_slots_from_knowledge(
             .where(
                 KnowledgeFact.tenant_id == tenant_id,
                 KnowledgeFact.project_id == project_id,
-                KnowledgeFact.slot_name == slot_name,
+                KnowledgeFact.fact_key == slot_name,
+                KnowledgeFact.fact_type == "decision_slot",
+                KnowledgeFact.approval_state == "approved",
+                KnowledgeFact.superseded_at.is_(None),
                 KnowledgeAsset.status == "ready",
             )
             .order_by(
@@ -902,10 +1426,11 @@ def resolve_missing_slots_from_knowledge(
                 continue
             candidate = SlotResolution(
                 slot_name=slot_name,
-                slot_value=str(fact.slot_value or "").strip(),
+                slot_value=str(fact.fact_value or fact.slot_value or "").strip(),
                 source_timestamp=fact.source_timestamp or asset.source_timestamp,
                 confidence=confidence,
                 citation={
+                    "fact_id": fact.fact_id,
                     "asset_id": asset.asset_id,
                     "title": asset.title,
                     "source_type": asset.source_type,
@@ -1018,6 +1543,7 @@ def _format_knowledge_context(
                 "source_ref": asset.source_ref,
                 "source_timestamp": source_time.isoformat() if source_time else None,
                 "score": round(score, 6),
+                "layer": "knowledge_chunk",
             }
         )
     return KnowledgePromptContext(text="\n".join(lines), citations=citations)
@@ -1147,10 +1673,18 @@ def build_knowledge_prompt_context(
     normalized_query = str(query or "").strip()
     if not normalized_query:
         return KnowledgePromptContext(text="", citations=[])
+    fact_lines, fact_citations = _match_facts(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        normalized_query=normalized_query,
+        max_items=max(1, min(max_items, 3)),
+    )
     bind = session.get_bind()
+    chunk_context: KnowledgePromptContext
     if bind.dialect.name == "postgresql":
         try:
-            return _postgres_hybrid_context(
+            chunk_context = _postgres_hybrid_context(
                 session=session,
                 tenant_id=tenant_id,
                 project_id=project_id,
@@ -1159,12 +1693,30 @@ def build_knowledge_prompt_context(
                 max_chars=max_chars,
             )
         except Exception:  # noqa: BLE001
-            pass
-    return _sqlite_fallback_context(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        normalized_query=normalized_query,
-        max_items=max_items,
-        max_chars=max_chars,
+            chunk_context = _sqlite_fallback_context(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                normalized_query=normalized_query,
+                max_items=max_items,
+                max_chars=max_chars,
+            )
+    else:
+        chunk_context = _sqlite_fallback_context(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            normalized_query=normalized_query,
+            max_items=max_items,
+            max_chars=max_chars,
+        )
+
+    sections = []
+    if fact_lines:
+        sections.append("Relevant facts:\n" + "\n".join(fact_lines))
+    if chunk_context.text:
+        sections.append("Supporting excerpts:\n" + chunk_context.text)
+    return KnowledgePromptContext(
+        text="\n\n".join(section for section in sections if section).strip(),
+        citations=[*fact_citations, *chunk_context.citations],
     )
