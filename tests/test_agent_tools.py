@@ -520,7 +520,10 @@ def test_resolve_context_prefers_run_worktree_for_run_scoped_tools() -> None:
         def query(self, _cls):  # noqa: ANN001
             return _FakeQuery()
 
-    settings = SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs")
+    settings = SimpleNamespace(
+        project_repo_checkout_base_dir="/tmp/workdirs",
+        worker_workspace_key="worker-a",
+    )
 
     with patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"):
         with patch(
@@ -539,7 +542,10 @@ def test_resolve_context_prefers_run_worktree_for_run_scoped_tools() -> None:
                 tool_args={"command": "git status -sb"},
             )
 
-    assert run_mock.call_args.kwargs["cwd"] == "/tmp/workdirs/route25/route25-default/runs/run-123/repo"
+    assert (
+        run_mock.call_args.kwargs["cwd"]
+        == "/tmp/workdirs/route25/route25-default/runs/run-123/workspaces/worker-a/repo"
+    )
 
 
 def test_project_get_runtime_values_returns_environment_value() -> None:

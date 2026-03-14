@@ -547,17 +547,7 @@ def _missing_evidence_message(plan: PmPlan) -> str | None:
     if not missing_sources:
         return None
     joined_sources = ", ".join(missing_sources)
-    message = f"PM could not load required evidence sources before implementation: {joined_sources}."
-    if "runtime_values" in {source.strip().lower() for source in missing_sources}:
-        unresolved_runtime_details = [
-            value for value in plan.unresolved_prerequisites if str(value).strip()
-        ]
-        if unresolved_runtime_details:
-            message = (
-                f"{message} Missing runtime prerequisites: "
-                f"{'; '.join(unresolved_runtime_details[:3])}."
-            )
-    return message
+    return f"PM could not load required evidence sources before implementation: {joined_sources}."
 
 
 def _terminal_blocker_message(*, category: str | None, message: str | None) -> str | None:

@@ -391,17 +391,13 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertIn("decision_state, knowledge", result.diagnostics.message)
         self.assertEqual(stage_agents.dev_calls, 0)
 
-    def test_pm_runtime_values_missing_evidence_includes_unresolved_runtime_details(self) -> None:
+    def test_pm_runtime_values_missing_evidence_stops_before_dev(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(
                 plan_steps=["plan"],
                 acceptance_criteria=["ac1"],
                 risks=[],
                 missing_evidence_sources=["runtime_values"],
-                unresolved_prerequisites=[
-                    "SUPABASE_APPLE_REDIRECT_SCHEME is missing",
-                    "SUPABASE_APPLE_SERVICE_ID is missing",
-                ],
             ),
             dev_results=[],
             test_results=[],
@@ -412,8 +408,9 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
 
         self.assertFalse(result.succeeded)
         self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "pm")
+        self.assertEqual(result.diagnostics.classification, "missing_context")
         self.assertIn("runtime_values", result.diagnostics.message)
-        self.assertIn("SUPABASE_APPLE_REDIRECT_SCHEME is missing", result.diagnostics.message)
         self.assertEqual(stage_agents.dev_calls, 0)
 
     def test_pm_confirmed_external_blocker_stops_before_dev(self) -> None:

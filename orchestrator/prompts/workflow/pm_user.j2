@@ -51,8 +51,10 @@ Required actions:
    - resolved_prerequisites: concise prerequisite facts that are already satisfied.
    - unresolved_prerequisites: concise prerequisite facts that remain unresolved but are not raw source dumps.
 8. If evidence is missing, prefer missing_evidence_sources over inventing blockers from silence.
-9. Use runtime-values tools only for actual runtime config/secrets (for example SUPABASE_URL, SUPABASE_ANON_KEY), not for stable project metadata already present in context.
-10. If a transient one-time human input can unblock the run, request it with `run.request_human_input` before declaring the run blocked.
+9. Keep prerequisite validation tightly scoped to this ticket's explicit acceptance criteria and code-change path. Do not widen scope by default.
+10. Use runtime-values tools only for runtime config/secrets explicitly required by this ticket's implementation or verification path (for example SUPABASE_URL, SUPABASE_ANON_KEY), not for stable project metadata already present in context.
+11. If additional runtime values are needed but not explicitly listed in this ticket, request them via `run.request_human_input`, continue planning, and do not treat that as terminal evidence failure.
+12. Only emit missing_evidence_sources=`runtime_values` when the ticket explicitly names required runtime values and they remain unresolved; that path should block PM planning.
 
 Output contract:
 - plan_steps: array of concrete execution steps.

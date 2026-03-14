@@ -42,6 +42,7 @@ from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
 from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.project_repo_checkout import check_run_snapshot_freshness
+from orchestrator.tools.project_repo_checkout import cleanup_run_workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,7 @@ def _process_next_queued_run_impl(
         block_archived_project_fn=block_archived_project,
         ensure_project_repository_checkout_fn=ensure_project_repository_checkout,
         fail_project_repository_checkout_fn=fail_project_repository_checkout,
+        cleanup_run_workspaces_fn=cleanup_run_workspaces,
         start_run_fn=start_run,
         bind_run_project_fn=bind_run_project,
         workflow_request_for_run_fn=_workflow_request_for_run,
