@@ -68,6 +68,7 @@ def test_ensure_project_checkout_clones_when_repo_missing() -> None:
         assert "AGENTS.md" in exclude_lines
         assert ".codex/" in exclude_lines
         assert ".master-builder-run.json" in exclude_lines
+        assert ".gitignore" in exclude_lines
 
 
 def test_github_git_extraheader_uses_basic_auth_with_x_access_token() -> None:
@@ -308,6 +309,7 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
         assert "AGENTS.md" in exclude_lines
         assert ".codex/" in exclude_lines
         assert ".master-builder-run.json" in exclude_lines
+        assert ".gitignore" in exclude_lines
 
 
 def test_check_run_snapshot_freshness_detects_ref_drift() -> None:
@@ -371,3 +373,38 @@ def test_validate_run_worktree_rejects_branch_mismatch() -> None:
             )
 
         assert error == "run worktree branch mismatch: expected run/tp-99/run-1, found feature/other"
+
+
+def test_validate_run_worktree_allows_seeded_gitignore_without_reporting_dirtiness() -> None:
+    with TemporaryDirectory() as tmpdir:
+        run_repo_dir = project_run_repo_dir(
+            base_dir=tmpdir,
+            tenant_id="tenant-a",
+            project_id="project-1",
+            run_id="run-1",
+        )
+        (run_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+        (run_repo_dir / ".master-builder-run.json").write_text(
+            (
+                '{"run_id":"run-1","issue_key":"TP-99","execution_branch":"run/tp-99/run-1",'
+                '"base_branch":"main","integration_branch":"feature/TP-99"}\n'
+            ),
+            encoding="utf-8",
+        )
+
+        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+            _ = (cwd, env)
+            if args == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return "run/tp-99/run-1\n"
+            if args == ["status", "--porcelain"]:
+                return ""
+            raise AssertionError(f"unexpected git args: {args}")
+
+        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+            error = validate_run_worktree(
+                repo_dir=run_repo_dir,
+                run_id="run-1",
+                execution_branch="run/tp-99/run-1",
+            )
+
+        assert error is None

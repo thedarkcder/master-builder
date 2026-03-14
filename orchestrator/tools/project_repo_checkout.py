@@ -178,8 +178,10 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
         _disable_jira_mcp_servers_in_project_codex(repo_dir=repo_dir)
 
     gitignore_path = repo_dir / ".gitignore"
+    seeded_gitignore = False
     if not gitignore_path.exists():
         gitignore_path.write_text(_build_seeded_gitignore_content(repo_dir=repo_dir), encoding="utf-8")
+        seeded_gitignore = True
 
     # Keep workspace policy files out of accidental commits inside project repos/worktrees.
     exclude_path = _resolve_git_path(repo_dir=repo_dir, git_path="info/exclude")
@@ -192,6 +194,8 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
             if line.strip()
         }
     required_lines = {"AGENTS.md", ".codex/", ".master-builder-run.json"}
+    if seeded_gitignore:
+        required_lines.add(".gitignore")
     missing_lines = [line for line in sorted(required_lines) if line not in existing_lines]
     if missing_lines:
         prefix = "\n" if exclude_path.exists() and exclude_path.read_text(encoding="utf-8") else ""
