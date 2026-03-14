@@ -273,7 +273,7 @@ def _resolve_worktree_start_point(*, repo_dir: Path, base_branch: str, integrati
     for ref in candidate_refs:
         if ref == "HEAD" or _git_ref_exists(cwd=repo_dir, ref=ref):
             if ref.startswith("refs/remotes/origin/"):
-                return f"origin/{ref.rsplit('/', 1)[-1]}"
+                return f"origin/{ref.removeprefix('refs/remotes/origin/')}"
             if ref.startswith("refs/heads/"):
                 return ref.removeprefix("refs/heads/")
             return ref
