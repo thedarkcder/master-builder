@@ -118,6 +118,70 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.dev_feedback, [None, "Fix Apple nonce handling"])
         self.assertEqual(result.pr_url, "https://example/pull/1")
 
+    def test_review_approved_without_pr_loops_back_when_pr_creation_required(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+            dev_results=[
+                DevResult(change_summary=["implemented attempt 1"], pr_url=None),
+                DevResult(change_summary=["implemented attempt 2"], pr_url="https://example/pull/2"),
+            ],
+            test_results=[
+                TestResult(passed=True, guidance=["pytest -q"]),
+                TestResult(passed=True, guidance=["pytest -q"]),
+            ],
+            review_results=[
+                ReviewResult(
+                    approved=True,
+                    outcome="approved",
+                    summary=["Looks good"],
+                    feedback=None,
+                    pr_url=None,
+                ),
+                ReviewResult(
+                    approved=True,
+                    outcome="approved",
+                    summary=["Looks good"],
+                    feedback=None,
+                    pr_url="https://example/pull/2",
+                ),
+            ],
+        )
+
+        result = self._executor(stage_agents).execute(replace(self._request(), allow_pr_creation=True))
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(
+            stage_agents.dev_feedback,
+            [None, "Review approved the changes, but no PR was created even though allow_pr_creation is enabled."],
+        )
+        self.assertEqual(result.pr_url, "https://example/pull/2")
+
+    def test_review_approved_without_pr_fails_when_pr_creation_required_and_loops_exhausted(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+            dev_results=[DevResult(change_summary=["implemented"], pr_url=None)],
+            test_results=[TestResult(passed=True, guidance=["pytest -q"])],
+            review_results=[
+                ReviewResult(
+                    approved=True,
+                    outcome="approved",
+                    summary=["Looks good"],
+                    feedback=None,
+                    pr_url=None,
+                ),
+            ],
+        )
+
+        result = self._executor(stage_agents).execute(
+            replace(self._request(), allow_pr_creation=True, max_dev_test_review_loops=1)
+        )
+
+        self.assertFalse(result.succeeded)
+        self.assertIsNotNone(result.diagnostics)
+        self.assertEqual(result.diagnostics.stage, "review")
+        self.assertIn("no PR was created", result.diagnostics.message)
+
     def test_test_failure_retries_and_emits_feedback_hook(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),

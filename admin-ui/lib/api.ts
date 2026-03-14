@@ -393,6 +393,17 @@ export type ReadyGatePreviewRecord = {
   guidance: string;
 };
 
+export const RUN_STATUSES = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "blocked",
+  "cancelled",
+] as const;
+
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
 export type RunRecord = {
   run_id: string;
   tenant_id: string;
@@ -406,7 +417,7 @@ export type RunRecord = {
   dev_session_id: string | null;
   pm_session_id: string | null;
   orchestrated_session_id: string | null;
-  status: string;
+  status: RunStatus;
   last_error: string | null;
   created_at: string;
   started_at: string | null;
@@ -1250,7 +1261,7 @@ export function listRuns(
   params: {
     tenantId?: string;
     projectId?: string;
-    status?: string;
+    status?: RunStatus;
     issue?: string;
     prState?: "none" | "has_value";
     from?: string;

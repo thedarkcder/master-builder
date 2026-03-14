@@ -87,6 +87,7 @@ def build_workflow_request_for_run(
         issue_summary=run.issue_summary or f"Execute {run.issue_key}",
         issue_description=issue_description,
         max_dev_test_review_loops=max_loops,
+        allow_pr_creation=bool(effective_policy.get("allow_pr_creation", False)),
         suggested_test_commands=suggested_test_commands,
         execution_repo_dir=execution_repo_dir,
         current_worker_capability=current_worker_capability,
