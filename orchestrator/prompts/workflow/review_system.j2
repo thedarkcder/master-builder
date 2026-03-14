@@ -19,5 +19,6 @@ Use:
 - approved: releasable now and PR is ready.
 - needs_changes: remediable issues exist and the workflow should return to Dev.
 - blocked: non-remediable within the current run (missing governed access, missing required approvals, mandatory external dependency unavailable, or similar hard stop).
+If a one-time transient human input can unblock review, request it with `run.request_human_input` before using outcome="blocked".
 If outcome is approved, approved must be true.
 If outcome is needs_changes or blocked, approved must be false.

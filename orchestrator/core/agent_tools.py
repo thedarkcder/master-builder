@@ -21,6 +21,7 @@ from orchestrator.core.platform_secret_service import resolve_platform_secret_re
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_human_input_service import create_human_input_request
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 from orchestrator.storage.models import (
     DecisionAnswer,
     DecisionCase,
@@ -262,11 +263,13 @@ def _resolve_context(
         raise ValueError(f"No project mapping available for tenant '{tenant.tenant_id}'")
 
     if run_id:
+        workspace_key = resolve_worker_workspace_key(settings=settings)
         repo_dir = project_run_repo_dir(
             base_dir=settings.project_repo_checkout_base_dir,
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
             run_id=run_id,
+            workspace_key=workspace_key,
         )
     else:
         repo_dir = project_repo_dir(

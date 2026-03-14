@@ -11,6 +11,7 @@ Execution branch: {{ execution_branch }}
 Base branch: {{ base_branch }}
 Integration branch: {{ integration_branch }}
 PR target branch: {{ pr_target_branch }}
+PR creation required by policy: {{ allow_pr_creation }}
 Attempt: {{ attempt }}
 Feedback from prior stage: {{ feedback }}
 Plan: {{ plan_json }}
@@ -33,6 +34,7 @@ Required actions:
 7. Use a blocker only for the allowed terminal categories from the system prompt, and include exact details in change_summary.
 8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch/PR actions).
 9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
+10. If PR creation required by policy is `true`, do not treat implementation as complete until a PR exists and `pr_url` is set.
 
 Output contract:
 - change_summary: array of implemented changes (or concrete blocker facts).

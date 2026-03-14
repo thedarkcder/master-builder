@@ -144,6 +144,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["execution_repo_dir"], "/tmp/test-repo")
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
+        self.assertEqual(captured["allow_pr_creation"], "false")
 
     def test_stage_prompts_include_answered_human_inputs(self) -> None:
         runtime = CodexRuntime(
@@ -175,6 +176,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             base_branch="main",
             integration_branch="feature/MAB-54",
             pr_target_branch="main",
+            allow_pr_creation=True,
             human_inputs=[
                 {
                     "request_id": "request-1",
@@ -196,6 +198,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             agents.dev(request, plan, 1, None)
 
         self.assertEqual(json.loads(str(captured["human_inputs_json"]))[0]["value"], "123456")
+        self.assertEqual(captured["allow_pr_creation"], "true")
 
     def test_resume_session_id_is_applied_to_selected_stage(self) -> None:
         runtime = CodexRuntime(

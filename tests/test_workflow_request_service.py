@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-import unittest
 from unittest.mock import patch
+import unittest
 
 from orchestrator.core.worker.workflow_request_service import build_workflow_request_for_run
 
@@ -18,11 +18,14 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             issue_summary="Summary",
             issue_description="Description",
             project_id="project-1",
+            branch=None,
+            plan=None,
         )
-        effective_policy = {"max_dev_test_review_loops": 1, "allowed_commands": []}
+        effective_policy = {"max_dev_test_review_loops": 1, "allowed_commands": [], "allow_pr_creation": True}
         settings = SimpleNamespace(
             project_repo_checkout_base_dir=checkout_base_dir,
             worker_capabilities="linux",
+            worker_workspace_key="worker-a",
         )
         return tenant, run, effective_policy, settings
 
@@ -47,6 +50,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
+                environment={},
             )
             with patch(
                 "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
@@ -70,6 +74,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
+                environment={},
             )
             with patch(
                 "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
@@ -93,20 +98,27 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
+                environment={},
             )
-            checkout_dir = Path(tmp_dir) / "tenant-1" / "project-1" / "runs" / "run-1" / "repo"
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
                     "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/TP-1/run-1"),
+                    return_value=(checkout_dir, "run/tp-1/run-1"),
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
-                    return_value={
-                        "start_point_ref": "origin/main",
-                        "start_point_sha": "abc123",
-                    },
+                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
@@ -121,8 +133,10 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     effective_policy=effective_policy,
                     settings=settings,
                 )
+
             self.assertEqual(request.execution_repo_dir, str(checkout_dir))
-            self.assertEqual(request.execution_branch, "run/TP-1/run-1")
+            self.assertEqual(request.execution_branch, "run/tp-1/run-1")
+            self.assertEqual(request.workspace_key, "worker-a")
             self.assertEqual(request.start_point_ref, "origin/main")
             self.assertEqual(request.start_point_sha, "abc123")
             self.assertEqual(request.current_worker_capability, "linux")
@@ -131,6 +145,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertEqual(request.project_name, "Project")
             self.assertEqual(request.github_repository, "https://github.com/example/repo")
             self.assertEqual(request.jira_project_key, "TP")
+            self.assertTrue(request.allow_pr_creation)
 
     def test_build_workflow_request_extracts_resume_metadata(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -152,13 +167,23 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
+                environment={},
             )
-            checkout_dir = Path(tmp_dir) / "tenant-1" / "project-1" / "runs" / "run-1" / "repo"
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
                     "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/TP-1/run-1"),
+                    return_value=(checkout_dir, "run/tp-1/run-1"),
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
@@ -177,6 +202,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     effective_policy=effective_policy,
                     settings=settings,
                 )
+
             self.assertEqual(request.resume_mode, "resume")
             self.assertEqual(request.resume_stage, "dev")
             self.assertEqual(request.resume_session_id, "dev-session-123")
@@ -185,23 +211,29 @@ class WorkflowRequestServiceTests(unittest.TestCase):
     def test_build_workflow_request_includes_answered_human_inputs(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
-            run.plan = {
-                "trigger_context": {
-                    "human_input_request_ids": ["request-1"],
-                }
-            }
+            run.plan = {"trigger_context": {"human_input_request_ids": ["request-1"]}}
             project = SimpleNamespace(
                 project_id="project-1",
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
+                environment={},
             )
-            checkout_dir = Path(tmp_dir) / "tenant-1" / "project-1" / "runs" / "run-1" / "repo"
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
             checkout_dir.mkdir(parents=True, exist_ok=True)
             with (
                 patch(
                     "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-                    return_value=(checkout_dir, "run/TP-1/run-1"),
+                    return_value=(checkout_dir, "run/tp-1/run-1"),
                 ),
                 patch(
                     "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
@@ -231,6 +263,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                     effective_policy=effective_policy,
                     settings=settings,
                 )
+
             self.assertEqual(request.human_inputs[0]["request_type"], "verification_code")
             self.assertEqual(request.human_inputs[0]["value"], "123456")
 

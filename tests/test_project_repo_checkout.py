@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from orchestrator.tools.project_repo_checkout import (
     ProjectRepoCheckoutError,
     _disable_jira_mcp_servers_in_project_codex,
     _github_git_extraheader,
+    cleanup_run_workspaces,
     check_run_snapshot_freshness,
     collect_local_repo_context,
     ensure_project_checkout,
@@ -250,6 +252,7 @@ def test_disable_jira_mcp_servers_preserves_section_boundaries() -> None:
 
 def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    workspace_key = "worker-a"
     with TemporaryDirectory() as tmpdir:
         shared_repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
         (shared_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
@@ -266,6 +269,7 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
                     tenant_id="tenant-a",
                     project_id="project-1",
                     run_id="run-1",
+                    workspace_key=workspace_key,
                 )
                 run_repo_dir.mkdir(parents=True, exist_ok=True)
                 git_dir = shared_repo_dir / ".git" / "worktrees" / "run-1"
@@ -291,6 +295,7 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
                 issue_key="TP-99",
                 base_branch="main",
                 integration_branch="feature/TP-99",
+                workspace_key=workspace_key,
             )
 
         assert run_repo_dir == project_run_repo_dir(
@@ -298,6 +303,7 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
             tenant_id="tenant-a",
             project_id="project-1",
             run_id="run-1",
+            workspace_key=workspace_key,
         )
         assert execution_branch == "run/tp-99/run-1"
         assert any(call[0][:3] == ("fetch", "origin", "--prune") for call in calls)
@@ -305,6 +311,7 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
         metadata = json.loads((run_repo_dir / ".master-builder-run.json").read_text(encoding="utf-8"))
         assert metadata["run_id"] == "run-1"
         assert metadata["execution_branch"] == "run/tp-99/run-1"
+        assert metadata["workspace_key"] == workspace_key
         assert metadata["start_point_ref"] == "HEAD"
         assert metadata["start_point_sha"] == "abc123def456"
         exclude_lines = (shared_repo_dir / ".git" / "worktrees" / "run-1" / "info" / "exclude").read_text(encoding="utf-8")
@@ -316,6 +323,7 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
 
 def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    workspace_key = "worker-a"
     with TemporaryDirectory() as tmpdir:
         shared_repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
         (shared_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
@@ -332,6 +340,7 @@ def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
                     tenant_id="tenant-a",
                     project_id="project-1",
                     run_id="run-1",
+                    workspace_key=workspace_key,
                 )
                 run_repo_dir.mkdir(parents=True, exist_ok=True)
                 git_dir = shared_repo_dir / ".git" / "worktrees" / "run-1"
@@ -360,6 +369,7 @@ def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
                 issue_key="TP-99",
                 base_branch="main",
                 integration_branch="feature/team/TP-99",
+                workspace_key=workspace_key,
             )
 
         assert run_repo_dir == project_run_repo_dir(
@@ -367,6 +377,7 @@ def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
             tenant_id="tenant-a",
             project_id="project-1",
             run_id="run-1",
+            workspace_key=workspace_key,
         )
         assert execution_branch == "run/tp-99/run-1"
         metadata = json.loads((run_repo_dir / ".master-builder-run.json").read_text(encoding="utf-8"))
@@ -376,6 +387,84 @@ def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
             call[0] == ("worktree", "add", "--force", "-B", "run/tp-99/run-1", str(run_repo_dir), "branchsha987654")
             for call in calls
         )
+
+
+def test_ensure_run_worktree_recreates_unusable_existing_checkout() -> None:
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    workspace_key = "worker-a"
+    with TemporaryDirectory() as tmpdir:
+        shared_repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        (shared_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+        run_repo_dir = project_run_repo_dir(
+            base_dir=tmpdir,
+            tenant_id="tenant-a",
+            project_id="project-1",
+            run_id="run-1",
+            workspace_key=workspace_key,
+        )
+        run_repo_dir.mkdir(parents=True, exist_ok=True)
+        (run_repo_dir / ".git").write_text("gitdir: /tmp/other-root/repo/.git/worktrees/run-1\n", encoding="utf-8")
+        (run_repo_dir / ".master-builder-run.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run-1",
+                    "issue_key": "TP-99",
+                    "execution_branch": "run/tp-99/run-1",
+                    "base_branch": "main",
+                    "integration_branch": "feature/TP-99",
+                    "workspace_key": workspace_key,
+                    "start_point_ref": "HEAD",
+                    "start_point_sha": "abc123def456",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        calls: list[tuple[tuple[str, ...], str]] = []
+
+        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+            _ = env
+            calls.append((tuple(args), str(cwd)))
+            if args == ["fetch", "origin", "--prune"]:
+                return ""
+            if args == ["worktree", "remove", "--force", str(run_repo_dir)]:
+                shutil.rmtree(run_repo_dir.parent, ignore_errors=True)
+                return ""
+            if args == ["worktree", "prune"]:
+                return ""
+            if args[:2] == ["worktree", "add"]:
+                run_repo_dir.mkdir(parents=True, exist_ok=True)
+                git_dir = shared_repo_dir / ".git" / "worktrees" / "run-1"
+                git_dir.mkdir(parents=True, exist_ok=True)
+                (run_repo_dir / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+                return ""
+            if args == ["rev-parse", "HEAD"]:
+                return "abc123def456\n"
+            if args == ["rev-parse", "--git-path", "info/exclude"]:
+                return str(shared_repo_dir / ".git" / "worktrees" / "run-1" / "info" / "exclude") + "\n"
+            raise AssertionError(f"unexpected git args: {args}")
+
+        with (
+            patch("orchestrator.tools.project_repo_checkout._git_ref_exists", return_value=False),
+            patch("orchestrator.tools.project_repo_checkout._is_worktree_checkout_usable", return_value=False),
+            patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git),
+        ):
+            result_repo_dir, execution_branch = ensure_run_worktree(
+                base_dir=tmpdir,
+                tenant_id="tenant-a",
+                project=project,
+                run_id="run-1",
+                issue_key="TP-99",
+                base_branch="main",
+                integration_branch="feature/TP-99",
+                workspace_key=workspace_key,
+            )
+
+        assert result_repo_dir == run_repo_dir
+        assert execution_branch == "run/tp-99/run-1"
+        assert any(call[0] == ("worktree", "remove", "--force", str(run_repo_dir)) for call in calls)
+        assert any(call[0] == ("worktree", "prune") for call in calls)
+        assert any(call[0][:2] == ("worktree", "add") for call in calls)
 
 
 def test_check_run_snapshot_freshness_detects_ref_drift() -> None:
@@ -407,18 +496,20 @@ def test_check_run_snapshot_freshness_detects_ref_drift() -> None:
 
 
 def test_validate_run_worktree_rejects_branch_mismatch() -> None:
+    workspace_key = "worker-a"
     with TemporaryDirectory() as tmpdir:
         run_repo_dir = project_run_repo_dir(
             base_dir=tmpdir,
             tenant_id="tenant-a",
             project_id="project-1",
             run_id="run-1",
+            workspace_key=workspace_key,
         )
         (run_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
         (run_repo_dir / ".master-builder-run.json").write_text(
             (
                 '{"run_id":"run-1","issue_key":"TP-99","execution_branch":"run/tp-99/run-1",'
-                '"base_branch":"main","integration_branch":"feature/TP-99"}\n'
+                '"base_branch":"main","integration_branch":"feature/TP-99","workspace_key":"worker-a"}\n'
             ),
             encoding="utf-8",
         )
@@ -436,24 +527,27 @@ def test_validate_run_worktree_rejects_branch_mismatch() -> None:
                 repo_dir=run_repo_dir,
                 run_id="run-1",
                 execution_branch="run/tp-99/run-1",
+                workspace_key=workspace_key,
             )
 
         assert error == "run worktree branch mismatch: expected run/tp-99/run-1, found feature/other"
 
 
 def test_validate_run_worktree_allows_seeded_gitignore_without_reporting_dirtiness() -> None:
+    workspace_key = "worker-a"
     with TemporaryDirectory() as tmpdir:
         run_repo_dir = project_run_repo_dir(
             base_dir=tmpdir,
             tenant_id="tenant-a",
             project_id="project-1",
             run_id="run-1",
+            workspace_key=workspace_key,
         )
         (run_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
         (run_repo_dir / ".master-builder-run.json").write_text(
             (
                 '{"run_id":"run-1","issue_key":"TP-99","execution_branch":"run/tp-99/run-1",'
-                '"base_branch":"main","integration_branch":"feature/TP-99"}\n'
+                '"base_branch":"main","integration_branch":"feature/TP-99","workspace_key":"worker-a"}\n'
             ),
             encoding="utf-8",
         )
@@ -471,6 +565,41 @@ def test_validate_run_worktree_allows_seeded_gitignore_without_reporting_dirtine
                 repo_dir=run_repo_dir,
                 run_id="run-1",
                 execution_branch="run/tp-99/run-1",
+                workspace_key=workspace_key,
             )
 
         assert error is None
+
+
+def test_cleanup_run_workspaces_removes_workspace_dir_and_prunes() -> None:
+    with TemporaryDirectory() as tmpdir:
+        repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+        workspace_root = (
+            Path(tmpdir)
+            / "tenant-a"
+            / "project-1"
+            / "runs"
+            / "run-1"
+            / "workspaces"
+            / "worker-a"
+        )
+        (workspace_root / "repo").mkdir(parents=True, exist_ok=True)
+        calls: list[tuple[str, ...]] = []
+
+        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+            _ = (cwd, env)
+            calls.append(tuple(args))
+            return ""
+
+        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+            cleanup_run_workspaces(
+                base_dir=tmpdir,
+                tenant_id="tenant-a",
+                project_id="project-1",
+                run_id="run-1",
+                workspace_key="worker-a",
+            )
+
+        assert not workspace_root.exists()
+        assert ("worktree", "prune") in calls
