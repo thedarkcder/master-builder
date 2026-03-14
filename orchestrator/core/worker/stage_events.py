@@ -171,3 +171,27 @@ def run_requeued_capability_mismatch_update(
             "No developer changes were executed on this worker.",
         ),
     )
+
+
+def run_requeued_stale_snapshot_update(
+    *,
+    tenant_id: str,
+    issue_key: str | None,
+    run_id: str,
+    jira_url: str | None,
+    run_url: str | None = None,
+    error: str,
+) -> dict[str, str]:
+    return _build_stage_update(
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        run_id=run_id,
+        stage="run_requeued_stale_snapshot",
+        jira_url=jira_url,
+        run_url=run_url,
+        error=error,
+        next_steps=(
+            "A fresh run will restart from the latest upstream branch snapshot.",
+            "The current run branch was not updated in place.",
+        ),
+    )

@@ -188,6 +188,129 @@ class KnowledgeAssetRead(BaseModel):
     updated_at: datetime
 
 
+class KnowledgeSourceCreate(BaseModel):
+    connector_type: str = Field(min_length=1, max_length=64)
+    display_name: str | None = Field(default=None, max_length=255)
+    status: str | None = Field(default=None, pattern="^(active|disabled)$")
+    sync_mode: str | None = Field(default=None, pattern="^(manual|scheduled)$")
+    config_json: dict = Field(default_factory=dict)
+
+
+class KnowledgeSourceUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=255)
+    status: str | None = Field(default=None, pattern="^(active|disabled)$")
+    sync_mode: str | None = Field(default=None, pattern="^(manual|scheduled)$")
+    config_json: dict | None = None
+
+
+class KnowledgeSourceRead(BaseModel):
+    source_id: str
+    tenant_id: str
+    project_id: str
+    connector_type: str
+    display_name: str
+    status: str
+    sync_mode: str
+    config_json: dict = Field(default_factory=dict)
+    config_summary: str
+    supports_sync_now: bool
+    supports_scheduled_sync: bool
+    last_synced_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeFactRead(BaseModel):
+    fact_id: str
+    asset_id: str
+    chunk_id: str | None = None
+    tenant_id: str
+    project_id: str
+    fact_type: str
+    fact_key: str
+    fact_value: str
+    approval_state: str
+    confidence: float
+    is_inferred: bool
+    metadata_json: dict = Field(default_factory=dict)
+    source_timestamp: datetime | None = None
+    superseded_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeAssetDetailRead(KnowledgeAssetRead):
+    text_content: str | None = None
+    metadata_json: dict = Field(default_factory=dict)
+    facts: list[KnowledgeFactRead] = Field(default_factory=list)
+
+
+class KnowledgeChunkRead(BaseModel):
+    chunk_id: str
+    asset_id: str
+    tenant_id: str
+    project_id: str
+    chunk_index: int
+    content: str
+    token_count: int
+    source_timestamp: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeAssetPageRead(BaseModel):
+    items: list[KnowledgeAssetRead] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+
+
+class KnowledgeSourcePageRead(BaseModel):
+    items: list[KnowledgeSourceRead] = Field(default_factory=list)
+    total: int
+
+
+class KnowledgeChunkPageRead(BaseModel):
+    items: list[KnowledgeChunkRead] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+
+
+class KnowledgeDebugMatchRead(BaseModel):
+    layer: str
+    score: float
+    asset_id: str
+    source_type: str
+    title: str
+    source_ref: str | None = None
+    source_timestamp: str | None = None
+    fact_id: str | None = None
+    chunk_id: str | None = None
+    snippet: str
+    metadata: dict = Field(default_factory=dict)
+
+
+class KnowledgeDebugSearchRead(BaseModel):
+    query: str
+    items: list[KnowledgeDebugMatchRead] = Field(default_factory=list)
+
+
+class KnowledgeAssetStatsRead(BaseModel):
+    total_assets: int
+    total_chunks: int
+    total_facts: int
+    approved_facts: int
+    pending_review_facts: int
+    superseded_facts: int
+    ready_assets: int
+    pending_review_assets: int
+    rejected_assets: int
+    latest_asset_updated_at: datetime | None = None
+    source_type_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class KnowledgeAssetStatusUpdate(BaseModel):
     status: str = Field(pattern="^(pending_review|ready|rejected)$")
 
@@ -342,6 +465,21 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
+class RunRerunRequest(BaseModel):
+    mode: str = Field(default="fresh", pattern="^(fresh|resume)$")
+    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev)$")
+
+    @field_validator("resume_stage")
+    @classmethod
+    def validate_resume_stage(cls, value: str | None, info):  # type: ignore[override]
+        mode = info.data.get("mode")
+        if mode == "resume" and not value:
+            raise ValueError("resume_stage is required when mode=resume")
+        if mode != "resume" and value is not None:
+            raise ValueError("resume_stage is only allowed when mode=resume")
+        return value
+
+
 class RunEventRead(BaseModel):
     event_type: str
     run_id: str
@@ -433,6 +571,34 @@ class TenantHealthRead(BaseModel):
     webhook_events_failed: int
     webhook_failure_rate_ratio: float
     integrations: TenantIntegrationHealthRead
+
+
+class KnowledgeJiraSyncProjectStatusRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    jira_project_key: str
+    state: str
+    failure_category: str | None = None
+    last_error: str | None = None
+    last_attempted_at: datetime | None = None
+    last_successful_sync_at: datetime | None = None
+    next_retry_at: datetime | None = None
+    consecutive_failures: int
+
+
+class KnowledgeJiraSyncRuntimeRead(BaseModel):
+    state: str
+    enabled: bool
+    database_backend: str
+    started_at: datetime | None = None
+    stopped_at: datetime | None = None
+    last_pass_started_at: datetime | None = None
+    last_pass_finished_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    leader_acquired: bool
+    service_instance_id: str | None = None
+    stale: bool = False
+    projects: list[KnowledgeJiraSyncProjectStatusRead] = Field(default_factory=list)
 
 
 class ObservabilityDurationStatsRead(BaseModel):

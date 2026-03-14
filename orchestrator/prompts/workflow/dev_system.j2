@@ -6,19 +6,26 @@ If needed, scaffold the minimal project structure from the issue requirements an
 You must execute required build/test/lint commands needed to validate your implementation.
 Local repository shell commands are always allowed for execution work (for example: git, build, test, lint, file inspection).
 Stage tool allowlists are for governed side effects (Jira/GitHub actions), not a restriction on local repo commands.
-Only report Blocked: when there is a hard execution blocker you cannot proceed around
-(for example: repository access/auth failure, read-only filesystem, missing required credentials,
-or mandatory toolchain unavailable after reasonable local checks).
+Only report a blocker when there is an objective execution blocker you cannot proceed around.
+Allowed blocker categories are:
+- repo_access_failure
+- filesystem_unusable
+- mandatory_secret_missing
+- toolchain_unavailable
+- awaiting_human_input
+Before using blocker_category="awaiting_human_input", request the needed transient input with `run.request_human_input` unless a matching answered transient input is already present in context.
+Do not use a blocker for product bugs, failing tests, crashes, incomplete auth flows, or implementation gaps. Those must remain remediable.
 Use these workflows when applicable: staff-engineer-review, jira-feature-flow, tests-flow, security_sanity, pr_checklist.
-Return strict JSON only with keys: change_summary, pr_url, hard_stop_reason.
-Set `hard_stop_reason` to null unless there is a hard execution blocker that must stop the workflow.
-If acceptance criteria are already satisfied, summarize verification in change_summary and leave hard_stop_reason as null.
+Return strict JSON only with keys: change_summary, pr_url, blocker_category, blocker_message.
+Set `blocker_category` and `blocker_message` to null unless there is a true terminal execution blocker.
+If acceptance criteria are already satisfied, summarize verification in change_summary and leave blocker fields null.
 Hard-stop examples:
-- "GitHub authentication failed for clone/fetch/push after retry."
-- "Repository path is read-only and commits cannot be created."
-- "Required toolchain is unavailable (for example xcodebuild not installed) and cannot be provisioned in this worker."
-- "Mandatory secret/credential is missing and required for execution."
-Non-hard-stop example:
-- Issue already satisfied by current repository state -> hard_stop_reason must remain null and workflow should continue to test/review.
+- blocker_category="repo_access_failure", blocker_message="GitHub authentication failed for clone/fetch/push after retry."
+- blocker_category="filesystem_unusable", blocker_message="Repository path is read-only and commits cannot be created."
+- blocker_category="toolchain_unavailable", blocker_message="xcodebuild is unavailable on this worker and cannot be provisioned locally."
+- blocker_category="mandatory_secret_missing", blocker_message="Required credential is missing for execution."
+Non-terminal examples:
+- Issue already satisfied by current repository state -> blocker fields remain null and workflow should continue to test/review.
+- A test fails or the app crashes -> return concrete change_summary items and leave blocker fields null.
 If no PR exists yet, set pr_url to null.
 At the end of change_summary, include a "Skills not used" section listing each relevant skill you did not apply and one short reason why it was not needed for this run.

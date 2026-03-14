@@ -22,6 +22,10 @@ from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.config import Settings
 from orchestrator.core.error_observability import emit_hard_error
+from orchestrator.core.run_human_input_service import (
+    pending_human_input_for_thread,
+    resume_run_from_human_input_reply,
+)
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -314,6 +318,47 @@ class DiscordGatewayListener:
         with self._session_factory() as session:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
             if tenant is None:
+                return
+            pending_human_input = pending_human_input_for_thread(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                thread_channel_id=channel_id,
+            )
+            if pending_human_input is not None and not content.startswith("!"):
+                try:
+                    resumed_run = resume_run_from_human_input_reply(
+                        session=session,
+                        settings=self._settings,
+                        request=pending_human_input,
+                        reply_text=content,
+                        source_ref=str(payload.get("id") or "").strip() or None,
+                    )
+                    message_content = (
+                        f"<@{user_id}> Captured input for `{pending_human_input.issue_key}` "
+                        f"and queued resumed run `{resumed_run.run_id}`."
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "discord_gateway_human_input_resume_failed tenant_id=%s user_id=%s channel_id=%s request_id=%s error=%s",
+                        tenant.tenant_id,
+                        user_id,
+                        channel_id,
+                        pending_human_input.request_id,
+                        exc,
+                    )
+                    message_content = f"<@{user_id}> Failed to capture the requested input: {exc}"
+                try:
+                    DiscordApiClient(bot_token=bot_token).post_message(
+                        channel_id=channel_id,
+                        content=message_content,
+                    )
+                except DiscordApiError as exc:
+                    logger.exception(
+                        "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
+                        user_id,
+                        channel_id,
+                        exc,
+                    )
                 return
             decision_gate_issue_key = _decision_gate_issue_for_thread(
                 session=session,

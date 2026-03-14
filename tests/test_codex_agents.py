@@ -35,6 +35,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             max_dev_test_review_loops=1,
             suggested_test_commands=["python -m unittest"],
             execution_repo_dir="/tmp/test-repo",
+            execution_branch="run/MAB-54/run-1",
+            base_branch="main",
+            integration_branch="feature/MAB-54",
+            pr_target_branch="main",
         )
 
     def test_agents_map_json_payloads(self) -> None:
@@ -45,9 +49,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _request=_RuntimeQueue(
                 [
                     '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
-                    '{"change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
-                    '{"passed":true,"guidance":["run tests"],"feedback":null}',
-                    '{"approved":true,"summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1"}',
+                    '{"change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_category":null,"blocker_message":null}',
+                    '{"passed":true,"guidance":["run tests"],"feedback":null,"blocker_category":null,"blocker_message":null}',
+                    '{"approved":true,"summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_category":null,"blocker_message":null}',
                 ]
             ),
         )
@@ -92,6 +96,182 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(plan.confirmed_external_blockers, ["Apple developer access still pending"])
         self.assertEqual(plan.resolved_prerequisites, ["Supabase redirect URI approved"])
         self.assertEqual(plan.unresolved_prerequisites, ["Provision staging Service ID"])
+
+    def test_pm_prompt_includes_project_metadata_in_context(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = WorkflowRequest(
+            tenant_id="tenant-1",
+            project_id="project-1",
+            project_name="example App",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="GP",
+            run_id="run-1",
+            issue_key="MAB-54",
+            issue_summary="Integrate Codex runtime",
+            issue_description="Objective and acceptance criteria",
+            max_dev_test_review_loops=1,
+            suggested_test_commands=["python -m unittest"],
+            execution_repo_dir="/tmp/test-repo",
+            execution_branch="run/MAB-54/run-1",
+            base_branch="main",
+            integration_branch="feature/MAB-54",
+            pr_target_branch="main",
+        )
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/pm_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+            agents.pm(request, 1, None, [], None, None, None)
+
+        self.assertEqual(captured["project_id"], "project-1")
+        self.assertEqual(captured["project_name"], "example App")
+        self.assertEqual(captured["github_repository"], "https://github.com/example/repo")
+        self.assertEqual(captured["jira_project_key"], "GP")
+        self.assertEqual(captured["execution_repo_dir"], "/tmp/test-repo")
+        self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
+        self.assertEqual(captured["integration_branch"], "feature/MAB-54")
+
+    def test_stage_prompts_include_answered_human_inputs(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev"}',
+                    '{"change_summary":["implemented"],"pr_url":null,"blocker_category":null,"blocker_message":null}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = WorkflowRequest(
+            tenant_id="tenant-1",
+            project_id="project-1",
+            project_name="example App",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="GP",
+            run_id="run-1",
+            issue_key="MAB-54",
+            issue_summary="Integrate Codex runtime",
+            issue_description="Objective and acceptance criteria",
+            max_dev_test_review_loops=1,
+            suggested_test_commands=["python -m unittest"],
+            execution_repo_dir="/tmp/test-repo",
+            execution_branch="run/MAB-54/run-1",
+            base_branch="main",
+            integration_branch="feature/MAB-54",
+            pr_target_branch="main",
+            human_inputs=[
+                {
+                    "request_id": "request-1",
+                    "request_type": "verification_code",
+                    "prompt": "Reply with the Apple code",
+                    "value": "123456",
+                }
+            ],
+        )
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/dev_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+            plan = agents.pm(request, 1, None, [], None, None, None)
+            agents.dev(request, plan, 1, None)
+
+        self.assertEqual(json.loads(str(captured["human_inputs_json"]))[0]["value"], "123456")
+
+    def test_resume_session_id_is_applied_to_selected_stage(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue([]),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = WorkflowRequest(
+            tenant_id="tenant-1",
+            run_id="run-1",
+            issue_key="MAB-54",
+            issue_summary="Integrate Codex runtime",
+            issue_description="Objective and acceptance criteria",
+            max_dev_test_review_loops=1,
+            suggested_test_commands=["python -m unittest"],
+            execution_repo_dir="/tmp/test-repo",
+            execution_branch="run/MAB-54/run-1",
+            base_branch="main",
+            integration_branch="feature/MAB-54",
+            pr_target_branch="main",
+            resume_mode="resume",
+            resume_stage="dev",
+            resume_session_id="dev-session-123",
+        )
+        captured_contexts: list[CodexInvocationContext] = []
+
+        def _invoke_codex_json(*, context, **kwargs):  # noqa: ANN001
+            _ = kwargs
+            captured_contexts.append(context)
+            if context.stage == "pm":
+                return {"plan_steps": ["step1"], "acceptance_criteria": ["ac1"], "risks": []}
+            return {"change_summary": ["implemented"], "pr_url": None}
+
+        with (
+            patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch("orchestrator.core.codex_agents.invoke_codex_json", side_effect=_invoke_codex_json),
+        ):
+            plan = agents.pm(request, 1, None, [], None, None, None)
+            agents.dev(request, plan, 1, None)
+
+        self.assertEqual(captured_contexts[0].stage, "pm")
+        self.assertIsNone(captured_contexts[0].codex_session_id)
+        self.assertEqual(captured_contexts[1].stage, "dev")
+        self.assertEqual(captured_contexts[1].codex_session_id, "dev-session-123")
+
+    def test_dev_test_and_review_map_structured_blockers(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
+                    '{"change_summary":["implemented"],"pr_url":null,"blocker_category":"mandatory_secret_missing","blocker_message":"APPLE_TEST_PASSWORD missing"}',
+                    '{"passed":false,"guidance":["retry targeted UI test"],"feedback":"UI test failed","blocker_category":"toolchain_unavailable","blocker_message":"xcodebuild missing"}',
+                    '{"approved":false,"outcome":"blocked","summary":["Awaiting approval"],"feedback":"Need PM approval","blocker_category":"awaiting_human_input","blocker_message":"Decision owner approval missing"}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = self._request()
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            plan = agents.pm(request, 1, None, [], None, None, None)
+            dev = agents.dev(request, plan, 1, None)
+            test_result = agents.test(request, plan, dev, 1)
+            review = agents.review(request, plan, dev, test_result, 1)
+
+        self.assertEqual(dev.blocker_category, "mandatory_secret_missing")
+        self.assertEqual(dev.blocker_message, "APPLE_TEST_PASSWORD missing")
+        self.assertEqual(test_result.blocker_category, "toolchain_unavailable")
+        self.assertEqual(test_result.blocker_message, "xcodebuild missing")
+        self.assertEqual(review.blocker_category, "awaiting_human_input")
+        self.assertEqual(review.blocker_message, "Decision owner approval missing")
 
     def test_review_fallback_does_not_treat_generic_not_as_rejection(self) -> None:
         runtime = CodexRuntime(

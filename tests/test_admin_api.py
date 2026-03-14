@@ -21,7 +21,7 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, Project, Run, RunLock, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeChunk, KnowledgeFact, KnowledgeSource, ManagedSecret, Project, Run, RunLock, Tenant
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -691,6 +691,56 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.json()["effective_policy"]["knowledge_auto_answer_mode"], "safe")
         self.assertEqual(update_project.json()["effective_policy"]["allowed_commands"], [])
 
+    def test_project_update_migrates_inline_secret_values_to_project_managed_refs(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        default_project = projects_response.json()[0]
+        project_id = default_project["project_id"]
+
+        update_project = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            json={
+                "name": default_project["name"],
+                "github_repository": default_project["github_repository"],
+                "jira_project_key": default_project["jira_project_key"],
+                "environment": {},
+                "secret_refs": {
+                    "SUPABASE_URL": "https://example.supabase.co",
+                    "APPLE_TEST_PASSWORD": "Ft6ygA&aYkf%hy",
+                },
+                "is_archived": False,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_project.status_code, 200)
+        body = update_project.json()
+        self.assertEqual(
+            body["secret_refs"],
+            {
+                "SUPABASE_URL": f"project/tenant-a/{project_id}/SUPABASE_URL",
+                "APPLE_TEST_PASSWORD": f"project/tenant-a/{project_id}/APPLE_TEST_PASSWORD",
+            },
+        )
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            assert project is not None
+            self.assertEqual(project.secret_refs, body["secret_refs"])
+            supabase_secret = session.get(ManagedSecret, f"project/tenant-a/{project_id}/SUPABASE_URL")
+            password_secret = session.get(ManagedSecret, f"project/tenant-a/{project_id}/APPLE_TEST_PASSWORD")
+            self.assertIsNotNone(supabase_secret)
+            self.assertIsNotNone(password_secret)
+
     def test_project_discord_enable_provisions_channel_when_missing(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -924,7 +974,7 @@ class AdminApiTests(unittest.TestCase):
                     orchestrated_session_id="orchestrated-session-789",
                     status="failed",
                     last_error="boom",
-                    plan=None,
+                    plan={"plan": {"plan_steps": ["restore auth flow"], "acceptance_criteria": ["login works"], "risks": []}},
                     created_at=now,
                     started_at=now,
                     finished_at=now,
@@ -932,16 +982,82 @@ class AdminApiTests(unittest.TestCase):
             )
             session.commit()
 
-        response = self.client.post("/api/admin/runs/run-failed-rerun/rerun", auth=("admin", "secret"))
+        response = self.client.post(
+            "/api/admin/runs/run-failed-rerun/rerun",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertEqual(body["tenant_id"], "tenant-a")
         self.assertEqual(body["issue_key"], "TP-999")
         self.assertEqual(body["status"], "queued")
         self.assertNotEqual(body["run_id"], "run-failed-rerun")
+        self.assertIsNone(body["dev_session_id"])
+        self.assertIsNone(body["pm_session_id"])
+        self.assertIsNone(body["orchestrated_session_id"])
+        self.assertEqual(body["plan"]["trigger_context"]["rerun_mode"], "fresh")
+
+    def test_resume_rerun_from_dev_stage_copies_session_and_plan(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-failed-resume",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-1000",
+                    issue_summary="failed run",
+                    issue_description="Objective: resume from dev.",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    dev_session_id="dev-session-123",
+                    pm_session_id="pm-session-456",
+                    orchestrated_session_id="orchestrated-session-789",
+                    status="failed",
+                    last_error="boom",
+                    plan={
+                        "plan": {
+                            "plan_steps": ["restore auth flow"],
+                            "acceptance_criteria": ["login works"],
+                            "risks": ["stale session"],
+                            "resolved_prerequisites": ["supabase configured"],
+                        }
+                    },
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/runs/run-failed-resume/rerun",
+            json={"mode": "resume", "resume_stage": "dev"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body["status"], "queued")
         self.assertEqual(body["dev_session_id"], "dev-session-123")
-        self.assertEqual(body["pm_session_id"], "pm-session-456")
-        self.assertEqual(body["orchestrated_session_id"], "orchestrated-session-789")
+        self.assertIsNone(body["pm_session_id"])
+        self.assertIsNone(body["orchestrated_session_id"])
+        trigger = body["plan"]["trigger_context"]
+        self.assertEqual(trigger["rerun_mode"], "resume")
+        self.assertEqual(trigger["resume_stage"], "dev")
+        self.assertEqual(trigger["resume_session_id"], "dev-session-123")
+        self.assertEqual(trigger["resume_source_run_id"], "run-failed-resume")
+        self.assertEqual(trigger["resume_source_plan"]["plan_steps"], ["restore auth flow"])
 
     def test_cancel_active_run_from_admin(self) -> None:
         payload = self._tenant_payload()
@@ -2564,6 +2680,28 @@ class AdminApiTests(unittest.TestCase):
                 updated_at=now,
             )
             session.add(asset)
+            session.add(
+                KnowledgeFact(
+                    fact_id="kb-pending-fact-1",
+                    asset_id="kb-pending-1",
+                    chunk_id=None,
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    fact_type="decision_slot",
+                    fact_key="decision_owner",
+                    fact_value="Platform owner",
+                    approval_state="pending_review",
+                    slot_name="decision_owner",
+                    slot_value="Platform owner",
+                    confidence=0.9,
+                    is_inferred=False,
+                    metadata_json={},
+                    source_timestamp=now,
+                    superseded_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
             session.commit()
 
         response = self.client.patch(
@@ -2579,6 +2717,9 @@ class AdminApiTests(unittest.TestCase):
             asset = session.get(KnowledgeAsset, "kb-pending-1")
             self.assertIsNotNone(asset)
             self.assertEqual(asset.status, "ready")
+            fact = session.get(KnowledgeFact, "kb-pending-fact-1")
+            self.assertIsNotNone(fact)
+            self.assertEqual(fact.approval_state, "approved")
 
     def test_update_project_knowledge_asset_status_rejects_invalid_transition(self) -> None:
         payload = self._tenant_payload()
@@ -2663,6 +2804,543 @@ class AdminApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "pending_review")
+
+    def test_list_project_knowledge_assets_supports_paging_and_filters(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    KnowledgeAsset(
+                        asset_id="kb-1",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        source_type="jira_issue",
+                        title="MAB-100 auth flow",
+                        mime_type="text/plain",
+                        source_ref="jira:issue:MAB-100",
+                        source_timestamp=now,
+                        checksum="checksum-a",
+                        text_content="Auth flow details",
+                        binary_content=None,
+                        chunk_count=2,
+                        status="ready",
+                        metadata_json={},
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    KnowledgeAsset(
+                        asset_id="kb-2",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        source_type="file_upload",
+                        title="Architecture notes",
+                        mime_type="text/markdown",
+                        source_ref="notes.md",
+                        source_timestamp=now,
+                        checksum="checksum-b",
+                        text_content="Platform notes",
+                        binary_content=None,
+                        chunk_count=1,
+                        status="pending_review",
+                        metadata_json={},
+                        created_at=now,
+                        updated_at=now + timedelta(seconds=1),
+                    ),
+                    KnowledgeAsset(
+                        asset_id="kb-3",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        source_type="jira_comment",
+                        title="MAB-133 decision",
+                        mime_type="text/plain",
+                        source_ref="jira:comment:MAB-133:42",
+                        source_timestamp=now,
+                        checksum="checksum-c",
+                        text_content="Decision comment",
+                        binary_content=None,
+                        chunk_count=1,
+                        status="ready",
+                        metadata_json={},
+                        created_at=now,
+                        updated_at=now + timedelta(seconds=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/assets?limit=1&offset=0&status=ready&q=MAB",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total"], 2)
+        self.assertEqual(body["limit"], 1)
+        self.assertEqual(body["offset"], 0)
+        self.assertEqual(len(body["items"]), 1)
+        self.assertEqual(body["items"][0]["asset_id"], "kb-3")
+
+    def test_get_project_knowledge_asset_detail_and_chunk_page(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            asset = KnowledgeAsset(
+                asset_id="kb-detail-1",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_type="file_upload",
+                title="Design notes",
+                mime_type="text/plain",
+                source_ref="design.txt",
+                source_timestamp=now,
+                checksum="checksum-detail",
+                text_content="Detailed knowledge content",
+                binary_content=None,
+                chunk_count=3,
+                status="ready",
+                metadata_json={"origin": "upload"},
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(asset)
+            session.add_all(
+                [
+                    KnowledgeChunk(
+                        chunk_id="chunk-1",
+                        asset_id="kb-detail-1",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        chunk_index=0,
+                        content="Chunk zero",
+                        token_count=2,
+                        embedding=None,
+                        source_timestamp=now,
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    KnowledgeChunk(
+                        chunk_id="chunk-2",
+                        asset_id="kb-detail-1",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        chunk_index=1,
+                        content="Chunk one",
+                        token_count=2,
+                        embedding=None,
+                        source_timestamp=now,
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    KnowledgeFact(
+                        fact_id="fact-1",
+                        asset_id="kb-detail-1",
+                        chunk_id=None,
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        fact_type="configuration",
+                        fact_key="production_bundle_id",
+                        fact_value="com.example.girlpower",
+                        approval_state="approved",
+                        slot_name="production_bundle_id",
+                        slot_value="com.example.girlpower",
+                        confidence=0.9,
+                        is_inferred=False,
+                        metadata_json={"label": "Production Bundle ID"},
+                        source_timestamp=now,
+                        superseded_at=None,
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                ]
+            )
+            session.commit()
+
+        detail_response = self.client.get(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/assets/kb-detail-1",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["text_content"], "Detailed knowledge content")
+        self.assertEqual(detail_response.json()["metadata_json"]["origin"], "upload")
+        self.assertEqual(detail_response.json()["facts"][0]["fact_key"], "production_bundle_id")
+
+        chunks_response = self.client.get(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/assets/kb-detail-1/chunks?limit=1&offset=1",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(chunks_response.status_code, 200)
+        chunks_body = chunks_response.json()
+        self.assertEqual(chunks_body["total"], 2)
+        self.assertEqual(len(chunks_body["items"]), 1)
+        self.assertEqual(chunks_body["items"][0]["chunk_id"], "chunk-2")
+
+    def test_get_project_knowledge_stats_returns_aggregates(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    KnowledgeAsset(
+                        asset_id="stats-1",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        source_type="jira_issue",
+                        title="Ready issue",
+                        mime_type="text/plain",
+                        source_ref="jira:issue:1",
+                        source_timestamp=now,
+                        checksum="stats-1",
+                        text_content="Ready",
+                        binary_content=None,
+                        chunk_count=4,
+                        status="ready",
+                        metadata_json={},
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    KnowledgeAsset(
+                        asset_id="stats-2",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        source_type="file_upload",
+                        title="Pending asset",
+                        mime_type="text/plain",
+                        source_ref="pending.txt",
+                        source_timestamp=now,
+                        checksum="stats-2",
+                        text_content="Pending",
+                        binary_content=None,
+                        chunk_count=2,
+                        status="pending_review",
+                        metadata_json={},
+                        created_at=now,
+                        updated_at=now + timedelta(seconds=1),
+                    ),
+                    KnowledgeFact(
+                        fact_id="stats-fact-1",
+                        asset_id="stats-1",
+                        chunk_id=None,
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        fact_type="decision_slot",
+                        fact_key="decision_owner",
+                        fact_value="Platform owner",
+                        approval_state="approved",
+                        slot_name="decision_owner",
+                        slot_value="Platform owner",
+                        confidence=0.95,
+                        is_inferred=False,
+                        metadata_json={},
+                        source_timestamp=now,
+                        superseded_at=None,
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    KnowledgeFact(
+                        fact_id="stats-fact-2",
+                        asset_id="stats-2",
+                        chunk_id=None,
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        fact_type="reference_fact",
+                        fact_key="rollback_plan",
+                        fact_value="Retry on next launch",
+                        approval_state="pending_review",
+                        slot_name="rollout_constraints",
+                        slot_value="Retry on next launch",
+                        confidence=0.7,
+                        is_inferred=False,
+                        metadata_json={},
+                        source_timestamp=now,
+                        superseded_at=now + timedelta(seconds=2),
+                        created_at=now,
+                        updated_at=now + timedelta(seconds=2),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/stats",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_assets"], 2)
+        self.assertEqual(body["total_chunks"], 6)
+        self.assertEqual(body["total_facts"], 2)
+        self.assertEqual(body["approved_facts"], 1)
+        self.assertEqual(body["pending_review_facts"], 1)
+        self.assertEqual(body["superseded_facts"], 1)
+        self.assertEqual(body["ready_assets"], 1)
+        self.assertEqual(body["pending_review_assets"], 1)
+        self.assertEqual(body["rejected_assets"], 0)
+        self.assertEqual(body["source_type_counts"]["jira_issue"], 1)
+
+    def test_project_knowledge_sources_support_crud(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_response.status_code, 201)
+
+        create_source = self.client.post(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/sources",
+            json={
+                "connector_type": "google_drive",
+                "display_name": "Architecture Docs",
+                "config_json": {"targets": ["https://drive.google.com/file/d/abc123/view"]},
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_source.status_code, 201)
+        source_body = create_source.json()
+        self.assertEqual(source_body["connector_type"], "google_drive")
+        self.assertEqual(source_body["status"], "active")
+        self.assertFalse(source_body["supports_sync_now"])
+        source_id = source_body["source_id"]
+
+        list_response = self.client.get(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/sources",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(list_response.status_code, 200)
+        items = list_response.json()["items"]
+        self.assertTrue(any(item["source_id"] == source_id for item in items))
+
+        update_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/sources/{source_id}",
+            json={"status": "disabled"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.json()["status"], "disabled")
+
+        delete_response = self.client.delete(
+            f"/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/sources/{source_id}",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(delete_response.status_code, 204)
+
+    def test_sync_project_knowledge_source_rejects_unsupported_connector(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_response.status_code, 201)
+
+        source_response = self.client.post(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/sources",
+            json={
+                "connector_type": "discord",
+                "display_name": "Support Threads",
+                "config_json": {"thread_ids": ["1234567890"]},
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(source_response.status_code, 201)
+        source_id = source_response.json()["source_id"]
+
+        sync_response = self.client.post(
+            f"/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/sources/{source_id}/sync",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(sync_response.status_code, 409)
+        self.assertIn("does not provide a live sync adapter", sync_response.json()["detail"])
+
+    def test_sync_project_knowledge_source_runs_jira_connector(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_response.status_code, 201)
+        self._insert_jira_connection()
+
+        source_response = self.client.post(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/sources",
+            json={"connector_type": "jira", "config_json": {"project_key": "TPA"}},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(source_response.status_code, 201)
+        source_id = source_response.json()["source_id"]
+
+        with (
+            patch("orchestrator.core.knowledge_sources.refresh_jira_connection_tokens", return_value="token"),
+            patch("orchestrator.core.knowledge_sources.jira_oauth_client", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.core.knowledge_sources.sync_project_knowledge_from_jira",
+                return_value=SimpleNamespace(
+                    ok=True,
+                    synced_assets=1,
+                    skipped_assets=0,
+                    created_assets=1,
+                    updated_assets=0,
+                    unchanged_assets=0,
+                    deleted_assets=0,
+                    failed_assets=0,
+                    details="synced",
+                ),
+            ),
+        ):
+            sync_response = self.client.post(
+                f"/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/sources/{source_id}/sync",
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(sync_response.status_code, 200)
+        self.assertEqual(sync_response.json()["created_assets"], 1)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            source = session.get(KnowledgeSource, source_id)
+            self.assertIsNotNone(source)
+            self.assertIsNotNone(source.last_synced_at)
+            self.assertIsNone(source.last_error)
+
+    def test_debug_project_knowledge_search_returns_fact_and_chunk_matches(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                KnowledgeAsset(
+                    asset_id="debug-asset-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    source_type="file_upload",
+                    title="Apple auth rollout",
+                    mime_type="text/plain",
+                    source_ref="notes/apple.txt",
+                    source_timestamp=now,
+                    checksum="debug-1",
+                    text_content="Production Bundle ID is com.example.girlpower",
+                    binary_content=None,
+                    chunk_count=1,
+                    status="ready",
+                    metadata_json={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                KnowledgeChunk(
+                    chunk_id="debug-chunk-1",
+                    asset_id="debug-asset-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    chunk_index=0,
+                    content="Production Bundle ID is com.example.girlpower",
+                    token_count=6,
+                    embedding=None,
+                    source_timestamp=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                KnowledgeFact(
+                    fact_id="debug-fact-1",
+                    asset_id="debug-asset-1",
+                    chunk_id=None,
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    fact_type="configuration",
+                    fact_key="production_bundle_id",
+                    fact_value="com.example.girlpower",
+                    approval_state="approved",
+                    slot_name="production_bundle_id",
+                    slot_value="com.example.girlpower",
+                    confidence=0.9,
+                    is_inferred=False,
+                    metadata_json={},
+                    source_timestamp=now,
+                    superseded_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/tenants/tenant-a/projects/tenant-a-default/knowledge/debug-search?query=production%20bundle%20id",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["query"], "production bundle id")
+        self.assertTrue(any(item["layer"] == "knowledge_fact" for item in body["items"]))
+        self.assertTrue(any(item["layer"] == "knowledge_chunk" for item in body["items"]))
+
+    def test_admin_knowledge_jira_sync_runtime_status_returns_snapshot(self) -> None:
+        with patch(
+            "orchestrator.api.routes.admin_observability.get_knowledge_jira_sync_runtime_status",
+            return_value=SimpleNamespace(
+                state="degraded",
+                enabled=True,
+                database_backend="postgres",
+                started_at=datetime(2026, 3, 13, 11, 7, 17, tzinfo=timezone.utc),
+                stopped_at=None,
+                last_pass_started_at=datetime(2026, 3, 13, 11, 7, 17, tzinfo=timezone.utc),
+                last_pass_finished_at=datetime(2026, 3, 13, 11, 7, 18, tzinfo=timezone.utc),
+                last_heartbeat_at=datetime(2026, 3, 13, 11, 7, 18, tzinfo=timezone.utc),
+                leader_acquired=True,
+                service_instance_id="api-sync-1",
+                stale=False,
+                projects=(
+                    SimpleNamespace(
+                        tenant_id="example",
+                        project_id="example-default",
+                        jira_project_key="GP",
+                        state="degraded",
+                        failure_category="invalid_refresh_token",
+                        last_error="refresh_token is invalid",
+                        last_attempted_at=datetime(2026, 3, 13, 11, 7, 17, tzinfo=timezone.utc),
+                        last_successful_sync_at=None,
+                        next_retry_at=datetime(2026, 3, 13, 17, 7, 17, tzinfo=timezone.utc),
+                        consecutive_failures=1,
+                    ),
+                ),
+            ),
+        ):
+            response = self.client.get(
+                "/api/admin/observability/knowledge-jira-sync",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["state"], "degraded")
+        self.assertEqual(payload["database_backend"], "postgres")
+        self.assertEqual(payload["service_instance_id"], "api-sync-1")
+        self.assertFalse(payload["stale"])
+        self.assertEqual(len(payload["projects"]), 1)
+        self.assertEqual(payload["projects"][0]["failure_category"], "invalid_refresh_token")
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ from orchestrator.api.admin.runs_service import (
 )
 from orchestrator.api.admin.schema_mappers import run_to_schema
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.schemas import RunEventRead, RunLogEventRead, RunRead
+from orchestrator.api.schemas import RunEventRead, RunLogEventRead, RunRead, RunRerunRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.security import require_admin
@@ -90,12 +90,16 @@ def get_run(
 @router.post("/runs/{run_id}/rerun", response_model=RunRead, status_code=status.HTTP_201_CREATED)
 def rerun_failed_run(
     run_id: str,
+    payload: RunRerunRequest | None = None,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> RunRead:
+    rerun_request = payload or RunRerunRequest()
     return rerun_run_impl(
         session=session,
         run_id=run_id,
+        mode=rerun_request.mode,
+        resume_stage=rerun_request.resume_stage,
         run_model=Run,
         tenant_model=Tenant,
         resolve_project_for_run_fn=resolve_project_for_run,

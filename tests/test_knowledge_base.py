@@ -11,7 +11,7 @@ from orchestrator.core.knowledge_base import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import KnowledgeAsset, Project, Tenant
+from orchestrator.storage.models import KnowledgeAsset, KnowledgeFact, Project, Tenant
 
 
 def test_build_knowledge_prompt_context_requires_project_scope() -> None:
@@ -104,9 +104,73 @@ def test_build_knowledge_prompt_context_returns_project_scoped_match() -> None:
                 query="What is the production bundle id for GirlPower Apple sign in?",
             )
 
+        assert "Relevant facts:" in context.text
         assert "com.example.girlpower" in context.text
         assert context.citations
         assert context.citations[0]["source_type"] == "jira_comment"
+        assert context.citations[0]["layer"] == "knowledge_fact"
+
+
+def test_create_knowledge_asset_extracts_source_agnostic_facts() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_fact_test.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="MAB",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            create_knowledge_asset(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                source_type="web_page",
+                title="Auth rollout note",
+                mime_type="text/plain",
+                source_ref="https://example.test/auth",
+                text_content=(
+                    "Production Bundle ID: com.example.girlpower\n"
+                    "Decision owner: Platform Identity & Security owner\n"
+                    "Rollback plan: Disable the gate and retry login with the previous session policy."
+                ),
+            )
+
+            facts = session.query(KnowledgeFact).order_by(KnowledgeFact.fact_type, KnowledgeFact.fact_key).all()
+
+        assert {fact.fact_type for fact in facts} >= {"configuration", "decision_slot", "ownership", "rollout_constraint"}
+        assert any(fact.fact_key == "decision_owner" and "Platform Identity" in fact.fact_value for fact in facts)
+        assert any(fact.fact_key == "production_bundle_id" for fact in facts)
+        assert all(fact.approval_state == "approved" for fact in facts)
 
 
 def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> None:
@@ -254,3 +318,84 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
             assert len(active_assets) == 2
             assert len(deleted_assets) == 1
             assert any(asset.source_type == "jira_comment" and "com.example.girlpower.stage" in str(asset.text_content) for asset in active_assets)
+
+
+def test_sync_project_knowledge_from_jira_with_pgvector_string_embeddings() -> None:
+    from unittest.mock import patch
+
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_sync_pgvector_strings.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            class _JiraClient:
+                def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
+                    start_at = int(kwargs.get("start_at", 0) or 0)
+                    if start_at > 0:
+                        return []
+                    return [SimpleNamespace(key="GP-122")]
+
+                def get_issue_detail(self, **_kwargs):
+                    return SimpleNamespace(
+                        key="GP-122",
+                        summary="Auth gate rollout",
+                        status="Blocked",
+                        description="Need Apple Sign In config confirmed.",
+                        labels=[],
+                    )
+
+                def list_issue_comments(self, **_kwargs):
+                    return []
+
+                def list_issue_attachments(self, **_kwargs):
+                    return []
+
+            with patch(
+                "orchestrator.core.knowledge_base._embed_texts",
+                return_value=["[0.1,0.2,0.3]"],
+            ):
+                result = sync_project_knowledge_from_jira(
+                    session=session,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    project_key="GP",
+                    jira_client=_JiraClient(),
+                    access_token="tok",
+                    cloud_id="cloud",
+                )
+
+            assert result.failed_assets == 0

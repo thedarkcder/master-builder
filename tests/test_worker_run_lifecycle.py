@@ -12,6 +12,7 @@ from orchestrator.core.worker.run_lifecycle import (
     fail_project_repository_checkout,
     finalize_workflow_result,
     requeue_workflow_result_for_capability,
+    requeue_workflow_result_for_stale_snapshot,
     resolve_project_for_run,
     start_run,
 )
@@ -369,4 +370,77 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 issue_key="TA-202",
             )
             lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-202"})
+            self.assertIsNone(lock)
+
+    def test_requeue_workflow_result_for_stale_snapshot_notifies_queue_listener(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            run = Run(
+                run_id="run-stale-requeue",
+                tenant_id="tenant-a",
+                issue_key="TA-203",
+                issue_summary="stale snapshot requeue",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch="feature/TA-203",
+                pr_url="https://github.com/example/a/pull/88",
+                status="running",
+                last_error="old error",
+                plan=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                project_id="tenant-a-default",
+            )
+            session.add(run)
+            session.add(
+                RunLock(
+                    tenant_id="tenant-a",
+                    issue_key="TA-203",
+                    run_id="run-stale-requeue",
+                    locked_at=now,
+                )
+            )
+            session.commit()
+            session.refresh(run)
+
+            workflow_result = WorkflowResult(
+                succeeded=True,
+                plan=PmPlan(
+                    plan_steps=["finalize"],
+                    acceptance_criteria=["PR exists"],
+                    risks=[],
+                ),
+                pr_url="https://github.com/example/a/pull/88",
+                summary=["complete"],
+                test_guidance=["pytest"],
+                attempts=1,
+                diagnostics=None,
+            )
+
+            with patch("orchestrator.core.worker.run_lifecycle.notify_run_enqueued") as notify_mock:
+                requeued = requeue_workflow_result_for_stale_snapshot(
+                    session,
+                    run=run,
+                    workflow_result=workflow_result,
+                    stage_updates=[{"stage": "run_requeued_stale_snapshot"}],
+                    error="Branch snapshot stale: origin/main moved from aaa to bbb.",
+                )
+
+            self.assertEqual(requeued.status, "queued")
+            self.assertIsNone(requeued.last_error)
+            self.assertIsNone(requeued.started_at)
+            self.assertIsNone(requeued.finished_at)
+            self.assertIsNone(requeued.pr_url)
+            self.assertTrue(requeued.plan["requeued"])
+            self.assertTrue(requeued.plan["stale_branch_snapshot"])
+            self.assertIn("Branch snapshot stale", requeued.plan["requeue_reason"])
+            notify_mock.assert_called_once_with(
+                session,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                run_id="run-stale-requeue",
+                issue_key="TA-203",
+            )
+            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-203"})
             self.assertIsNone(lock)

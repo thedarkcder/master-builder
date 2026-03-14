@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import shutil
@@ -98,8 +99,32 @@ def _run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -
     return process.stdout
 
 
+def _resolve_git_path(*, repo_dir: Path, git_path: str) -> Path:
+    resolved = _run_git(["rev-parse", "--git-path", git_path], cwd=repo_dir).strip()
+    if not resolved:
+        raise ProjectRepoCheckoutError(
+            f"Unable to resolve git path '{git_path}' for repository bootstrap (repo_dir={repo_dir})"
+        )
+    candidate = Path(resolved)
+    if not candidate.is_absolute():
+        candidate = repo_dir / candidate
+    return candidate
+
+
 def project_repo_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
     return Path(base_dir) / tenant_id / project_id / "repo"
+
+
+def project_run_repo_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
+    return Path(base_dir) / tenant_id / project_id / "runs" / run_id / "repo"
+
+
+def execution_branch_name(*, issue_key: str, run_id: str) -> str:
+    normalized_issue = re.sub(r"[^a-z0-9._/-]+", "-", str(issue_key).strip().lower()).strip("-")
+    normalized_run = re.sub(r"[^a-z0-9._/-]+", "-", str(run_id).strip().lower()).strip("-")
+    issue_component = normalized_issue or "issue"
+    run_component = normalized_run or "run"
+    return f"run/{issue_component}/{run_component}"
 
 
 def _is_swift_repo(repo_dir: Path) -> bool:
@@ -153,13 +178,14 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
         _disable_jira_mcp_servers_in_project_codex(repo_dir=repo_dir)
 
     gitignore_path = repo_dir / ".gitignore"
+    seeded_gitignore = False
     if not gitignore_path.exists():
         gitignore_path.write_text(_build_seeded_gitignore_content(repo_dir=repo_dir), encoding="utf-8")
+        seeded_gitignore = True
 
-    # Keep workspace policy files out of accidental commits inside project repos.
-    info_dir = repo_dir / ".git" / "info"
-    info_dir.mkdir(parents=True, exist_ok=True)
-    exclude_path = info_dir / "exclude"
+    # Keep workspace policy files out of accidental commits inside project repos/worktrees.
+    exclude_path = _resolve_git_path(repo_dir=repo_dir, git_path="info/exclude")
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
     existing_lines = set()
     if exclude_path.exists():
         existing_lines = {
@@ -167,12 +193,243 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
             for line in exclude_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
-    required_lines = {"AGENTS.md", ".codex/"}
+    required_lines = {"AGENTS.md", ".codex/", ".master-builder-run.json"}
+    if seeded_gitignore:
+        required_lines.add(".gitignore")
     missing_lines = [line for line in sorted(required_lines) if line not in existing_lines]
     if missing_lines:
         prefix = "\n" if exclude_path.exists() and exclude_path.read_text(encoding="utf-8") else ""
         with exclude_path.open("a", encoding="utf-8") as handle:
             handle.write(prefix + "\n".join(missing_lines) + "\n")
+
+
+def _run_metadata_path(*, repo_dir: Path | str) -> Path:
+    return Path(repo_dir) / ".master-builder-run.json"
+
+
+def read_run_worktree_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
+    return _read_run_metadata(repo_dir=repo_dir)
+
+
+def _write_run_metadata(
+    *,
+    repo_dir: Path,
+    run_id: str,
+    issue_key: str,
+    execution_branch: str,
+    base_branch: str,
+    integration_branch: str,
+    start_point_ref: str,
+    start_point_sha: str,
+) -> None:
+    _run_metadata_path(repo_dir=repo_dir).write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "issue_key": issue_key,
+                "execution_branch": execution_branch,
+                "base_branch": base_branch,
+                "integration_branch": integration_branch,
+                "start_point_ref": start_point_ref,
+                "start_point_sha": start_point_sha,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _read_run_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
+    path = _run_metadata_path(repo_dir=repo_dir)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _git_ref_exists(*, cwd: Path, ref: str) -> bool:
+    process = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", ref],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return process.returncode == 0
+
+
+def _resolve_worktree_start_point(*, repo_dir: Path, base_branch: str, integration_branch: str) -> str:
+    candidate_refs = [
+        f"refs/remotes/origin/{integration_branch}",
+        f"refs/heads/{integration_branch}",
+        f"refs/remotes/origin/{base_branch}",
+        f"refs/heads/{base_branch}",
+        "HEAD",
+    ]
+    for ref in candidate_refs:
+        if ref == "HEAD" or _git_ref_exists(cwd=repo_dir, ref=ref):
+            if ref.startswith("refs/remotes/origin/"):
+                return f"origin/{ref.removeprefix('refs/remotes/origin/')}"
+            if ref.startswith("refs/heads/"):
+                return ref.removeprefix("refs/heads/")
+            return ref
+    return "HEAD"
+
+
+def _resolve_ref_commit_sha(*, repo_dir: Path, ref: str) -> str:
+    return _run_git(["rev-parse", ref], cwd=repo_dir).strip()
+
+
+def _remove_run_worktree(*, repo_dir: Path, run_repo_dir: Path) -> None:
+    run_root = run_repo_dir.parent
+    if (run_repo_dir / ".git").exists():
+        try:
+            _run_git(["worktree", "remove", "--force", str(run_repo_dir)], cwd=repo_dir)
+        except ProjectRepoCheckoutError:
+            shutil.rmtree(run_root, ignore_errors=True)
+            return
+    if run_root.exists():
+        shutil.rmtree(run_root, ignore_errors=True)
+
+
+@dataclass(frozen=True)
+class RunSnapshotFreshness:
+    start_point_ref: str
+    start_point_sha: str
+    current_start_point_sha: str | None
+    stale: bool
+    message: str | None
+
+
+def check_run_snapshot_freshness(
+    *,
+    base_dir: str,
+    tenant_id: str,
+    project: Project,
+    start_point_ref: str,
+    start_point_sha: str,
+) -> RunSnapshotFreshness:
+    repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
+    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
+    try:
+        current_sha = _resolve_ref_commit_sha(repo_dir=repo_dir, ref=start_point_ref)
+    except ProjectRepoCheckoutError:
+        return RunSnapshotFreshness(
+            start_point_ref=start_point_ref,
+            start_point_sha=start_point_sha,
+            current_start_point_sha=None,
+            stale=True,
+            message=(
+                f"Branch snapshot stale: start ref {start_point_ref} is no longer available upstream. "
+                "Requeueing from the latest snapshot."
+            ),
+        )
+
+    stale = current_sha != start_point_sha
+    message = None
+    if stale:
+        message = (
+            f"Branch snapshot stale: {start_point_ref} moved from {start_point_sha[:12]} "
+            f"to {current_sha[:12]}. Requeueing from the latest snapshot."
+        )
+    return RunSnapshotFreshness(
+        start_point_ref=start_point_ref,
+        start_point_sha=start_point_sha,
+        current_start_point_sha=current_sha,
+        stale=stale,
+        message=message,
+    )
+
+
+def ensure_run_worktree(
+    *,
+    base_dir: str,
+    tenant_id: str,
+    project: Project,
+    run_id: str,
+    issue_key: str,
+    base_branch: str,
+    integration_branch: str,
+) -> tuple[Path, str]:
+    repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
+    if not (repo_dir / ".git").exists():
+        raise ProjectRepoCheckoutError(
+            f"Project repository checkout is missing for run worktree creation (repo_dir={repo_dir})"
+        )
+
+    run_repo = project_run_repo_dir(
+        base_dir=base_dir,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+        run_id=run_id,
+    )
+    execution_branch = execution_branch_name(issue_key=issue_key, run_id=run_id)
+    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
+    start_point_ref = _resolve_worktree_start_point(
+        repo_dir=repo_dir,
+        base_branch=base_branch,
+        integration_branch=integration_branch,
+    )
+    start_point_sha = _resolve_ref_commit_sha(repo_dir=repo_dir, ref=start_point_ref)
+    metadata = _read_run_metadata(repo_dir=run_repo) if run_repo.exists() else None
+    if (run_repo / ".git").exists() and metadata is not None:
+        if (
+            str(metadata.get("run_id") or "") == run_id
+            and str(metadata.get("execution_branch") or "") == execution_branch
+            and str(metadata.get("base_branch") or "") == base_branch
+            and str(metadata.get("integration_branch") or "") == integration_branch
+            and str(metadata.get("start_point_ref") or "") == start_point_ref
+            and str(metadata.get("start_point_sha") or "") == start_point_sha
+        ):
+            _sync_agent_workspace_files(repo_dir=run_repo)
+            return run_repo, execution_branch
+        _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=run_repo)
+    elif run_repo.exists():
+        shutil.rmtree(run_repo.parent, ignore_errors=True)
+
+    run_repo.parent.mkdir(parents=True, exist_ok=True)
+    _run_git(
+        ["worktree", "add", "--force", "-B", execution_branch, str(run_repo), start_point_sha],
+        cwd=repo_dir,
+    )
+    _sync_agent_workspace_files(repo_dir=run_repo)
+    _write_run_metadata(
+        repo_dir=run_repo,
+        run_id=run_id,
+        issue_key=issue_key,
+        execution_branch=execution_branch,
+        base_branch=base_branch,
+        integration_branch=integration_branch,
+        start_point_ref=start_point_ref,
+        start_point_sha=start_point_sha,
+    )
+    return run_repo, execution_branch
+
+
+def validate_run_worktree(
+    *,
+    repo_dir: Path,
+    run_id: str,
+    execution_branch: str,
+) -> str | None:
+    if not (repo_dir / ".git").exists():
+        return "run worktree is missing its git metadata"
+    metadata = _read_run_metadata(repo_dir=repo_dir)
+    if metadata is None:
+        return "run worktree metadata is missing"
+    if str(metadata.get("run_id") or "") != run_id:
+        return f"run worktree metadata does not match run_id={run_id}"
+    expected_branch = str(metadata.get("execution_branch") or "").strip() or execution_branch
+    current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir).strip()
+    if current_branch != expected_branch:
+        return f"run worktree branch mismatch: expected {expected_branch}, found {current_branch}"
+    if _run_git(["status", "--porcelain"], cwd=repo_dir).strip():
+        return "run worktree is unexpectedly dirty before execution"
+    return None
 
 
 def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:

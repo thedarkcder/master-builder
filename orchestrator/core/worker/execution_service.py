@@ -23,6 +23,7 @@ from orchestrator.core.worker.run_lifecycle import (
     finalize_cancelled_run,
     finalize_workflow_result,
     requeue_workflow_result_for_capability,
+    requeue_workflow_result_for_stale_snapshot,
     resolve_project_for_run,
     start_run,
 )
@@ -32,6 +33,7 @@ from orchestrator.core.worker.stage_events import (
     pr_opened_update,
     run_failed_update,
     run_requeued_capability_mismatch_update,
+    run_requeued_stale_snapshot_update,
 )
 from orchestrator.core.worker.workflow_request_service import (
     build_workflow_request_for_run as _build_workflow_request_for_run,
@@ -39,6 +41,7 @@ from orchestrator.core.worker.workflow_request_service import (
 from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
 from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
 from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.tools.project_repo_checkout import check_run_snapshot_freshness
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,7 @@ def _workflow_request_for_run(
     effective_policy: dict,
 ) -> WorkflowRequest:
     return _build_workflow_request_for_run(
+        session=session,
         tenant=tenant,
         run=run,
         project=project,
@@ -165,9 +169,12 @@ def _process_next_queued_run_impl(
         pr_opened_update_fn=pr_opened_update,
         run_failed_update_fn=run_failed_update,
         run_requeued_capability_update_fn=run_requeued_capability_mismatch_update,
+        run_requeued_stale_snapshot_update_fn=run_requeued_stale_snapshot_update,
         finalize_cancelled_run_fn=finalize_cancelled_run,
         finalize_workflow_result_fn=finalize_workflow_result,
         requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability,
+        requeue_workflow_result_for_stale_snapshot_fn=requeue_workflow_result_for_stale_snapshot,
+        check_run_snapshot_freshness_fn=check_run_snapshot_freshness,
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
