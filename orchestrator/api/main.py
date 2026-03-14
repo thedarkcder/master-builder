@@ -55,6 +55,9 @@ def create_app() -> FastAPI:
     )
     initialize_sentry(settings=settings)
     cors_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+    admin_ui_origin = str(settings.admin_ui_base_url or "").strip().rstrip("/")
+    if admin_ui_origin and admin_ui_origin not in cors_origins:
+        cors_origins.append(admin_ui_origin)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -71,6 +74,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
+        allow_origin_regex=str(getattr(settings, "cors_origin_regex", "") or "").strip() or None,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
