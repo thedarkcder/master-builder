@@ -33,9 +33,11 @@ import {
   listGitHubRepositories,
   listJiraProjects,
   listRuns,
+  RUN_STATUSES,
   updateProject,
   type ProjectRecord,
   type RunRecord,
+  type RunStatus,
 } from "@/lib/api";
 
 type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
@@ -207,7 +209,7 @@ export function TenantProjectDetailsPage() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsBusy, setRunsBusy] = useState(false);
   const [runIssueFilter, setRunIssueFilter] = useState("");
-  const [runStatusFilter, setRunStatusFilter] = useState("");
+  const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
   const [runPrFilter, setRunPrFilter] = useState<"any" | "none" | "has_value">("any");
   const [runFromDate, setRunFromDate] = useState("");
   const [runToDate, setRunToDate] = useState("");
@@ -258,7 +260,7 @@ export function TenantProjectDetailsPage() {
         tenantId: params.tenantId,
         projectId: params.projectId,
         issue: runIssueFilter || undefined,
-        status: runStatusFilter || undefined,
+        status: runStatusFilter === "all" ? undefined : runStatusFilter,
         prState: runPrFilter === "any" ? undefined : runPrFilter,
         from,
         to,
@@ -1164,13 +1166,19 @@ export function TenantProjectDetailsPage() {
                 placeholder="Issue / summary"
                 disabled={runsBusy}
               />
-              <Input
-                className="h-8 w-32 text-sm"
+              <select
+                className="h-8 w-36 rounded-md border border-input bg-background px-2 text-sm"
                 value={runStatusFilter}
-                onChange={(e) => setRunStatusFilter(e.target.value)}
-                placeholder="Status"
+                onChange={(e) => setRunStatusFilter(e.target.value as RunStatus | "all")}
                 disabled={runsBusy}
-              />
+              >
+                <option value="all">Status: Any</option>
+                {RUN_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                 value={runPrFilter}
@@ -1220,7 +1228,7 @@ export function TenantProjectDetailsPage() {
                 className="h-8"
                 onClick={() => {
                   setRunIssueFilter("");
-                  setRunStatusFilter("");
+                  setRunStatusFilter("all");
                   setRunPrFilter("any");
                   setRunFromDate("");
                   setRunToDate("");

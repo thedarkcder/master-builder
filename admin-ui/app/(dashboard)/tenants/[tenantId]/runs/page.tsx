@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { listRuns, type RunRecord } from "@/lib/api";
+import { listRuns, RUN_STATUSES, type RunRecord, type RunStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 function statusBorderClass(status: string): string {
@@ -30,7 +30,7 @@ export default function TenantRunsPage() {
 
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [issueFilter, setIssueFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<RunStatus | "all">("all");
   const [prFilter, setPrFilter] = useState<"any" | "none" | "has_value">("any");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -48,7 +48,7 @@ export default function TenantRunsPage() {
       const payload = await listRuns(credentials, {
         tenantId,
         issue: issueFilter || undefined,
-        status: statusFilter || undefined,
+        status: statusFilter === "all" ? undefined : statusFilter,
         prState: prFilter === "any" ? undefined : prFilter,
         from,
         to,
@@ -70,14 +70,14 @@ export default function TenantRunsPage() {
 
   function clearFilters() {
     setIssueFilter("");
-    setStatusFilter("");
+    setStatusFilter("all");
     setPrFilter("any");
     setFromDate("");
     setToDate("");
     setPage(1);
   }
 
-  const hasFilters = issueFilter || statusFilter || prFilter !== "any" || fromDate || toDate;
+  const hasFilters = issueFilter || statusFilter !== "all" || prFilter !== "any" || fromDate || toDate;
 
   return (
     <div className="space-y-4">
@@ -101,12 +101,18 @@ export default function TenantRunsPage() {
               onChange={(e) => { setIssueFilter(e.target.value); setPage(1); }}
               placeholder="Issue key"
             />
-            <Input
-              className="h-8 w-28 text-sm"
+            <select
+              className="h-8 w-32 rounded-md border border-input bg-background px-2 text-sm"
               value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-              placeholder="Status"
-            />
+              onChange={(e) => { setStatusFilter(e.target.value as RunStatus | "all"); setPage(1); }}
+            >
+              <option value="all">Status: Any</option>
+              {RUN_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
             <select
               className="h-8 rounded-md border border-input bg-background px-2 text-sm"
               value={prFilter}

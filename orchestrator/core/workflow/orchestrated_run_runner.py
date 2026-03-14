@@ -356,6 +356,31 @@ class OrchestratedRunWorkflowExecutor:
             review_message = _summarize_review_result(review_result)
             review_outcome = _normalize_review_outcome(review_result)
             if review_outcome == "approved":
+                pr_url = review_result.pr_url or dev_result.pr_url
+                if request.allow_pr_creation and not pr_url:
+                    review_message = (
+                        "Review approved the changes, but no PR was created even though allow_pr_creation is enabled."
+                    )
+                    history.append({"stage": "review", "attempt": str(attempt), "event": review_message})
+                    stage_trace.append(
+                        _stage_trace_entry(
+                            stage="review",
+                            status="failed",
+                            attempt=attempt,
+                            summary=review_message,
+                        )
+                    )
+                    if attempt >= max_loops:
+                        return self._failure_result(
+                            request=request,
+                            state=state,
+                            stage="review",
+                            attempts=attempt,
+                            message=review_message,
+                            classification="review_incomplete",
+                        )
+                    next_feedback = review_message
+                    continue
                 stage_trace.append(
                     _stage_trace_entry(
                         stage="review",
@@ -364,7 +389,6 @@ class OrchestratedRunWorkflowExecutor:
                         summary=review_message,
                     )
                 )
-                pr_url = review_result.pr_url or dev_result.pr_url
                 return WorkflowResult(
                     succeeded=True,
                     plan=plan,

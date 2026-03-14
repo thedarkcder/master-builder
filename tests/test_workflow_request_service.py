@@ -21,7 +21,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             branch=None,
             plan=None,
         )
-        effective_policy = {"max_dev_test_review_loops": 1, "allowed_commands": []}
+        effective_policy = {"max_dev_test_review_loops": 1, "allowed_commands": [], "allow_pr_creation": True}
         settings = SimpleNamespace(
             project_repo_checkout_base_dir=checkout_base_dir,
             worker_capabilities="linux",
@@ -134,6 +134,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertEqual(request.project_name, "Project")
             self.assertEqual(request.github_repository, "https://github.com/example/repo")
             self.assertEqual(request.jira_project_key, "TP")
+            self.assertTrue(request.allow_pr_creation)
 
     def test_build_workflow_request_extracts_resume_metadata(self) -> None:
         with TemporaryDirectory() as tmp_dir:

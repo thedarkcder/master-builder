@@ -11,6 +11,7 @@ Execution branch: {{ execution_branch }}
 Base branch: {{ base_branch }}
 Integration branch: {{ integration_branch }}
 PR target branch: {{ pr_target_branch }}
+PR creation required by policy: {{ allow_pr_creation }}
 Attempt: {{ attempt }}
 Plan steps: {{ plan_steps_json }}
 Acceptance criteria: {{ acceptance_criteria_json }}
@@ -33,6 +34,7 @@ Required actions:
 3. Treat the PM evidence ledger as the current ticket prerequisite summary; do not invent new external blockers from missing repo evidence alone.
 4. Preserve fail-closed behavior when verification is incomplete.
 5. If a one-time transient human input can unblock the remaining verification, request it with `run.request_human_input` before using outcome="blocked" with blocker_category="awaiting_human_input".
+6. If PR creation required by policy is `true`, you must not approve the run unless a PR exists and `pr_url` is set.
 
 Output contract:
 - approved: boolean decision.
