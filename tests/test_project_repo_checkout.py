@@ -258,6 +258,8 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
         def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
             _ = env
             calls.append((tuple(args), str(cwd)))
+            if args == ["fetch", "origin", "--prune"]:
+                return ""
             if args[:2] == ["worktree", "add"]:
                 run_repo_dir = project_run_repo_dir(
                     base_dir=tmpdir,
@@ -310,6 +312,70 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
         assert ".codex/" in exclude_lines
         assert ".master-builder-run.json" in exclude_lines
         assert ".gitignore" in exclude_lines
+
+
+def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    with TemporaryDirectory() as tmpdir:
+        shared_repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        (shared_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+        calls: list[tuple[tuple[str, ...], str]] = []
+
+        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+            _ = env
+            calls.append((tuple(args), str(cwd)))
+            if args == ["fetch", "origin", "--prune"]:
+                return ""
+            if args[:2] == ["worktree", "add"]:
+                run_repo_dir = project_run_repo_dir(
+                    base_dir=tmpdir,
+                    tenant_id="tenant-a",
+                    project_id="project-1",
+                    run_id="run-1",
+                )
+                run_repo_dir.mkdir(parents=True, exist_ok=True)
+                git_dir = shared_repo_dir / ".git" / "worktrees" / "run-1"
+                git_dir.mkdir(parents=True, exist_ok=True)
+                (run_repo_dir / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+                return ""
+            if args == ["rev-parse", "origin/feature/team/TP-99"]:
+                return "branchsha987654\n"
+            if args == ["rev-parse", "--git-path", "info/exclude"]:
+                return str(shared_repo_dir / ".git" / "worktrees" / "run-1" / "info" / "exclude") + "\n"
+            raise AssertionError(f"unexpected git args: {args}")
+
+        def _fake_ref_exists(*, cwd: Path, ref: str) -> bool:
+            _ = cwd
+            return ref == "refs/remotes/origin/feature/team/TP-99"
+
+        with (
+            patch("orchestrator.tools.project_repo_checkout._git_ref_exists", side_effect=_fake_ref_exists),
+            patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git),
+        ):
+            run_repo_dir, execution_branch = ensure_run_worktree(
+                base_dir=tmpdir,
+                tenant_id="tenant-a",
+                project=project,
+                run_id="run-1",
+                issue_key="TP-99",
+                base_branch="main",
+                integration_branch="feature/team/TP-99",
+            )
+
+        assert run_repo_dir == project_run_repo_dir(
+            base_dir=tmpdir,
+            tenant_id="tenant-a",
+            project_id="project-1",
+            run_id="run-1",
+        )
+        assert execution_branch == "run/tp-99/run-1"
+        metadata = json.loads((run_repo_dir / ".master-builder-run.json").read_text(encoding="utf-8"))
+        assert metadata["start_point_ref"] == "origin/feature/team/TP-99"
+        assert metadata["start_point_sha"] == "branchsha987654"
+        assert any(
+            call[0] == ("worktree", "add", "--force", "-B", "run/tp-99/run-1", str(run_repo_dir), "branchsha987654")
+            for call in calls
+        )
 
 
 def test_check_run_snapshot_freshness_detects_ref_drift() -> None:
