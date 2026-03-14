@@ -14,8 +14,10 @@ class WorkflowRequest:
     issue_summary: str
     issue_description: str
     max_dev_test_review_loops: int
+    allow_pr_creation: bool = False
     suggested_test_commands: list[str] = field(default_factory=list)
     execution_repo_dir: str | None = None
+    workspace_key: str | None = None
     project_id: str | None = None
     project_name: str | None = None
     github_repository: str | None = None

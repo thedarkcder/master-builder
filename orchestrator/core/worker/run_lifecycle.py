@@ -147,9 +147,12 @@ def finalize_workflow_result(
     run: Run,
     workflow_result: WorkflowResult,
     stage_updates: list[dict[str, str]],
+    execution_context: dict[str, str] | None = None,
 ) -> Run:
     plan_payload = workflow_result.to_plan_payload()
     plan_payload["stage_updates"] = stage_updates
+    if execution_context:
+        plan_payload["execution_context"] = execution_context
     run.plan = plan_payload
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)
@@ -177,9 +180,12 @@ def requeue_workflow_result_for_capability(
     stage_updates: list[dict[str, str]],
     required_worker_capability: str,
     required_worker_label: str,
+    execution_context: dict[str, str] | None = None,
 ) -> Run:
     plan_payload = workflow_result.to_plan_payload()
     plan_payload["stage_updates"] = stage_updates
+    if execution_context:
+        plan_payload["execution_context"] = execution_context
     plan_payload["required_worker_capability"] = required_worker_capability
     plan_payload["required_worker_label"] = required_worker_label
     plan_payload["requeued"] = True
@@ -208,9 +214,12 @@ def requeue_workflow_result_for_stale_snapshot(
     workflow_result: WorkflowResult,
     stage_updates: list[dict[str, str]],
     error: str,
+    execution_context: dict[str, str] | None = None,
 ) -> Run:
     plan_payload = workflow_result.to_plan_payload()
     plan_payload["stage_updates"] = stage_updates
+    if execution_context:
+        plan_payload["execution_context"] = execution_context
     plan_payload["requeued"] = True
     plan_payload["stale_branch_snapshot"] = True
     plan_payload["requeue_reason"] = error

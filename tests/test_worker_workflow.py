@@ -168,6 +168,7 @@ class WorkerWorkflowTests(unittest.TestCase):
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
+        os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
@@ -207,6 +208,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         self.freshness_patcher.stop()
         self.temp_dir.cleanup()
         os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
         self.decision_gate_patcher.stop()
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -313,6 +315,16 @@ class WorkerWorkflowTests(unittest.TestCase):
         )
         os.makedirs(repo_git_dir, exist_ok=True)
 
+    def _run_workspaces_dir(self, run_id: str) -> Path:
+        return (
+            Path(self.repo_checkout_base_dir)
+            / "tenant-worker"
+            / "tenant-worker-default"
+            / "runs"
+            / run_id
+            / "workspaces"
+        )
+
     def _ensure_run_worktree_stub(
         self,
         *,
@@ -323,6 +335,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         issue_key: str,
         base_branch: str,
         integration_branch: str,
+        workspace_key: str,
     ) -> tuple[str, str]:
         _ = (issue_key, base_branch, integration_branch)
         worktree_dir = (
@@ -331,6 +344,8 @@ class WorkerWorkflowTests(unittest.TestCase):
             / project.project_id
             / "runs"
             / run_id
+            / "workspaces"
+            / workspace_key
             / "repo"
         )
         (worktree_dir / ".git").mkdir(parents=True, exist_ok=True)
@@ -342,6 +357,7 @@ class WorkerWorkflowTests(unittest.TestCase):
                     "execution_branch": f"run/{issue_key}/{run_id}",
                     "base_branch": base_branch,
                     "integration_branch": integration_branch,
+                    "workspace_key": workspace_key,
                     "start_point_ref": "origin/main",
                     "start_point_sha": "startsha123",
                 }
@@ -376,9 +392,10 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNotNone(runner.last_request)
             self.assertTrue(
                 str(runner.last_request.execution_repo_dir).endswith(
-                    "/tenant-worker/tenant-worker-default/runs/run-TP-300/repo"
+                    "/tenant-worker/tenant-worker-default/runs/run-TP-300/workspaces/worker-a/repo"
                 )
             )
+            self.assertFalse(self._run_workspaces_dir(run_id).exists())
 
         events, _ = agent_observability_tracker.snapshot()
         event_types = [event.event_type for event in events]
@@ -416,6 +433,7 @@ class WorkerWorkflowTests(unittest.TestCase):
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "run_requeued_stale_snapshot"],
             )
+            self.assertFalse(self._run_workspaces_dir(run_id).exists())
             lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3001"})
             self.assertIsNone(lock)
 
@@ -470,6 +488,7 @@ class WorkerWorkflowTests(unittest.TestCase):
                 [entry["stage"] for entry in stage_updates],
                 ["lock_acquired", "plan_posted", "run_requeued_capability_mismatch"],
             )
+            self.assertFalse(self._run_workspaces_dir(run_id).exists())
             lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3020"})
             self.assertIsNone(lock)
 

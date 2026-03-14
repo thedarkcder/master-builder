@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.run_human_input_service import answered_human_inputs_for_request
+from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.worker_capabilities import parse_worker_capabilities
 from orchestrator.core.workflow.runner import WorkflowRequest
@@ -51,7 +52,7 @@ def build_workflow_request_for_run(
     default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
     base_branch = _normalize_branch(default_branch) or "main"
     integration_branch = _normalize_branch(getattr(run, "branch", None)) or f"feature/{run.issue_key}"
-    execution_repo_dir, execution_branch, start_point_ref, start_point_sha = _resolve_execution_repo_dir(
+    execution_repo_dir, execution_branch, start_point_ref, start_point_sha, workspace_key = _resolve_execution_repo_dir(
         settings=settings,
         tenant=tenant,
         run=run,
@@ -87,8 +88,10 @@ def build_workflow_request_for_run(
         issue_summary=run.issue_summary or f"Execute {run.issue_key}",
         issue_description=issue_description,
         max_dev_test_review_loops=max_loops,
+        allow_pr_creation=bool(effective_policy.get("allow_pr_creation", False)),
         suggested_test_commands=suggested_test_commands,
         execution_repo_dir=execution_repo_dir,
+        workspace_key=workspace_key,
         current_worker_capability=current_worker_capability,
         available_worker_capabilities=available_worker_capabilities,
         base_branch=base_branch,
@@ -115,9 +118,10 @@ def _resolve_execution_repo_dir(
     project: Project | None,
     base_branch: str,
     integration_branch: str,
-) -> tuple[str, str, str | None, str | None]:
+) -> tuple[str, str, str | None, str | None, str]:
     if project is None:
         raise ValueError("Run project routing is required before workflow execution")
+    workspace_key = resolve_worker_workspace_key(settings=settings)
     try:
         repo_dir, execution_branch = ensure_run_worktree(
             base_dir=settings.project_repo_checkout_base_dir,
@@ -127,6 +131,7 @@ def _resolve_execution_repo_dir(
             issue_key=run.issue_key,
             base_branch=base_branch,
             integration_branch=integration_branch,
+            workspace_key=workspace_key,
         )
     except ProjectRepoCheckoutError as exc:
         raise ValueError(str(exc)) from exc
@@ -139,6 +144,7 @@ def _resolve_execution_repo_dir(
         repo_dir=repo_dir,
         run_id=run.run_id,
         execution_branch=execution_branch,
+        workspace_key=workspace_key,
     )
     if validation_error is not None:
         raise ValueError(
@@ -149,7 +155,7 @@ def _resolve_execution_repo_dir(
     metadata = read_run_worktree_metadata(repo_dir=repo_dir) or {}
     start_point_ref = str(metadata.get("start_point_ref") or "").strip() or None
     start_point_sha = str(metadata.get("start_point_sha") or "").strip() or None
-    return str(repo_dir), execution_branch, start_point_ref, start_point_sha
+    return str(repo_dir), execution_branch, start_point_ref, start_point_sha, workspace_key
 
 
 def _normalize_branch(value: object) -> str | None:

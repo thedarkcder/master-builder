@@ -12,6 +12,7 @@ from orchestrator.core.worker_capabilities import (
     worker_label_for_capability,
 )
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
+from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 
 
 def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: str) -> None:  # noqa: ANN001
@@ -61,6 +62,7 @@ def process_next_queued_run(
     block_archived_project_fn,
     ensure_project_repository_checkout_fn,
     fail_project_repository_checkout_fn,
+    cleanup_run_workspaces_fn,
     start_run_fn,
     bind_run_project_fn,
     workflow_request_for_run_fn,
@@ -87,6 +89,7 @@ def process_next_queued_run(
     run_status_cancelled: str,
 ):  # noqa: ANN001
     settings = settings_fn()
+    worker_workspace_key = resolve_worker_workspace_key(settings=settings)
     selection = select_next_queued_run_fn(
         session,
         queued_status=run_status_queued,
@@ -222,6 +225,15 @@ def process_next_queued_run(
             effective_policy=effective_policy,
         )
     except (PermissionError, ValueError) as exc:
+        _cleanup_run_workspaces_safe(
+            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+            logger=logger,
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            workspace_key=worker_workspace_key,
+        )
         return fail_guardrail_violation_fn(session, run=run, error=str(exc))
 
     jira_issue_url = tenant_jira_issue_url_fn(session=session, tenant=tenant, issue_key=run.issue_key)
@@ -274,6 +286,14 @@ def process_next_queued_run(
     )
     session.refresh(run)
     if run.status == run_status_cancelled:
+        _cleanup_run_workspaces_safe(
+            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+            logger=logger,
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+        )
         return finalize_cancelled_run_fn(session, run=run, stage_updates=notifier.stage_updates)
     if workflow_result.plan is not None:
         notifier.append(
@@ -313,12 +333,21 @@ def process_next_queued_run(
                     error=error_text,
                 )
             )
+            _cleanup_run_workspaces_safe(
+                cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+                logger=logger,
+                base_dir=settings.project_repo_checkout_base_dir,
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+            )
             return requeue_workflow_result_for_stale_snapshot_fn(
                 session,
                 run=run,
                 workflow_result=workflow_result,
                 stage_updates=notifier.stage_updates,
                 error=error_text,
+                execution_context=_execution_context(workflow_request=workflow_request),
             )
     if workflow_result.pr_url:
         notifier.append(
@@ -359,6 +388,14 @@ def process_next_queued_run(
                     error=error_text,
                 )
             )
+            _cleanup_run_workspaces_safe(
+                cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+                logger=logger,
+                base_dir=settings.project_repo_checkout_base_dir,
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+            )
             return requeue_workflow_result_for_capability_fn(
                 session,
                 run=run,
@@ -366,6 +403,7 @@ def process_next_queued_run(
                 stage_updates=notifier.stage_updates,
                 required_worker_capability=capability_requeue_target,
                 required_worker_label=required_worker_label,
+                execution_context=_execution_context(workflow_request=workflow_request),
             )
         error_text = (
             workflow_result.diagnostics.message
@@ -430,12 +468,21 @@ def process_next_queued_run(
             issue_key=run.issue_key,
             agent_id=agent_id,
         )
+    _cleanup_run_workspaces_safe(
+        cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+        logger=logger,
+        base_dir=settings.project_repo_checkout_base_dir,
+        tenant_id=run.tenant_id,
+        project_id=project.project_id,
+        run_id=run.run_id,
+    )
 
     return finalize_workflow_result_fn(
         session,
         run=run,
         workflow_result=workflow_result,
         stage_updates=notifier.stage_updates,
+        execution_context=_execution_context(workflow_request=workflow_request),
     )
 
 
@@ -466,6 +513,45 @@ def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: 
             if parsed is not None:
                 return parsed
     return None
+
+
+def _execution_context(*, workflow_request) -> dict[str, str] | None:  # noqa: ANN001
+    context: dict[str, str] = {}
+    execution_repo_dir = str(getattr(workflow_request, "execution_repo_dir", "") or "").strip()
+    workspace_key = str(getattr(workflow_request, "workspace_key", "") or "").strip()
+    if execution_repo_dir:
+        context["execution_repo_dir"] = execution_repo_dir
+    if workspace_key:
+        context["workspace_key"] = workspace_key
+    return context or None
+
+
+def _cleanup_run_workspaces_safe(
+    *,
+    cleanup_run_workspaces_fn,
+    logger,
+    base_dir: str,
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    workspace_key: str | None = None,
+) -> None:  # noqa: ANN001
+    try:
+        cleanup_run_workspaces_fn(
+            base_dir=base_dir,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+            workspace_key=workspace_key,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "worker_run_workspace_cleanup_failed tenant_id=%s project_id=%s run_id=%s workspace_key=%s",
+            tenant_id,
+            project_id,
+            run_id,
+            workspace_key,
+        )
 
 
 def _normalize_terminal_status(status: str) -> str:
