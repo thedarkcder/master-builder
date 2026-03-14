@@ -25,6 +25,28 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _coerce_resume_source_plan(value: object) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _extract_resume_source_plan(*, run: Run, request_context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if isinstance(request_context, dict):
+        for key in ("resume_source_plan", "plan"):
+            candidate = _coerce_resume_source_plan(request_context.get(key))
+            if candidate is not None:
+                return candidate
+    if isinstance(run.plan, dict):
+        candidate = _coerce_resume_source_plan(run.plan.get("plan"))
+        if candidate is not None:
+            return candidate
+        trigger_context = run.plan.get("trigger_context")
+        if isinstance(trigger_context, dict):
+            candidate = _coerce_resume_source_plan(trigger_context.get("resume_source_plan"))
+            if candidate is not None:
+                return candidate
+    return None
+
+
 def _resume_target_for_run(*, run: Run, stage: str) -> HumanInputResumeTarget:
     normalized_stage = str(stage or "").strip().lower()
     if normalized_stage == "pm":
@@ -36,13 +58,10 @@ def _resume_target_for_run(*, run: Run, stage: str) -> HumanInputResumeTarget:
         session_id = str(getattr(run, "dev_session_id", "") or "").strip()
         if not session_id:
             raise ValueError("No Dev session is available for human-input resume")
-        source_plan = run.plan.get("plan") if isinstance(run.plan, dict) else None
-        if not isinstance(source_plan, dict):
-            raise ValueError("No persisted PM plan is available for human-input dev resume")
         return HumanInputResumeTarget(
             resume_stage="dev",
             resume_session_id=session_id,
-            resume_source_plan=dict(source_plan),
+            resume_source_plan=_extract_resume_source_plan(run=run),
         )
     session_id = str(getattr(run, "orchestrated_session_id", "") or "").strip()
     if not session_id:
@@ -72,6 +91,10 @@ def create_human_input_request(
         raise ValueError("Human input prompt is required")
     if not normalized_request_type:
         raise ValueError("Human input request_type is required")
+    normalized_request_context = dict(request_context or {})
+    resume_source_plan = _extract_resume_source_plan(run=run, request_context=normalized_request_context)
+    if resume_source_plan is not None and "resume_source_plan" not in normalized_request_context:
+        normalized_request_context["resume_source_plan"] = dict(resume_source_plan)
     resume_target = _resume_target_for_run(run=run, stage=source_stage)
     now = _now()
     expires_at = now + timedelta(minutes=max(1, int(expires_in_minutes or 15)))
@@ -90,7 +113,7 @@ def create_human_input_request(
         instructions=str(instructions or "").strip() or None,
         expected_reply_format=str(expected_reply_format or "").strip() or None,
         status="pending",
-        request_context_json=dict(request_context or {}),
+        request_context_json=normalized_request_context,
         thread_channel_id=None,
         thread_message_id=None,
         answer_encrypted=None,
@@ -251,10 +274,13 @@ def resume_run_from_human_input_reply(
     trigger_context["resume_source_run_id"] = request.source_run_id
     trigger_context["human_input_request_ids"] = [request.request_id]
     if request.resume_stage == "dev":
-        source_plan_payload = source_plan.get("plan")
+        source_plan_payload = _extract_resume_source_plan(
+            run=source_run,
+            request_context=request.request_context_json if isinstance(request.request_context_json, dict) else None,
+        )
         if isinstance(source_plan_payload, dict):
             trigger_context["resume_source_plan"] = dict(source_plan_payload)
-            enqueue_result.run.dev_session_id = request.resume_session_id
+        enqueue_result.run.dev_session_id = request.resume_session_id
     elif request.resume_stage == "pm":
         enqueue_result.run.pm_session_id = request.resume_session_id
     else:
