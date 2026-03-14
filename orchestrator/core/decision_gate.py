@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
-import importlib.resources
-from pathlib import Path
 
-RULES_FILE_PATH = Path(".codex/DECISION_GATE_TEMPLATE.md")
-CODEX_ASSETS_PACKAGE = "master_builder_codex_assets"
-PACKAGED_RULES_FILENAME = "decision_gate.md"
+from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.config import get_settings
+from orchestrator.core.prompt_templates import render_prompt
 
 
 @dataclass(frozen=True)
@@ -47,168 +45,126 @@ class DecisionGateRules:
     options_line: str
 
 
-def _normalize_heading(raw_heading: str) -> str:
-    return raw_heading.strip().lower()
+def reset_decision_gate_rules_cache() -> None:
+    return None
 
 
-def _parse_markdown_rule_file(markdown: str) -> tuple[dict[str, list[str]], dict[str, str]]:
-    current_section: str | None = None
-    list_sections: dict[str, list[str]] = {}
-    message_map: dict[str, str] = {}
-
-    for raw_line in markdown.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("## "):
-            current_section = _normalize_heading(line[3:])
-            list_sections.setdefault(current_section, [])
-            continue
-        if not line.startswith("- ") or current_section is None:
-            continue
-        item = line[2:].strip()
-        if current_section == "messages":
-            key, sep, value = item.partition(":")
-            if sep and key.strip() and value.strip():
-                message_map[key.strip()] = value.strip()
-            continue
-        list_sections[current_section].append(item)
-
-    return list_sections, message_map
-
-
-def _required_non_empty(section_values: dict[str, list[str]], *, key: str) -> tuple[str, ...]:
-    values = tuple(v for v in section_values.get(key, ()) if v)
-    if not values:
-        raise ValueError(f"Decision Gate rules missing required section values: '{key}'")
-    return values
-
-
-def _required_message(messages: dict[str, str], *, key: str) -> str:
-    value = messages.get(key, "").strip()
-    if not value:
-        raise ValueError(f"Decision Gate rules missing required message key: '{key}'")
-    return value
-
-
-def _load_packaged_rules_markdown() -> str:
-    try:
-        packaged_asset = importlib.resources.files(CODEX_ASSETS_PACKAGE).joinpath(
-            PACKAGED_RULES_FILENAME
-        )
-    except (ModuleNotFoundError, FileNotFoundError) as exc:
-        raise FileNotFoundError(
-            f"Decision Gate rules file not found: {RULES_FILE_PATH} "
-            f"(and packaged fallback '{CODEX_ASSETS_PACKAGE}/{PACKAGED_RULES_FILENAME}' is unavailable)"
-        ) from exc
-    if not packaged_asset.is_file():
-        raise FileNotFoundError(
-            f"Decision Gate packaged rules file not found: "
-            f"{CODEX_ASSETS_PACKAGE}/{PACKAGED_RULES_FILENAME}"
-        )
-    return packaged_asset.read_text(encoding="utf-8")
-
-
-@lru_cache(maxsize=8)
-def _load_decision_gate_rules_cached(path_text: str, allow_packaged_fallback: bool) -> DecisionGateRules:
-    path = Path(path_text)
-    if path.exists():
-        markdown = path.read_text(encoding="utf-8")
-    elif allow_packaged_fallback:
-        markdown = _load_packaged_rules_markdown()
-    else:
-        raise FileNotFoundError(f"Decision Gate rules file not found: {path}")
-
-    list_sections, messages = _parse_markdown_rule_file(markdown)
+def load_decision_gate_rules(*, path: str | None = None) -> DecisionGateRules:
+    _ = path
     return DecisionGateRules(
-        required_sections=_required_non_empty(list_sections, key="required sections"),
-        nfr_markers=_required_non_empty(list_sections, key="nfr markers"),
-        ambiguity_markers=_required_non_empty(list_sections, key="ambiguity markers"),
-        questions=_required_non_empty(list_sections, key="resolution questions"),
-        tags=_required_non_empty(list_sections, key="tags"),
-        clear_reason=_required_message(messages, key="clear_reason"),
-        blocked_recommendation=_required_message(messages, key="blocked_recommendation"),
-        clear_summary=_required_message(messages, key="clear_summary"),
-        blocked_title=_required_message(messages, key="blocked_title"),
-        missing_sections_prefix=_required_message(messages, key="missing_sections_prefix"),
-        ambiguity_prefix=_required_message(messages, key="ambiguity_prefix"),
-        options_line=_required_message(messages, key="options_line"),
+        required_sections=(),
+        nfr_markers=(),
+        ambiguity_markers=(),
+        questions=(),
+        tags=(),
+        clear_reason="Decision Gate not required",
+        blocked_recommendation="Decision required before build",
+        clear_summary="Decision Gate not required.",
+        blocked_title="Decision Gate required.",
+        missing_sections_prefix="Missing GTD sections",
+        ambiguity_prefix="Ambiguity markers found",
+        options_line="Options: MVP quick delivery vs scale-ready design.",
     )
 
 
-def reset_decision_gate_rules_cache() -> None:
-    _load_decision_gate_rules_cached.cache_clear()
+def _string_list(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
-def load_decision_gate_rules(*, path: str | Path | None = None) -> DecisionGateRules:
-    rules_path = Path(path) if path is not None else RULES_FILE_PATH
-    allow_packaged_fallback = path is None
-    return _load_decision_gate_rules_cached(str(rules_path), allow_packaged_fallback)
+def _evaluate_decision_gate_with_codex(
+    *,
+    issue_summary: str,
+    issue_description: str,
+    tenant_id: str | None,
+    project_id: str | None,
+    issue_key: str | None,
+    run_id: str | None,
+) -> DecisionGateResult:
+    settings = get_settings()
+    runtime = build_codex_runtime(session=None, settings=settings)
+    try:
+        payload = invoke_codex_json(
+            runtime=runtime,
+            context=CodexInvocationContext(
+                channel="system",
+                tenant_id=tenant_id,
+                project_id=project_id,
+                command="policy",
+                stage="decision_gate",
+                working_dir=".",
+                issue_key=issue_key,
+                run_id=run_id,
+                reasoning_effort="low",
+                issue_description_chars=len(issue_description or ""),
+            ),
+            system_prompt=render_prompt("policy/decision_gate_system.j2"),
+            user_prompt=render_prompt(
+                "policy/decision_gate_user.j2",
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+            ),
+        )
+    except CodexRuntimeError as exc:
+        raise RuntimeError(f"Codex decision gate evaluation failed: {exc}") from exc
 
+    triggered = bool(payload.get("triggered"))
+    reason = str(payload.get("reason") or "").strip()
+    missing_sections = _string_list(payload.get("missing_sections"))
+    questions = _string_list(payload.get("questions"))
+    recommendation = str(payload.get("recommendation") or "").strip()
+    tags = _string_list(payload.get("tags"))
 
-def _has_section(description: str, section: str) -> bool:
-    return section.lower() in description.lower()
+    if not reason:
+        raise RuntimeError("Codex decision gate evaluation returned empty reason")
+    if not recommendation:
+        raise RuntimeError("Codex decision gate evaluation returned empty recommendation")
+
+    return DecisionGateResult(
+        triggered=triggered,
+        reason=reason,
+        missing_sections=missing_sections,
+        questions=questions,
+        recommendation=recommendation,
+        tags=tags,
+    )
 
 
 def evaluate_decision_gate(
     *,
     issue_summary: str | None,
     issue_description: str | None,
-    rules_path: str | Path | None = None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+    issue_key: str | None = None,
+    run_id: str | None = None,
+    rules_path: str | None = None,
 ) -> DecisionGateResult:
-    rules = load_decision_gate_rules(path=rules_path)
-    summary = (issue_summary or "").strip()
-    description = (issue_description or "").strip()
-    normalized = f"{summary}\n{description}".lower()
-
-    missing_sections: list[str] = []
-    for section in rules.required_sections:
-        if not _has_section(description, section):
-            missing_sections.append(section)
-
-    if not any(marker.lower() in normalized for marker in rules.nfr_markers):
-        missing_sections.append("NFR intent (MVP vs scale-ready)")
-
-    ambiguous_markers = [marker for marker in rules.ambiguity_markers if marker.lower() in normalized]
-
-    if not missing_sections and not ambiguous_markers:
-        return DecisionGateResult(
-            triggered=False,
-            reason=rules.clear_reason,
-            missing_sections=(),
-            questions=(),
-            recommendation="Proceed",
-            tags=rules.tags,
-        )
-
-    reason_parts: list[str] = []
-    if missing_sections:
-        reason_parts.append(f"{rules.missing_sections_prefix}: {', '.join(missing_sections)}")
-    if ambiguous_markers:
-        reason_parts.append(f"{rules.ambiguity_prefix}: {', '.join(ambiguous_markers)}")
-
-    return DecisionGateResult(
-        triggered=True,
-        reason="; ".join(reason_parts),
-        missing_sections=tuple(missing_sections),
-        questions=rules.questions,
-        recommendation=rules.blocked_recommendation,
-        tags=rules.tags,
+    _ = rules_path
+    return _evaluate_decision_gate_with_codex(
+        issue_summary=(issue_summary or "").strip(),
+        issue_description=(issue_description or "").strip(),
+        tenant_id=tenant_id,
+        project_id=project_id,
+        issue_key=issue_key,
+        run_id=run_id,
     )
 
 
 def format_decision_gate_summary(result: DecisionGateResult) -> str:
-    rules = load_decision_gate_rules()
     if not result.triggered:
-        return rules.clear_summary
+        return "Decision Gate not required."
 
     lines = [
-        rules.blocked_title,
+        "Decision Gate required.",
         f"Reason: {result.reason}",
-        rules.options_line,
+        "Options: MVP quick delivery vs scale-ready design.",
         f"Recommendation: {result.recommendation}",
-        "Questions:",
     ]
-    lines.extend(f"{idx}) {question}" for idx, question in enumerate(result.questions[:5], start=1))
-    lines.append("Tags: " + " ".join(result.tags))
+    if result.questions:
+        lines.append("Questions:")
+        lines.extend(f"{idx}) {question}" for idx, question in enumerate(result.questions[:5], start=1))
+    if result.tags:
+        lines.append("Tags: " + " ".join(result.tags))
     return "\n".join(lines)

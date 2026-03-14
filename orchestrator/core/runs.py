@@ -9,15 +9,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import Run, RunLock, WebhookDelivery
+from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
+RUN_STATUS_CANCELLED = "cancelled"
 
 ACTIVE_RUN_STATUSES = {RUN_STATUS_QUEUED, RUN_STATUS_RUNNING}
-TERMINAL_RUN_STATUSES = {RUN_STATUS_SUCCEEDED, RUN_STATUS_FAILED, RUN_STATUS_BLOCKED}
+TERMINAL_RUN_STATUSES = {
+    RUN_STATUS_SUCCEEDED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_BLOCKED,
+    RUN_STATUS_CANCELLED,
+}
 
 
 class RunStateTransitionError(ValueError):
@@ -31,6 +38,41 @@ class EnqueueRunResult:
     run: Run
 
 
+def _normalize_precheck_outcome(raw_outcome: object | None) -> str | None:
+    if not isinstance(raw_outcome, str):
+        return None
+    normalized_outcome = raw_outcome.strip()
+    return normalized_outcome if normalized_outcome else None
+
+
+def resolve_precheck_outcome_from_plan(plan: object | None) -> str | None:
+    if not isinstance(plan, dict):
+        return None
+    pre_check_payload = plan.get("pre_check")
+    if not isinstance(pre_check_payload, dict):
+        return None
+    raw_outcome = pre_check_payload.get("outcome")
+    if not isinstance(raw_outcome, str):
+        return None
+    normalized_outcome = raw_outcome.strip()
+    return normalized_outcome if normalized_outcome else None
+
+
+def resolve_precheck_outcome_for_enqueue(
+    *,
+    precheck_outcome: str | None,
+    precheck_source_plan: object | None = None,
+) -> str | None:
+    normalized_outcome = _normalize_precheck_outcome(precheck_outcome)
+    if normalized_outcome is not None:
+        return normalized_outcome
+    return resolve_precheck_outcome_from_plan(precheck_source_plan)
+
+
+def is_ready_for_agent_precheck(plan: object | None) -> bool:
+    return (resolve_precheck_outcome_from_plan(plan) or "").casefold() == "ready_for_agent"
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -38,7 +80,11 @@ def _now() -> datetime:
 def _active_run_for_issue(session: Session, tenant_id: str, issue_key: str) -> Run | None:
     active_lock = session.get(RunLock, {"tenant_id": tenant_id, "issue_key": issue_key})
     if active_lock is not None:
-        return session.get(Run, active_lock.run_id)
+        locked_run = session.get(Run, active_lock.run_id)
+        if locked_run is not None and locked_run.status in ACTIVE_RUN_STATUSES:
+            return locked_run
+        session.delete(active_lock)
+        session.flush()
 
     return session.execute(
         select(Run).where(
@@ -61,14 +107,19 @@ def _active_run_count_for_tenant(session: Session, tenant_id: str) -> int:
 
 
 def _first_active_run_for_tenant(session: Session, tenant_id: str) -> Run | None:
-    return session.execute(
+    return (
+        session.execute(
         select(Run)
         .where(
             Run.tenant_id == tenant_id,
             Run.status.in_(ACTIVE_RUN_STATUSES),
         )
         .order_by(Run.created_at.asc())
-    ).scalar_one_or_none()
+        .limit(1)
+    )
+        .scalars()
+        .first()
+    )
 
 
 def _coerce_positive_limit(value: int | None) -> int | None:
@@ -85,10 +136,14 @@ def enqueue_run(
     session: Session,
     *,
     tenant_id: str,
+    project_id: str | None,
     issue_key: str,
     issue_summary: str | None = None,
     issue_description: str | None = None,
+    repo_url: str | None = None,
     delivery_id: str | None = None,
+    precheck_outcome: str | None = None,
+    precheck_source_plan: object | None = None,
     max_concurrent_runs: int | None = None,
 ) -> EnqueueRunResult:
     if delivery_id:
@@ -124,18 +179,25 @@ def enqueue_run(
             )
 
     now = _now()
+    normalized_precheck_outcome = resolve_precheck_outcome_for_enqueue(
+        precheck_outcome=precheck_outcome,
+        precheck_source_plan=precheck_source_plan,
+    )
     run = Run(
         run_id=str(uuid4()),
         tenant_id=tenant_id,
+        project_id=project_id,
         issue_key=issue_key,
         issue_summary=issue_summary,
         issue_description=issue_description,
-        repo_url=None,
+        repo_url=repo_url,
         branch=None,
         pr_url=None,
+        plan=None
+        if normalized_precheck_outcome is None
+        else {"pre_check": {"outcome": normalized_precheck_outcome}},
         status=RUN_STATUS_QUEUED,
         last_error=None,
-        plan=None,
         created_at=now,
         started_at=None,
         finished_at=None,
@@ -152,6 +214,13 @@ def enqueue_run(
                 created_at=now,
             )
         )
+    notify_run_enqueued(
+        session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        run_id=run.run_id,
+        issue_key=issue_key,
+    )
 
     try:
         session.commit()
@@ -247,6 +316,40 @@ def mark_run_terminal(
     now = _now()
     run.status = terminal_status
     run.last_error = last_error
+    if run.started_at is None:
+        run.started_at = now
+    run.finished_at = now
+
+    session.execute(
+        delete(RunLock).where(
+            RunLock.tenant_id == run.tenant_id,
+            RunLock.issue_key == run.issue_key,
+            RunLock.run_id == run.run_id,
+        )
+    )
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def cancel_run(
+    session: Session,
+    *,
+    run_id: str,
+    cancelled_by: str,
+) -> Run:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise RunStateTransitionError(f"Run not found: {run_id}")
+
+    if run.status in TERMINAL_RUN_STATUSES:
+        raise RunStateTransitionError(
+            f"Cannot cancel run {run_id} from terminal status {run.status}"
+        )
+
+    now = _now()
+    run.status = RUN_STATUS_CANCELLED
+    run.last_error = f"Cancelled by {cancelled_by}"
     if run.started_at is None:
         run.started_at = now
     run.finished_at = now

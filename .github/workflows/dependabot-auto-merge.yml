@@ -16,7 +16,7 @@ jobs:
   patch-assist:
     name: Approve and guide patch updates
     if: github.actor == 'dependabot[bot]' && github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
@@ -31,7 +31,7 @@ jobs:
 
       - name: Approve pull request
         if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -58,7 +58,7 @@ jobs:
 
       - name: Add merge guidance comment
         if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |

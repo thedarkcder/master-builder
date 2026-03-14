@@ -1,0 +1,190 @@
+<mxfile host="app.diagrams.net" modified="2026-02-13T02:35:00.000Z" agent="codex-gpt-5" version="24.7.17" editor="draw.io">
+  <diagram id="run-decision-engine" name="Run Decision Engine">
+    <mxGraphModel dx="1800" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="lane1" value="Actors / Event Sources" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;fontStyle=1;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="360" height="1280" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane2" value="Ingress + Command Routing (API)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f4ff;strokeColor=#6fa8dc;fontStyle=1;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="400" y="20" width="470" height="1280" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane3" value="Run Decision Engine (Queueing)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff4e6;strokeColor=#e69138;fontStyle=1;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="890" y="20" width="520" height="1280" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane4" value="Worker Start + Execution Gating" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf7ea;strokeColor=#6aa84f;fontStyle=1;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="1430" y="20" width="420" height="1280" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane5" value="Outcomes / Notifications" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#8e7cc3;fontStyle=1;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="1870" y="20" width="300" height="1280" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="a1" value="Discord User&#xa;(!run / !retry)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="90" y="90" width="220" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="a2" value="Jira Event&#xa;(issue update / comment run|retry)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="70" y="250" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="a3" value="Operator / CLI&#xa;(python -m orchestrator run ...)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="60" y="410" width="280" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="i1" value="Discord ingress path&#xa;orchestrator/api/discord/ingress/service.py&#xa;Owner: API command pipeline" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#3d85c6;" vertex="1" parent="1">
+          <mxGeometry x="470" y="80" width="330" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="i2" value="Jira webhook ingress&#xa;orchestrator/api/webhooks/jira_ingress.py&#xa;Owner: webhook policy + trigger rules" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#3d85c6;" vertex="1" parent="1">
+          <mxGeometry x="470" y="240" width="330" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="i3" value="CLI manual run path&#xa;orchestrator/cli.py::_handle_run&#xa;Owner: operator invocation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#3d85c6;" vertex="1" parent="1">
+          <mxGeometry x="470" y="400" width="330" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="d1" value="Discord run control decisions&#xa;orchestrator/api/discord/commands/run_controls.py&#xa;Owner: command handler&#xa;- scope checks&#xa;- executable status checks&#xa;- retryable status checks" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#3d85c6;" vertex="1" parent="1">
+          <mxGeometry x="460" y="560" width="350" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2" value="Jira trigger decisions&#xa;orchestrator/api/webhooks/jira_ingress.py&#xa;Owner: webhook pipeline&#xa;- ready status / To Do&#xa;- decision-gate cooldown&#xa;- retry source run exists" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#3d85c6;" vertex="1" parent="1">
+          <mxGeometry x="460" y="800" width="350" height="190" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="q1" value="enqueue_run(...)&#xa;orchestrator/core/runs.py&#xa;Owner: core run lifecycle" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#e69138;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="990" y="130" width="320" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="q2" value="Decision: duplicate delivery?&#xa;check WebhookDelivery by (tenant_id, delivery_id)" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#e69138;" vertex="1" parent="1">
+          <mxGeometry x="980" y="250" width="340" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="q3" value="Decision: active run already exists for issue?&#xa;check RunLock / active statuses {queued,running}" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#e69138;" vertex="1" parent="1">
+          <mxGeometry x="980" y="410" width="340" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="q4" value="Decision: tenant concurrency limit reached?&#xa;active run count &gt;= max_concurrent_runs" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#e69138;" vertex="1" parent="1">
+          <mxGeometry x="980" y="580" width="340" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="q5" value="Success enqueue path&#xa;Create Run(status=queued) + RunLock&#xa;Optional WebhookDelivery&#xa;notify_run_enqueued(...)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#e69138;" vertex="1" parent="1">
+          <mxGeometry x="980" y="740" width="340" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="q6" value="Enqueue conflict outcomes&#xa;reason=duplicate_delivery&#xa;reason=run_already_active&#xa;reason=tenant_concurrency_limit_reached" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#bf9000;" vertex="1" parent="1">
+          <mxGeometry x="980" y="910" width="340" height="120" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="w1" value="Worker queue select&#xa;orchestrator/core/worker/queue_selector.py&#xa;Owner: worker scheduler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6aa84f;" vertex="1" parent="1">
+          <mxGeometry x="1510" y="140" width="260" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="w2" value="Decision: startable now?&#xa;- oldest queued eligible&#xa;- tenant running count &lt; limit&#xa;- lock/project context valid" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6aa84f;" vertex="1" parent="1">
+          <mxGeometry x="1495" y="290" width="290" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="w3" value="Decision Gate check&#xa;orchestrator/core/worker/decision_gate.py&#xa;Owner: GTD/NFR policy evaluation" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6aa84f;" vertex="1" parent="1">
+          <mxGeometry x="1495" y="490" width="290" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="w4" value="Run execution continues&#xa;mark running -&gt; PM/Dev/Test/Review flow&#xa;terminal status: succeeded|failed|cancelled" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6aa84f;" vertex="1" parent="1">
+          <mxGeometry x="1510" y="680" width="260" height="110" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="o1" value="API response / command result&#xa;queued + run_id&#xa;or conflict + reason guidance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#8e7cc3;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="160" width="220" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="o2" value="Queued, waiting for worker&#xa;(status=queued)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#8e7cc3;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="320" width="220" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="o3" value="Not started yet&#xa;(worker defers due to concurrency)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#c27c0e;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="430" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="o4" value="Blocked by Decision Gate&#xa;status=blocked&#xa;Discord/Jira guidance + !retry path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f4cccc;strokeColor=#cc0000;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="560" width="220" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="o5" value="Execution terminal&#xa;succeeded / failed / cancelled" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9ead3;strokeColor=#38761d;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="720" width="220" height="80" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="n1" value="Who can make decisions?" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#444444;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="930" y="1080" width="870" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="n2" value="1) Command handler owners (Discord/Jira ingress code) decide eligibility before enqueue." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b7b7b7;" vertex="1" parent="1">
+          <mxGeometry x="930" y="1130" width="870" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="n3" value="2) Core run lifecycle (enqueue_run) decides idempotency/concurrency enqueue outcome." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b7b7b7;" vertex="1" parent="1">
+          <mxGeometry x="930" y="1175" width="870" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="n4" value="3) Worker scheduler decides when a queued run can actually start." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b7b7b7;" vertex="1" parent="1">
+          <mxGeometry x="930" y="1220" width="870" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" edge="1" parent="1" source="a1" target="i1" style="endArrow=block;html=1;rounded=0;strokeWidth=2;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="a2" target="i2" style="endArrow=block;html=1;rounded=0;strokeWidth=2;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="a3" target="i3" style="endArrow=block;html=1;rounded=0;strokeWidth=2;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e4" edge="1" parent="1" source="i1" target="d1" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="i2" target="d2" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="i3" target="q1" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="d1" target="q1" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="d2" target="q1" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e9" edge="1" parent="1" source="q1" target="q2" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="q2" target="q3" value="No" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="q3" target="q4" value="No" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="q4" target="q5" value="No" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="q2" target="q6" value="Yes: duplicate_delivery" style="endArrow=block;html=1;rounded=0;strokeColor=#bf9000;fontColor=#7f6000;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="q3" target="q6" value="Yes: run_already_active" style="endArrow=block;html=1;rounded=0;strokeColor=#bf9000;fontColor=#7f6000;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="q4" target="q6" value="Yes: tenant_concurrency_limit_reached" style="endArrow=block;html=1;rounded=0;strokeColor=#bf9000;fontColor=#7f6000;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e16" edge="1" parent="1" source="q6" target="o1" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e17" edge="1" parent="1" source="q5" target="o2" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e18" edge="1" parent="1" source="q5" target="w1" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e19" edge="1" parent="1" source="w1" target="w2" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e20" edge="1" parent="1" source="w2" target="o3" value="No" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e21" edge="1" parent="1" source="w2" target="w3" value="Yes" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e22" edge="1" parent="1" source="w3" target="o4" value="Triggered" style="endArrow=block;html=1;rounded=0;strokeColor=#cc0000;fontColor=#990000;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e23" edge="1" parent="1" source="w3" target="w4" value="Not triggered" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e24" edge="1" parent="1" source="w4" target="o5" style="endArrow=block;html=1;rounded=0;">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -16,13 +16,15 @@ concurrency:
 jobs:
   detect:
     name: Detect SAST languages
-    runs-on: ubuntu-latest
+    runs-on: 
+        - self-hosted
+        - Linux
     outputs:
       codeql_languages: ${{ steps.detect.outputs.codeql_languages }}
       is_python: ${{ steps.detect.outputs.is_python }}
       is_node: ${{ steps.detect.outputs.is_node }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: detect
         shell: bash
@@ -63,13 +65,13 @@ jobs:
   dependency-review:
     name: Dependency review
     needs: detect
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: github.event_name == 'pull_request' && vars.ENABLE_DEPENDENCY_REVIEW == 'true'
     permissions:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
@@ -80,13 +82,13 @@ jobs:
     name: Python dependency audit
     needs: detect
     if: needs.detect.outputs.is_python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -112,12 +114,12 @@ jobs:
   gitleaks:
     name: Secret scanning (gitleaks)
     needs: detect
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -131,13 +133,13 @@ jobs:
     name: SAST (CodeQL)
     needs: detect
     if: needs.detect.outputs.codeql_languages != '' && vars.ENABLE_CODEQL == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       actions: read
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
