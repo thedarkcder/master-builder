@@ -11,6 +11,7 @@ Allowed blocker categories are:
 - mandatory_secret_missing
 - toolchain_unavailable
 - awaiting_human_input
+Before using blocker_category="awaiting_human_input", request the needed transient input with `run.request_human_input` unless a matching answered transient input is already present in context.
 Failing tests, product bugs, incomplete implementation, and review findings must stay remediable and use outcome="needs_changes".
 Return strict JSON only with keys: approved, outcome, summary, feedback, pr_url, blocker_category, blocker_message.
 `outcome` must be exactly one of: approved, needs_changes, blocked.

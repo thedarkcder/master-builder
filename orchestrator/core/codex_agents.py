@@ -130,6 +130,7 @@ class CodexWorkflowAgents:
                 last_review_summary_json=json.dumps(last_review_result.summary if last_review_result else []),
                 current_worker_capability=request.current_worker_capability,
                 available_worker_capabilities_json=json.dumps(request.available_worker_capabilities),
+                human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("pm"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -235,6 +236,7 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
+                human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("dev"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -326,6 +328,7 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
+                human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("test"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "
@@ -431,6 +434,7 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
+                human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
                 agent_tool_command=(
                     "python -m orchestrator agent-tool "

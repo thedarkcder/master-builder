@@ -34,6 +34,7 @@ class WorkflowRequest:
     resume_stage: str | None = None
     resume_session_id: str | None = None
     resume_source_plan: dict | None = None
+    human_inputs: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -124,6 +124,54 @@ class Run(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class RunHumanInputRequest(Base):
+    __tablename__ = "run_human_input_requests"
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    resumed_run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    issue_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    resume_stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    resume_session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_reply_format: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    request_context_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    thread_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    thread_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    answer_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer_source_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class RunLock(Base):
     __tablename__ = "run_locks"
 

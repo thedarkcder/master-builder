@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,6 +26,12 @@ def test_allowed_tools_for_stage_pm_contains_evidence_tools() -> None:
     assert "knowledge.read" in tools
     assert "project.list_runtime_keys" in tools
     assert "project.get_runtime_values" in tools
+    assert "run.request_human_input" in tools
+
+
+def test_allowed_tools_for_stage_dev_contains_human_input_request_tool() -> None:
+    tools = allowed_tools_for_stage("dev")
+    assert "run.request_human_input" in tools
 
 
 def test_execute_agent_tool_rejects_disallowed_stage_tool() -> None:
@@ -101,6 +108,68 @@ def test_github_create_branch_uses_remote_default_when_base_omitted() -> None:
         (["checkout", "-B", "main", "origin/main"], None),
         (["checkout", "-B", "jira/MAB-1-test"], None),
     ]
+
+
+def test_run_request_human_input_creates_request() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "test"
+        issue_key = "GP-122"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    fake_run = SimpleNamespace(run_id="run-1")
+    fake_request = SimpleNamespace(
+        request_id="request-1",
+        request_type="verification_code",
+        resume_stage="dev",
+        thread_channel_id="thread-1",
+        expires_at=SimpleNamespace(isoformat=lambda: "2026-03-13T12:00:00+00:00"),
+    )
+    fake_session = MagicMock()
+    fake_session.get.return_value = fake_run
+
+    with (
+        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.agent_tools.create_human_input_request", return_value=fake_request) as create_mock,
+    ):
+        payload = execute_agent_tool(
+            session=fake_session,
+            settings=SimpleNamespace(),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-1",
+            issue_key="GP-122",
+            stage="test",
+            tool_name="run.request_human_input",
+            tool_args={
+                "request_type": "verification_code",
+                "prompt": "Reply with the 2FA code",
+                "instructions": "Use the latest code only.",
+                "expected_reply_format": "6 digits",
+                "request_context": {"provider": "apple"},
+            },
+        )
+
+    assert payload == {
+        "request_id": "request-1",
+        "request_type": "verification_code",
+        "resume_stage": "dev",
+        "thread_channel_id": "thread-1",
+        "expires_at": "2026-03-13T12:00:00+00:00",
+    }
+    create_mock.assert_called_once()
 
 
 def test_github_create_branch_uses_supplied_base_branch_for_sync() -> None:

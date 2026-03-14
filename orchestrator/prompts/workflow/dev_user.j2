@@ -19,6 +19,7 @@ Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
 Confirmed external blockers: {{ confirmed_external_blockers_json }}
 Missing evidence sources: {{ missing_evidence_sources_json }}
+Answered transient human inputs for this run: {{ human_inputs_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
 Agent tool command: {{ agent_tool_command }}
 
@@ -31,6 +32,7 @@ Required actions:
 6. Treat only this run-owned worktree as authoritative local repo state. Do not adapt to unrelated in-flight changes, wrong branches, or shared dirty state.
 7. Use a blocker only for the allowed terminal categories from the system prompt, and include exact details in change_summary.
 8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch/PR actions).
+9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
 
 Output contract:
 - change_summary: array of implemented changes (or concrete blocker facts).

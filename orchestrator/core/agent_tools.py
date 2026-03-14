@@ -19,6 +19,7 @@ from orchestrator.core.knowledge_exact_read import ExactReadRequest, exact_read_
 from orchestrator.core.knowledge_base import build_knowledge_prompt_context
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.run_human_input_service import create_human_input_request
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import (
     DecisionAnswer,
@@ -47,6 +48,7 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
         "repo.read",
     },
     "dev": {
@@ -61,6 +63,7 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
     "test": {
         "knowledge.exact_read",
@@ -69,6 +72,7 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
     "review": {
         "knowledge.exact_read",
@@ -79,6 +83,7 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
     "orchestrator": {
         "knowledge.exact_read",
@@ -99,6 +104,7 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
     "decision_planner": {
         "jira.get_issue",
@@ -109,6 +115,7 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "project.get_runtime_values",
         "project.list_runtime_keys",
         "project.request_runtime_values",
+        "run.request_human_input",
     },
 }
 
@@ -192,6 +199,14 @@ def execute_agent_tool(
         return _tool_repo_read(context=context, args=args)
     if tool_name.startswith("project."):
         return _execute_project_tool(
+            session=session,
+            settings=settings,
+            context=context,
+            tool_name=tool_name,
+            args=args,
+        )
+    if tool_name.startswith("run."):
+        return _execute_run_tool(
             session=session,
             settings=settings,
             context=context,
@@ -649,6 +664,58 @@ def _execute_project_tool(
         }
 
     return {"values": values}
+
+
+def _execute_run_tool(
+    *,
+    session: Session,
+    settings,
+    context: AgentToolContext,
+    tool_name: str,
+    args: dict[str, Any],  # noqa: ANN401
+) -> dict[str, Any]:
+    if tool_name != "run.request_human_input":
+        raise ValueError(f"Unsupported Run tool '{tool_name}'")
+    if not context.run_id:
+        raise ValueError("run.request_human_input requires an active run context")
+    run = session.get(Run, context.run_id)
+    if run is None:
+        raise ValueError(f"Run '{context.run_id}' was not found")
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("run.request_human_input requires non-empty 'prompt'")
+    request_type = str(args.get("request_type") or "").strip().lower()
+    if not request_type:
+        raise ValueError("run.request_human_input requires non-empty 'request_type'")
+    expected_reply_format = str(args.get("expected_reply_format") or "").strip() or None
+    instructions = str(args.get("instructions") or "").strip() or None
+    expires_in_minutes_raw = args.get("expires_in_minutes")
+    expires_in_minutes = int(expires_in_minutes_raw) if expires_in_minutes_raw is not None else None
+    request_context = args.get("request_context")
+    if request_context is not None and not isinstance(request_context, dict):
+        raise ValueError("run.request_human_input request_context must be a JSON object when provided")
+    request = create_human_input_request(
+        session=session,
+        settings=settings,
+        tenant=context.tenant,
+        project=context.project,
+        run=run,
+        issue_key=context.issue_key,
+        source_stage=context.stage,
+        request_type=request_type,
+        prompt=prompt,
+        instructions=instructions,
+        expected_reply_format=expected_reply_format,
+        request_context=request_context if isinstance(request_context, dict) else None,
+        expires_in_minutes=expires_in_minutes,
+    )
+    return {
+        "request_id": request.request_id,
+        "request_type": request.request_type,
+        "resume_stage": request.resume_stage,
+        "thread_channel_id": request.thread_channel_id,
+        "expires_at": request.expires_at.isoformat() if request.expires_at else None,
+    }
 
 
 def _execute_github_tool(
