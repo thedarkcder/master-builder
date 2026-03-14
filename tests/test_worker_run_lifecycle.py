@@ -294,6 +294,68 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             assert refreshed is not None
             self.assertEqual(refreshed.status, "running")
 
+    def test_start_run_respects_tenant_max_concurrent_runs_limit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            running = Run(
+                run_id="run-already-running",
+                tenant_id="tenant-a",
+                issue_key="TA-301",
+                issue_summary="already running",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                last_error=None,
+                plan=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                project_id="tenant-a-default",
+            )
+            queued = Run(
+                run_id="run-queued-under-limit",
+                tenant_id="tenant-a",
+                issue_key="TA-302",
+                issue_summary="queued candidate",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                last_error=None,
+                plan=None,
+                created_at=now,
+                started_at=None,
+                finished_at=None,
+                project_id="tenant-a-default",
+            )
+            session.add_all([running, queued])
+            session.commit()
+            session.refresh(queued)
+
+            blocked = start_run(
+                session,
+                run=queued,
+                expected_status="queued",
+                max_concurrent_runs=1,
+            )
+            self.assertIsNone(blocked)
+            refreshed = session.get(Run, "run-queued-under-limit")
+            assert refreshed is not None
+            self.assertEqual(refreshed.status, "queued")
+
+            started = start_run(
+                session,
+                run=queued,
+                expected_status="queued",
+                max_concurrent_runs=2,
+            )
+            self.assertIsNotNone(started)
+            assert started is not None
+            self.assertEqual(started.status, "running")
+
     def test_requeue_workflow_result_for_capability_notifies_queue_listener(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
