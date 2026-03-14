@@ -36,6 +36,14 @@ class WorkerDependencyFailure(RuntimeError):
     pass
 
 
+def _coerce_parallel_slots(raw_value: object) -> int:
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, parsed)
+
+
 def process_next_queued_run(session, runner):  # noqa: ANN001
     return _process_next_queued_run_with_dependencies(
         session=session,
@@ -44,10 +52,31 @@ def process_next_queued_run(session, runner):  # noqa: ANN001
     )
 
 
+def _process_next_queued_run_once(*, session_factory):  # noqa: ANN001
+    with session_factory() as session:
+        try:
+            runner = build_workflow_runner_for_session(session=session)
+        except CodexRuntimeError as exc:
+            platform_metrics.record_worker_failure(kind="dependency")
+            raise WorkerDependencyFailure(f"Worker runtime unavailable: {exc}") from exc
+        return process_next_queued_run(session, runner)
+
+
+async def _run_worker_slot(*, session_factory, stop_event: asyncio.Event) -> None:  # noqa: ANN001
+    while not stop_event.is_set():
+        processed = await asyncio.to_thread(
+            _process_next_queued_run_once,
+            session_factory=session_factory,
+        )
+        if processed is None:
+            return
+
+
 async def run_worker() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     session_factory = create_session_factory()
+    parallel_slots = _coerce_parallel_slots(getattr(settings, "worker_parallel_slots", 1))
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -79,17 +108,14 @@ async def run_worker() -> None:
             if stop_event.is_set():
                 break
             wake_event.clear()
-
-            while not stop_event.is_set():
-                with session_factory() as session:
-                    try:
-                        runner = build_workflow_runner_for_session(session=session)
-                    except CodexRuntimeError as exc:
-                        platform_metrics.record_worker_failure(kind="dependency")
-                        raise WorkerDependencyFailure(f"Worker runtime unavailable: {exc}") from exc
-                    processed = process_next_queued_run(session, runner)
-                if processed is None:
-                    break
+            slots = [
+                asyncio.create_task(
+                    _run_worker_slot(session_factory=session_factory, stop_event=stop_event)
+                )
+                for _ in range(parallel_slots)
+            ]
+            if slots:
+                await asyncio.gather(*slots)
     except WorkerDependencyFailure:
         raise
     except Exception:
