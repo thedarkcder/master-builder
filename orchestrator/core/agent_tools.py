@@ -718,6 +718,58 @@ def _execute_run_tool(
     }
 
 
+def _execute_run_tool(
+    *,
+    session: Session,
+    settings,
+    context: AgentToolContext,
+    tool_name: str,
+    args: dict[str, Any],  # noqa: ANN401
+) -> dict[str, Any]:
+    if tool_name != "run.request_human_input":
+        raise ValueError(f"Unsupported Run tool '{tool_name}'")
+    if not context.run_id:
+        raise ValueError("run.request_human_input requires an active run context")
+    run = session.get(Run, context.run_id)
+    if run is None:
+        raise ValueError(f"Run '{context.run_id}' was not found")
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("run.request_human_input requires non-empty 'prompt'")
+    request_type = str(args.get("request_type") or "").strip().lower()
+    if not request_type:
+        raise ValueError("run.request_human_input requires non-empty 'request_type'")
+    expected_reply_format = str(args.get("expected_reply_format") or "").strip() or None
+    instructions = str(args.get("instructions") or "").strip() or None
+    expires_in_minutes_raw = args.get("expires_in_minutes")
+    expires_in_minutes = int(expires_in_minutes_raw) if expires_in_minutes_raw is not None else None
+    request_context = args.get("request_context")
+    if request_context is not None and not isinstance(request_context, dict):
+        raise ValueError("run.request_human_input request_context must be a JSON object when provided")
+    request = create_human_input_request(
+        session=session,
+        settings=settings,
+        tenant=context.tenant,
+        project=context.project,
+        run=run,
+        issue_key=context.issue_key,
+        source_stage=context.stage,
+        request_type=request_type,
+        prompt=prompt,
+        instructions=instructions,
+        expected_reply_format=expected_reply_format,
+        request_context=request_context if isinstance(request_context, dict) else None,
+        expires_in_minutes=expires_in_minutes,
+    )
+    return {
+        "request_id": request.request_id,
+        "request_type": request.request_type,
+        "resume_stage": request.resume_stage,
+        "thread_channel_id": request.thread_channel_id,
+        "expires_at": request.expires_at.isoformat() if request.expires_at else None,
+    }
+
+
 def _execute_github_tool(
     *,
     session: Session,
