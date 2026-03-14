@@ -112,6 +112,34 @@ def build_discord_guild_commands() -> list[dict]:
             ],
         },
         {
+            "name": "pm",
+            "description": "Ask a product question and get a structured PM brief",
+            "options": [
+                {
+                    "type": 3,  # STRING
+                    "name": "question",
+                    "description": "Product or prioritization question",
+                    "required": True,
+                },
+                {
+                    "type": 3,  # STRING
+                    "name": "action",
+                    "description": "Optional PM mode (for example: approve)",
+                    "required": False,
+                    "choices": [
+                        {
+                            "name": "Ask",
+                            "value": "ask",
+                        },
+                        {
+                            "name": "Approve",
+                            "value": "approve",
+                        },
+                    ],
+                },
+            ],
+        },
+        {
             "name": "gap",
             "description": "Compare Jira acceptance criteria vs current code signals",
             "options": [

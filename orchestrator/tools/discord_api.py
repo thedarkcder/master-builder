@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from uuid import uuid4
 from urllib.error import HTTPError
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -37,6 +38,67 @@ class DiscordApiClient:
             body = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
 
+        request = Request(
+            url=f"{self._base_url}{path}",
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                raw_body = response.read().decode("utf-8")
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8")
+            if exc.code == 403 and "Cloudflare" in error_body and "Error 1010" in error_body:
+                raise DiscordApiError(
+                    "Discord API request was blocked by Cloudflare (Error 1010). "
+                    "This is an egress/IP or client-fingerprint block, not a bot-token validation failure."
+                ) from exc
+            raise DiscordApiError(f"Discord API request failed ({exc.code}): {error_body}") from exc
+        except URLError as exc:
+            raise DiscordApiError(f"Discord API request failed (network): {exc}") from exc
+
+        if not raw_body:
+            return {}
+        return json.loads(raw_body)
+
+    def _request_multipart(
+        self,
+        *,
+        method: str,
+        path: str,
+        payload_json: dict,
+        file_field: str,
+        file_name: str,
+        file_bytes: bytes,
+        file_content_type: str = "application/octet-stream",
+    ) -> dict | list:
+        boundary = f"----master-builder-discord-boundary-{uuid4().hex}"
+        normalized_content_type = file_content_type.strip() or "application/octet-stream"
+        encoded_payload = json.dumps(payload_json, separators=(",", ":")).encode("utf-8")
+        body = b"".join(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                b'Content-Disposition: form-data; name="payload_json"\r\n',
+                b"Content-Type: application/json\r\n\r\n",
+                encoded_payload,
+                b"\r\n",
+                f"--{boundary}\r\n".encode("utf-8"),
+                (
+                    f'Content-Disposition: form-data; name="{file_field}"; filename="{file_name}"\r\n'
+                    f"Content-Type: {normalized_content_type}\r\n\r\n"
+                ).encode("utf-8"),
+                file_bytes,
+                b"\r\n",
+                f"--{boundary}--\r\n".encode("utf-8"),
+            ]
+        )
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bot {self._bot_token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "MasterBuilderDiscordClient/1.0 (+https://github.com/thedarkcder/master-builder)",
+        }
         request = Request(
             url=f"{self._base_url}{path}",
             data=body,
@@ -114,6 +176,43 @@ class DiscordApiClient:
             method="POST",
             path=f"/channels/{normalized_channel_id}/messages",
             payload=payload,
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord create message response was not an object")
+        return data
+
+    def post_message_with_attachment(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        filename: str,
+        file_bytes: bytes,
+        content_type: str = "application/octet-stream",
+        components: list[dict] | None = None,
+    ) -> dict:
+        normalized_channel_id = channel_id.strip()
+        normalized_content = content.strip()
+        normalized_filename = filename.strip()
+        if not normalized_channel_id:
+            raise ValueError("Discord channel ID cannot be empty")
+        if not normalized_filename:
+            raise ValueError("Discord attachment filename cannot be empty")
+        if not file_bytes:
+            raise ValueError("Discord attachment payload cannot be empty")
+        payload: dict[str, object] = {}
+        if normalized_content:
+            payload["content"] = normalized_content
+        if components:
+            payload["components"] = components
+        data = self._request_multipart(
+            method="POST",
+            path=f"/channels/{normalized_channel_id}/messages",
+            payload_json=payload,
+            file_field="files[0]",
+            file_name=normalized_filename,
+            file_bytes=file_bytes,
+            file_content_type=content_type,
         )
         if not isinstance(data, dict):
             raise DiscordApiError("Discord create message response was not an object")

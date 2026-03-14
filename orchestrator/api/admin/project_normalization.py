@@ -11,6 +11,16 @@ DISCORD_INTERNAL_CONFIG_KEYS = {
     "allowlist_requests",
     "allowed_user_ids",
 }
+PM_ROOM_LIST_KEYS = (
+    "pm_room_channel_ids",
+    "pm_room_thread_channel_ids",
+    "pm_thread_channel_ids",
+)
+PM_ROOM_SINGLE_KEYS = (
+    "pm_room_channel_id",
+    "pm_room_thread_channel_id",
+    "pm_thread_channel_id",
+)
 
 
 def default_project_name_from_repo(*, repo_url: str, tenant_id: str) -> str:
@@ -42,6 +52,12 @@ def normalize_string_map(raw: dict[str, str] | None) -> dict[str, str]:
     return normalized
 
 
+def _normalize_channel_id_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 def normalize_project_discord_config(raw: dict | None) -> dict:
     if not isinstance(raw, dict):
         return {}
@@ -57,19 +73,22 @@ def normalize_project_discord_config(raw: dict | None) -> dict:
         if normalized_events:
             normalized["notify_events"] = normalized_events
 
-    ask_thread_channel_ids = raw.get("ask_thread_channel_ids")
-    if isinstance(ask_thread_channel_ids, list):
-        normalized_ask_threads = [str(value).strip() for value in ask_thread_channel_ids if str(value).strip()]
-        if normalized_ask_threads:
-            normalized["ask_thread_channel_ids"] = normalized_ask_threads
+    normalized_ask_threads = _normalize_channel_id_list(raw.get("ask_thread_channel_ids"))
+    if normalized_ask_threads:
+        normalized["ask_thread_channel_ids"] = normalized_ask_threads
 
-    seed_followup_thread_channel_ids = raw.get("seed_followup_thread_channel_ids")
-    if isinstance(seed_followup_thread_channel_ids, list):
-        normalized_seed_threads = [
-            str(value).strip() for value in seed_followup_thread_channel_ids if str(value).strip()
-        ]
-        if normalized_seed_threads:
-            normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
+    normalized_seed_threads = _normalize_channel_id_list(raw.get("seed_followup_thread_channel_ids"))
+    if normalized_seed_threads:
+        normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
+
+    for key in PM_ROOM_LIST_KEYS:
+        normalized_pm_channels = _normalize_channel_id_list(raw.get(key))
+        if normalized_pm_channels:
+            normalized[key] = normalized_pm_channels
+    for key in PM_ROOM_SINGLE_KEYS:
+        normalized_pm_channel = str(raw.get(key) or "").strip()
+        if normalized_pm_channel:
+            normalized[key] = normalized_pm_channel
 
     return normalized
 
@@ -78,7 +97,8 @@ def with_preserved_discord_system_fields(*, existing: dict, proposed: dict | Non
     if proposed is None:
         return None
     merged = dict(proposed)
-    for key in DISCORD_INTERNAL_CONFIG_KEYS:
+    preserved_keys = set(DISCORD_INTERNAL_CONFIG_KEYS) | set(PM_ROOM_LIST_KEYS) | set(PM_ROOM_SINGLE_KEYS)
+    for key in preserved_keys:
         if key in merged:
             continue
         value = existing.get(key)

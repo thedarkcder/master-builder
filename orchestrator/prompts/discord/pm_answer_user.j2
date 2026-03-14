@@ -1,0 +1,15 @@
+Stage: discord-pm-answer
+Action: {{ action }}
+Question: {{ question }}
+Projects: {{ project_keys_json }}
+Status counts: {{ status_counts_json }}
+GitHub context: {{ github_context_json }}
+Recent conversation context: {{ history_json }}
+Issues (sample): {{ issues_json }}
+
+Output contract:
+- Keep the response product-first and decision-oriented.
+- brief.objective should be one sentence.
+- brief.scope_in and brief.scope_out should be concrete and non-overlapping.
+- brief.risks should call out evidence gaps explicitly when relevant.
+- brief.next_steps should be executable by PM/engineering leads.

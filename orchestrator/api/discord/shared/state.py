@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.state_repository import (
@@ -21,19 +22,60 @@ from orchestrator.core.discord.policy import (
 from orchestrator.storage.models import Project, Tenant
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "reply", "promote", "issues"}
-PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "gap", "request", "bug"}
+PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "pm", "gap", "request", "bug"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 REQUEST_PERMISSION_LABELS = {
     "run_controls": "run controls (!run, !cancel, !retry)",
     "seed_issues": "issue seeding (!issues seed)",
     "all_sensitive": "all sensitive commands",
 }
+PM_ROOM_LIST_KEYS = (
+    "pm_room_channel_ids",
+    "pm_room_thread_channel_ids",
+    "pm_thread_channel_ids",
+)
+PM_ROOM_SINGLE_KEYS = (
+    "pm_room_channel_id",
+    "pm_room_thread_channel_id",
+    "pm_thread_channel_id",
+)
 MAX_PENDING_SEED_FOLLOWUPS = 30
 MAX_PENDING_SEED_FOLLOWUP_AGE = timedelta(hours=24)
 
 
 def normalize_status_name(value: str) -> str:
     return value.strip().lower()
+
+
+def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    config = dict(discord_config or {})
+    channel_ids: set[str] = set()
+    for key in PM_ROOM_LIST_KEYS:
+        raw_values = config.get(key)
+        if not isinstance(raw_values, list):
+            continue
+        for value in raw_values:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
+    for key in PM_ROOM_SINGLE_KEYS:
+        normalized = str(config.get(key) or "").strip()
+        if normalized:
+            channel_ids.add(normalized)
+    return channel_ids
+
+
+def project_pm_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        channel_ids.update(_pm_room_channel_ids_from_discord_config(project.discord_config or {}))
+    return channel_ids
 
 
 def parse_command_text(command_text: str) -> tuple[str, list[str]]:
@@ -181,6 +223,8 @@ def assert_sensitive_command_permission(
 
 def assert_channel_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> None:
     allowed_channel_ids = tenant_allowed_channel_ids(session=session, tenant=tenant)
+    allowed_channel_ids.update(project_pm_room_channel_ids(session=session, tenant_id=tenant.tenant_id))
+    allowed_channel_ids.update(_pm_room_channel_ids_from_discord_config(tenant.discord_config or {}))
     if not is_channel_allowed(channel_id=channel_id, allowed_channel_ids=allowed_channel_ids):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

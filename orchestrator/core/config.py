@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
+    voice_transcription_provider: Literal["disabled", "openai"] = "disabled"
+    voice_transcription_model: str = "gpt-4o-mini-transcribe"
+    voice_transcription_language: str = ""
+    voice_transcription_openai_api_key: str = ""
+    voice_attachment_max_bytes: int = 25000000
+    voice_reply_provider: Literal["disabled", "pocket_tts"] = "disabled"
+    voice_reply_enabled_default: bool = False
+    pocket_tts_base_url: str = ""
+    pocket_tts_voice: str = ""
     codex_cli_command: str = "codex"
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5.4"

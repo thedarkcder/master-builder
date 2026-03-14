@@ -66,6 +66,7 @@ def build_discord_ingress_dependencies(
             store_pending_ask_action=store_pending_ask_action_fn,
             store_ask_history_entry=store_ask_history_entry_fn,
             ask_board_message=ask_board_message_fn,
+            seed_issues_with_codex=seed_issues_with_codex_fn,
             scoped_project_keys=list(ctx.scope.project_keys),
             codex_working_dir=resolve_codex_working_dir_fn(
                 session=ctx.session,
