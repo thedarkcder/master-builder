@@ -799,6 +799,46 @@ class GitHubAppClientTests(unittest.TestCase):
             with self.assertRaisesRegex(GitHubApiError, "response was not a list"):
                 client.list_open_pull_requests(repo_full_name="example/repo")
 
+    def test_find_open_pull_request_matches_head_and_base(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        with patch.object(
+            client,
+            "list_open_pull_requests",
+            return_value=[
+                PullRequestSummary(
+                    number=123,
+                    title="MAB-123: branch",
+                    state="open",
+                    html_url="https://github.com/example/repo/pull/123",
+                    head_ref="feature/MAB-123",
+                    base_ref="main",
+                    updated_at="2026-03-15T11:00:00Z",
+                ),
+                PullRequestSummary(
+                    number=124,
+                    title="MAB-123: staging",
+                    state="open",
+                    html_url="https://github.com/example/repo/pull/124",
+                    head_ref="feature/MAB-123",
+                    base_ref="staging",
+                    updated_at="2026-03-15T10:00:00Z",
+                ),
+            ],
+        ):
+            pull_request = client.find_open_pull_request(
+                repo_full_name="example/repo",
+                head_branch="feature/MAB-123",
+                base_branch="staging",
+            )
+
+        self.assertIsNotNone(pull_request)
+        self.assertEqual(pull_request.number, 124)
+
     def test_create_and_update_issue_comment(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
         client = GitHubAppClient(config)
