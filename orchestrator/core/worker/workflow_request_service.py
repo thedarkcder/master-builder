@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import logging
+
 from orchestrator.core.guardrails import enforce_safe_command
+from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.run_human_input_service import answered_human_inputs_for_request
+from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
 from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.worker_capabilities import parse_worker_capabilities
 from orchestrator.core.workflow.runner import WorkflowRequest
 from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.project_repo_checkout import (
     ProjectRepoCheckoutError,
     ensure_run_worktree,
     read_run_worktree_metadata,
     validate_run_worktree,
 )
+from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
+
+logger = logging.getLogger(__name__)
 
 
 def build_workflow_request_for_run(
@@ -51,7 +59,14 @@ def build_workflow_request_for_run(
     project_environment = getattr(project, "environment", {}) if project is not None else {}
     default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
     base_branch = _normalize_branch(default_branch) or "main"
-    integration_branch = _normalize_branch(getattr(run, "branch", None)) or f"feature/{run.issue_key}"
+    integration_branch = _resolve_integration_branch(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        run=run,
+        project=project,
+        base_branch=base_branch,
+    )
     execution_repo_dir, execution_branch, start_point_ref, start_point_sha, workspace_key = _resolve_execution_repo_dir(
         settings=settings,
         tenant=tenant,
@@ -163,6 +178,112 @@ def _normalize_branch(value: object) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _resolve_integration_branch(
+    *,
+    session,
+    settings,
+    tenant: Tenant,
+    run: Run,
+    project: Project | None,
+    base_branch: str,
+) -> str:
+    run_branch = _normalize_branch(getattr(run, "branch", None))
+    if run_branch:
+        return run_branch
+
+    reused_branch = _resolve_branch_from_open_pull_requests(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        run=run,
+        project=project,
+        base_branch=base_branch,
+    )
+    integration_branch = reused_branch or f"feature/{run.issue_key}"
+    run.branch = integration_branch
+    return integration_branch
+
+
+def _resolve_branch_from_open_pull_requests(
+    *,
+    session,
+    settings,
+    tenant: Tenant,
+    run: Run,
+    project: Project | None,
+    base_branch: str,
+) -> str | None:
+    if project is None:
+        return None
+    github_repository = str(project.github_repository or "").strip()
+    if not github_repository:
+        return None
+    github_config_raw = getattr(tenant, "github_config", {})
+    github_config = github_config_raw if isinstance(github_config_raw, dict) else {}
+    if not github_config:
+        return None
+
+    issue_key = str(run.issue_key or "").strip()
+    if not issue_key:
+        return None
+    issue_key_lower = issue_key.lower()
+    repo_full_name = _repo_full_name(github_repository)
+    if repo_full_name is None:
+        return None
+
+    try:
+        github_client = github_client_from_tenant_config(
+            github_config,
+            tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                encryption_key=settings.secrets_encryption_key,
+            ),
+            platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+                session,
+                secret_ref=secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+            ),
+        )
+        pull_requests = github_client.list_open_pull_requests(repo_full_name=repo_full_name, limit=100)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "workflow_branch_lookup_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s error=%s",
+            tenant.tenant_id,
+            project.project_id,
+            run.run_id,
+            run.issue_key,
+            exc,
+        )
+        return None
+
+    for pull_request in pull_requests:
+        if str(pull_request.base_ref or "").strip() != base_branch:
+            continue
+        title_lower = str(pull_request.title or "").lower()
+        head_ref = _normalize_branch(pull_request.head_ref)
+        if not head_ref:
+            continue
+        head_lower = head_ref.lower()
+        if issue_key_lower not in head_lower and issue_key_lower not in title_lower:
+            continue
+        return head_ref
+    return None
+
+
+def _repo_full_name(repository_url: str) -> str | None:
+    normalized = normalize_repo_identifier(repository_url)
+    prefix = "github.com/"
+    if not normalized.startswith(prefix):
+        return None
+    full_name = normalized[len(prefix) :].strip("/")
+    if full_name.count("/") != 1:
+        return None
+    return full_name
 
 
 def _extract_trigger_context(plan: object) -> dict | None:
