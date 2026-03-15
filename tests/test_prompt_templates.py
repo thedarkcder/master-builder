@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 from orchestrator.core.prompt_templates import render_prompt
 
@@ -27,6 +28,20 @@ class PromptTemplateTests(unittest.TestCase):
             rendered = render_prompt("workflow/pm_user.j2", tenant_id="tenant-1")
         self.assertEqual(fake_env.template_name, "workflow/pm_user.j2")
         self.assertEqual(rendered, "Tenant=tenant-1")
+
+    def test_pm_user_prompt_enforces_macos_signals_for_ios_work(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "pm_user.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("mandatory macos signals", prompt_text)
+        self.assertIn("xcodebuild", prompt_text)
+        self.assertIn("XCUITest", prompt_text)
+        self.assertIn('Never output "linux" when mandatory macos signals exist', prompt_text)
 
 
 if __name__ == "__main__":
