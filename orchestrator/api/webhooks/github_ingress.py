@@ -53,6 +53,51 @@ async def ingest_github_webhook_event(
     repo_full_name = context.repo_full_name
     pr_targets = context.pr_targets
 
+    effective_policy = resolve_effective_policy(
+        tenant_policy=getattr(tenant, "policy_config", {}) or {},
+        project_overrides=getattr(project, "policy_overrides", {}) or {},
+    )
+    allow_code_reviews = bool(effective_policy.get("allow_code_reviews", True))
+    allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
+    allow_pr_remediation = allow_code_reviews and bool(effective_policy.get("allow_pr_remediation", True))
+    max_pr_auto_remediation_loops = _coerce_positive_int(
+        effective_policy.get("max_pr_auto_remediation_loops"),
+        default=5,
+    )
+
+    if not allow_code_reviews:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "project_id": project.project_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": True,
+                "repository": repo_full_name,
+                "signals": [],
+                "review_comments": [],
+                "inline_reviews": [],
+                "auto_merge": {
+                    "enabled": False,
+                    "reason": "code_reviews_disabled",
+                    "results": [],
+                },
+                "pr_review": {
+                    "enabled": False,
+                    "reason": "code_reviews_disabled",
+                },
+                "pr_remediation": {
+                    "enabled": False,
+                    "reason": "code_reviews_disabled",
+                },
+                "remediation": [],
+                "remediation_comments": [],
+            },
+        )
+
     try:
         github_client, reviewer_gate = build_github_review_runtime(
             session=session,
@@ -80,17 +125,6 @@ async def ingest_github_webhook_event(
                 "project_id": project.project_id,
             },
         )
-
-    effective_policy = resolve_effective_policy(
-        tenant_policy=getattr(tenant, "policy_config", {}) or {},
-        project_overrides=getattr(project, "policy_overrides", {}) or {},
-    )
-    allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
-    allow_pr_remediation = bool(effective_policy.get("allow_pr_remediation", True))
-    max_pr_auto_remediation_loops = _coerce_positive_int(
-        effective_policy.get("max_pr_auto_remediation_loops"),
-        default=5,
-    )
 
     review_results = process_pull_request_targets(
         request_id=request_id,
