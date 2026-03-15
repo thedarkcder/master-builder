@@ -43,8 +43,10 @@ Required actions:
    - Use "dev" if code changes are still needed.
    - Use "test" only when prior dev output is sufficient and we should retest/validate.
 6. Choose execution worker capability for implementation stages (dev/test/review):
-   - Output "macos" for iOS/macOS/Xcode/Simulator execution needs.
-   - Output "linux" for backend/web/infra work that does not need macOS tooling.
+   - Output "macos" when any required implementation or verification step needs Apple-only tooling.
+   - Treat these as mandatory macos signals: iOS, iPadOS, Xcode, xcodebuild, XCTest, XCUITest, Simulator, simctl, SwiftUI app test execution, Apple Sign In validation on simulator/device.
+   - Never output "linux" when mandatory macos signals exist, even if the current worker is linux; choose "macos" and let orchestration requeue.
+   - Output "linux" only when all required implementation and verification work can run without macOS-only tooling.
 7. Output only compact evidence conclusions:
    - missing_evidence_sources: source names you could not load or validate (for example: jira_issue, decision_state, knowledge, runtime_values).
    - confirmed_external_blockers: only evidence-backed external blockers that should stop implementation now.
