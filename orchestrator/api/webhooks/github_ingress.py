@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from uuid import uuid4
 
 from fastapi import Request, status
@@ -14,6 +15,7 @@ from orchestrator.api.webhooks.github_webhook_context import (
 )
 from orchestrator.api.webhooks.pr_review_comment_service import (
     publish_inline_review_batch,
+    upsert_manual_fix_followup_comment,
     upsert_sticky_remediation_comment,
     upsert_sticky_review_comment,
 )
@@ -25,6 +27,7 @@ from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.tools.github_app import GitHubApiError
 
 logger = logging.getLogger(__name__)
+_MB_MENTION_PATTERN = re.compile(r"(?<!\w)(?:@mb|/mb)\b", re.IGNORECASE)
 
 
 async def ingest_github_webhook_event(
@@ -130,6 +133,16 @@ async def ingest_github_webhook_event(
             },
         )
 
+    _add_manual_fix_eyes_reaction_if_requested(
+        github_event=github_event,
+        payload=payload,
+        github_client=github_client,
+        repo_full_name=repo_full_name,
+        logger=logger,
+        request_id=request_id,
+        tenant_id=tenant.tenant_id,
+    )
+
     review_results = process_pull_request_targets(
         request_id=request_id,
         tenant=tenant,
@@ -155,6 +168,7 @@ async def ingest_github_webhook_event(
         publish_inline_review_batch_fn=publish_inline_review_batch,
         enqueue_pr_remediation_if_needed_fn=enqueue_pr_remediation_if_needed,
         upsert_sticky_remediation_comment_fn=upsert_sticky_remediation_comment,
+        upsert_manual_fix_followup_comment_fn=upsert_manual_fix_followup_comment,
         github_api_error_type=GitHubApiError,
     )
 
@@ -194,3 +208,38 @@ def _valid_pr_details(details: object) -> bool:
     head_sha = getattr(details, "head_sha", None)
     title = getattr(details, "title", None)
     return isinstance(head_sha, str) and bool(head_sha.strip()) and isinstance(title, str) and bool(title.strip())
+
+
+def _add_manual_fix_eyes_reaction_if_requested(
+    *,
+    github_event: str,
+    payload: dict,
+    github_client,
+    repo_full_name: str,
+    logger,
+    request_id: str,
+    tenant_id: str,
+) -> None:  # noqa: ANN001
+    if str(github_event or "").strip().lower() != "issue_comment":
+        return
+    comment = payload.get("comment")
+    body = str(comment.get("body") or "") if isinstance(comment, dict) else ""
+    if not _MB_MENTION_PATTERN.search(body):
+        return
+    comment_id = comment.get("id") if isinstance(comment, dict) else None
+    if not isinstance(comment_id, int) or comment_id <= 0:
+        return
+    try:
+        github_client.add_issue_comment_reaction(
+            repo_full_name=repo_full_name,
+            comment_id=comment_id,
+            content="eyes",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "github_webhook_manual_fix_reaction_failed request_id=%s tenant_id=%s comment_id=%s error=%s",
+            request_id,
+            tenant_id,
+            comment_id,
+            exc,
+        )
