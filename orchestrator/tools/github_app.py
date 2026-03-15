@@ -95,6 +95,12 @@ class PullRequestIssueComment:
 
 
 @dataclass(frozen=True)
+class CommentReactionResult:
+    reaction_id: int | None
+    content: str | None
+
+
+@dataclass(frozen=True)
 class PullRequestInlineCommentDraft:
     path: str
     line: int
@@ -679,6 +685,48 @@ class GitHubAppClient:
         if comment is None:
             raise GitHubApiError("GitHub update issue comment response was not valid")
         return comment
+
+    def add_issue_comment_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        comment_id: int,
+        content: str = "eyes",
+    ) -> CommentReactionResult:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/issues/comments/{comment_id}/reactions",
+            bearer_token=installation_token,
+            payload={"content": content},
+        )
+        reaction_id = response.get("id")
+        reaction_content = response.get("content")
+        return CommentReactionResult(
+            reaction_id=reaction_id if isinstance(reaction_id, int) else None,
+            content=reaction_content if isinstance(reaction_content, str) else None,
+        )
+
+    def add_pull_request_review_comment_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        comment_id: int,
+        content: str = "eyes",
+    ) -> CommentReactionResult:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/pulls/comments/{comment_id}/reactions",
+            bearer_token=installation_token,
+            payload={"content": content},
+        )
+        reaction_id = response.get("id")
+        reaction_content = response.get("content")
+        return CommentReactionResult(
+            reaction_id=reaction_id if isinstance(reaction_id, int) else None,
+            content=reaction_content if isinstance(reaction_content, str) else None,
+        )
 
     def submit_pull_request_review(
         self,

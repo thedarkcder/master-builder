@@ -866,6 +866,32 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(updated.body, "second")
         self.assertEqual(request_json.call_count, 2)
 
+    def test_add_issue_and_review_comment_reactions(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            side_effect=[
+                {"id": 901, "content": "eyes"},
+                {"id": 902, "content": "eyes"},
+            ],
+        ) as request_json:
+            issue_reaction = client.add_issue_comment_reaction(
+                repo_full_name="example/repo",
+                comment_id=1001,
+            )
+            review_reaction = client.add_pull_request_review_comment_reaction(
+                repo_full_name="example/repo",
+                comment_id=2002,
+            )
+
+        self.assertEqual(issue_reaction.reaction_id, 901)
+        self.assertEqual(issue_reaction.content, "eyes")
+        self.assertEqual(review_reaction.reaction_id, 902)
+        self.assertEqual(review_reaction.content, "eyes")
+        self.assertEqual(request_json.call_count, 2)
+
     def test_submit_pull_request_review_and_merge(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
         client = GitHubAppClient(config)

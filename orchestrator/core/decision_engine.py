@@ -75,6 +75,36 @@ _READY_FOR_AGENT_OVERRIDE_SOURCES = {
     "cli_run",
     "github_pr_remediation",
 }
+_PR_REMEDIATION_TRIGGER_SOURCE = "github_pr_review_feedback"
+_LEGACY_REMEDIATION_DESCRIPTION_PREFIX = "automated remediation run triggered from github pr #"
+_LEGACY_REMEDIATION_SUMMARY_MARKER = ": pr remediation for #"
+
+
+def _extract_trigger_context_from_plan(plan: object | None) -> dict | None:
+    if not isinstance(plan, dict):
+        return None
+    trigger_context = plan.get("trigger_context")
+    return trigger_context if isinstance(trigger_context, dict) else None
+
+
+def is_pr_remediation_run(
+    *,
+    run_plan: object | None,
+    issue_summary: str | None,
+    issue_description: str | None,
+) -> bool:
+    trigger_context = _extract_trigger_context_from_plan(run_plan)
+    if isinstance(trigger_context, dict):
+        source = str(trigger_context.get("source") or "").strip().lower()
+        if source == _PR_REMEDIATION_TRIGGER_SOURCE:
+            return True
+
+    normalized_description = str(issue_description or "").strip().lower()
+    if normalized_description.startswith(_LEGACY_REMEDIATION_DESCRIPTION_PREFIX):
+        return True
+
+    normalized_summary = str(issue_summary or "").strip().lower()
+    return _LEGACY_REMEDIATION_SUMMARY_MARKER in normalized_summary
 
 
 def _planner_classification(gate_status: str) -> str:
@@ -341,7 +371,16 @@ def resolve_enqueue_precheck_outcome(
     source: DecisionSource,
     precheck_outcome: str | None = None,
     precheck_source_plan: object | None = None,
+    issue_summary: str | None = None,
+    issue_description: str | None = None,
 ) -> str | None:
+    if is_pr_remediation_run(
+        run_plan=precheck_source_plan,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+    ):
+        return "ready_for_agent"
+
     normalized_outcome = resolve_precheck_outcome_for_enqueue(
         precheck_outcome=precheck_outcome,
         precheck_source_plan=precheck_source_plan,
@@ -369,6 +408,13 @@ def evaluate_worker_decision(
     evaluate_decision_gate_fn: Callable[..., DecisionGateResult] | None = None,
 ) -> WorkerDecision:
     if is_ready_for_agent_precheck(run_plan):
+        return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
+
+    if is_pr_remediation_run(
+        run_plan=run_plan,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+    ):
         return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
 
     if session is not None and issue_key:

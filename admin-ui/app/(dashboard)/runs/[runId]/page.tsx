@@ -519,12 +519,30 @@ export default function RunDetailPage() {
     [tokenTimeline?.turns]
   );
   const tokenTurnRows = useMemo(
-    () =>
-      (tokenTimeline?.turns ?? []).map((turn, index) => ({
-        ...turn,
-        turnOrder: index + 1,
-        uncached_input_tokens: Math.max(0, turn.input_tokens - turn.cached_input_tokens),
-      })),
+    () => {
+      const keyCounts = new Map<string, number>();
+      return (tokenTimeline?.turns ?? []).map((turn, index) => {
+        const turnId = String(turn.turn_id ?? "").trim();
+        const fallbackKey = [
+          String(turn.invocation_id ?? "").trim(),
+          String(turn.stage ?? "").trim(),
+          turn.attempt === null ? "na" : String(turn.attempt),
+          String(turn.recorded_at ?? "").trim(),
+        ]
+          .filter((part) => part.length > 0)
+          .join("::");
+        const baseKey = turnId || fallbackKey || `token-turn-${index + 1}`;
+        const seenCount = keyCounts.get(baseKey) ?? 0;
+        keyCounts.set(baseKey, seenCount + 1);
+        const rowKey = seenCount === 0 ? baseKey : `${baseKey}::${seenCount + 1}`;
+        return {
+          ...turn,
+          rowKey,
+          turnOrder: index + 1,
+          uncached_input_tokens: Math.max(0, turn.input_tokens - turn.cached_input_tokens),
+        };
+      });
+    },
     [tokenTimeline?.turns]
   );
   const orchestrationTrace = useMemo(() => {
@@ -1447,7 +1465,7 @@ export default function RunDetailPage() {
                           <TableBody>
                             {tokenTurnRows.map((turn) => (
                               <TableRow
-                                key={turn.turn_id}
+                                key={turn.rowKey}
                                 className={turn.is_growth_spike ? "border-l-4 border-l-amber-500" : undefined}
                               >
                                 <TableCell>{turn.turnOrder}</TableCell>
