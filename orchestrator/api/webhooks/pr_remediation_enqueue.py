@@ -19,8 +19,34 @@ def enqueue_pr_remediation_run(
     reviews,
     review_comments,
     issue_comments,
+    manual_fix_request: dict[str, object] | None = None,
     max_concurrent_runs: int | None = None,
 ):
+    manual_requested_comment = (
+        dict(manual_fix_request.get("requested_comment"))
+        if isinstance(manual_fix_request, dict) and isinstance(manual_fix_request.get("requested_comment"), dict)
+        else None
+    )
+    manual_requested_by = (
+        str(manual_fix_request.get("requested_by") or "").strip()
+        if isinstance(manual_fix_request, dict)
+        else ""
+    )
+    manual_context_lines: list[str] = []
+    if manual_requested_comment is not None:
+        manual_context_lines.append("Manual request: yes")
+        if manual_requested_by:
+            manual_context_lines.append(f"Requested by: {manual_requested_by}")
+        comment_url = str(manual_requested_comment.get("url") or "").strip()
+        if comment_url:
+            manual_context_lines.append(f"Requested comment: {comment_url}")
+        comment_body = str(manual_requested_comment.get("body") or "").strip()
+        if comment_body:
+            manual_context_lines.append(f"Requested comment body: {comment_body}")
+    manual_context_suffix = ""
+    if manual_context_lines:
+        manual_context_suffix = "\n" + "\n".join(manual_context_lines)
+
     trigger_context = {
         "source": "github_pr_review_feedback",
         "event": normalized_event,
@@ -55,6 +81,8 @@ def enqueue_pr_remediation_run(
             {"id": comment.comment_id, "body": comment.body}
             for comment in issue_comments
         ],
+        "manual_fix_request": dict(manual_fix_request) if isinstance(manual_fix_request, dict) else None,
+        "requested_comment": manual_requested_comment,
     }
 
     enqueue_result = enqueue_run(
@@ -67,6 +95,7 @@ def enqueue_pr_remediation_run(
             f"Automated remediation run triggered from GitHub PR #{pr_number} ({details.html_url}).\n"
             f"Event: {normalized_event}/{normalized_action}\n"
             f"Head SHA: {details.head_sha}"
+            + manual_context_suffix
         ),
         repo_url=project.github_repository,
         delivery_id=None,

@@ -69,4 +69,12 @@ def extract_pull_request_targets(payload: dict) -> list[tuple[int, bool]]:
                 targets.append((number, True))
                 seen.add(number)
 
+    issue = payload.get("issue")
+    if isinstance(issue, dict):
+        number = issue.get("number")
+        pull_request = issue.get("pull_request")
+        if isinstance(number, int) and number > 0 and isinstance(pull_request, dict) and number not in seen:
+            targets.append((number, True))
+            seen.add(number)
+
     return targets

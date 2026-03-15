@@ -67,6 +67,7 @@ export function defaultTenantFormValues(): TenantFormValues {
       allow_pr_creation: true,
       allow_code_reviews: true,
       allow_pr_remediation: true,
+      allow_manual_pr_fix_requests: true,
       allow_label_mutations: true,
       allow_auto_merge: false,
       max_runtime_minutes: 30,
