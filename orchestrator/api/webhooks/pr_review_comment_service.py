@@ -49,6 +49,21 @@ def build_remediation_marker(
     return f"<!-- codex:pr-remediation:{tenant_id}:{project_id}:{repo_full_name}:{pr_number} -->"
 
 
+def build_manual_fix_followup_marker(
+    *,
+    tenant_id: str,
+    project_id: str,
+    repo_full_name: str,
+    pr_number: int,
+    triggering_comment_id: int,
+) -> str:
+    return (
+        "<!-- codex:pr-manual-fix:"
+        f"{tenant_id}:{project_id}:{repo_full_name}:{pr_number}:{triggering_comment_id}"
+        " -->"
+    )
+
+
 def format_sticky_review_comment(
     *,
     signal: ReviewerSignal,
@@ -80,7 +95,7 @@ def format_sticky_review_comment(
         [
             "",
             "### Queue Fix",
-            "Comment on this PR with `@mb fix <comment-url>` or `/mb fix <comment-url>`.",
+            "Comment on this PR with `@mb fix` (uses current comment) or `@mb fix <comment-url>`.",
             f"[Open comment box]({compose_url})",
         ]
     )
@@ -203,6 +218,97 @@ def upsert_sticky_remediation_comment(
         head_sha=head_sha,
         event=event,
         action=action,
+        marker=marker,
+    )
+    comments = github_client.list_pull_request_issue_comments(
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+    )
+    existing = next((comment for comment in comments if marker in comment.body), None)
+    if existing is None:
+        created = github_client.create_pull_request_issue_comment(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            body=body,
+        )
+        return StickyReviewCommentResult(action="created", comment_id=created.comment_id)
+    updated = github_client.update_issue_comment(
+        repo_full_name=repo_full_name,
+        comment_id=existing.comment_id,
+        body=body,
+    )
+    return StickyReviewCommentResult(action="updated", comment_id=updated.comment_id)
+
+
+def format_manual_fix_followup_comment(
+    *,
+    requested_by: str | None,
+    triggering_comment_url: str | None,
+    requested_comment_url: str | None,
+    issue_key: str | None,
+    issue_url: str | None,
+    enqueued: bool,
+    run_id: str | None,
+    reason: str | None,
+    marker: str,
+) -> str:
+    status = "ENQUEUED" if enqueued else "BLOCKED"
+    requested_by_text = f"@{requested_by}" if requested_by else "unknown"
+    issue_reference = issue_key or "none"
+    if issue_key and issue_url:
+        issue_reference = f"[{issue_key}]({issue_url})"
+    lines = [
+        "## Codex Manual Fix",
+        "",
+        f"Status: {status}",
+        f"Requested by: {requested_by_text}",
+    ]
+    if triggering_comment_url:
+        lines.append(f"Command comment: {triggering_comment_url}")
+    if requested_comment_url:
+        lines.append(f"Target comment: {requested_comment_url}")
+    lines.append(f"Issue: {issue_reference}")
+    if run_id:
+        lines.append(f"Run ID: {run_id}")
+    if reason:
+        lines.append(f"Reason: {reason}")
+    lines.extend(["", marker])
+    return "\n".join(lines).strip()
+
+
+def upsert_manual_fix_followup_comment(
+    *,
+    github_client: GitHubAppClient,
+    repo_full_name: str,
+    pr_number: int,
+    tenant_id: str,
+    project_id: str,
+    triggering_comment_id: int,
+    requested_by: str | None,
+    triggering_comment_url: str | None,
+    requested_comment_url: str | None,
+    issue_key: str | None,
+    issue_url: str | None,
+    enqueued: bool,
+    run_id: str | None,
+    reason: str | None,
+) -> StickyReviewCommentResult:
+    marker = build_manual_fix_followup_marker(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        triggering_comment_id=triggering_comment_id,
+    )
+    body = format_manual_fix_followup_comment(
+        requested_by=requested_by,
+        triggering_comment_url=triggering_comment_url,
+        requested_comment_url=requested_comment_url,
+        issue_key=issue_key,
+        issue_url=issue_url,
+        enqueued=enqueued,
+        run_id=run_id,
+        reason=reason,
         marker=marker,
     )
     comments = github_client.list_pull_request_issue_comments(

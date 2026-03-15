@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.runs import enqueue_run, resolve_precheck_outcome_for_enqueue
+from orchestrator.core.runs import enqueue_run
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.storage.models import Project, Run, RunHumanInputRequest, Tenant
 
@@ -234,6 +234,8 @@ def resume_run_from_human_input_reply(
     reply_text: str,
     source_ref: str | None,
 ) -> Run:
+    from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
+
     if request.status != "pending":
         raise ValueError("Human input request is not pending")
     source_run = session.get(Run, request.source_run_id)
@@ -256,9 +258,11 @@ def resume_run_from_human_input_reply(
         issue_description=source_run.issue_description,
         repo_url=source_run.repo_url,
         delivery_id=None,
-        precheck_outcome=resolve_precheck_outcome_for_enqueue(
-            precheck_outcome=None,
+        precheck_outcome=resolve_enqueue_precheck_outcome(
+            source="admin_rerun",
             precheck_source_plan=source_run.plan,
+            issue_summary=source_run.issue_summary,
+            issue_description=source_run.issue_description,
         ),
         precheck_source_plan=source_run.plan,
     )

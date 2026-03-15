@@ -223,13 +223,12 @@ class WorkerTests(unittest.TestCase):
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
 
-    def test_run_worker_uses_configured_parallel_slots(self) -> None:
+    def test_run_worker_uses_policy_parallel_slots(self) -> None:
         import orchestrator.worker as worker_module
 
         fake_settings = SimpleNamespace(
             database_url="postgresql://localhost/db",
             log_level="INFO",
-            worker_parallel_slots=2,
         )
         session = MagicMock()
 
@@ -262,11 +261,13 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
             patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=2) as slots_mock,
             patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()),
             patch.object(worker_module, "process_next_queued_run", new=process_mock),
         ):
             asyncio.run(worker_module.run_worker())
 
+        self.assertTrue(slots_mock.called)
         self.assertEqual(process_mock.call_count, 2)
         listener.start.assert_called_once()
         listener.stop.assert_called_once()

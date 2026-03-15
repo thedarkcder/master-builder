@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from orchestrator.api.webhooks.pr_review_comment_service import (
     format_sticky_review_comment,
     publish_inline_review_batch,
+    upsert_manual_fix_followup_comment,
     upsert_sticky_remediation_comment,
     upsert_sticky_review_comment,
 )
@@ -80,8 +81,8 @@ def test_format_sticky_review_comment_includes_manual_fix_quick_action() -> None
         action="submitted",
         marker="<!-- marker -->",
     )
-    assert "@mb fix <comment-url>" in body
-    assert "/mb fix <comment-url>" in body
+    assert "@mb fix" in body
+    assert "<comment-url>" in body
     assert "https://github.com/org/repo/pull/10#issuecomment-new" in body
 
 
@@ -248,3 +249,54 @@ def test_upsert_sticky_remediation_comment_creates_and_updates() -> None:
     )
     assert updated.action == "updated"
     assert updated.comment_id == 202
+
+
+def test_upsert_manual_fix_followup_comment_creates_and_updates() -> None:
+    github_client = SimpleNamespace(
+        list_pull_request_issue_comments=lambda **_kwargs: [],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+    )
+    created = upsert_manual_fix_followup_comment(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=9001,
+        requested_by="alice",
+        triggering_comment_url="https://github.com/org/repo/pull/10#issuecomment-9001",
+        requested_comment_url="https://github.com/org/repo/pull/10#discussion_r222",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        enqueued=True,
+        run_id="run-10",
+        reason=None,
+    )
+    assert created.action == "created"
+    assert created.comment_id == 303
+
+    marker_body = "<!-- codex:pr-manual-fix:t1:p1:org/repo:10:9001 -->"
+    github_client = SimpleNamespace(
+        list_pull_request_issue_comments=lambda **_kwargs: [SimpleNamespace(comment_id=303, body=marker_body)],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+    )
+    updated = upsert_manual_fix_followup_comment(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=9001,
+        requested_by="alice",
+        triggering_comment_url="https://github.com/org/repo/pull/10#issuecomment-9001",
+        requested_comment_url="https://github.com/org/repo/pull/10#discussion_r222",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        enqueued=False,
+        run_id=None,
+        reason="manual_fix_comment_not_found",
+    )
+    assert updated.action == "updated"
+    assert updated.comment_id == 303
