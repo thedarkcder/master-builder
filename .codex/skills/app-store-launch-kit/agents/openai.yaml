@@ -1,0 +1,4 @@
+interface:
+  display_name: "App Store Launch Kit"
+  short_description: "Orchestrate screenshot, design, copy, and export pipeline."
+  default_prompt: "Plan and execute the full launch-kit workflow from real mobile app screens to final store-ready assets."

@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import json
-import os
 import unittest
-from unittest.mock import patch
+from io import BytesIO
+from urllib.error import HTTPError
+from unittest.mock import MagicMock, patch
+
+from jwt.exceptions import InvalidKeyError
 
 from orchestrator.tools.github_app import (
+    GitHubApiError,
     GitHubAppClient,
     GitHubAppConfig,
     InstallationRepository,
     PullRequestDetails,
     PullRequestFileChange,
+    PullRequestInlineCommentDraft,
     PullRequestResult,
+    PullRequestSummary,
     WorkflowCheckSuite,
     github_client_from_tenant_config,
 )
@@ -32,6 +38,74 @@ class _FakeHTTPResponse:
 
 
 class GitHubAppClientTests(unittest.TestCase):
+    def test_create_app_jwt_normalizes_escaped_newlines(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n",
+        )
+        client = GitHubAppClient(config)
+
+        with patch("orchestrator.tools.github_app.jwt.encode", return_value="token") as mock_encode:
+            token = client.create_app_jwt()
+
+        self.assertEqual(token, "token")
+        self.assertEqual(
+            mock_encode.call_args.args[1],
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        )
+
+    def test_create_app_jwt_normalizes_quoted_escaped_newlines(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem='"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n"',
+        )
+        client = GitHubAppClient(config)
+
+        with patch("orchestrator.tools.github_app.jwt.encode", return_value="token") as mock_encode:
+            token = client.create_app_jwt()
+
+        self.assertEqual(token, "token")
+        self.assertEqual(
+            mock_encode.call_args.args[1],
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        )
+
+    def test_create_app_jwt_rejects_client_or_pat_token_values(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="gho_example_token",
+        )
+        client = GitHubAppClient(config)
+
+        with self.assertRaisesRegex(ValueError, "received OAuth/PAT token"):
+            client.create_app_jwt()
+
+    def test_create_app_jwt_raises_value_error_for_invalid_private_key(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="not-a-private-key",
+        )
+        client = GitHubAppClient(config)
+
+        with patch("orchestrator.tools.github_app.jwt.encode", side_effect=InvalidKeyError("invalid key")):
+            with self.assertRaisesRegex(ValueError, "Invalid GitHub App private key secret"):
+                client.create_app_jwt()
+
+    def test_create_app_jwt_invalid_key_error_from_jwt_encode(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        )
+        client = GitHubAppClient(config)
+        with patch("orchestrator.tools.github_app.jwt.encode", side_effect=InvalidKeyError("bad key")):
+            with self.assertRaisesRegex(ValueError, "expected PEM"):
+                client.create_app_jwt()
+
     def test_installation_token_is_cached_until_expiry(self) -> None:
         config = GitHubAppConfig(
             app_id="12345",
@@ -94,7 +168,7 @@ class GitHubAppClientTests(unittest.TestCase):
         ):
             result = client.create_pull_request(
                 repo_full_name="example/repo",
-                allowlist=["https://github.com/example/repo"],
+                github_repository="https://github.com/example/repo",
                 title="MAB-8: add github client",
                 head_branch="jira/MAB-8-add-github-client",
                 base_branch="main",
@@ -115,7 +189,7 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(payload["body"], "PR body")
         self.assertEqual(requests[1].get_header("Authorization"), "Bearer inst_token_2")
 
-    def test_create_pull_request_rejects_repo_outside_allowlist(self) -> None:
+    def test_create_pull_request_rejects_repo_outside_tenant_repository(self) -> None:
         config = GitHubAppConfig(
             app_id="12345",
             installation_id="999",
@@ -126,7 +200,7 @@ class GitHubAppClientTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             client.create_pull_request(
                 repo_full_name="example/repo",
-                allowlist=["https://github.com/example/other-repo"],
+                github_repository="https://github.com/example/other-repo",
                 title="MAB-11: enforce repo guardrails",
                 head_branch="jira/MAB-11-guardrails",
                 base_branch="main",
@@ -141,19 +215,268 @@ class GitHubAppClientTests(unittest.TestCase):
             "installation_id": "101",
         }
 
-        os.environ.pop("TEST_GH_APP_ID", None)
-        os.environ.pop("TEST_GH_PRIVATE_KEY", None)
-        with self.assertRaises(ValueError):
-            github_client_from_tenant_config(config)
+        tenant_secret_lookup = MagicMock(return_value=None)
+        platform_secret_lookup = MagicMock(return_value=None)
 
-        os.environ["TEST_GH_APP_ID"] = "777"
-        os.environ["TEST_GH_PRIVATE_KEY"] = "fake-private-key"
-        try:
-            client = github_client_from_tenant_config(config)
-            self.assertIsInstance(client, GitHubAppClient)
-        finally:
-            os.environ.pop("TEST_GH_APP_ID", None)
-            os.environ.pop("TEST_GH_PRIVATE_KEY", None)
+        with self.assertRaises(ValueError):
+            github_client_from_tenant_config(config, tenant_secret_lookup=tenant_secret_lookup, platform_secret_lookup=platform_secret_lookup)
+
+        tenant_secret_lookup = MagicMock(return_value="tenant-app-id")
+        platform_secret_lookup = MagicMock(return_value="fake-private-key")
+        client = github_client_from_tenant_config(config, tenant_secret_lookup=tenant_secret_lookup, platform_secret_lookup=platform_secret_lookup)
+        self.assertIsInstance(client, GitHubAppClient)
+
+    def test_github_client_from_tenant_config_resolves_tenant_and_platform_refs(self) -> None:
+        tenant_secret_lookup = MagicMock(side_effect=lambda secret_ref: "tenant-app-id" if secret_ref.endswith("GITHUB_APP_ID") else "tenant-private-key")
+        platform_secret_lookup = MagicMock(return_value="platform-mismatch")
+        config = {
+            "mode": "github_app",
+            "app_id_ref": "tenant/example/GITHUB_APP_ID",
+            "private_key_ref": "tenant/example/GITHUB_APP_PRIVATE_KEY",
+            "installation_id": "101",
+        }
+        client = github_client_from_tenant_config(
+            config,
+            tenant_secret_lookup=tenant_secret_lookup,
+            platform_secret_lookup=platform_secret_lookup,
+        )
+        self.assertEqual(client._config.app_id, "tenant-app-id")
+        self.assertEqual(client._config.private_key_pem, "tenant-private-key")
+        self.assertEqual(tenant_secret_lookup.call_count, 2)
+        self.assertEqual(platform_secret_lookup.call_count, 0)
+
+    def test_github_client_from_tenant_config_uses_platform_resolver_for_unscoped_refs(self) -> None:
+        tenant_secret_lookup = MagicMock(return_value=None)
+        platform_secret_lookup = MagicMock(side_effect=lambda secret_ref: "platform-app-id" if "APP_ID" in secret_ref else "platform-private-key")
+        config = {
+            "mode": "github_app",
+            "app_id_ref": "GITHUB_APP_ID",
+            "private_key_ref": "GITHUB_APP_PRIVATE_KEY",
+            "installation_id": "101",
+        }
+        client = github_client_from_tenant_config(
+            config,
+            tenant_secret_lookup=tenant_secret_lookup,
+            platform_secret_lookup=platform_secret_lookup,
+        )
+        self.assertEqual(client._config.app_id, "platform-app-id")
+        self.assertEqual(client._config.private_key_pem, "platform-private-key")
+        self.assertEqual(tenant_secret_lookup.call_count, 0)
+        self.assertEqual(platform_secret_lookup.call_count, 2)
+
+    def test_github_client_from_tenant_config_returns_error_if_scoped_lookup_missing(self) -> None:
+        tenant_secret_lookup = MagicMock(return_value=None)
+        platform_secret_lookup = MagicMock(return_value="platform-private-key")
+        config = {
+            "mode": "github_app",
+            "app_id_ref": "tenant/example/GITHUB_APP_ID",
+            "private_key_ref": "GITHUB_APP_PRIVATE_KEY",
+            "installation_id": "101",
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "Missing GitHub App ID secret for ref 'tenant/example/GITHUB_APP_ID'",
+        ):
+            github_client_from_tenant_config(
+                config,
+                tenant_secret_lookup=tenant_secret_lookup,
+                platform_secret_lookup=platform_secret_lookup,
+            )
+
+    def test_github_client_from_tenant_config_returns_error_if_platform_lookup_missing(self) -> None:
+        tenant_secret_lookup = MagicMock(return_value="tenant-private-key")
+        platform_secret_lookup = MagicMock(return_value=None)
+        config = {
+            "mode": "github_app",
+            "app_id_ref": "GITHUB_APP_ID",
+            "private_key_ref": "GITHUB_APP_PRIVATE_KEY",
+            "installation_id": "101",
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "Missing GitHub App ID secret for ref 'GITHUB_APP_ID'",
+        ):
+            github_client_from_tenant_config(
+                config,
+                tenant_secret_lookup=tenant_secret_lookup,
+                platform_secret_lookup=platform_secret_lookup,
+            )
+        self.assertEqual(tenant_secret_lookup.call_count, 0)
+        self.assertEqual(platform_secret_lookup.call_count, 1)
+
+    def test_github_client_from_tenant_config_requires_installation(self) -> None:
+        with self.assertRaisesRegex(ValueError, "required config fields"):
+            github_client_from_tenant_config(
+                {"installation_id": ""},
+                tenant_secret_lookup=lambda ref: None,
+                platform_secret_lookup=lambda ref: None,
+            )
+
+    def test_request_json_http_error_and_empty_body_paths(self) -> None:
+        config = GitHubAppConfig(app_id="1", installation_id="2", private_key_pem="pem")
+        client = GitHubAppClient(config)
+        error = HTTPError(
+            url="https://api.github.com",
+            code=500,
+            msg="boom",
+            hdrs=None,
+            fp=BytesIO(b'{"message":"failed"}'),
+        )
+        with patch("orchestrator.tools.github_app.urlopen", side_effect=error):
+            with self.assertRaisesRegex(GitHubApiError, "request failed"):
+                client._request_json(method="GET", path="/x", bearer_token="t")
+
+        class _EmptyResponse:
+            def read(self) -> bytes:
+                return b""
+
+            def __enter__(self):  # noqa: ANN204
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        with patch("orchestrator.tools.github_app.urlopen", return_value=_EmptyResponse()):
+            result = client._request_json(method="GET", path="/x", bearer_token="t")
+        self.assertEqual(result, {})
+
+    def test_get_installation_token_validates_required_fields(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+
+        with patch.object(client, "create_app_jwt", return_value="jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            return_value=_FakeHTTPResponse({"expires_at": "2099-01-01T00:00:00Z"}),
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "include token"):
+                client.get_installation_token()
+
+        with patch.object(client, "create_app_jwt", return_value="jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            return_value=_FakeHTTPResponse({"token": "abc"}),
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "include expires_at"):
+                client.get_installation_token()
+
+    def test_create_pull_request_validates_response_shape(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"html_url": "https://example/pull/1"}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "numeric PR number"):
+                client.create_pull_request(
+                    repo_full_name="example/repo",
+                    github_repository="https://github.com/example/repo",
+                    title="title",
+                    head_branch="h",
+                    base_branch="b",
+                    body="body",
+                )
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"number": 1}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "html_url"):
+                client.create_pull_request(
+                    repo_full_name="example/repo",
+                    github_repository="https://github.com/example/repo",
+                    title="title",
+                    head_branch="h",
+                    base_branch="b",
+                    body="body",
+                )
+
+    def test_get_pull_request_details_validates_fields(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"number": "x", "html_url": "https://example"}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "numeric PR number"):
+                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"number": 1, "head": {"sha": "abc"}}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "html_url"):
+                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={"number": 1, "html_url": "https://example", "head": {}}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "head SHA"):
+                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
+
+    def test_list_check_suites_validates_payload_and_sanitizes_conclusion(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "check_suites"):
+                client.list_check_suites(repo_full_name="example/repo", ref="abc")
+
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={
+                "check_suites": [
+                    {"name": "CI", "status": "queued", "conclusion": 123, "app": {"slug": "github-actions"}},
+                    {"name": "", "status": "queued", "app": {"slug": "github-actions"}},
+                ]
+            },
+        ):
+            suites = client.list_check_suites(repo_full_name="example/repo", ref="abc")
+        self.assertEqual(suites, [WorkflowCheckSuite(name="CI", status="queued", conclusion=None)])
+
+    def test_list_pull_request_files_validates_response_type_and_patch_type(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "was not a list"):
+                client.list_pull_request_files(repo_full_name="example/repo", pr_number=1)
+
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value=[{"filename": "a.txt", "patch": {"bad": True}}]
+        ):
+            files = client.list_pull_request_files(repo_full_name="example/repo", pr_number=1)
+        self.assertEqual(files, [PullRequestFileChange(filename="a.txt", patch=None)])
+
+    def test_list_installation_repositories_validates_response_and_defaults(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client, "_request_json", return_value={}
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "include repositories"):
+                client.list_installation_repositories()
+
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={
+                "repositories": [
+                    {
+                        "full_name": "example/repo",
+                        "html_url": "https://github.com/example/repo",
+                        "default_branch": "",
+                        "private": "no",
+                    }
+                ]
+            },
+        ):
+            repos = client.list_installation_repositories()
+        self.assertEqual(
+            repos,
+            [
+                InstallationRepository(
+                    full_name="example/repo",
+                    html_url="https://github.com/example/repo",
+                    default_branch="main",
+                    private=False,
+                )
+            ],
+        )
 
     def test_get_pull_request_details_extracts_head_sha(self) -> None:
         config = GitHubAppConfig(
@@ -172,6 +495,9 @@ class GitHubAppClientTests(unittest.TestCase):
                 "number": 12,
                 "html_url": "https://github.com/example/repo/pull/12",
                 "head": {"sha": "abc123sha"},
+                "base": {"ref": "main"},
+                "title": "MAB-12: Update",
+                "state": "open",
             },
         ]
 
@@ -190,6 +516,9 @@ class GitHubAppClientTests(unittest.TestCase):
                 number=12,
                 html_url="https://github.com/example/repo/pull/12",
                 head_sha="abc123sha",
+                title="MAB-12: Update",
+                state="open",
+                base_ref="main",
             ),
         )
 
@@ -393,3 +722,136 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(len(files), 101)
         self.assertEqual(files[0].filename, "src/file-0.ts")
         self.assertEqual(files[-1].filename, "README.md")
+
+    def test_list_open_pull_requests_parses_pr_summary(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_8",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            [
+                {
+                    "number": 123,
+                    "title": "Sync staging before release",
+                    "state": "open",
+                    "html_url": "https://github.com/example/repo/pull/123",
+                    "updated_at": "2026-02-12T17:00:00Z",
+                    "head": {"ref": "jira/MAB-118-agent-lifecycle-heartbeat"},
+                    "base": {"ref": "staging"},
+                }
+            ],
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            pull_requests = client.list_open_pull_requests(repo_full_name="example/repo", limit=10)
+
+        self.assertEqual(
+            pull_requests,
+            [
+                PullRequestSummary(
+                    number=123,
+                    title="Sync staging before release",
+                    state="open",
+                    html_url="https://github.com/example/repo/pull/123",
+                    head_ref="jira/MAB-118-agent-lifecycle-heartbeat",
+                    base_ref="staging",
+                    updated_at="2026-02-12T17:00:00Z",
+                )
+            ],
+        )
+
+    def test_list_open_pull_requests_rejects_non_list_payload(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_9",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            {"unexpected": True},
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "response was not a list"):
+                client.list_open_pull_requests(repo_full_name="example/repo")
+
+    def test_create_and_update_issue_comment(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            side_effect=[
+                {"id": 1001, "body": "first", "created_at": "2026-03-04T10:00:00Z", "user": {"login": "bot"}},
+                {"id": 1001, "body": "second", "created_at": "2026-03-04T10:01:00Z", "user": {"login": "bot"}},
+            ],
+        ) as request_json:
+            created = client.create_pull_request_issue_comment(
+                repo_full_name="example/repo",
+                pr_number=10,
+                body="first",
+            )
+            updated = client.update_issue_comment(
+                repo_full_name="example/repo",
+                comment_id=1001,
+                body="second",
+            )
+
+        self.assertEqual(created.comment_id, 1001)
+        self.assertEqual(created.body, "first")
+        self.assertEqual(updated.body, "second")
+        self.assertEqual(request_json.call_count, 2)
+
+    def test_submit_pull_request_review_and_merge(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            side_effect=[
+                {"id": 9001, "state": "COMMENTED"},
+                {"merged": True, "message": "Pull Request successfully merged", "sha": "abc123"},
+            ],
+        ) as request_json:
+            review = client.submit_pull_request_review(
+                repo_full_name="example/repo",
+                pr_number=10,
+                commit_id="abc123",
+                body="Codex inline findings",
+                comments=[PullRequestInlineCommentDraft(path="src/main.py", line=42, body="Fix this.")],
+            )
+            merge_result = client.merge_pull_request(
+                repo_full_name="example/repo",
+                pr_number=10,
+                head_sha="abc123",
+            )
+
+        self.assertEqual(review.review_id, 9001)
+        self.assertEqual(review.state, "COMMENTED")
+        self.assertTrue(merge_result.merged)
+        self.assertEqual(merge_result.sha, "abc123")
+        self.assertEqual(request_json.call_count, 2)

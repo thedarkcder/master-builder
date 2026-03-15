@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-import type { Credentials } from "@/lib/api";
+import { authenticateAdmin, verifyAdminCredentials, type AdminLoginInput, type Credentials } from "@/lib/api";
 import {
   AUTH_COOKIE_KEY,
   AUTH_COOKIE_TTL_SECONDS,
@@ -13,7 +13,7 @@ import {
 type AuthContextValue = {
   credentials: Credentials | null;
   ready: boolean;
-  login: (nextCredentials: Credentials) => void;
+  login: (nextCredentials: AdminLoginInput) => Promise<void>;
   logout: () => void;
 };
 
@@ -35,42 +35,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [credentials, setCredentials] = useState<Credentials | null>(null);
 
   useEffect(() => {
-    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!raw) {
-      setReady(true);
-      return;
-    }
+    let isMounted = true;
 
-    try {
-      const parsed = JSON.parse(raw) as Credentials;
-      if (parsed.apiBaseUrl && parsed.username && parsed.password) {
-        setCredentials(parsed);
-        writeSessionCookie(true);
-      } else {
+    async function hydrate(): Promise<void> {
+      const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+      if (!raw) {
+        if (isMounted) {
+          setReady(true);
+        }
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw) as Credentials;
+        if (parsed.accessToken) {
+          const sessionFromEnv: Credentials = {
+            apiBaseUrl: DEFAULT_API_BASE_URL,
+            accessToken: parsed.accessToken
+          };
+          await verifyAdminCredentials(sessionFromEnv);
+          if (!isMounted) {
+            return;
+          }
+          setCredentials(sessionFromEnv);
+          window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(sessionFromEnv));
+          writeSessionCookie(true);
+        } else {
+          window.localStorage.removeItem(AUTH_STORAGE_KEY);
+          writeSessionCookie(false);
+        }
+      } catch {
         window.localStorage.removeItem(AUTH_STORAGE_KEY);
         writeSessionCookie(false);
       }
-    } catch {
-      window.localStorage.removeItem(AUTH_STORAGE_KEY);
-      writeSessionCookie(false);
+
+      if (isMounted) {
+        setReady(true);
+      }
     }
 
-    setReady(true);
+    void hydrate();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
       credentials,
       ready,
-      login: (nextCredentials: Credentials) => {
-        const normalized: Credentials = {
-          apiBaseUrl: nextCredentials.apiBaseUrl.trim() || DEFAULT_API_BASE_URL,
+      login: async (nextCredentials: AdminLoginInput) => {
+        const session = await authenticateAdmin({
+          apiBaseUrl: DEFAULT_API_BASE_URL,
           username: nextCredentials.username.trim(),
           password: nextCredentials.password
-        };
-        window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(normalized));
+        });
+        await verifyAdminCredentials(session);
+        window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
         writeSessionCookie(true);
-        setCredentials(normalized);
+        setCredentials(session);
       },
       logout: () => {
         window.localStorage.removeItem(AUTH_STORAGE_KEY);

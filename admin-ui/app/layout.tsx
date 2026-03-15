@@ -1,18 +1,21 @@
 import type { Metadata } from "next";
+import { ThemeProvider } from "next-themes";
 
 import { AuthProvider } from "@/components/auth-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "master-builder admin-ui",
-  description: "Next.js admin dashboard for master-builder"
+  title: "Master Builder",
+  description: "AI orchestration platform admin dashboard"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen">
-        <AuthProvider>{children}</AuthProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <AuthProvider>{children}</AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

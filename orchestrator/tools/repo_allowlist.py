@@ -19,8 +19,8 @@ def normalize_repo_identifier(repo_url: str) -> str:
     return trimmed.lower().removesuffix(".git").rstrip("/")
 
 
-def enforce_repo_allowlist(repo_url: str, allowlist: list[str]) -> None:
-    allowed = {normalize_repo_identifier(item) for item in allowlist}
+def enforce_repo_match(repo_url: str, github_repository: str) -> None:
     normalized_repo = normalize_repo_identifier(repo_url)
-    if normalized_repo not in allowed:
-        raise PermissionError(f"Repo '{repo_url}' is not in tenant allowlist")
+    normalized_target = normalize_repo_identifier(github_repository)
+    if normalized_repo != normalized_target:
+        raise PermissionError(f"Repo '{repo_url}' does not match tenant github_repository")

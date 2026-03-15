@@ -21,68 +21,30 @@ export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@
 export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
 export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
-export ORCHESTRATOR_GITHUB_APP_SLUG=your-github-app-slug
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
-export ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION=0.1.1
+export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
+export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
+export ORCHESTRATOR_CODEX_STDERR_LOG_MODE=errors_only # all|errors_only|off
+export ORCHESTRATOR_CODEX_PERSIST_TURN_COMPLETED_USAGE=true
+export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
 PY
 )
 
-export SECRET_JIRA_CLIENT_ID=your-atlassian-oauth-client-id
-export SECRET_JIRA_CLIENT_SECRET=your-atlassian-oauth-client-secret
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_ID_REF=SECRET_JIRA_CLIENT_ID
-export ORCHESTRATOR_JIRA_OAUTH_CLIENT_SECRET_REF=SECRET_JIRA_CLIENT_SECRET
+# Store OAuth secret values via managed secrets API/UI, not shell exports:
+# - secret ref JIRA_OAUTH_CLIENT_ID -> Jira OAuth client id
+# - secret ref JIRA_OAUTH_CLIENT_SECRET -> Jira OAuth client secret
 
-# Optional extra Python index for pinned codex assets wheel
-# Example local package service (docker-compose):
-# export PIP_EXTRA_INDEX_URL=http://tenant:change-me@localhost:4401/simple/
 ```
 
-`ORCHESTRATOR_REQUIRED_CODEX_ASSETS_VERSION` enforces the codex assets version used for tenant init.
-If required assets are missing or the version mismatches, tenant create/update returns `503`.
-
-The orchestrator runtime loads codex assets from local `.codex` when present (including Docker image builds in this repo), and can fall back to the packaged `master-builder-codex-assets` dependency path where configured.
-
-## Codex assets package publishing
-Codex assets package publishing is automated by `.github/workflows/publish-codex-assets.yml`.
-
-How to cut a new codex assets package version:
-1. Update `.codex/codex_assets_manifest.json` and bump `assets_version`.
-2. Keep `.codex` content aligned with that version bump.
-3. Merge to `staging` or `main`.
-
-What happens automatically:
-- The workflow detects whether `assets_version` changed.
-- If changed, it builds a wheel/sdist directly from `.codex`.
-- Branch behavior:
-  - `staging` publishes beta/pre-release package versions (`<assets_version>b<run_number>`)
-  - `main` publishes stable package versions (`<assets_version>`)
-- It uploads artifacts to the workflow run and creates/updates a GitHub Release tag:
-  - `codex-assets-v<publish_version>`
-
-Optional direct package-index publish (same workflow run):
-- Set repo variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`
-- Set repo variable `CODEX_ASSETS_PUBLISH_REPOSITORY_URL` (must be repo-scoped for GitHub Packages, e.g. `https://pypi.pkg.github.com/<OWNER>/<REPO>/`)
-- Set repo variable `CODEX_ASSETS_PUBLISH_USERNAME`
-- Set repo secret `CODEX_ASSETS_PUBLISH_PASSWORD`
-
-Authentication:
-- Uses the explicit package-service credentials above (no fallback credentials).
-
-Same-repo quick setup:
-1. In GitHub repo settings, set Actions variable `CODEX_ASSETS_PUBLISH_TO_INDEX=true`.
-2. Merge a PR that bumps `.codex/codex_assets_manifest.json` `assets_version`.
-3. Confirm workflow `Publish Codex Assets` uploads release artifacts and publishes package index files.
-
-Version bump helpers:
-- Auto-bump patch version + sync pin:
-  - `python3 scripts/bump_codex_assets_version.py`
-- Validate bump + pin consistency:
-  - `scripts/validate_codex_assets_version.sh origin/staging`
-- CI enforces this on pull requests via job: `Codex assets version guard`.
+Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
+For containers, run one-time login and keep the shared Codex auth volume:
+```bash
+docker compose run --rm worker codex login --device-auth
+```
 
 ## Jira release-train automation (repo-level)
 This repo uses two release-train workflows:
@@ -110,6 +72,7 @@ Enable with:
 
 Detailed setup:
 - `docs/release-train-automation.md`
+- `docs/run-decision-engine.md` (where run queue/start decisions are made)
 
 ## Public API
 - `GET /health`
@@ -182,7 +145,7 @@ Start API:
 uvicorn orchestrator.api.main:app --reload --port 4000
 ```
 
-Start worker:
+Start worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
 ```bash
 python -m orchestrator worker
 ```
@@ -207,59 +170,130 @@ UI sections:
 - `/runs` for run observability
 
 ## Docker
-Build and run API + worker + Postgres + package service + optional admin UI + cloudflared:
+Build and run API + worker + Postgres + optional admin UI + tailscale sidecar:
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
 API is exposed on `http://localhost:4000`.
 Postgres is exposed on `localhost:4402`.
-Private package service is exposed on `http://localhost:4401`.
 Admin UI (if running locally) is exposed on `http://localhost:4100`.
+Tailscale sidecar uses `TS_AUTHKEY` from your environment (required for tailnet auth).
 
-Default local package service credentials:
-- username: `tenant`
-- password: `change-me`
+### Worker build toolchains
+The worker image now includes:
+- Java 17 JDK
+- Android SDK command-line tools (`platform-tools`, `build-tools;34.0.0`, `platforms;android-34`)
+- Node/npm, `ripgrep`, and Codex CLI
 
-Examples:
-- Install from local package service:
-  - `pip install --extra-index-url "http://tenant:change-me@localhost:4401/simple/" master-builder-codex-assets==0.1.1`
-- Upload with twine:
-  - `python -m twine upload --repository-url "http://localhost:4401/" -u tenant -p change-me dist/codex-assets/*`
-
-### Quick tunnel URL (trycloudflare)
-The stack includes `cloudflared` in Quick Tunnel mode, targeting the API service directly (`api:4000`).
-
-Watch logs and copy the generated public URL:
+Quick checks:
 ```bash
-docker compose logs -f cloudflared
+docker compose run --rm worker java -version
+docker compose run --rm worker sdkmanager --version
 ```
 
-Extract just the URL:
+Swift/iOS note:
+- `xcodebuild` (iOS/macOS builds) cannot run in this Linux worker container.
+- Use a macOS self-hosted runner/container host for iOS build/test steps.
+
+### Tailscale Funnel URL
+Start API and Tailscale sidecar:
 ```bash
-docker compose logs cloudflared | grep -Eo \"https://[-a-z0-9]+\\.trycloudflare\\.com\" | tail -n 1
+docker compose up -d api tailscale
 ```
 
-Use that URL for external callbacks (Jira/GitHub/Discord) during local testing.
+Connect and verify:
+```bash
+docker exec -it master-builder-tailscale tailscale status
+```
 
-If your admin UI is hosted on Vercel, use this tunnel URL for API callbacks only.
+Expose API publicly on Funnel:
+```bash
+docker exec -it master-builder-tailscale tailscale funnel --bg 4000
+docker exec -it master-builder-tailscale tailscale funnel status
+```
+
+Use the returned `https://<device>.<tailnet>.ts.net` URL for external callbacks (Jira/GitHub/Discord) during local testing.
+
+If your admin UI is hosted on Vercel, use this Funnel URL for API callbacks only.
 
 ## Tenant onboarding
 1. Create a tenant via `POST /api/admin/tenants`.
 2. Connect Jira from the wizard (`Connect Jira`) and select `project_keys`.
 3. Connect GitHub integration from the wizard (`Install GitHub App`) so `installation_id` is saved automatically.
-4. Configure allowed repositories under `repos.allowlist`.
+4. Set tenant repository under `repos.github_repository`.
 5. Validate connections:
    - `POST /api/admin/tenants/{tenant_id}/test-jira`
    - `POST /api/admin/tenants/{tenant_id}/test-github`
-6. Inspect repo bootstrap state:
+
+## Discord app setup
+Configure one Discord app (bot) and install it into your server. The same app can be reused across tenants.
+
+1. Create app + bot
+   - Open Discord Developer Portal: `https://discord.com/developers/applications`
+   - Create a new application
+   - Go to `Bot` and click `Add Bot`
+   - Copy and store bot token securely (do not commit it)
+
+2. Enable intents
+   - In `Bot` settings, enable:
+     - `SERVER MEMBERS INTENT`
+     - `MESSAGE CONTENT INTENT` (required for prefix commands like `!status`)
+
+3. Configure OAuth install
+   - In `OAuth2 > URL Generator`:
+     - Scopes: `bot` (and `applications.commands` if you later add slash commands)
+     - Bot permissions:
+       - `View Channels`
+       - `Send Messages`
+       - `Read Message History`
+       - `Manage Channels` (required for automatic tenant channel create/reuse)
+   - Open generated invite URL and install bot into your target Discord server
+
+4. Capture IDs (Developer Mode must be enabled in Discord client)
+   - Server ID (`guild_id`): right-click server -> `Copy Server ID`
+   - User ID for command allowlist: right-click user -> `Copy User ID`
+
+5. Configure backend globals
+   - Set `ORCHESTRATOR_DISCORD_GUILD_ID` to your server ID, or store it in Secrets Manager as `DISCORD_GUILD_ID`.
+   - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_NAME_TEMPLATE` (default `tenant-{tenant_id}`).
+   - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID` to place channels under a category.
+   - Store bot token in Secrets Manager under `DISCORD_BOT_TOKEN` (or change `ORCHESTRATOR_DISCORD_BOT_TOKEN_SECRET_REF`).
+   - Store Discord interactions public key in Secrets Manager under `DISCORD_INTERACTIONS_PUBLIC_KEY`.
+
+6. Configure Discord Interactions callback
+   - In Discord Developer Portal -> your app -> `General Information` copy `Public Key`.
+   - Save it as managed secret `DISCORD_INTERACTIONS_PUBLIC_KEY`.
+   - In Discord Developer Portal -> `Interactions Endpoint URL`, set:
+     - `https://<your-api-domain>/discord/interactions`
+
+7. Configure tenant in admin UI
+   - Enable Discord settings for tenant.
+   - Set `notify_events` checkboxes.
+   - Save tenant: backend auto-creates/reuses tenant channel and stores `channel_id`.
+
+Notes:
+- Server ID and channel ID are different values.
+- Native interactions endpoint is `POST /discord/interactions`.
+- Internal command API endpoint is `POST /discord/command/{tenant_id}`.
+- Slash commands are auto-synced to the configured guild on API startup (best-effort).
+- Command set includes `/ask` for board questions (`!ask` in internal command format).
+- Automatic channel create/reuse requires `Manage Channels` permission.
+8. Inspect repo bootstrap state:
    - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
 
 ## GitHub App setup
-The service uses one server-managed GitHub App for all tenants:
-- `ORCHESTRATOR_GITHUB_APP_SLUG`
-- `ORCHESTRATOR_GITHUB_APP_ID_REF` (defaults to `secret/app-id`)
-- `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF` (defaults to `secret/private-key`)
+GitHub App credentials resolve with scoped fallback in this order:
+1. `project/{tenant_id}/{project_id}/{ref}`
+2. `tenant/{tenant_id}/{ref}`
+3. `platform/{ref}`
+4. `{ref}` (legacy direct ref / env var)
+
+Default refs:
+- secret ref `GITHUB_APP_SLUG` (GitHub App slug)
+- `ORCHESTRATOR_GITHUB_APP_ID_REF` (defaults to `GITHUB_APP_ID`)
+- `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF` (defaults to `GITHUB_APP_PRIVATE_KEY`)
 
 Tenants only store GitHub mode + installation state (`installation_id`).
 
@@ -332,7 +366,12 @@ Bootstrap persistence is tracked per tenant/repo in `repo_bootstrap_states`.
 
 ## Tests
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
+pytest -q
+```
+
+## Coverage
+```bash
+pytest -q --cov=orchestrator --cov-report=term-missing --cov-report=xml
 ```
 
 ## Lint
