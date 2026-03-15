@@ -9,6 +9,7 @@ from unittest.mock import patch
 from orchestrator.core.worker.process_service import _emit_detailed_jira_feedback
 from orchestrator.core.worker.process_service import _emit_orchestrated_trace_logs
 from orchestrator.core.worker.process_service import _extract_capability_requeue_target
+from orchestrator.core.worker.process_service import process_next_queued_run
 from orchestrator.core.workflow.runner import PmPlan, WorkflowDiagnostics, WorkflowResult
 
 
@@ -120,6 +121,75 @@ class WorkerProcessServiceTests(unittest.TestCase):
             ),
         )
         self.assertIsNone(_extract_capability_requeue_target(workflow_result))
+
+    def test_process_next_queued_run_retries_start_claim_conflicts(self) -> None:
+        run = SimpleNamespace(run_id="run-1", tenant_id="tenant-1", issue_key="GP-122", project_id="project-1")
+        tenant = SimpleNamespace(tenant_id="tenant-1")
+        selection = SimpleNamespace(
+            run=run,
+            tenant=tenant,
+            terminal_run=None,
+            effective_policy={"max_concurrent_runs": 1},
+        )
+        selection_fn = MagicMock(return_value=selection)
+        start_run_fn = MagicMock(side_effect=[None, run])
+        decision_gate_run = SimpleNamespace(run_id="decision-gate-result")
+
+        result = process_next_queued_run(
+            session=MagicMock(),
+            runner=MagicMock(),
+            logger=MagicMock(),
+            settings_fn=lambda: SimpleNamespace(
+                worker_capabilities="linux",
+                worker_workspace_key="worker-a",
+                project_repo_checkout_base_dir="/tmp/workdirs",
+                admin_ui_base_url="http://localhost:4100",
+            ),
+            select_next_queued_run_fn=selection_fn,
+            apply_decision_gate_fn=lambda **_: (
+                decision_gate_run,
+                {"send_result": SimpleNamespace(sent=True), "stage_update": {"stage": "decision_gate_required"}},
+            ),
+            send_discord_message_fn=MagicMock(),
+            send_jira_message_fn=MagicMock(),
+            ask_reply_components_fn=MagicMock(),
+            resolve_project_for_run_fn=MagicMock(),
+            fail_missing_project_mapping_fn=MagicMock(),
+            block_archived_project_fn=MagicMock(),
+            ensure_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_checkout_fn=MagicMock(),
+            cleanup_run_workspaces_fn=MagicMock(),
+            start_run_fn=start_run_fn,
+            bind_run_project_fn=MagicMock(),
+            workflow_request_for_run_fn=MagicMock(),
+            fail_guardrail_violation_fn=MagicMock(),
+            tenant_jira_issue_url_fn=MagicMock(),
+            lock_acquired_update_fn=MagicMock(),
+            plan_posted_update_fn=MagicMock(),
+            pr_opened_update_fn=MagicMock(),
+            run_failed_update_fn=MagicMock(),
+            run_requeued_capability_update_fn=MagicMock(),
+            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            finalize_cancelled_run_fn=MagicMock(),
+            finalize_workflow_result_fn=MagicMock(),
+            requeue_workflow_result_for_capability_fn=MagicMock(),
+            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+            check_run_snapshot_freshness_fn=MagicMock(),
+            transition_issue_status_fn=MagicMock(),
+            emit_agent_event_fn=MagicMock(),
+            resolve_agent_id_fn=lambda: "worker-linux-local",
+            run_status_queued="queued",
+            run_status_running="running",
+            run_status_failed="failed",
+            run_status_blocked="blocked",
+            run_status_cancelled="cancelled",
+        )
+
+        self.assertIs(result, decision_gate_run)
+        self.assertEqual(start_run_fn.call_count, 2)
+        start_kwargs = start_run_fn.call_args.kwargs
+        self.assertEqual(start_kwargs["expected_status"], "queued")
+        self.assertEqual(start_kwargs["max_concurrent_runs"], 1)
 
 
 if __name__ == "__main__":

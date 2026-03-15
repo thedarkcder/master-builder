@@ -425,6 +425,7 @@ class CodexWorkflowAgents:
                 base_branch=request.base_branch or "",
                 integration_branch=request.integration_branch or "",
                 pr_target_branch=request.pr_target_branch or "",
+                allow_pr_creation="true" if request.allow_pr_creation else "false",
                 attempt=attempt,
                 plan_steps_json=json.dumps(plan.plan_steps),
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
