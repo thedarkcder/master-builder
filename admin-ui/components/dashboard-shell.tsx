@@ -19,7 +19,7 @@ import {
 
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useAuth } from "@/components/auth-provider";
-import { getRun, type TenantRecord, getTenant } from "@/lib/api";
+import { getRun, type TenantRecord, getTenant, listProjects, type ProjectRecord } from "@/lib/api";
 import {
   Sidebar,
   SidebarContent,
@@ -77,6 +77,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { credentials, ready, logout } = useAuth();
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
+  const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
   const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\//);
   const runMatch = pathname.match(/^\/runs\/([^/]+)$/);
   const [runTenantId, setRunTenantId] = useState<string | null>(null);
@@ -118,6 +119,33 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, [credentials, tenantId]);
 
+  useEffect(() => {
+    if (!credentials || !tenantId) {
+      setTenantProjects([]);
+      return;
+    }
+    let cancelled = false;
+    const decodedTenantId = decodeURIComponent(tenantId);
+    void listProjects(credentials, decodedTenantId)
+      .then((projects) => {
+        if (cancelled) {
+          return;
+        }
+        const active = projects
+          .filter((project) => !project.is_archived)
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setTenantProjects(active);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTenantProjects([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, tenantId]);
+
   if (!ready) {
     return <main className="p-8 text-sm text-muted-foreground">Loading session...</main>;
   }
@@ -157,12 +185,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           label: "Pipeline",
           icon: Activity,
           matchPrefix: `/tenants/${decodedTenantId}/runs`
-        },
-        {
-          href: `/tenants/${decodedTenantId}/projects`,
-          label: "Projects",
-          icon: FolderKanban,
-          matchPrefix: `/tenants/${decodedTenantId}/projects`
         },
         {
           href: `/tenants/${decodedTenantId}/analytics/token-overview`,
@@ -230,6 +252,32 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                         <Link href={item.href}>
                           <item.icon className="h-4 w-4 flex-shrink-0" />
                           {item.label}
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+
+              <SidebarMenu className="mt-3">
+                <SidebarMenuLabel>Projects</SidebarMenuLabel>
+                <SidebarMenuItem key={`projects-overview-${decodedTenantId}`}>
+                  <SidebarMenuButton asChild isActive={pathname === `/tenants/${decodedTenantId}/projects`}>
+                    <Link href={`/tenants/${decodedTenantId}/projects`}>
+                      <FolderKanban className="h-4 w-4 flex-shrink-0" />
+                      All projects
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {tenantProjects.map((project) => {
+                  const projectHref = `/tenants/${decodedTenantId}/projects/${encodeURIComponent(project.project_id)}`;
+                  const active = pathname === projectHref || pathname.startsWith(`${projectHref}/`);
+                  return (
+                    <SidebarMenuItem key={project.project_id}>
+                      <SidebarMenuButton asChild isActive={active}>
+                        <Link href={projectHref}>
+                          <FolderKanban className="h-4 w-4 flex-shrink-0" />
+                          {project.name}
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
