@@ -22,6 +22,7 @@ export type ReposConfig = {
 export type PolicyConfig = {
   allow_jira_transitions: boolean;
   allow_pr_creation: boolean;
+  allow_code_reviews: boolean;
   allow_pr_remediation: boolean;
   allow_label_mutations: boolean;
   allow_auto_merge: boolean;
@@ -95,6 +96,7 @@ export type ProjectPolicyOverrides = Partial<
     PolicyConfig,
     | "allow_jira_transitions"
     | "allow_pr_creation"
+    | "allow_code_reviews"
     | "allow_pr_remediation"
     | "allow_label_mutations"
     | "allow_auto_merge"

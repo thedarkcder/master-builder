@@ -17,6 +17,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             {
                 "allow_jira_transitions": True,
                 "allow_pr_creation": False,
+                "allow_code_reviews": True,
                 "allow_pr_remediation": False,
                 "allow_label_mutations": "nope",
                 "allow_auto_merge": True,
@@ -32,6 +33,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         )
         self.assertEqual(normalized["allow_jira_transitions"], True)
         self.assertEqual(normalized["allow_pr_creation"], False)
+        self.assertEqual(normalized["allow_code_reviews"], True)
         self.assertEqual(normalized["allow_pr_remediation"], False)
         self.assertEqual(normalized["allow_auto_merge"], True)
         self.assertNotIn("allow_label_mutations", normalized)
@@ -48,6 +50,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             tenant_policy={
                 "allow_jira_transitions": True,
                 "allow_pr_creation": True,
+                "allow_code_reviews": True,
                 "allow_pr_remediation": True,
                 "allow_label_mutations": True,
                 "allow_auto_merge": True,
@@ -61,6 +64,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             },
             project_overrides={
                 "allow_pr_creation": False,
+                "allow_code_reviews": False,
                 "allow_pr_remediation": False,
                 "allow_auto_merge": False,
                 "max_dev_test_review_loops": 999,
@@ -75,6 +79,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             default_codex_reasoning_effort="medium",
         )
         self.assertEqual(effective["allow_pr_creation"], False)
+        self.assertEqual(effective["allow_code_reviews"], False)
         self.assertEqual(effective["allow_pr_remediation"], False)
         self.assertEqual(effective["allow_auto_merge"], False)
         self.assertEqual(effective["max_dev_test_review_loops"], 10)

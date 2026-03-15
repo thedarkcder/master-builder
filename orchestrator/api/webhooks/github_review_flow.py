@@ -353,6 +353,9 @@ def process_pull_request_targets(
         "signals": signals,
         "review_comments": review_comments,
         "inline_reviews": inline_reviews,
+        "pr_review": {
+            "enabled": True,
+        },
         "auto_merge": {
             "enabled": allow_auto_merge,
             "results": merge_results,
