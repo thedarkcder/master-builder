@@ -57,6 +57,7 @@ type ProjectFormState = {
   codex_reasoning_effort: "low" | "medium" | "high" | null;
   allow_jira_transitions: OverrideToggleValue;
   allow_pr_creation: OverrideToggleValue;
+  allow_code_reviews: OverrideToggleValue;
   allow_pr_remediation: OverrideToggleValue;
   allow_label_mutations: OverrideToggleValue;
   allow_auto_merge: OverrideToggleValue;
@@ -158,6 +159,7 @@ function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState 
         : null,
     allow_jira_transitions: booleanOverrideToState(overrides.allow_jira_transitions),
     allow_pr_creation: booleanOverrideToState(overrides.allow_pr_creation),
+    allow_code_reviews: booleanOverrideToState(overrides.allow_code_reviews),
     allow_pr_remediation: booleanOverrideToState(overrides.allow_pr_remediation),
     allow_label_mutations: booleanOverrideToState(overrides.allow_label_mutations),
     allow_auto_merge: booleanOverrideToState(overrides.allow_auto_merge),
@@ -349,6 +351,7 @@ export function TenantProjectDetailsPage() {
     }
     const allowJiraTransitions = booleanStateToOverride(form.allow_jira_transitions);
     const allowPrCreation = booleanStateToOverride(form.allow_pr_creation);
+    const allowCodeReviews = booleanStateToOverride(form.allow_code_reviews);
     const allowPrRemediation = booleanStateToOverride(form.allow_pr_remediation);
     const allowLabelMutations = booleanStateToOverride(form.allow_label_mutations);
     const allowAutoMerge = booleanStateToOverride(form.allow_auto_merge);
@@ -365,6 +368,11 @@ export function TenantProjectDetailsPage() {
       delete nextPolicyOverrides.allow_pr_creation;
     } else {
       nextPolicyOverrides.allow_pr_creation = allowPrCreation;
+    }
+    if (allowCodeReviews === undefined) {
+      delete nextPolicyOverrides.allow_code_reviews;
+    } else {
+      nextPolicyOverrides.allow_code_reviews = allowCodeReviews;
     }
     if (allowPrRemediation === undefined) {
       delete nextPolicyOverrides.allow_pr_remediation;
@@ -715,6 +723,10 @@ export function TenantProjectDetailsPage() {
                         <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_creation)}</p>
                       </div>
                       <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code review</p>
+                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_code_reviews)}</p>
+                      </div>
+                      <div className="space-y-1">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation</p>
                         <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
                       </div>
@@ -1007,6 +1019,18 @@ export function TenantProjectDetailsPage() {
                         disabled={busy}
                       />
                       <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_pr_creation)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Code review
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_code_reviews}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_code_reviews: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_code_reviews)}</p>
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">

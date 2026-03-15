@@ -43,6 +43,7 @@ class ReposConfig(BaseModel):
 class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
+    allow_code_reviews: bool = True
     allow_pr_remediation: bool = True
     allow_label_mutations: bool = True
     allow_auto_merge: bool = False

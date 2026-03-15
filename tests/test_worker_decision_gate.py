@@ -241,3 +241,39 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
     assert meta is not None
     assert sent_discord_messages
     assert "https://jira.example.test/browse/YANA-46" in sent_discord_messages[0]
+
+
+def test_apply_decision_gate_passes_run_id_into_worker_decision() -> None:
+    session = _Session()
+    run = _run()
+    tenant = SimpleNamespace(tenant_id="tenant-1")
+    captured: dict[str, object] = {}
+
+    def _capture_evaluate_worker_decision(**kwargs):  # noqa: ANN003
+        captured["run_id"] = kwargs["run_id"]
+        return _worker_decision(outcome="ready_for_agent")
+
+    with patch(
+        "orchestrator.core.worker.decision_gate.evaluate_worker_decision",
+        side_effect=_capture_evaluate_worker_decision,
+    ), patch(
+        "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+        return_value=None,
+    ):
+        terminal, meta = apply_decision_gate(
+            session=session,
+            run=run,
+            tenant=tenant,
+            settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
+            tenant_jira_oauth_context_fn=lambda **_: None,
+            send_discord_message_fn=lambda **_: None,
+            send_jira_message_fn=lambda **_: None,
+            ask_reply_components_fn=lambda: [],
+            emit_agent_event_fn=lambda **_: None,
+            blocked_status="blocked",
+            failed_status="failed",
+        )
+
+    assert terminal is None
+    assert meta is None
+    assert captured["run_id"] == "run-1"

@@ -293,6 +293,7 @@ export function PolicySection({
         <div className="grid gap-2 md:grid-cols-2">
           <Toggle label="Allow Jira transitions" checked={policy.allow_jira_transitions} onChange={(next) => onPolicyChange({ ...policy, allow_jira_transitions: next })} />
           <Toggle label="Allow PR creation" checked={policy.allow_pr_creation} onChange={(next) => onPolicyChange({ ...policy, allow_pr_creation: next })} />
+          <Toggle label="Allow code review" checked={policy.allow_code_reviews} onChange={(next) => onPolicyChange({ ...policy, allow_code_reviews: next })} />
           <Toggle label="Allow PR remediation" checked={policy.allow_pr_remediation} onChange={(next) => onPolicyChange({ ...policy, allow_pr_remediation: next })} />
           <Toggle label="Allow label mutations" checked={policy.allow_label_mutations} onChange={(next) => onPolicyChange({ ...policy, allow_label_mutations: next })} />
           <Toggle label="Require AGENTS.md" checked={policy.require_agents_md} onChange={(next) => onPolicyChange({ ...policy, require_agents_md: next })} />
