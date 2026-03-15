@@ -53,6 +53,8 @@ def format_sticky_review_comment(
     *,
     signal: ReviewerSignal,
     findings_result: PrReviewFindingsResult,
+    repo_full_name: str,
+    pr_number: int,
     event: str,
     action: str | None,
     marker: str,
@@ -73,6 +75,15 @@ def format_sticky_review_comment(
             if finding.path and finding.line:
                 location = f" ({finding.path}:{finding.line})"
             lines.append(f"- [{finding.severity}] {finding.message}{location}")
+    compose_url = f"https://github.com/{repo_full_name}/pull/{pr_number}#issuecomment-new"
+    lines.extend(
+        [
+            "",
+            "### Queue Fix",
+            "Comment on this PR with `@mb fix <comment-url>` or `/mb fix <comment-url>`.",
+            f"[Open comment box]({compose_url})",
+        ]
+    )
     lines.extend(["", marker])
     return "\n".join(lines).strip()
 
@@ -133,6 +144,8 @@ def upsert_sticky_review_comment(
     body = format_sticky_review_comment(
         signal=signal,
         findings_result=findings_result,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
         event=event,
         action=action,
         marker=marker,

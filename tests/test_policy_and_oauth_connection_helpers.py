@@ -19,6 +19,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "allow_pr_creation": False,
                 "allow_code_reviews": True,
                 "allow_pr_remediation": False,
+                "allow_manual_pr_fix_requests": False,
                 "allow_label_mutations": "nope",
                 "allow_auto_merge": True,
                 "max_dev_test_review_loops": 0,
@@ -35,6 +36,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(normalized["allow_pr_creation"], False)
         self.assertEqual(normalized["allow_code_reviews"], True)
         self.assertEqual(normalized["allow_pr_remediation"], False)
+        self.assertEqual(normalized["allow_manual_pr_fix_requests"], False)
         self.assertEqual(normalized["allow_auto_merge"], True)
         self.assertNotIn("allow_label_mutations", normalized)
         self.assertEqual(normalized["max_dev_test_review_loops"], 1)
@@ -52,6 +54,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "allow_pr_creation": True,
                 "allow_code_reviews": True,
                 "allow_pr_remediation": True,
+                "allow_manual_pr_fix_requests": True,
                 "allow_label_mutations": True,
                 "allow_auto_merge": True,
                 "max_dev_test_review_loops": 10,
@@ -66,6 +69,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "allow_pr_creation": False,
                 "allow_code_reviews": False,
                 "allow_pr_remediation": False,
+                "allow_manual_pr_fix_requests": False,
                 "allow_auto_merge": False,
                 "max_dev_test_review_loops": 999,
                 "max_pr_auto_remediation_loops": 999,
@@ -81,6 +85,7 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(effective["allow_pr_creation"], False)
         self.assertEqual(effective["allow_code_reviews"], False)
         self.assertEqual(effective["allow_pr_remediation"], False)
+        self.assertEqual(effective["allow_manual_pr_fix_requests"], False)
         self.assertEqual(effective["allow_auto_merge"], False)
         self.assertEqual(effective["max_dev_test_review_loops"], 10)
         self.assertEqual(effective["max_pr_auto_remediation_loops"], 5)

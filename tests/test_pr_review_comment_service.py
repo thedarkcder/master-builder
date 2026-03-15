@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from orchestrator.api.webhooks.pr_review_comment_service import (
+    format_sticky_review_comment,
     publish_inline_review_batch,
     upsert_sticky_remediation_comment,
     upsert_sticky_review_comment,
@@ -67,6 +68,21 @@ def test_upsert_sticky_review_comment_creates_and_updates() -> None:
     )
     assert updated.action == "updated"
     assert updated.comment_id == 101
+
+
+def test_format_sticky_review_comment_includes_manual_fix_quick_action() -> None:
+    body = format_sticky_review_comment(
+        signal=_signal(ready=False),
+        findings_result=PrReviewFindingsResult(state="blocked", summary="needs fixes", findings=()),
+        repo_full_name="org/repo",
+        pr_number=10,
+        event="pull_request_review",
+        action="submitted",
+        marker="<!-- marker -->",
+    )
+    assert "@mb fix <comment-url>" in body
+    assert "/mb fix <comment-url>" in body
+    assert "https://github.com/org/repo/pull/10#issuecomment-new" in body
 
 
 def test_publish_inline_review_batch_filters_to_valid_locations() -> None:

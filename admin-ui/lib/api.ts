@@ -24,6 +24,7 @@ export type PolicyConfig = {
   allow_pr_creation: boolean;
   allow_code_reviews: boolean;
   allow_pr_remediation: boolean;
+  allow_manual_pr_fix_requests: boolean;
   allow_label_mutations: boolean;
   allow_auto_merge: boolean;
   max_runtime_minutes: number;
@@ -98,6 +99,7 @@ export type ProjectPolicyOverrides = Partial<
     | "allow_pr_creation"
     | "allow_code_reviews"
     | "allow_pr_remediation"
+    | "allow_manual_pr_fix_requests"
     | "allow_label_mutations"
     | "allow_auto_merge"
     | "max_dev_test_review_loops"
