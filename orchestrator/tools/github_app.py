@@ -485,6 +485,27 @@ class GitHubAppClient:
             )
         return parsed
 
+    def find_open_pull_request(
+        self,
+        *,
+        repo_full_name: str,
+        head_branch: str,
+        base_branch: str | None = None,
+        limit: int = 100,
+    ) -> PullRequestSummary | None:
+        normalized_head = str(head_branch or "").strip()
+        normalized_base = str(base_branch or "").strip()
+        if not normalized_head:
+            return None
+        pull_requests = self.list_open_pull_requests(repo_full_name=repo_full_name, limit=limit)
+        for pull_request in pull_requests:
+            if pull_request.head_ref != normalized_head:
+                continue
+            if normalized_base and pull_request.base_ref != normalized_base:
+                continue
+            return pull_request
+        return None
+
     def list_installation_repositories(self) -> list[InstallationRepository]:
         installation_token = self.get_installation_token()
         response = self._request_json(
