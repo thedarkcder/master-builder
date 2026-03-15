@@ -60,6 +60,9 @@ async def ingest_github_webhook_event(
     allow_code_reviews = bool(effective_policy.get("allow_code_reviews", True))
     allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
     allow_pr_remediation = allow_code_reviews and bool(effective_policy.get("allow_pr_remediation", True))
+    allow_manual_pr_fix_requests = allow_pr_remediation and bool(
+        effective_policy.get("allow_manual_pr_fix_requests", True)
+    )
     max_pr_auto_remediation_loops = _coerce_positive_int(
         effective_policy.get("max_pr_auto_remediation_loops"),
         default=5,
@@ -91,6 +94,7 @@ async def ingest_github_webhook_event(
                 },
                 "pr_remediation": {
                     "enabled": False,
+                    "manual_fix_requests_enabled": False,
                     "reason": "code_reviews_disabled",
                 },
                 "remediation": [],
@@ -139,6 +143,7 @@ async def ingest_github_webhook_event(
         reviewer_gate=reviewer_gate,
         allow_auto_merge=allow_auto_merge,
         allow_pr_remediation=allow_pr_remediation,
+        allow_manual_pr_fix_requests=allow_manual_pr_fix_requests,
         max_pr_auto_remediation_loops=max_pr_auto_remediation_loops,
         session=session,
         settings=settings,

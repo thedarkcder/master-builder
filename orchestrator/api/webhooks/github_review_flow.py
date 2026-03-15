@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from orchestrator.api.webhooks.pr_remediation_policy import parse_manual_pr_fix_request
+
 
 def process_pull_request_targets(
     *,
@@ -15,6 +17,7 @@ def process_pull_request_targets(
     reviewer_gate,
     allow_auto_merge: bool,
     allow_pr_remediation: bool,
+    allow_manual_pr_fix_requests: bool,
     max_pr_auto_remediation_loops: int,
     session,
     settings,  # noqa: ANN001
@@ -34,6 +37,8 @@ def process_pull_request_targets(
     review_comments: list[dict[str, object]] = []
     inline_reviews: list[dict[str, object]] = []
     merge_results: list[dict[str, object]] = []
+    manual_fix_request = parse_manual_pr_fix_request(payload=payload)
+    manual_fix_requested = manual_fix_request is not None
     for pr_number, _review_summary_present in pr_targets:
         try:
             signal = reviewer_gate.evaluate_pr(
@@ -245,7 +250,7 @@ def process_pull_request_targets(
             )
         try:
             remediation_result = None
-            if not green and allow_pr_remediation:
+            if ((not green and allow_pr_remediation) or (manual_fix_requested and allow_manual_pr_fix_requests)):
                 remediation_result = enqueue_pr_remediation_if_needed_fn(
                     session=session,
                     tenant=tenant,
@@ -275,6 +280,18 @@ def process_pull_request_targets(
                 }
             )
             continue
+        if manual_fix_requested and allow_pr_remediation and not allow_manual_pr_fix_requests:
+            remediation.append(
+                {
+                    "pr_number": pr_number,
+                    "enqueued": False,
+                    "reason": "manual_pr_fix_requests_disabled",
+                    "run_id": None,
+                    "issue_key": None,
+                    "issue_url": None,
+                    "issue_created": False,
+                }
+            )
         if not green and not allow_pr_remediation:
             remediation.append(
                 {
@@ -362,6 +379,7 @@ def process_pull_request_targets(
         },
         "pr_remediation": {
             "enabled": allow_pr_remediation,
+            "manual_fix_requests_enabled": allow_manual_pr_fix_requests,
         },
         "remediation": remediation,
         "remediation_comments": remediation_comments,

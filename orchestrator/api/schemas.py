@@ -45,6 +45,7 @@ class PolicyConfig(BaseModel):
     allow_pr_creation: bool = True
     allow_code_reviews: bool = True
     allow_pr_remediation: bool = True
+    allow_manual_pr_fix_requests: bool = True
     allow_label_mutations: bool = True
     allow_auto_merge: bool = False
     max_dev_test_review_loops: int = 2

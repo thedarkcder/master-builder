@@ -127,6 +127,7 @@ class AdminApiTests(unittest.TestCase):
                 "allow_pr_creation": True,
                 "allow_code_reviews": True,
                 "allow_pr_remediation": True,
+                "allow_manual_pr_fix_requests": True,
                 "allow_label_mutations": True,
                 "max_runtime_minutes": 30,
                 "max_dev_test_review_loops": 2,
@@ -658,6 +659,7 @@ class AdminApiTests(unittest.TestCase):
                 "policy_overrides": {
                     "allow_code_reviews": False,
                     "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": False,
                     "allow_auto_merge": False,
                     "max_pr_auto_remediation_loops": 3,
                     "knowledge_base_enabled": False,
@@ -680,6 +682,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.3-codex-spark")
         self.assertFalse(update_project.json()["policy_overrides"]["allow_code_reviews"])
         self.assertFalse(update_project.json()["policy_overrides"]["allow_pr_remediation"])
+        self.assertFalse(update_project.json()["policy_overrides"]["allow_manual_pr_fix_requests"])
         self.assertEqual(update_project.json()["policy_overrides"]["max_pr_auto_remediation_loops"], 3)
         self.assertFalse(update_project.json()["policy_overrides"]["knowledge_base_enabled"])
         self.assertEqual(update_project.json()["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
@@ -689,6 +692,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.json()["effective_policy"]["codex_reasoning_effort"], "high")
         self.assertFalse(update_project.json()["effective_policy"]["allow_code_reviews"])
         self.assertFalse(update_project.json()["effective_policy"]["allow_pr_remediation"])
+        self.assertFalse(update_project.json()["effective_policy"]["allow_manual_pr_fix_requests"])
         self.assertFalse(update_project.json()["effective_policy"]["allow_auto_merge"])
         self.assertEqual(update_project.json()["effective_policy"]["max_pr_auto_remediation_loops"], 3)
         self.assertFalse(update_project.json()["effective_policy"]["knowledge_base_enabled"])
