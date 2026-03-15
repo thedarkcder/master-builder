@@ -71,10 +71,11 @@ class PrRemediationServiceTests(unittest.TestCase):
 
     def test_reuses_existing_issue_key_for_same_pr_head(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()
+        queued_run = SimpleNamespace(run_id="run-11", plan={}, branch=None, pr_url=None)
         enqueue_result = EnqueueRunResult(
             enqueued=True,
             reason=None,
-            run=SimpleNamespace(run_id="run-11", plan={}),
+            run=queued_run,
         )
 
         with (
@@ -107,6 +108,8 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.enqueued)
         self.assertEqual(result.issue_key, "GP-122")
         self.assertFalse(result.issue_created)
+        self.assertEqual(queued_run.branch, "feature/no-key")
+        self.assertEqual(queued_run.pr_url, "https://github.com/org/repo/pull/11")
         create_bug_mock.assert_not_called()
         enqueue_run_mock.assert_called_once()
         self.assertEqual(enqueue_run_mock.call_args.kwargs["issue_key"], "GP-122")
@@ -226,30 +229,53 @@ class PrRemediationServiceTests(unittest.TestCase):
         session.commit.assert_not_called()
         session.refresh.assert_not_called()
 
-    def test_manual_fix_command_without_url_is_rejected(self) -> None:
+    def test_manual_fix_command_without_url_infers_trigger_comment_url(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()
+        github_client.list_pull_request_issue_comments.return_value = [
+            SimpleNamespace(
+                comment_id=501,
+                body="@mb fix",
+                created_at="2026-03-15T12:00:00Z",
+                user_login="owner-a",
+            )
+        ]
         payload = {
             **payload,
             "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
             "comment": {"id": 501, "body": "@mb fix", "html_url": "https://github.com/org/repo/pull/11#issuecomment-501"},
         }
-
-        result = enqueue_pr_remediation_if_needed(
-            session=session,
-            tenant=tenant,
-            project=project,
-            github_client=github_client,
-            event="issue_comment",
-            action="created",
-            payload=payload,
-            pr_number=11,
-            repo_full_name="org/repo",
-            settings=settings,
+        enqueue_result = EnqueueRunResult(
+            enqueued=True,
+            reason=None,
+            run=SimpleNamespace(run_id="run-manual-inferred", plan={}),
         )
 
+        with (
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
+                return_value="GP-122",
+            ),
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
+                return_value=enqueue_result,
+            ),
+        ):
+            result = enqueue_pr_remediation_if_needed(
+                session=session,
+                tenant=tenant,
+                project=project,
+                github_client=github_client,
+                event="issue_comment",
+                action="created",
+                payload=payload,
+                pr_number=11,
+                repo_full_name="org/repo",
+                settings=settings,
+            )
+
         self.assertTrue(result.triggered)
-        self.assertFalse(result.enqueued)
-        self.assertEqual(result.reason, "manual_fix_missing_comment_url")
+        self.assertTrue(result.enqueued)
+        self.assertIsNone(result.reason)
 
     def test_manual_fix_command_enqueues_with_requested_comment(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()
