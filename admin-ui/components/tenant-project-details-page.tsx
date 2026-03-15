@@ -59,6 +59,7 @@ type ProjectFormState = {
   allow_pr_creation: OverrideToggleValue;
   allow_code_reviews: OverrideToggleValue;
   allow_pr_remediation: OverrideToggleValue;
+  allow_manual_pr_fix_requests: OverrideToggleValue;
   allow_label_mutations: OverrideToggleValue;
   allow_auto_merge: OverrideToggleValue;
   require_agents_md: RequireAgentsValue;
@@ -161,6 +162,7 @@ function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState 
     allow_pr_creation: booleanOverrideToState(overrides.allow_pr_creation),
     allow_code_reviews: booleanOverrideToState(overrides.allow_code_reviews),
     allow_pr_remediation: booleanOverrideToState(overrides.allow_pr_remediation),
+    allow_manual_pr_fix_requests: booleanOverrideToState(overrides.allow_manual_pr_fix_requests),
     allow_label_mutations: booleanOverrideToState(overrides.allow_label_mutations),
     allow_auto_merge: booleanOverrideToState(overrides.allow_auto_merge),
     require_agents_md: requireAgentsOverrideToState(overrides.require_agents_md),
@@ -353,6 +355,7 @@ export function TenantProjectDetailsPage() {
     const allowPrCreation = booleanStateToOverride(form.allow_pr_creation);
     const allowCodeReviews = booleanStateToOverride(form.allow_code_reviews);
     const allowPrRemediation = booleanStateToOverride(form.allow_pr_remediation);
+    const allowManualPrFixRequests = booleanStateToOverride(form.allow_manual_pr_fix_requests);
     const allowLabelMutations = booleanStateToOverride(form.allow_label_mutations);
     const allowAutoMerge = booleanStateToOverride(form.allow_auto_merge);
     const knowledgeBaseEnabled = booleanStateToOverride(form.knowledge_base_enabled);
@@ -378,6 +381,11 @@ export function TenantProjectDetailsPage() {
       delete nextPolicyOverrides.allow_pr_remediation;
     } else {
       nextPolicyOverrides.allow_pr_remediation = allowPrRemediation;
+    }
+    if (allowManualPrFixRequests === undefined) {
+      delete nextPolicyOverrides.allow_manual_pr_fix_requests;
+    } else {
+      nextPolicyOverrides.allow_manual_pr_fix_requests = allowManualPrFixRequests;
     }
     if (allowLabelMutations === undefined) {
       delete nextPolicyOverrides.allow_label_mutations;
@@ -731,6 +739,12 @@ export function TenantProjectDetailsPage() {
                         <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
                       </div>
                       <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Manual PR fix requests</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {formatBoolean(project.effective_policy.allow_manual_pr_fix_requests)}
+                        </p>
+                      </div>
+                      <div className="space-y-1">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Auto merge</p>
                         <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_auto_merge)}</p>
                       </div>
@@ -1043,6 +1057,20 @@ export function TenantProjectDetailsPage() {
                         disabled={busy}
                       />
                       <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Manual PR fix requests
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_manual_pr_fix_requests}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_manual_pr_fix_requests: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Effective: {formatBoolean(project.effective_policy.allow_manual_pr_fix_requests)}
+                      </p>
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">

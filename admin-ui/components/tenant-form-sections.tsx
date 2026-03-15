@@ -295,6 +295,11 @@ export function PolicySection({
           <Toggle label="Allow PR creation" checked={policy.allow_pr_creation} onChange={(next) => onPolicyChange({ ...policy, allow_pr_creation: next })} />
           <Toggle label="Allow code review" checked={policy.allow_code_reviews} onChange={(next) => onPolicyChange({ ...policy, allow_code_reviews: next })} />
           <Toggle label="Allow PR remediation" checked={policy.allow_pr_remediation} onChange={(next) => onPolicyChange({ ...policy, allow_pr_remediation: next })} />
+          <Toggle
+            label="Allow manual PR fix requests"
+            checked={policy.allow_manual_pr_fix_requests}
+            onChange={(next) => onPolicyChange({ ...policy, allow_manual_pr_fix_requests: next })}
+          />
           <Toggle label="Allow label mutations" checked={policy.allow_label_mutations} onChange={(next) => onPolicyChange({ ...policy, allow_label_mutations: next })} />
           <Toggle label="Require AGENTS.md" checked={policy.require_agents_md} onChange={(next) => onPolicyChange({ ...policy, require_agents_md: next })} />
         </div>
