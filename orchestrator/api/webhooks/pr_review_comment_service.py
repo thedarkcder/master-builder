@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 
 from orchestrator.core.pr_review_findings import PrReviewFindingsResult, ReviewFinding
 from orchestrator.core.reviewer import ReviewerSignal
@@ -9,6 +11,9 @@ from orchestrator.tools.github_app import (
     PullRequestInlineCommentDraft,
     PullRequestReviewSubmissionResult,
 )
+
+_INLINE_REVIEW_MARKER_PREFIX = "<!-- codex:inline-review:"
+_INLINE_REVIEW_MARKER_SUFFIX = " -->"
 
 
 @dataclass(frozen=True)
@@ -237,11 +242,21 @@ def publish_inline_review_batch(
     if not drafts:
         return InlineReviewPublishResult(submitted=False, review_id=None, inline_count=0)
 
+    signature = _build_inline_review_signature(head_sha=head_sha, drafts=drafts)
+    if _inline_review_signature_exists(
+        github_client=github_client,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        signature=signature,
+    ):
+        return InlineReviewPublishResult(submitted=False, review_id=None, inline_count=0)
+
+    marker = _build_inline_review_marker(signature=signature)
     review_result: PullRequestReviewSubmissionResult = github_client.submit_pull_request_review(
         repo_full_name=repo_full_name,
         pr_number=pr_number,
         commit_id=head_sha,
-        body="Codex inline review findings.",
+        body=f"Codex inline review findings.\n\n{marker}",
         comments=drafts,
     )
     return InlineReviewPublishResult(
@@ -249,3 +264,66 @@ def publish_inline_review_batch(
         review_id=review_result.review_id,
         inline_count=len(drafts),
     )
+
+
+def _build_inline_review_signature(
+    *,
+    head_sha: str,
+    drafts: list[PullRequestInlineCommentDraft],
+) -> str:
+    normalized_entries = sorted(
+        (draft.path, int(draft.line), draft.body.strip())
+        for draft in drafts
+    )
+    payload = {
+        "head_sha": str(head_sha or "").strip(),
+        "comments": normalized_entries,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _build_inline_review_marker(*, signature: str) -> str:
+    return f"{_INLINE_REVIEW_MARKER_PREFIX}{signature}{_INLINE_REVIEW_MARKER_SUFFIX}"
+
+
+def _extract_inline_review_signatures(*, review_body: str) -> set[str]:
+    body = str(review_body or "")
+    signatures: set[str] = set()
+    cursor = 0
+    while True:
+        start = body.find(_INLINE_REVIEW_MARKER_PREFIX, cursor)
+        if start == -1:
+            break
+        value_start = start + len(_INLINE_REVIEW_MARKER_PREFIX)
+        end = body.find(_INLINE_REVIEW_MARKER_SUFFIX, value_start)
+        if end == -1:
+            break
+        signature = body[value_start:end].strip()
+        if signature:
+            signatures.add(signature)
+        cursor = end + len(_INLINE_REVIEW_MARKER_SUFFIX)
+    return signatures
+
+
+def _inline_review_signature_exists(
+    *,
+    github_client: GitHubAppClient,
+    repo_full_name: str,
+    pr_number: int,
+    signature: str,
+) -> bool:
+    list_reviews = getattr(github_client, "list_pull_request_reviews", None)
+    if not callable(list_reviews):
+        return False
+    try:
+        reviews = list_reviews(repo_full_name=repo_full_name, pr_number=pr_number)
+    except Exception:  # noqa: BLE001
+        return False
+    for review in reviews:
+        body = getattr(review, "body", None)
+        if not isinstance(body, str) or not body.strip():
+            continue
+        if signature in _extract_inline_review_signatures(review_body=body):
+            return True
+    return False
