@@ -1,204 +1,138 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from urllib.error import HTTPError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
+from orchestrator.tools.jira_oauth_attachment_service import JiraOAuthAttachmentService
+from orchestrator.tools.jira_oauth_callback_flow import JiraOAuthCallbackFlow
+from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
+from orchestrator.tools.jira_oauth_issue_service import JiraOAuthIssueService, _to_adf_description
+from orchestrator.tools.jira_oauth_models import (
+    JiraIssueAttachment,
+    JiraIssueBulkCreateResult,
+    JiraIssueComment,
+    JiraIssueCreateInput,
+    JiraIssueCreateResult,
+    JiraIssueDetail,
+    JiraIssuePreview,
+    JiraOAuthClientConfig,
+    JiraOAuthError,
+    JiraOAuthResource,
+    JiraOAuthTokenSet,
+    JiraProject,
+)
+from orchestrator.tools.jira_oauth_webhook_manager import JiraOAuthWebhookManager
 
-class JiraOAuthError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class JiraOAuthTokenSet:
-    access_token: str
-    refresh_token: str
-    expires_at: datetime
-    scopes: list[str]
-
-
-@dataclass(frozen=True)
-class JiraOAuthResource:
-    cloud_id: str
-    site_url: str
-    name: str
-
-
-@dataclass(frozen=True)
-class JiraProject:
-    key: str
-    name: str
-
-
-@dataclass(frozen=True)
-class JiraIssuePreview:
-    key: str
-    summary: str
-    status: str
-
-
-@dataclass(frozen=True)
-class JiraOAuthClientConfig:
-    client_id: str
-    client_secret: str
-    redirect_uri: str
-    scopes: tuple[str, ...] = ("read:jira-work", "write:jira-work")
+__all__ = [
+    "JiraOAuthClient",
+    "JiraOAuthClientConfig",
+    "JiraOAuthError",
+    "JiraOAuthResource",
+    "JiraOAuthTokenSet",
+    "JiraProject",
+    "JiraIssuePreview",
+    "JiraIssueDetail",
+    "JiraIssueComment",
+    "JiraIssueAttachment",
+    "JiraIssueCreateInput",
+    "JiraIssueCreateResult",
+    "JiraIssueBulkCreateResult",
+    "_to_adf_description",
+]
 
 
 class JiraOAuthClient:
-    def __init__(self, config: JiraOAuthClientConfig):
-        self._config = config
+    """Jira OAuth and Jira API client operations."""
 
-    def build_authorize_url(self, *, state: str) -> str:
-        query = urlencode(
-            {
-                "audience": "api.atlassian.com",
-                "client_id": self._config.client_id,
-                "scope": " ".join(self._config.scopes),
-                "redirect_uri": self._config.redirect_uri,
-                "state": state,
-                "response_type": "code",
-                "prompt": "consent",
-            }
+    def __init__(self, config: JiraOAuthClientConfig):
+        self._http = JiraOAuthHttpClient(opener=lambda request, timeout=30: urlopen(request, timeout=timeout))
+        self._callback_flow = JiraOAuthCallbackFlow(
+            config=config,
+            post_json=lambda url, payload: self._post_json(url, payload),
+            get_json=lambda url, access_token: self._get_json(url, access_token=access_token),
         )
-        return f"https://auth.atlassian.com/authorize?{query}"
+        self._issue_service = JiraOAuthIssueService(
+            get_json=lambda *, url, access_token: self._get_json(url, access_token=access_token),
+            request_json=lambda *, method, url, access_token, payload=None: self._request_json(
+                method=method,
+                url=url,
+                access_token=access_token,
+                payload=payload,
+            ),
+        )
+        self._webhook_manager = JiraOAuthWebhookManager(
+            request_json=lambda method, url, access_token, payload: self._request_json(
+                method=method,
+                url=url,
+                access_token=access_token,
+                payload=payload,
+            )
+        )
+        self._attachment_service = JiraOAuthAttachmentService(
+            post_multipart=lambda *, url, access_token, filename, content, content_type="application/octet-stream": self._post_multipart(
+                url=url,
+                access_token=access_token,
+                filename=filename,
+                content=content,
+                content_type=content_type,
+            ),
+            get_bytes=lambda *, url, access_token: self._get_bytes(url=url, access_token=access_token),
+        )
 
     def _post_json(self, url: str, payload: dict) -> dict:
-        body = json.dumps(payload).encode("utf-8")
-        request = Request(
+        return self._http.post_json(url=url, payload=payload)
+
+    def _get_json(self, url: str, *, access_token: str):
+        return self._http.get_json(url=url, access_token=access_token)
+
+    def _request_json(
+        self,
+        *,
+        method: str,
+        url: str,
+        access_token: str,
+        payload: dict | None = None,
+    ):
+        return self._http.request_json(
+            method=method,
             url=url,
-            data=body,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=30) as response:
-                response_body = response.read().decode("utf-8")
-        except HTTPError as exc:
-            error_body = exc.read().decode("utf-8")
-            raise JiraOAuthError(f"Jira OAuth request failed ({exc.code}): {error_body}") from exc
-
-        if not response_body:
-            return {}
-        return json.loads(response_body)
-
-    def _get_json(self, url: str, *, access_token: str) -> dict | list:
-        request = Request(
-            url=url,
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-            },
-            method="GET",
-        )
-        try:
-            with urlopen(request, timeout=30) as response:
-                response_body = response.read().decode("utf-8")
-        except HTTPError as exc:
-            error_body = exc.read().decode("utf-8")
-            raise JiraOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
-        if not response_body:
-            return {}
-        return json.loads(response_body)
-
-    def _parse_tokens(self, payload: dict) -> JiraOAuthTokenSet:
-        access_token = payload.get("access_token")
-        refresh_token = payload.get("refresh_token")
-        expires_in = payload.get("expires_in")
-        scope_raw = payload.get("scope")
-
-        if not isinstance(access_token, str) or not access_token:
-            raise JiraOAuthError("Jira OAuth response missing access_token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            raise JiraOAuthError("Jira OAuth response missing refresh_token")
-        if not isinstance(expires_in, int):
-            raise JiraOAuthError("Jira OAuth response missing expires_in")
-        if not isinstance(scope_raw, str):
-            scope_raw = ""
-
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(1, expires_in))
-        scopes = [scope for scope in scope_raw.split(" ") if scope]
-        return JiraOAuthTokenSet(
             access_token=access_token,
-            refresh_token=refresh_token,
-            expires_at=expires_at,
-            scopes=scopes,
+            payload=payload,
         )
+
+    def _get_bytes(self, *, url: str, access_token: str) -> bytes:
+        return self._http.get_bytes(url=url, access_token=access_token)
+
+    def _post_multipart(
+        self,
+        *,
+        url: str,
+        access_token: str,
+        filename: str,
+        content: bytes,
+        content_type: str = "application/octet-stream",
+    ):
+        return self._http.post_multipart(
+            url=url,
+            access_token=access_token,
+            filename=filename,
+            content=content,
+            content_type=content_type,
+        )
+
+    def build_authorize_url(self, *, state: str) -> str:
+        return self._callback_flow.build_authorize_url(state=state)
 
     def exchange_code(self, *, code: str) -> JiraOAuthTokenSet:
-        payload = self._post_json(
-            "https://auth.atlassian.com/oauth/token",
-            {
-                "grant_type": "authorization_code",
-                "client_id": self._config.client_id,
-                "client_secret": self._config.client_secret,
-                "code": code,
-                "redirect_uri": self._config.redirect_uri,
-            },
-        )
-        return self._parse_tokens(payload)
+        return self._callback_flow.exchange_code(code=code)
 
     def refresh_tokens(self, *, refresh_token: str) -> JiraOAuthTokenSet:
-        payload = self._post_json(
-            "https://auth.atlassian.com/oauth/token",
-            {
-                "grant_type": "refresh_token",
-                "client_id": self._config.client_id,
-                "client_secret": self._config.client_secret,
-                "refresh_token": refresh_token,
-            },
-        )
-        return self._parse_tokens(payload)
+        return self._callback_flow.refresh_tokens(refresh_token=refresh_token)
 
     def list_accessible_resources(self, *, access_token: str) -> list[JiraOAuthResource]:
-        payload = self._get_json(
-            "https://api.atlassian.com/oauth/token/accessible-resources",
-            access_token=access_token,
-        )
-        if not isinstance(payload, list):
-            raise JiraOAuthError("Accessible resources response was not a list")
-
-        resources: list[JiraOAuthResource] = []
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            cloud_id = item.get("id")
-            site_url = item.get("url")
-            name = item.get("name")
-            if not isinstance(cloud_id, str) or not cloud_id:
-                continue
-            if not isinstance(site_url, str) or not site_url:
-                continue
-            if not isinstance(name, str) or not name:
-                name = site_url
-            resources.append(JiraOAuthResource(cloud_id=cloud_id, site_url=site_url, name=name))
-        return resources
+        return self._callback_flow.list_accessible_resources(access_token=access_token)
 
     def list_projects(self, *, access_token: str, cloud_id: str) -> list[JiraProject]:
-        payload = self._get_json(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/search?maxResults=100",
-            access_token=access_token,
-        )
-        values = payload.get("values") if isinstance(payload, dict) else None
-        if not isinstance(values, list):
-            raise JiraOAuthError("Project search response missing values list")
-
-        projects: list[JiraProject] = []
-        for item in values:
-            if not isinstance(item, dict):
-                continue
-            key = item.get("key")
-            name = item.get("name")
-            if not isinstance(key, str) or not key:
-                continue
-            if not isinstance(name, str) or not name:
-                name = key
-            projects.append(JiraProject(key=key, name=name))
-        projects.sort(key=lambda project: project.key)
-        return projects
+        return self._issue_service.list_projects(access_token=access_token, cloud_id=cloud_id)
 
     def search_issues_by_jql(
         self,
@@ -207,41 +141,230 @@ class JiraOAuthClient:
         cloud_id: str,
         jql: str,
         max_results: int = 20,
+        start_at: int = 0,
     ) -> list[JiraIssuePreview]:
-        bounded_max_results = max(1, min(max_results, 50))
-        query = urlencode(
-            {
-                "jql": jql,
-                "maxResults": bounded_max_results,
-                "fields": "summary,status",
-            }
-        )
-        payload = self._get_json(
-            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search?{query}",
+        return self._issue_service.search_issues_by_jql(
             access_token=access_token,
+            cloud_id=cloud_id,
+            jql=jql,
+            max_results=max_results,
+            start_at=start_at,
         )
-        issues = payload.get("issues") if isinstance(payload, dict) else None
-        if not isinstance(issues, list):
-            raise JiraOAuthError("Issue search response missing issues list")
 
-        results: list[JiraIssuePreview] = []
-        for item in issues:
-            if not isinstance(item, dict):
-                continue
-            key = item.get("key")
-            fields = item.get("fields")
-            if not isinstance(fields, dict):
-                fields = {}
-            summary = fields.get("summary")
-            status_obj = fields.get("status")
-            status_name = status_obj.get("name") if isinstance(status_obj, dict) else None
+    def get_issue_detail(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> JiraIssueDetail:
+        return self._issue_service.get_issue_detail(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+        )
 
-            if not isinstance(key, str) or not key:
-                continue
-            if not isinstance(summary, str) or not summary:
-                summary = key
-            if not isinstance(status_name, str) or not status_name:
-                status_name = "Unknown"
+    def list_issue_comments(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> list[JiraIssueComment]:
+        return self._issue_service.list_issue_comments(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+        )
 
-            results.append(JiraIssuePreview(key=key, summary=summary, status=status_name))
-        return results
+    def list_issue_attachments(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+    ) -> list[JiraIssueAttachment]:
+        return self._issue_service.list_issue_attachments(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+        )
+
+    def create_issues_bulk(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+        issues: list[JiraIssueCreateInput],
+    ) -> JiraIssueBulkCreateResult:
+        return self._issue_service.create_issues_bulk(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            project_key=project_key,
+            issues=issues,
+        )
+
+    def update_issue_fields(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+        description: str | dict,
+        labels: list[str],
+    ) -> None:
+        self._issue_service.update_issue_fields(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            summary=summary,
+            description=description,
+            labels=labels,
+        )
+
+    def add_issue_comment(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        comment: str | dict,
+    ) -> dict:
+        return self._issue_service.add_issue_comment(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            comment=comment,
+        )
+
+    def transition_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        target_status: str,
+    ) -> dict:
+        return self._issue_service.transition_issue(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            target_status=target_status,
+        )
+
+    def add_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        self._issue_service.add_issue_labels(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            labels=labels,
+        )
+
+    def update_issue_summary(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+    ) -> None:
+        self._issue_service.update_issue_summary(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            summary=summary,
+        )
+
+    def update_issue_summary_and_description(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        summary: str,
+        description: str | dict,
+    ) -> None:
+        self._issue_service.update_issue_summary_and_description(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            summary=summary,
+            description=description,
+        )
+
+    def register_webhook(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        callback_url: str,
+        jql_filter: str,
+        events: list[str],
+    ) -> list[int]:
+        return self._webhook_manager.register_webhook(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            callback_url=callback_url,
+            jql_filter=jql_filter,
+            events=events,
+        )
+
+    def list_webhooks(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+    ) -> list[dict]:
+        return self._webhook_manager.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+
+    def delete_webhooks(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        webhook_ids: list[int],
+    ) -> None:
+        self._webhook_manager.delete_webhooks(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            webhook_ids=webhook_ids,
+        )
+
+    def upload_issue_attachment(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        filename: str,
+        content: bytes,
+        content_type: str | None = None,
+    ) -> list[dict]:
+        return self._attachment_service.upload_issue_attachment(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            filename=filename,
+            content=content,
+            content_type=content_type,
+        )
+
+    def download_attachment(
+        self,
+        *,
+        access_token: str,
+        content_url: str,
+    ) -> bytes:
+        return self._attachment_service.download_attachment(
+            access_token=access_token,
+            content_url=content_url,
+        )

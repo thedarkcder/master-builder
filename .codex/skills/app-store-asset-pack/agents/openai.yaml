@@ -1,0 +1,4 @@
+interface:
+  display_name: "Launch Kit Packaging"
+  short_description: "Assemble launch-kit exports and manifest outputs."
+  default_prompt: "Package iOS and Android screenshots, copy docs, and metadata into a deterministic launch-kit bundle."
