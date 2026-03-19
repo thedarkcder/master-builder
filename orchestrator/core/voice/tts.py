@@ -24,16 +24,72 @@ class VoiceReplyAudio:
     content_type: str
 
 
-def synthesize_reply_audio(*, settings: Settings, text: str) -> VoiceReplyAudio:
+@dataclass(frozen=True)
+class VoiceReplyPersonaMetadata:
+    persona_id: str | None
+    display_name: str
+    voice: str
+
+
+_PERSONA_NAME_KEYS = ("persona_names", "pm_room_persona_names")
+_PERSONA_VOICE_KEYS = ("persona_voices", "pm_room_persona_voices")
+
+
+def synthesize_reply_audio(
+    *,
+    settings: Settings,
+    text: str,
+    persona_id: str | None = None,
+    room_config: dict | None = None,
+) -> VoiceReplyAudio:
     provider = str(settings.voice_reply_provider or "").strip().lower()
     if provider in {"", "disabled"}:
         raise VoiceReplyError("Voice reply is disabled")
     if provider == "pocket_tts":
-        return _synthesize_with_pocket_tts(settings=settings, text=text)
+        persona_metadata = resolve_voice_reply_persona_metadata(
+            settings=settings,
+            persona_id=persona_id,
+            room_config=room_config,
+        )
+        return _synthesize_with_pocket_tts(
+            settings=settings,
+            text=text,
+            voice=persona_metadata.voice,
+        )
     raise VoiceReplyError(f"Unsupported voice reply provider '{provider}'")
 
 
-def _synthesize_with_pocket_tts(*, settings: Settings, text: str) -> VoiceReplyAudio:
+def resolve_voice_reply_persona_metadata(
+    *,
+    settings: Settings,
+    persona_id: str | None = None,
+    room_config: dict | None = None,
+) -> VoiceReplyPersonaMetadata:
+    normalized_persona_id = _normalize_persona_id(persona_id)
+    config = dict(room_config or {})
+    persona_names = _merged_string_map(config, _PERSONA_NAME_KEYS)
+    persona_voices = _merged_string_map(config, _PERSONA_VOICE_KEYS)
+
+    display_name = persona_names.get(normalized_persona_id or "", "").strip()
+    if not display_name:
+        display_name = persona_names.get("default", "").strip()
+    if not display_name:
+        display_name = _default_persona_display_name(normalized_persona_id)
+
+    voice = persona_voices.get(normalized_persona_id or "", "").strip()
+    if not voice:
+        voice = persona_voices.get("default", "").strip()
+    if not voice:
+        voice = str(settings.pocket_tts_voice or "").strip()
+
+    return VoiceReplyPersonaMetadata(
+        persona_id=normalized_persona_id,
+        display_name=display_name,
+        voice=voice,
+    )
+
+
+def _synthesize_with_pocket_tts(*, settings: Settings, text: str, voice: str | None = None) -> VoiceReplyAudio:
     base_url = str(settings.pocket_tts_base_url or "").strip()
     if not base_url:
         raise VoiceReplyError("Pocket TTS base URL is missing")
@@ -42,9 +98,9 @@ def _synthesize_with_pocket_tts(*, settings: Settings, text: str) -> VoiceReplyA
         raise VoiceReplyError("Voice reply text cannot be empty")
 
     payload: dict[str, str] = {"text": normalized_text}
-    voice = str(settings.pocket_tts_voice or "").strip()
-    if voice:
-        payload["voice"] = voice
+    resolved_voice = str(voice or "").strip()
+    if resolved_voice:
+        payload["voice"] = resolved_voice
 
     request = Request(
         url=base_url,
@@ -261,3 +317,37 @@ def _pick_filename(*candidates: str | None) -> str:
         if sanitized:
             return sanitized
     return "voice_reply.bin"
+
+
+def _merged_string_map(config: dict, keys: tuple[str, ...]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for key in keys:
+        value = config.get(key)
+        if not isinstance(value, dict):
+            continue
+        merged.update(_normalize_string_map(value))
+    return merged
+
+
+def _normalize_string_map(raw: dict | None) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in raw.items():
+        normalized_key = str(key).strip().lower()
+        normalized_value = str(value).strip()
+        if not normalized_key or not normalized_value:
+            continue
+        normalized[normalized_key] = normalized_value
+    return normalized
+
+
+def _normalize_persona_id(persona_id: str | None) -> str | None:
+    normalized = str(persona_id or "").strip().lower()
+    return normalized or None
+
+
+def _default_persona_display_name(persona_id: str | None) -> str:
+    if not persona_id:
+        return "Voice Reply"
+    return persona_id.replace("_", " ").strip().title()

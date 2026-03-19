@@ -129,6 +129,27 @@ class DiscordFollowupFormatTests(unittest.TestCase):
         self.assertIn("[MAB-21](https://jira.example.com/browse/MAB-21)", message)
         self.assertIn("[MAB-22](https://jira.example.com/browse/MAB-22)", message)
 
+    def test_room_mode_prefixes_persona_label(self) -> None:
+        pattern = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+        response = self._response(
+            command="pm",
+            message="We should keep the MVP to voice capture and routing.",
+            data={
+                "room_mode": True,
+                "persona_name": "Ava",
+                "persona_role": "PM",
+            },
+        )
+
+        message = build_command_followup_message(
+            user_id="u7",
+            command_response=response,
+            jira_browse_base_url=None,
+            issue_key_pattern=pattern,
+        )
+
+        self.assertIn("<@u7> [Ava (PM)] We should keep the MVP to voice capture and routing.", message)
+
     def test_content_truncation_and_created_issue_overflow(self) -> None:
         pattern = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
         keys = [f"MAB-{idx}" for idx in range(1, 26)]

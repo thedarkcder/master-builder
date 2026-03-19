@@ -29,12 +29,28 @@ REQUEST_PERMISSION_LABELS = {
     "seed_issues": "issue seeding (!issues seed)",
     "all_sensitive": "all sensitive commands",
 }
-PM_ROOM_LIST_KEYS = (
+ROOM_LIST_KEYS = (
+    "voice_room_channel_ids",
+    "voice_room_thread_channel_ids",
+    "voice_thread_channel_ids",
+    "persona_room_channel_ids",
+    "persona_room_thread_channel_ids",
+    "persona_thread_channel_ids",
+    "room_channel_ids",
+    "room_thread_channel_ids",
     "pm_room_channel_ids",
     "pm_room_thread_channel_ids",
     "pm_thread_channel_ids",
 )
-PM_ROOM_SINGLE_KEYS = (
+ROOM_SINGLE_KEYS = (
+    "voice_room_channel_id",
+    "voice_room_thread_channel_id",
+    "voice_thread_channel_id",
+    "persona_room_channel_id",
+    "persona_room_thread_channel_id",
+    "persona_thread_channel_id",
+    "room_channel_id",
+    "room_thread_channel_id",
     "pm_room_channel_id",
     "pm_room_thread_channel_id",
     "pm_thread_channel_id",
@@ -47,10 +63,10 @@ def normalize_status_name(value: str) -> str:
     return value.strip().lower()
 
 
-def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+def _room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
     config = dict(discord_config or {})
     channel_ids: set[str] = set()
-    for key in PM_ROOM_LIST_KEYS:
+    for key in ROOM_LIST_KEYS:
         raw_values = config.get(key)
         if not isinstance(raw_values, list):
             continue
@@ -58,14 +74,18 @@ def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set
             normalized = str(value or "").strip()
             if normalized:
                 channel_ids.add(normalized)
-    for key in PM_ROOM_SINGLE_KEYS:
+    for key in ROOM_SINGLE_KEYS:
         normalized = str(config.get(key) or "").strip()
         if normalized:
             channel_ids.add(normalized)
     return channel_ids
 
 
-def project_pm_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+def room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return _room_channel_ids_from_discord_config(discord_config)
+
+
+def project_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
     projects = session.execute(
         select(Project).where(
             Project.tenant_id == tenant_id,
@@ -74,8 +94,16 @@ def project_pm_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]
     ).scalars().all()
     channel_ids: set[str] = set()
     for project in projects:
-        channel_ids.update(_pm_room_channel_ids_from_discord_config(project.discord_config or {}))
+        channel_ids.update(_room_channel_ids_from_discord_config(project.discord_config or {}))
     return channel_ids
+
+
+def project_pm_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    return project_room_channel_ids(session=session, tenant_id=tenant_id)
+
+
+def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return _room_channel_ids_from_discord_config(discord_config)
 
 
 def parse_command_text(command_text: str) -> tuple[str, list[str]]:
@@ -223,8 +251,8 @@ def assert_sensitive_command_permission(
 
 def assert_channel_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> None:
     allowed_channel_ids = tenant_allowed_channel_ids(session=session, tenant=tenant)
-    allowed_channel_ids.update(project_pm_room_channel_ids(session=session, tenant_id=tenant.tenant_id))
-    allowed_channel_ids.update(_pm_room_channel_ids_from_discord_config(tenant.discord_config or {}))
+    allowed_channel_ids.update(project_room_channel_ids(session=session, tenant_id=tenant.tenant_id))
+    allowed_channel_ids.update(_room_channel_ids_from_discord_config(tenant.discord_config or {}))
     if not is_channel_allowed(channel_id=channel_id, allowed_channel_ids=allowed_channel_ids):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

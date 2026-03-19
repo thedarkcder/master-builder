@@ -3,6 +3,10 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from orchestrator.api.admin.project_normalization import (
+    normalize_project_discord_config,
+    with_preserved_discord_system_fields,
+)
 from orchestrator.api.admin.project_service import AdminProjectService
 from orchestrator.storage.models import Project
 from orchestrator.tools.jira_oauth import JiraOAuthError
@@ -362,3 +366,39 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
     }
     assert ("project/t1/p1/SUPABASE_URL", "https://example.supabase.co") in upsert_calls
     assert ("project/t1/p1/APPLE_TEST_PASSWORD", "Ft6ygA&aYkf%hy") in upsert_calls
+
+
+def test_normalize_project_discord_config_preserves_persona_maps() -> None:
+    normalized = normalize_project_discord_config(
+        {
+            "channel_id": "  channel-1  ",
+            "persona_names": {"pm": " Ava ", "security": " June "},
+            "persona_voices": {"pm": " alloy ", "security": " sonic "},
+            "voice_room_channel_ids": [" voice-room-1 ", ""],
+            "pm_room_channel_ids": [" room-1 ", ""],
+        }
+    )
+
+    assert normalized["channel_id"] == "channel-1"
+    assert normalized["persona_names"] == {"pm": "Ava", "security": "June"}
+    assert normalized["persona_voices"] == {"pm": "alloy", "security": "sonic"}
+    assert normalized["voice_room_channel_ids"] == ["voice-room-1"]
+    assert normalized["pm_room_channel_ids"] == ["room-1"]
+
+
+def test_with_preserved_discord_system_fields_keeps_persona_maps_when_unset() -> None:
+    merged = with_preserved_discord_system_fields(
+        existing={
+            "ask_history": [],
+            "persona_names": {"pm": "Ava"},
+            "persona_voices": {"pm": "alloy"},
+            "voice_room_channel_ids": ["voice-room-1"],
+        },
+        proposed={"channel_id": "channel-1"},
+    )
+
+    assert merged is not None
+    assert merged["channel_id"] == "channel-1"
+    assert merged["persona_names"] == {"pm": "Ava"}
+    assert merged["persona_voices"] == {"pm": "alloy"}
+    assert merged["voice_room_channel_ids"] == ["voice-room-1"]

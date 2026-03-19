@@ -11,12 +11,38 @@ DISCORD_INTERNAL_CONFIG_KEYS = {
     "allowlist_requests",
     "allowed_user_ids",
 }
-PM_ROOM_LIST_KEYS = (
+PERSONA_DISCORD_CONFIG_KEYS = {
+    "persona_names",
+    "persona_voices",
+    "voice_room_persona_names",
+    "voice_room_persona_voices",
+    "room_persona_names",
+    "room_persona_voices",
+    "pm_room_persona_names",
+    "pm_room_persona_voices",
+}
+ROOM_LIST_KEYS = (
+    "voice_room_channel_ids",
+    "voice_room_thread_channel_ids",
+    "voice_thread_channel_ids",
+    "persona_room_channel_ids",
+    "persona_room_thread_channel_ids",
+    "persona_thread_channel_ids",
+    "room_channel_ids",
+    "room_thread_channel_ids",
     "pm_room_channel_ids",
     "pm_room_thread_channel_ids",
     "pm_thread_channel_ids",
 )
-PM_ROOM_SINGLE_KEYS = (
+ROOM_SINGLE_KEYS = (
+    "voice_room_channel_id",
+    "voice_room_thread_channel_id",
+    "voice_thread_channel_id",
+    "persona_room_channel_id",
+    "persona_room_thread_channel_id",
+    "persona_thread_channel_id",
+    "room_channel_id",
+    "room_thread_channel_id",
     "pm_room_channel_id",
     "pm_room_thread_channel_id",
     "pm_thread_channel_id",
@@ -58,6 +84,19 @@ def _normalize_channel_id_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _normalize_string_map(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, raw_value in value.items():
+        normalized_key = str(key).strip().lower()
+        normalized_value = str(raw_value).strip()
+        if not normalized_key or not normalized_value:
+            continue
+        normalized[normalized_key] = normalized_value
+    return normalized
+
+
 def normalize_project_discord_config(raw: dict | None) -> dict:
     if not isinstance(raw, dict):
         return {}
@@ -81,11 +120,16 @@ def normalize_project_discord_config(raw: dict | None) -> dict:
     if normalized_seed_threads:
         normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
 
-    for key in PM_ROOM_LIST_KEYS:
+    for key in PERSONA_DISCORD_CONFIG_KEYS:
+        normalized_persona_map = _normalize_string_map(raw.get(key))
+        if normalized_persona_map:
+            normalized[key] = normalized_persona_map
+
+    for key in ROOM_LIST_KEYS:
         normalized_pm_channels = _normalize_channel_id_list(raw.get(key))
         if normalized_pm_channels:
             normalized[key] = normalized_pm_channels
-    for key in PM_ROOM_SINGLE_KEYS:
+    for key in ROOM_SINGLE_KEYS:
         normalized_pm_channel = str(raw.get(key) or "").strip()
         if normalized_pm_channel:
             normalized[key] = normalized_pm_channel
@@ -97,7 +141,12 @@ def with_preserved_discord_system_fields(*, existing: dict, proposed: dict | Non
     if proposed is None:
         return None
     merged = dict(proposed)
-    preserved_keys = set(DISCORD_INTERNAL_CONFIG_KEYS) | set(PM_ROOM_LIST_KEYS) | set(PM_ROOM_SINGLE_KEYS)
+    preserved_keys = (
+        set(DISCORD_INTERNAL_CONFIG_KEYS)
+        | set(PERSONA_DISCORD_CONFIG_KEYS)
+        | set(ROOM_LIST_KEYS)
+        | set(ROOM_SINGLE_KEYS)
+    )
     for key in preserved_keys:
         if key in merged:
             continue

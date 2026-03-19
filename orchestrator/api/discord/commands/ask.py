@@ -16,7 +16,8 @@ from orchestrator.core.codex_agents import (
 from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
-from orchestrator.storage.models import Tenant
+from orchestrator.core.discord.persona_room import answer_voice_room_turn
+from orchestrator.storage.models import Project, Tenant
 
 
 def _normalized_project_keys(project_keys: list[str]) -> list[str]:
@@ -92,6 +93,21 @@ def _pm_history_answer(answer: str) -> str:
     return compact
 
 
+def _voice_room_history_question(question: str) -> str:
+    compact = " ".join(question.strip().split())
+    if len(compact) > 220:
+        compact = f"{compact[:217]}..."
+    return f"room {compact}".strip()
+
+
+def _voice_room_history_answer(*, answer: str, persona_id: str) -> str:
+    compact = " ".join(str(answer).strip().split())
+    if len(compact) > 380:
+        compact = f"{compact[:377]}..."
+    prefix = str(persona_id or "pm").strip().lower() or "pm"
+    return f"{prefix}: {compact}".strip()
+
+
 def dispatch_ask_command(
     *,
     session: Session,
@@ -110,6 +126,7 @@ def dispatch_ask_command(
     ask_board_message: Callable[..., Any],
     seed_issues_with_codex: Callable[..., Any] | None,
     scoped_project_keys: list[str],
+    scoped_project_id: str | None,
     codex_working_dir: str,
 ) -> DiscordCommandResponse | None:
     if command_name not in {"ask", "pm"}:
@@ -123,8 +140,10 @@ def dispatch_ask_command(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Usage: !pm <product request> or !pm approve <handoff request>",
             )
+        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
+        is_voice_room_mode = str(command_params.get("room_mode") or "").strip().lower() in {"1", "true", "yes"}
         first_token = arguments[0].strip().lower()
-        approval_requested = first_token == "approve"
+        approval_requested = first_token == "approve" and not is_voice_room_mode
         question_tokens = arguments[1:] if approval_requested else arguments
         question = " ".join(question_tokens).strip()
         if not question:
@@ -155,6 +174,74 @@ def dispatch_ask_command(
             tenant=tenant,
             project_keys=normalized_project_keys,
         )
+        scoped_project = session.get(Project, scoped_project_id) if scoped_project_id else None
+        project_discord_config = scoped_project.discord_config if scoped_project is not None else {}
+        if is_voice_room_mode:
+            try:
+                voice_room_result = answer_voice_room_turn(
+                    runtime=runtime,
+                    transcript=question,
+                    project_keys=normalized_project_keys,
+                    issues=issues,
+                    status_counts=status_counts,
+                    invocation_context=CodexInvocationContext(
+                        channel="discord",
+                        tenant_id=tenant.tenant_id,
+                        project_id=scoped_project_id,
+                        command="pm",
+                        stage="voice-room",
+                        working_dir=codex_working_dir,
+                        issue_key=normalized_issue_key,
+                    ),
+                    history=_history_context,
+                    github_context=github_context,
+                    tenant_discord_config=getattr(tenant, "discord_config", None) or {},
+                    project_discord_config=project_discord_config or {},
+                )
+            except CodexRuntimeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Codex voice room assistant is unavailable: {exc}",
+                ) from exc
+
+            store_ask_history_entry(
+                session=session,
+                tenant=tenant,
+                user_id=normalized_user_id,
+                channel_id=normalized_channel_id,
+                question=_voice_room_history_question(question),
+                answer=_voice_room_history_answer(
+                    answer=voice_room_result.message,
+                    persona_id=voice_room_result.persona_id,
+                ),
+                issue_key=normalized_issue_key,
+                status_name=requested_status,
+            )
+            return DiscordCommandResponse(
+                ok=True,
+                command="pm",
+                message=voice_room_result.message,
+                data={
+                    "pm_mode": True,
+                    "room_mode": True,
+                    "question": question,
+                    "issue_key": normalized_issue_key,
+                    "status": requested_status,
+                    "status_counts": status_counts,
+                    "issues": issues,
+                    "brief": voice_room_result.brief,
+                    "persona_id": voice_room_result.persona_id,
+                    "persona_role": voice_room_result.persona_role,
+                    "persona_name": voice_room_result.persona_name,
+                    "persona_voice_id": voice_room_result.persona_voice_id,
+                    "room_config": voice_room_result.room_config,
+                    "router": {
+                        "persona": voice_room_result.persona_id,
+                        "confidence": voice_room_result.router_confidence,
+                        "reason": voice_room_result.router_reason,
+                    },
+                },
+            )
         try:
             pm_payload = answer_pm_question_with_codex(
                 runtime=runtime,
@@ -166,7 +253,7 @@ def dispatch_ask_command(
                 invocation_context=CodexInvocationContext(
                     channel="discord",
                     tenant_id=tenant.tenant_id,
-                    project_id=None,
+                    project_id=scoped_project_id,
                     command="pm",
                     stage="approve" if approval_requested else "answer",
                     working_dir=codex_working_dir,
