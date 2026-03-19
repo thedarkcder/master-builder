@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from uuid import uuid4
 
 from fastapi import Request, status
@@ -19,6 +18,7 @@ from orchestrator.api.webhooks.pr_review_comment_service import (
     upsert_sticky_remediation_comment,
     upsert_sticky_review_comment,
 )
+from orchestrator.api.webhooks.pr_remediation_policy import parse_manual_pr_fix_request
 from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
@@ -27,7 +27,6 @@ from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.tools.github_app import GitHubApiError
 
 logger = logging.getLogger(__name__)
-_MB_MENTION_PATTERN = re.compile(r"(?<!\w)(?:@mb|/mb)\b", re.IGNORECASE)
 
 
 async def ingest_github_webhook_event(
@@ -220,21 +219,28 @@ def _add_manual_fix_eyes_reaction_if_requested(
     request_id: str,
     tenant_id: str,
 ) -> None:  # noqa: ANN001
-    if str(github_event or "").strip().lower() != "issue_comment":
+    normalized_event = str(github_event or "").strip().lower()
+    if normalized_event not in {"issue_comment", "pull_request_review_comment"}:
+        return
+    if parse_manual_pr_fix_request(payload=payload) is None:
         return
     comment = payload.get("comment")
-    body = str(comment.get("body") or "") if isinstance(comment, dict) else ""
-    if not _MB_MENTION_PATTERN.search(body):
-        return
     comment_id = comment.get("id") if isinstance(comment, dict) else None
     if not isinstance(comment_id, int) or comment_id <= 0:
         return
     try:
-        github_client.add_issue_comment_reaction(
-            repo_full_name=repo_full_name,
-            comment_id=comment_id,
-            content="eyes",
-        )
+        if normalized_event == "issue_comment":
+            github_client.add_issue_comment_reaction(
+                repo_full_name=repo_full_name,
+                comment_id=comment_id,
+                content="eyes",
+            )
+        else:
+            github_client.add_pull_request_review_comment_reaction(
+                repo_full_name=repo_full_name,
+                comment_id=comment_id,
+                content="eyes",
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "github_webhook_manual_fix_reaction_failed request_id=%s tenant_id=%s comment_id=%s error=%s",
