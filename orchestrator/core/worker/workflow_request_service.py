@@ -56,9 +56,12 @@ def build_workflow_request_for_run(
         issue_description = f"{issue_description}{project_context}".strip()
     else:
         issue_description = issue_description.strip()
+    trigger_context = _extract_trigger_context(getattr(run, "plan", None))
     project_environment = getattr(project, "environment", {}) if project is not None else {}
     default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
-    base_branch = _normalize_branch(default_branch) or "main"
+    remediation_base_branch = _extract_remediation_base_ref(trigger_context)
+    base_branch = remediation_base_branch or _normalize_branch(default_branch) or "main"
+    remediation_head_branch = _extract_remediation_head_ref(trigger_context)
     integration_branch = _resolve_integration_branch(
         session=session,
         settings=settings,
@@ -66,6 +69,7 @@ def build_workflow_request_for_run(
         run=run,
         project=project,
         base_branch=base_branch,
+        remediation_head_branch=remediation_head_branch,
     )
     execution_repo_dir, execution_branch, start_point_ref, start_point_sha, workspace_key = _resolve_execution_repo_dir(
         settings=settings,
@@ -79,7 +83,6 @@ def build_workflow_request_for_run(
         parse_worker_capabilities(getattr(settings, "worker_capabilities", ""))
     )
     current_worker_capability = available_worker_capabilities[0] if available_worker_capabilities else "linux"
-    trigger_context = _extract_trigger_context(getattr(run, "plan", None))
     pr_number = _extract_pr_number(trigger_context)
     resume_mode = _extract_resume_mode(trigger_context)
     resume_stage = _extract_resume_stage(trigger_context)
@@ -188,10 +191,15 @@ def _resolve_integration_branch(
     run: Run,
     project: Project | None,
     base_branch: str,
+    remediation_head_branch: str | None = None,
 ) -> str:
     run_branch = _normalize_branch(getattr(run, "branch", None))
     if run_branch:
         return run_branch
+
+    if remediation_head_branch:
+        run.branch = remediation_head_branch
+        return remediation_head_branch
 
     reused_branch = _resolve_branch_from_open_pull_requests(
         session=session,
@@ -302,6 +310,24 @@ def _extract_pr_number(trigger_context: dict | None) -> int | None:
     if isinstance(value, int) and value > 0:
         return value
     return None
+
+
+def _extract_remediation_head_ref(trigger_context: dict | None) -> str | None:
+    if not isinstance(trigger_context, dict):
+        return None
+    source = str(trigger_context.get("source") or "").strip().lower()
+    if source != "github_pr_review_feedback":
+        return None
+    return _normalize_branch(trigger_context.get("head_ref"))
+
+
+def _extract_remediation_base_ref(trigger_context: dict | None) -> str | None:
+    if not isinstance(trigger_context, dict):
+        return None
+    source = str(trigger_context.get("source") or "").strip().lower()
+    if source != "github_pr_review_feedback":
+        return None
+    return _normalize_branch(trigger_context.get("base_ref"))
 
 
 def _extract_resume_mode(trigger_context: dict | None) -> str | None:

@@ -33,7 +33,7 @@ from orchestrator.storage.models import (
     Tenant,
 )
 from orchestrator.tools.git_ops import build_branch_name
-from orchestrator.tools.github_app import github_client_from_tenant_config
+from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.project_repo_checkout import project_repo_dir, project_run_repo_dir
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
@@ -807,6 +807,17 @@ def _execute_github_tool(
         head_branch = str(args.get("head_branch") or "").strip()
         base_branch = str(args.get("base_branch") or default_base_branch).strip()
         body = str(args.get("body") or "").strip()
+        remediation_pr_number = _extract_remediation_pr_number_from_run(getattr(context, "run", None))
+        if remediation_pr_number is not None:
+            try:
+                detail = github_client.get_pull_request_details(
+                    repo_full_name=repo_full_name,
+                    pr_number=remediation_pr_number,
+                )
+            except (GitHubApiError, ValueError):
+                detail = None
+            if detail is not None and str(detail.state or "").strip().lower() == "open":
+                return {"pr_number": detail.number, "pr_url": detail.html_url}
         if canonical_run_branch:
             head_branch = canonical_run_branch
         elif not head_branch:
@@ -1008,6 +1019,13 @@ def _resolve_canonical_run_branch(*, session: Session, context: AgentToolContext
     existing = _normalize_branch_name(getattr(run, "branch", None))
     if existing:
         return existing
+    remediation_branch = _extract_remediation_head_ref_from_run(run)
+    if remediation_branch:
+        run.branch = remediation_branch
+        flush_fn = getattr(session, "flush", None) if session is not None else None
+        if callable(flush_fn):
+            flush_fn()
+        return remediation_branch
     issue_key = str(context.issue_key or "").strip()
     if not issue_key:
         return None
@@ -1025,6 +1043,38 @@ def _sync_local_base_branch_to_origin(repo_dir: Path, *, base_branch: str, token
         raise ValueError("Base branch is required")
     _run_git(repo_dir, ["fetch", "origin", normalized_base_branch], token=token)
     _run_git(repo_dir, ["checkout", "-B", normalized_base_branch, f"origin/{normalized_base_branch}"])
+
+
+def _extract_trigger_context_from_run(run: object) -> dict | None:
+    plan = getattr(run, "plan", None)
+    if not isinstance(plan, dict):
+        return None
+    trigger_context = plan.get("trigger_context")
+    return trigger_context if isinstance(trigger_context, dict) else None
+
+
+def _is_pr_remediation_trigger_context(trigger_context: dict | None) -> bool:
+    if not isinstance(trigger_context, dict):
+        return False
+    return str(trigger_context.get("source") or "").strip().lower() == "github_pr_review_feedback"
+
+
+def _extract_remediation_head_ref_from_run(run: object) -> str | None:
+    trigger_context = _extract_trigger_context_from_run(run)
+    if not _is_pr_remediation_trigger_context(trigger_context):
+        return None
+    head_ref = str(trigger_context.get("head_ref") or "").strip()
+    return head_ref or None
+
+
+def _extract_remediation_pr_number_from_run(run: object) -> int | None:
+    trigger_context = _extract_trigger_context_from_run(run)
+    if not _is_pr_remediation_trigger_context(trigger_context):
+        return None
+    value = trigger_context.get("pr_number")
+    if isinstance(value, int) and value > 0:
+        return value
+    return None
 
 
 def print_tool_event(*, stage: str, tool_name: str, args: dict[str, Any], outcome: str) -> None:  # noqa: ANN401
