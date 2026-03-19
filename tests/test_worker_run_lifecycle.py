@@ -231,6 +231,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             run.status = "running"
             run.last_error = None
             run.finished_at = None
+            run.plan = {"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}}
             session.commit()
             session.refresh(run)
 
@@ -261,6 +262,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(finalized.status, "failed")
             self.assertEqual(finalized.last_error, "failure details")
             self.assertEqual(finalized.plan["stage_updates"], [{"stage": "run_failed"}])
+            self.assertEqual(
+                finalized.plan.get("trigger_context"),
+                {"source": "github_pr_review_feedback", "pr_number": 6},
+            )
             lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-200"})
             self.assertIsNone(lock)
 
@@ -294,6 +299,68 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             assert refreshed is not None
             self.assertEqual(refreshed.status, "running")
 
+    def test_start_run_respects_tenant_max_concurrent_runs_limit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            running = Run(
+                run_id="run-already-running",
+                tenant_id="tenant-a",
+                issue_key="TA-301",
+                issue_summary="already running",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                last_error=None,
+                plan=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                project_id="tenant-a-default",
+            )
+            queued = Run(
+                run_id="run-queued-under-limit",
+                tenant_id="tenant-a",
+                issue_key="TA-302",
+                issue_summary="queued candidate",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="queued",
+                last_error=None,
+                plan=None,
+                created_at=now,
+                started_at=None,
+                finished_at=None,
+                project_id="tenant-a-default",
+            )
+            session.add_all([running, queued])
+            session.commit()
+            session.refresh(queued)
+
+            blocked = start_run(
+                session,
+                run=queued,
+                expected_status="queued",
+                max_concurrent_runs=1,
+            )
+            self.assertIsNone(blocked)
+            refreshed = session.get(Run, "run-queued-under-limit")
+            assert refreshed is not None
+            self.assertEqual(refreshed.status, "queued")
+
+            started = start_run(
+                session,
+                run=queued,
+                expected_status="queued",
+                max_concurrent_runs=2,
+            )
+            self.assertIsNotNone(started)
+            assert started is not None
+            self.assertEqual(started.status, "running")
+
     def test_requeue_workflow_result_for_capability_notifies_queue_listener(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -308,7 +375,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 pr_url=None,
                 status="running",
                 last_error="old error",
-                plan=None,
+                plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}},
                 created_at=now,
                 started_at=now,
                 finished_at=None,
@@ -362,6 +429,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(requeued.plan["required_worker_capability"], "macos")
             self.assertEqual(requeued.plan["required_worker_label"], "macos")
             self.assertTrue(requeued.plan["requeued"])
+            self.assertEqual(
+                requeued.plan.get("trigger_context"),
+                {"source": "github_pr_review_feedback", "pr_number": 6},
+            )
             notify_mock.assert_called_once_with(
                 session,
                 tenant_id="tenant-a",
@@ -386,7 +457,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 pr_url="https://github.com/example/a/pull/88",
                 status="running",
                 last_error="old error",
-                plan=None,
+                plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}},
                 created_at=now,
                 started_at=now,
                 finished_at=None,
@@ -435,6 +506,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertTrue(requeued.plan["requeued"])
             self.assertTrue(requeued.plan["stale_branch_snapshot"])
             self.assertIn("Branch snapshot stale", requeued.plan["requeue_reason"])
+            self.assertEqual(
+                requeued.plan.get("trigger_context"),
+                {"source": "github_pr_review_feedback", "pr_number": 6},
+            )
             notify_mock.assert_called_once_with(
                 session,
                 tenant_id="tenant-a",

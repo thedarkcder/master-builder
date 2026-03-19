@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import re
+from urllib.parse import urlparse
+
 from orchestrator.api.webhooks.pr_remediation_issue_service import (
     create_pr_remediation_bug_issue_key,
     extract_issue_key,
@@ -7,6 +11,81 @@ from orchestrator.api.webhooks.pr_remediation_issue_service import (
 )
 from orchestrator.tools.github_app import GitHubAppClient
 from orchestrator.tools.jira_oauth import JiraOAuthError
+
+_MANUAL_FIX_COMMAND_PATTERN = re.compile(
+    r"^\s*(?:@mb|/mb)\s+fix(?:\s+(?P<comment_url>\S+))?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PULL_COMMENT_URL_PATTERN = re.compile(r"^/([^/]+/[^/]+)/pull/(\d+)(?:/(?:files|commits|checks))?$")
+_DISCUSSION_ANCHOR_PATTERN = re.compile(r"^discussion_r(?P<comment_id>\d+)$")
+_ISSUE_COMMENT_ANCHOR_PATTERN = re.compile(r"^issuecomment-(?P<comment_id>\d+)$")
+
+
+@dataclass(frozen=True)
+class ManualPrFixRequest:
+    command: str
+    comment_url: str | None
+    parse_error: str | None
+
+
+@dataclass(frozen=True)
+class RequestedCommentRef:
+    comment_type: str
+    comment_id: int
+    comment_url: str
+
+
+def parse_manual_pr_fix_request(*, payload: dict) -> ManualPrFixRequest | None:
+    comment = payload.get("comment")
+    body = str(comment.get("body") or "") if isinstance(comment, dict) else ""
+    if not body.strip():
+        return None
+    match = _MANUAL_FIX_COMMAND_PATTERN.search(body)
+    if match is None:
+        return None
+    comment_url = str(match.group("comment_url") or "").strip() or None
+    return ManualPrFixRequest(command="fix", comment_url=comment_url, parse_error=None)
+
+
+def resolve_requested_comment_ref(
+    *,
+    comment_url: str,
+    repo_full_name: str,
+    pr_number: int,
+) -> tuple[RequestedCommentRef | None, str | None]:
+    parsed_url = urlparse(comment_url)
+    normalized_path = parsed_url.path.strip()
+    match = _PULL_COMMENT_URL_PATTERN.match(normalized_path)
+    if match is None:
+        return None, "manual_fix_invalid_comment_url"
+    url_repo = str(match.group(1) or "").strip()
+    url_pr_raw = str(match.group(2) or "").strip()
+    if url_repo.lower() != repo_full_name.lower():
+        return None, "manual_fix_comment_url_repo_mismatch"
+    try:
+        url_pr_number = int(url_pr_raw)
+    except ValueError:
+        return None, "manual_fix_invalid_comment_url"
+    if url_pr_number != pr_number:
+        return None, "manual_fix_comment_url_pr_mismatch"
+    anchor = str(parsed_url.fragment or "").strip()
+    if not anchor:
+        return None, "manual_fix_comment_url_missing_anchor"
+    discussion_match = _DISCUSSION_ANCHOR_PATTERN.match(anchor)
+    if discussion_match is not None:
+        return RequestedCommentRef(
+            comment_type="review_comment",
+            comment_id=int(discussion_match.group("comment_id")),
+            comment_url=comment_url,
+        ), None
+    issue_comment_match = _ISSUE_COMMENT_ANCHOR_PATTERN.match(anchor)
+    if issue_comment_match is not None:
+        return RequestedCommentRef(
+            comment_type="issue_comment",
+            comment_id=int(issue_comment_match.group("comment_id")),
+            comment_url=comment_url,
+        ), None
+    return None, "manual_fix_unsupported_comment_anchor"
 
 
 def is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
@@ -16,6 +95,8 @@ def is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
         return state == "changes_requested"
     if event == "pull_request_review_comment" and action in {"created", "edited"}:
         return True
+    if event == "issue_comment" and action in {"created", "edited"}:
+        return parse_manual_pr_fix_request(payload=payload) is not None
     if event == "check_run" and action in {"created", "completed", "rerequested"}:
         check_run = payload.get("check_run")
         conclusion = str(check_run.get("conclusion") or "").strip().lower() if isinstance(check_run, dict) else ""

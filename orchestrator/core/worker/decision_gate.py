@@ -99,7 +99,13 @@ def apply_decision_gate(
         reason=reason,
         questions=questions,
     )
-    run.plan = {
+    previous_plan = run.plan if isinstance(run.plan, dict) else {}
+    previous_trigger_context = (
+        dict(previous_plan.get("trigger_context"))
+        if isinstance(previous_plan.get("trigger_context"), dict)
+        else None
+    )
+    next_plan = {
         "succeeded": False,
         "attempts": 0,
         "summary": [],
@@ -111,6 +117,9 @@ def apply_decision_gate(
             "outcome": getattr(pre_check, "outcome", None) if pre_check is not None else None,
         },
     }
+    if previous_trigger_context is not None:
+        next_plan["trigger_context"] = previous_trigger_context
+    run.plan = next_plan
     terminal_run = mark_run_terminal(
         session,
         run_id=run.run_id,

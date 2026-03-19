@@ -6,6 +6,7 @@ from uuid import uuid4
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.worker_capabilities import (
     normalize_worker_capability,
     parse_worker_capabilities,
@@ -90,35 +91,47 @@ def process_next_queued_run(
 ):  # noqa: ANN001
     settings = settings_fn()
     worker_workspace_key = resolve_worker_workspace_key(settings=settings)
-    selection = select_next_queued_run_fn(
-        session,
-        queued_status=run_status_queued,
-        running_status=run_status_running,
-        failed_status=run_status_failed,
-        worker_capabilities=parse_worker_capabilities(getattr(settings, "worker_capabilities", "")),
-    )
-    if selection.terminal_run is not None:
-        return selection.terminal_run
-    if selection.run is None or selection.tenant is None:
-        return None
-    run = selection.run
-    tenant = selection.tenant
-    agent_id = resolve_agent_id_fn()
+    run = None
+    tenant = None
+    run_claimed = False
+    claim_retry_budget = 8
+    for _ in range(claim_retry_budget):
+        selection = select_next_queued_run_fn(
+            session,
+            queued_status=run_status_queued,
+            running_status=run_status_running,
+            failed_status=run_status_failed,
+            worker_capabilities=parse_worker_capabilities(getattr(settings, "worker_capabilities", "")),
+        )
+        if selection.terminal_run is not None:
+            return selection.terminal_run
+        if selection.run is None or selection.tenant is None:
+            return None
 
-    started_run = start_run_fn(
-        session,
-        run=run,
-        expected_status=run_status_queued,
-    )
-    if started_run is None:
+        run = selection.run
+        tenant = selection.tenant
+        effective_policy = selection.effective_policy if isinstance(selection.effective_policy, dict) else {}
+        max_concurrent_runs = coerce_positive_int(effective_policy.get("max_concurrent_runs"), default=1)
+        started_run = start_run_fn(
+            session,
+            run=run,
+            expected_status=run_status_queued,
+            max_concurrent_runs=max_concurrent_runs,
+        )
+        if started_run is not None:
+            run = started_run
+            run_claimed = True
+            break
+
         logger.info(
-            "worker_skipping_run_already_claimed run_id=%s tenant_id=%s issue_key=%s",
+            "worker_skipping_run_claim_conflict run_id=%s tenant_id=%s issue_key=%s",
             run.run_id,
             run.tenant_id,
             run.issue_key,
         )
+    if not run_claimed or run is None or tenant is None:
         return None
-    run = started_run
+    agent_id = resolve_agent_id_fn()
 
     emit_agent_event_fn(
         event_type="ISSUE_ASSIGNED",

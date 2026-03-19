@@ -205,6 +205,55 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(json.loads(str(captured["human_inputs_json"]))[0]["value"], "123456")
         self.assertEqual(captured["allow_pr_creation"], "true")
 
+    def test_review_prompt_includes_allow_pr_creation(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev"}',
+                    '{"change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_category":null,"blocker_message":null}',
+                    '{"passed":true,"guidance":["run tests"],"feedback":null,"blocker_category":null,"blocker_message":null}',
+                    '{"approved":true,"summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_category":null,"blocker_message":null}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = WorkflowRequest(
+            tenant_id="tenant-1",
+            project_id="project-1",
+            project_name="example App",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="GP",
+            run_id="run-1",
+            issue_key="MAB-54",
+            issue_summary="Integrate Codex runtime",
+            issue_description="Objective and acceptance criteria",
+            max_dev_test_review_loops=1,
+            suggested_test_commands=["python -m unittest"],
+            execution_repo_dir="/tmp/test-repo",
+            execution_branch="run/MAB-54/run-1",
+            base_branch="main",
+            integration_branch="feature/MAB-54",
+            pr_target_branch="main",
+            allow_pr_creation=True,
+        )
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/review_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt):
+            plan = agents.pm(request, 1, None, [], None, None, None)
+            dev = agents.dev(request, plan, 1, None)
+            test_result = agents.test(request, plan, dev, 1)
+            agents.review(request, plan, dev, test_result, 1)
+
+        self.assertEqual(captured["allow_pr_creation"], "true")
+
     def test_resume_session_id_is_applied_to_selected_stage(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",

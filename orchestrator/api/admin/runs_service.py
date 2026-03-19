@@ -133,6 +133,8 @@ def rerun_run(
         precheck_outcome=resolve_enqueue_precheck_outcome(
             source="admin_rerun",
             precheck_source_plan=source_run.plan,
+            issue_summary=source_run.issue_summary,
+            issue_description=source_run.issue_description,
         ),
         precheck_source_plan=source_run.plan,
         max_concurrent_runs=effective_policy.get("max_concurrent_runs"),
