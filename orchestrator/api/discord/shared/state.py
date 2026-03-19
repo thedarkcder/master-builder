@@ -55,6 +55,7 @@ ROOM_SINGLE_KEYS = (
     "pm_room_thread_channel_id",
     "pm_thread_channel_id",
 )
+LIVE_VOICE_LINK_KEYS = ("live_voice_room_links",)
 MAX_PENDING_SEED_FOLLOWUPS = 30
 MAX_PENDING_SEED_FOLLOWUP_AGE = timedelta(hours=24)
 
@@ -85,6 +86,47 @@ def room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str
     return _room_channel_ids_from_discord_config(discord_config)
 
 
+def live_voice_enabled_from_discord_config(discord_config: dict | None) -> bool:
+    value = (discord_config or {}).get("live_voice_enabled")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return False
+
+
+def _live_voice_room_links_from_discord_config(discord_config: dict | None) -> dict[str, str]:
+    config = dict(discord_config or {})
+    room_links: dict[str, str] = {}
+    for key in LIVE_VOICE_LINK_KEYS:
+        raw_value = config.get(key)
+        if not isinstance(raw_value, dict):
+            continue
+        for voice_channel_id, linked_channel_id in raw_value.items():
+            normalized_voice_channel_id = str(voice_channel_id or "").strip()
+            normalized_linked_channel_id = str(linked_channel_id or "").strip()
+            if not normalized_voice_channel_id or not normalized_linked_channel_id:
+                continue
+            room_links[normalized_voice_channel_id] = normalized_linked_channel_id
+    return room_links
+
+
+def live_voice_room_links_from_discord_config(discord_config: dict | None) -> dict[str, str]:
+    return _live_voice_room_links_from_discord_config(discord_config)
+
+
+def live_voice_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return set(_live_voice_room_links_from_discord_config(discord_config))
+
+
+def live_voice_linked_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return set(_live_voice_room_links_from_discord_config(discord_config).values())
+
+
 def project_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
     projects = session.execute(
         select(Project).where(
@@ -104,6 +146,36 @@ def project_pm_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]
 
 def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
     return _room_channel_ids_from_discord_config(discord_config)
+
+
+def project_live_voice_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        channel_ids.update(live_voice_room_channel_ids_from_discord_config(project.discord_config or {}))
+    return channel_ids
+
+
+def project_live_voice_room_links(*, session: Session, tenant_id: str) -> dict[str, str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    room_links: dict[str, str] = {}
+    for project in projects:
+        room_links.update(live_voice_room_links_from_discord_config(project.discord_config or {}))
+    return room_links
+
+
+def project_live_voice_linked_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    return set(project_live_voice_room_links(session=session, tenant_id=tenant_id).values())
 
 
 def parse_command_text(command_text: str) -> tuple[str, list[str]]:

@@ -372,6 +372,8 @@ def test_normalize_project_discord_config_preserves_persona_maps() -> None:
     normalized = normalize_project_discord_config(
         {
             "channel_id": "  channel-1  ",
+            "live_voice_enabled": "true",
+            "live_voice_room_links": {" voice-room-1 ": " text-room-1 ", "voice-room-2": "thread-room-2"},
             "persona_names": {"pm": " Ava ", "security": " June "},
             "persona_voices": {"pm": " alloy ", "security": " sonic "},
             "voice_room_channel_ids": [" voice-room-1 ", ""],
@@ -380,6 +382,8 @@ def test_normalize_project_discord_config_preserves_persona_maps() -> None:
     )
 
     assert normalized["channel_id"] == "channel-1"
+    assert normalized["live_voice_enabled"] is True
+    assert normalized["live_voice_room_links"] == {"voice-room-1": "text-room-1", "voice-room-2": "thread-room-2"}
     assert normalized["persona_names"] == {"pm": "Ava", "security": "June"}
     assert normalized["persona_voices"] == {"pm": "alloy", "security": "sonic"}
     assert normalized["voice_room_channel_ids"] == ["voice-room-1"]
@@ -390,8 +394,11 @@ def test_with_preserved_discord_system_fields_keeps_persona_maps_when_unset() ->
     merged = with_preserved_discord_system_fields(
         existing={
             "ask_history": [],
+            "persona_room_history": [{"room_id": "room-1", "text": "hello"}],
             "persona_names": {"pm": "Ava"},
             "persona_voices": {"pm": "alloy"},
+            "live_voice_enabled": True,
+            "live_voice_room_links": {"voice-room-1": "text-room-1"},
             "voice_room_channel_ids": ["voice-room-1"],
         },
         proposed={"channel_id": "channel-1"},
@@ -401,4 +408,7 @@ def test_with_preserved_discord_system_fields_keeps_persona_maps_when_unset() ->
     assert merged["channel_id"] == "channel-1"
     assert merged["persona_names"] == {"pm": "Ava"}
     assert merged["persona_voices"] == {"pm": "alloy"}
+    assert merged["persona_room_history"] == [{"room_id": "room-1", "text": "hello"}]
+    assert merged["live_voice_enabled"] is True
+    assert merged["live_voice_room_links"] == {"voice-room-1": "text-room-1"}
     assert merged["voice_room_channel_ids"] == ["voice-room-1"]

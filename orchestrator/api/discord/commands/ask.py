@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 from re import Pattern
 from typing import Any
 
@@ -8,6 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
+from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
 from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,
     answer_pm_question_with_codex,
@@ -18,6 +20,9 @@ from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runti
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.persona_room import answer_voice_room_turn
 from orchestrator.storage.models import Project, Tenant
+
+
+_room_history_service = DiscordRoomHistoryService()
 
 
 def _normalized_project_keys(project_keys: list[str]) -> list[str]:
@@ -177,6 +182,23 @@ def dispatch_ask_command(
         scoped_project = session.get(Project, scoped_project_id) if scoped_project_id else None
         project_discord_config = scoped_project.discord_config if scoped_project is not None else {}
         if is_voice_room_mode:
+            linked_text_channel_id = str(command_params.get("linked_text_channel_id") or "").strip() or None
+            voice_channel_id = str(command_params.get("voice_channel_id") or "").strip() or None
+            room_id = _room_history_service.resolve_room_id(
+                room_id=str(command_params.get("room_id") or "").strip() or None,
+                channel_id=normalized_channel_id,
+                linked_text_channel_id=linked_text_channel_id,
+                voice_channel_id=voice_channel_id,
+            )
+            room_source_mode = str(command_params.get("room_source") or "text").strip().lower() or "text"
+            history_owner = scoped_project if scoped_project is not None else tenant
+            room_history = _room_history_service.recent_room_history(
+                discord_config=getattr(history_owner, "discord_config", None),
+                room_id=room_id,
+                channel_id=normalized_channel_id,
+                linked_text_channel_id=linked_text_channel_id,
+                voice_channel_id=voice_channel_id,
+            )
             try:
                 voice_room_result = answer_voice_room_turn(
                     runtime=runtime,
@@ -193,7 +215,7 @@ def dispatch_ask_command(
                         working_dir=codex_working_dir,
                         issue_key=normalized_issue_key,
                     ),
-                    history=_history_context,
+                    history=room_history,
                     github_context=github_context,
                     tenant_discord_config=getattr(tenant, "discord_config", None) or {},
                     project_discord_config=project_discord_config or {},
@@ -217,6 +239,40 @@ def dispatch_ask_command(
                 issue_key=normalized_issue_key,
                 status_name=requested_status,
             )
+            updated_room_config, _ = _room_history_service.append_room_history_entry(
+                discord_config=getattr(history_owner, "discord_config", None),
+                room_id=room_id,
+                channel_id=normalized_channel_id,
+                linked_text_channel_id=linked_text_channel_id,
+                voice_channel_id=voice_channel_id,
+                speaker_type="user",
+                source_mode=room_source_mode,
+                text=question,
+                user_id=normalized_user_id,
+                issue_key=normalized_issue_key,
+                status_name=requested_status,
+            )
+            updated_room_config, _ = _room_history_service.append_room_history_entry(
+                discord_config=updated_room_config,
+                room_id=room_id,
+                channel_id=normalized_channel_id,
+                linked_text_channel_id=linked_text_channel_id,
+                voice_channel_id=voice_channel_id,
+                speaker_type="persona",
+                source_mode=room_source_mode,
+                text=voice_room_result.message,
+                persona_id=voice_room_result.persona_id,
+                issue_key=normalized_issue_key,
+                status_name=requested_status,
+                metadata={
+                    "router_confidence": voice_room_result.router_confidence,
+                    "router_reason": voice_room_result.router_reason,
+                },
+            )
+            history_owner.discord_config = dict(updated_room_config)
+            if hasattr(history_owner, "updated_at"):
+                history_owner.updated_at = datetime.now(timezone.utc)
+            session.commit()
             return DiscordCommandResponse(
                 ok=True,
                 command="pm",

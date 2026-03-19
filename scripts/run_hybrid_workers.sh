@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 WORKER_CHECKOUT_DIR="${ROOT_DIR}/.workdirs"
 mkdir -p "${WORKER_CHECKOUT_DIR}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$ROOT_DIR")}"
-DOCKER_SERVICES=(postgres api worker knowledge-sync discord-gateway tailscale)
+DOCKER_SERVICES=(postgres api worker knowledge-sync discord-gateway discord-live-voice tailscale)
 DOCKER_WAIT_TIMEOUT_SECONDS="${DOCKER_WAIT_TIMEOUT_SECONDS:-300}"
 DOCKER_WAIT_INTERVAL_SECONDS="${DOCKER_WAIT_INTERVAL_SECONDS:-3}"
 

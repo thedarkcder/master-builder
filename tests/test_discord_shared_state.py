@@ -196,6 +196,51 @@ class DiscordSharedStateTests(unittest.TestCase):
             {"voice-room-1", "persona-thread-1", "pm-room-1"},
         )
 
+    def test_live_voice_room_helpers_support_links_and_enabled(self) -> None:
+        config = {
+            "live_voice_enabled": "yes",
+            "live_voice_room_links": {
+                "voice-room-1": "text-room-1",
+                " voice-room-2 ": " thread-room-2 ",
+                " ": "skip",
+            },
+        }
+        self.assertTrue(state_module.live_voice_enabled_from_discord_config(config))
+        self.assertEqual(
+            state_module.live_voice_room_links_from_discord_config(config),
+            {
+                "voice-room-1": "text-room-1",
+                "voice-room-2": "thread-room-2",
+            },
+        )
+        self.assertEqual(
+            state_module.live_voice_room_channel_ids_from_discord_config(config),
+            {"voice-room-1", "voice-room-2"},
+        )
+        self.assertEqual(
+            state_module.live_voice_linked_channel_ids_from_discord_config(config),
+            {"text-room-1", "thread-room-2"},
+        )
+
+        session = MagicMock()
+        project = SimpleNamespace(discord_config=config)
+        session.execute.return_value.scalars.return_value.all.return_value = [project]
+        self.assertEqual(
+            state_module.project_live_voice_room_channel_ids(session=session, tenant_id="tenant-1"),
+            {"voice-room-1", "voice-room-2"},
+        )
+        self.assertEqual(
+            state_module.project_live_voice_room_links(session=session, tenant_id="tenant-1"),
+            {
+                "voice-room-1": "text-room-1",
+                "voice-room-2": "thread-room-2",
+            },
+        )
+        self.assertEqual(
+            state_module.project_live_voice_linked_channel_ids(session=session, tenant_id="tenant-1"),
+            {"text-room-1", "thread-room-2"},
+        )
+
     def test_seed_followup_lifecycle(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(discord_config={}, updated_at=None)
