@@ -25,7 +25,12 @@ from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runti
 from orchestrator.core.codex_working_dir import resolve_codex_working_dir
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.live_voice_runtime import build_live_voice_runtime
-from orchestrator.core.discord.live_voice_session import LiveVoiceCallbacks, LiveVoiceRoomBinding, LiveVoiceTurn
+from orchestrator.core.discord.live_voice_session import (
+    LiveVoiceCallbacks,
+    LiveVoiceRoomBinding,
+    LiveVoiceSessionState,
+    LiveVoiceTurn,
+)
 from orchestrator.core.discord.persona_room import answer_voice_room_turn
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
@@ -113,6 +118,8 @@ class DiscordLiveVoiceService:
         self._rooms_by_key: dict[str, ConfiguredLiveVoiceRoom] = {}
         self._voice_clients_by_room_key: dict[str, Any] = {}
         self._voice_clients_by_guild_id: dict[str, str] = {}
+        self._recording_room_keys: set[str] = set()
+        self._room_operation_locks: dict[str, asyncio.Lock] = {}
         self._runtime_lock = threading.RLock()
         self._processing_lock = threading.Lock()
         self._stop_event = stop_event or threading.Event()
@@ -329,48 +336,82 @@ class DiscordLiveVoiceService:
     async def _join_room(self, *, room: ConfiguredLiveVoiceRoom, human_count: int) -> None:
         if self._discord_client is None:
             return
-        active_room_key = self._voice_clients_by_guild_id.get(room.guild_id)
-        if active_room_key and active_room_key != room.room_key:
-            logger.warning(
-                "discord_live_voice_room_skipped guild_id=%s room_key=%s active_room_key=%s",
-                room.guild_id,
-                room.room_key,
-                active_room_key,
-            )
-            return
+        async with self._room_operation_lock(room.room_key):
+            active_room_key = self._voice_clients_by_guild_id.get(room.guild_id)
+            if active_room_key and active_room_key != room.room_key:
+                logger.warning(
+                    "discord_live_voice_room_skipped guild_id=%s room_key=%s active_room_key=%s",
+                    room.guild_id,
+                    room.room_key,
+                    active_room_key,
+                )
+                return
 
-        if room.room_key in self._voice_clients_by_room_key:
-            return
+            voice_channel = self._resolve_voice_channel(room)
+            if voice_channel is None:
+                logger.warning(
+                    "discord_live_voice_room_missing channel_id=%s guild_id=%s",
+                    room.voice_channel_id,
+                    room.guild_id,
+                )
+                return
 
-        voice_channel = self._resolve_voice_channel(room)
-        if voice_channel is None:
-            logger.warning("discord_live_voice_room_missing channel_id=%s guild_id=%s", room.voice_channel_id, room.guild_id)
-            return
+            try:
+                voice_client = await self._connect_or_reuse_voice_client(room=room, voice_channel=voice_channel)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("discord_live_voice_join_failed room_key=%s error=%s", room.room_key, exc)
+                return
+            if voice_client is None:
+                return
 
-        voice_client = await voice_channel.connect()
-        sink = _build_sink(discord=self._discord_module, service=self, room=room)
-        if not hasattr(voice_client, "start_recording"):
-            raise DiscordLiveVoiceDependencyFailure("Installed Discord voice client does not support audio recording.")
-        voice_client.start_recording(sink, _recording_stopped_callback)
-        self._voice_clients_by_room_key[room.room_key] = voice_client
-        self._voice_clients_by_guild_id[room.guild_id] = room.room_key
-        with self._runtime_lock:
-            self._runtime.join_room(binding=room.binding, human_member_count=human_count)
-        logger.info("discord_live_voice_joined room_key=%s human_count=%s", room.room_key, human_count)
+            if not self._voice_client_matches_room(voice_client=voice_client, room=room):
+                logger.warning(
+                    "discord_live_voice_join_skipped room_key=%s reason=voice_client_bound_elsewhere",
+                    room.room_key,
+                )
+                return
+            if not self._voice_client_is_connected(voice_client):
+                logger.warning(
+                    "discord_live_voice_join_skipped room_key=%s reason=voice_client_not_connected",
+                    room.room_key,
+                )
+                await self._disconnect_voice_client_instance(
+                    voice_client=voice_client,
+                    guild_id=room.guild_id,
+                    room_key=room.room_key,
+                )
+                return
+
+            self._voice_clients_by_room_key[room.room_key] = voice_client
+            self._voice_clients_by_guild_id[room.guild_id] = room.room_key
+            try:
+                self._ensure_recording_started(voice_client=voice_client, room=room)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("discord_live_voice_recording_start_failed room_key=%s error=%s", room.room_key, exc)
+                await self._disconnect_voice_client_instance(
+                    voice_client=voice_client,
+                    guild_id=room.guild_id,
+                    room_key=room.room_key,
+                )
+                return
+
+            self._mark_room_joined(room=room, human_count=human_count)
+            logger.info("discord_live_voice_joined room_key=%s human_count=%s", room.room_key, human_count)
 
     async def _leave_room(self, *, room: ConfiguredLiveVoiceRoom) -> None:
-        voice_client = self._voice_clients_by_room_key.pop(room.room_key, None)
-        self._voice_clients_by_guild_id.pop(room.guild_id, None)
-        if voice_client is not None:
-            if hasattr(voice_client, "stop_recording"):
-                try:
-                    voice_client.stop_recording()
-                except Exception:  # noqa: BLE001
-                    logger.exception("discord_live_voice_stop_recording_failed room_key=%s", room.room_key)
-            await voice_client.disconnect(force=True)
-        with self._runtime_lock:
-            self._runtime.leave_room(binding=room.binding)
-        logger.info("discord_live_voice_left room_key=%s", room.room_key)
+        async with self._room_operation_lock(room.room_key):
+            voice_client = self._voice_clients_by_room_key.get(room.room_key)
+            if voice_client is not None:
+                await self._disconnect_voice_client_instance(
+                    voice_client=voice_client,
+                    guild_id=room.guild_id,
+                    room_key=room.room_key,
+                )
+            with self._runtime_lock:
+                session = self._runtime.get_session(binding=room.binding)
+                if session is not None and session.state != LiveVoiceSessionState.DISCONNECTED:
+                    self._runtime.leave_room(binding=room.binding)
+            logger.info("discord_live_voice_left room_key=%s", room.room_key)
 
     def handle_voice_chunk(
         self,
@@ -622,6 +663,140 @@ class DiscordLiveVoiceService:
         if guild is None:
             return None
         return guild.get_channel(int(room.voice_channel_id))
+
+    def _room_operation_lock(self, room_key: str) -> asyncio.Lock:
+        lock = self._room_operation_locks.get(room_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._room_operation_locks[room_key] = lock
+        return lock
+
+    async def _connect_or_reuse_voice_client(self, *, room: ConfiguredLiveVoiceRoom, voice_channel) -> Any:  # noqa: ANN001
+        existing_room_client = self._voice_clients_by_room_key.get(room.room_key)
+        if existing_room_client is not None:
+            if self._voice_client_matches_room(voice_client=existing_room_client, room=room) and self._voice_client_is_connected(
+                existing_room_client
+            ):
+                return existing_room_client
+            await self._disconnect_voice_client_instance(
+                voice_client=existing_room_client,
+                guild_id=room.guild_id,
+                room_key=room.room_key,
+            )
+
+        guild_voice_client = self._guild_voice_client(room=room)
+        if guild_voice_client is not None and self._voice_client_matches_room(voice_client=guild_voice_client, room=room):
+            if self._voice_client_is_connected(guild_voice_client):
+                return guild_voice_client
+            await self._disconnect_voice_client_instance(
+                voice_client=guild_voice_client,
+                guild_id=room.guild_id,
+                room_key=self._voice_clients_by_guild_id.get(room.guild_id) or room.room_key,
+            )
+            guild_voice_client = None
+        if guild_voice_client is not None:
+            await self._disconnect_voice_client_instance(
+                voice_client=guild_voice_client,
+                guild_id=room.guild_id,
+                room_key=self._voice_clients_by_guild_id.get(room.guild_id),
+            )
+
+        try:
+            return await voice_channel.connect()
+        except Exception as exc:  # noqa: BLE001
+            if not self._is_already_connected_error(exc):
+                raise
+
+        guild_voice_client = self._guild_voice_client(room=room)
+        if guild_voice_client is None:
+            return None
+        if self._voice_client_matches_room(voice_client=guild_voice_client, room=room) and self._voice_client_is_connected(
+            guild_voice_client
+        ):
+            return guild_voice_client
+
+        await self._disconnect_voice_client_instance(
+            voice_client=guild_voice_client,
+            guild_id=room.guild_id,
+            room_key=self._voice_clients_by_guild_id.get(room.guild_id),
+        )
+        return await voice_channel.connect()
+
+    def _ensure_recording_started(self, *, voice_client: Any, room: ConfiguredLiveVoiceRoom) -> None:
+        if room.room_key in self._recording_room_keys:
+            return
+        sink = _build_sink(discord=self._discord_module, service=self, room=room)
+        if not hasattr(voice_client, "start_recording"):
+            raise DiscordLiveVoiceDependencyFailure("Installed Discord voice client does not support audio recording.")
+        voice_client.start_recording(sink, _recording_stopped_callback)
+        self._recording_room_keys.add(room.room_key)
+
+    def _mark_room_joined(self, *, room: ConfiguredLiveVoiceRoom, human_count: int) -> None:
+        with self._runtime_lock:
+            session = self._runtime.get_session(binding=room.binding)
+            if session is None:
+                self._runtime.register_room(
+                    binding=room.binding,
+                    bot_user_id=_discord_user_id(getattr(self._discord_client, "user", None)),
+                    human_member_count=human_count,
+                )
+                session = self._runtime.get_session(binding=room.binding)
+            if session is not None and session.state == LiveVoiceSessionState.DISCONNECTED:
+                self._runtime.join_room(binding=room.binding, human_member_count=human_count)
+
+    async def _disconnect_voice_client_instance(
+        self,
+        *,
+        voice_client: Any,
+        guild_id: str,
+        room_key: str | None,
+    ) -> None:
+        tracked_room_key = room_key or self._voice_clients_by_guild_id.get(guild_id)
+        if tracked_room_key:
+            self._voice_clients_by_room_key.pop(tracked_room_key, None)
+            self._recording_room_keys.discard(tracked_room_key)
+        self._voice_clients_by_guild_id.pop(guild_id, None)
+        if hasattr(voice_client, "stop_recording"):
+            try:
+                voice_client.stop_recording()
+            except Exception:  # noqa: BLE001
+                logger.exception("discord_live_voice_stop_recording_failed room_key=%s", tracked_room_key or "unknown")
+        if hasattr(voice_client, "disconnect"):
+            try:
+                await voice_client.disconnect(force=True)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "discord_live_voice_disconnect_failed guild_id=%s room_key=%s",
+                    guild_id,
+                    tracked_room_key or "unknown",
+                )
+
+    def _guild_voice_client(self, *, room: ConfiguredLiveVoiceRoom) -> Any | None:
+        voice_channel = self._resolve_voice_channel(room)
+        guild = getattr(voice_channel, "guild", None)
+        return getattr(guild, "voice_client", None)
+
+    @staticmethod
+    def _voice_client_matches_room(*, voice_client: Any, room: ConfiguredLiveVoiceRoom) -> bool:
+        channel = getattr(voice_client, "channel", None)
+        channel_id = str(getattr(channel, "id", "") or "").strip()
+        return channel_id == room.voice_channel_id
+
+    @staticmethod
+    def _voice_client_is_connected(voice_client: Any) -> bool:
+        is_connected = getattr(voice_client, "is_connected", None)
+        if callable(is_connected):
+            try:
+                return bool(is_connected())
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+
+    def _is_already_connected_error(self, exc: Exception) -> bool:
+        client_exception = getattr(self._discord_module, "ClientException", None)
+        if client_exception is None or not isinstance(exc, client_exception):
+            return False
+        return "Already connected to a voice channel" in str(exc)
 
     def _resolve_bot_token(self) -> str | None:
         with self._session_factory() as session:
