@@ -228,6 +228,8 @@ class DiscordLiveVoiceService:
     async def _handle_voice_state_update(self, *, member, before, after) -> None:  # noqa: ANN001
         if self._discord_client is None:
             return
+        if bool(getattr(member, "bot", False)):
+            return
 
         changed_channel_ids = {
             str(getattr(getattr(before, "channel", None), "id", "") or "").strip(),

@@ -160,6 +160,33 @@ class LiveVoiceJoinTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replacement_voice_client.start_recording_calls, 1)
         self.assertEqual(voice_channel.connect_calls, 1)
 
+    async def test_handle_voice_state_update_ignores_bot_members(self) -> None:
+        service = self._build_service()
+        room = ConfiguredLiveVoiceRoom(
+            tenant_id="tenant-a",
+            guild_id="guild-1",
+            voice_channel_id="voice-1",
+            linked_text_channel_id="text-1",
+            project_id="project-1",
+        )
+        service._rooms_by_key = {room.room_key: room}
+        service._refresh_room_registry = lambda: None
+
+        async def _unexpected_join(*, room, human_count):  # noqa: ANN001
+            raise AssertionError("bot voice state updates should not trigger room joins")
+
+        async def _unexpected_leave(*, room):  # noqa: ANN001
+            raise AssertionError("bot voice state updates should not trigger room leaves")
+
+        service._join_room = _unexpected_join
+        service._leave_room = _unexpected_leave
+
+        before = SimpleNamespace(channel=SimpleNamespace(id=room.voice_channel_id))
+        after = SimpleNamespace(channel=SimpleNamespace(id=room.voice_channel_id))
+        member = SimpleNamespace(bot=True)
+
+        await service._handle_voice_state_update(member=member, before=before, after=after)
+
 
 if __name__ == "__main__":
     unittest.main()
