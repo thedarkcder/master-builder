@@ -22,6 +22,7 @@ dependencies = [
   "sentry-sdk[fastapi]>=2.14.0",
   "sqlalchemy>=2.0.34",
   "pillow>=11.1.0",
+  "pocket-tts>=1.1.1",
   "pytesseract>=0.3.13",
   "uvicorn>=0.30.0",
   "websockets>=12.0",
