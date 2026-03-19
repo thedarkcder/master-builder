@@ -97,6 +97,32 @@ class DecisionEngineTests(unittest.TestCase):
         )
         self.assertIsNone(resolve_enqueue_precheck_outcome(source="jira_webhook"))
 
+    def test_resolve_enqueue_precheck_outcome_forces_ready_for_remediation_trigger_context(self) -> None:
+        self.assertEqual(
+            resolve_enqueue_precheck_outcome(
+                source="admin_rerun",
+                precheck_source_plan={
+                    "pre_check": {"outcome": "gtd_required"},
+                    "trigger_context": {"source": "github_pr_review_feedback"},
+                },
+            ),
+            "ready_for_agent",
+        )
+
+    def test_resolve_enqueue_precheck_outcome_forces_ready_for_legacy_remediation_marker(self) -> None:
+        self.assertEqual(
+            resolve_enqueue_precheck_outcome(
+                source="admin_rerun",
+                precheck_source_plan={"pre_check": {"outcome": "gtd_required"}},
+                issue_summary="GP-115: PR remediation for #6",
+                issue_description=(
+                    "Automated remediation run triggered from GitHub PR #6 "
+                    "(https://github.com/org/repo/pull/6)."
+                ),
+            ),
+            "ready_for_agent",
+        )
+
     def test_worker_decision_short_circuits_when_run_plan_is_ready(self) -> None:
         worker_decision = evaluate_worker_decision(
             run_plan={"pre_check": {"outcome": "ready_for_agent"}},
@@ -106,6 +132,42 @@ class DecisionEngineTests(unittest.TestCase):
             run_id="run-1",
             issue_summary="summary",
             issue_description="desc",
+            evaluate_decision_gate_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("should not call")),
+        )
+        self.assertTrue(worker_decision.allowed)
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertIsNone(worker_decision.configuration_error)
+
+    def test_worker_decision_allows_pr_remediation_when_trigger_context_present(self) -> None:
+        worker_decision = evaluate_worker_decision(
+            run_plan={
+                "pre_check": {"outcome": "gtd_required"},
+                "trigger_context": {"source": "github_pr_review_feedback"},
+            },
+            tenant_id="t1",
+            project_id="p1",
+            issue_key="TP-1",
+            run_id="run-1",
+            issue_summary="TP-1: PR remediation for #12",
+            issue_description="Automated remediation run triggered from GitHub PR #12.",
+            evaluate_decision_gate_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("should not call")),
+        )
+        self.assertTrue(worker_decision.allowed)
+        self.assertIsNone(worker_decision.decision_gate)
+        self.assertIsNone(worker_decision.configuration_error)
+
+    def test_worker_decision_allows_pr_remediation_via_legacy_issue_markers(self) -> None:
+        worker_decision = evaluate_worker_decision(
+            run_plan={"pre_check": {"outcome": "gtd_required"}},
+            tenant_id="t1",
+            project_id="p1",
+            issue_key="TP-1",
+            run_id="run-1",
+            issue_summary="TP-1: PR remediation for #12",
+            issue_description=(
+                "Automated remediation run triggered from GitHub PR #12 "
+                "(https://github.com/org/repo/pull/12)."
+            ),
             evaluate_decision_gate_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("should not call")),
         )
         self.assertTrue(worker_decision.allowed)

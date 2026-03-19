@@ -105,6 +105,12 @@ def enqueue_pr_remediation_run(
     run = enqueue_result.run
     if enqueue_result.enqueued:
         existing_plan = run.plan if isinstance(run.plan, dict) else {}
+        normalized_head_ref = str(details.head_ref or "").strip()
+        normalized_pr_url = str(details.html_url or "").strip()
+        if normalized_head_ref:
+            run.branch = normalized_head_ref
+        if normalized_pr_url:
+            run.pr_url = normalized_pr_url
         run.plan = {
             **existing_plan,
             "trigger_context": trigger_context,

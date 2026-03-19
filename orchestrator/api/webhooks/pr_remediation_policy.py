@@ -44,8 +44,6 @@ def parse_manual_pr_fix_request(*, payload: dict) -> ManualPrFixRequest | None:
     if match is None:
         return None
     comment_url = str(match.group("comment_url") or "").strip() or None
-    if comment_url is None:
-        return ManualPrFixRequest(command="fix", comment_url=None, parse_error="manual_fix_missing_comment_url")
     return ManualPrFixRequest(command="fix", comment_url=comment_url, parse_error=None)
 
 

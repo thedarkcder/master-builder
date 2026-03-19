@@ -87,7 +87,6 @@ def test_resume_run_from_human_input_reply_uses_request_context_resume_source_pl
     with (
         patch("orchestrator.core.run_human_input_service.encrypt_value", return_value="encrypted"),
         patch("orchestrator.core.run_human_input_service.enqueue_run", return_value=enqueue_result),
-        patch("orchestrator.core.run_human_input_service.resolve_precheck_outcome_for_enqueue", return_value=None),
     ):
         result = resume_run_from_human_input_reply(
             session=session,
@@ -101,4 +100,3 @@ def test_resume_run_from_human_input_reply_uses_request_context_resume_source_pl
     assert resumed_run.dev_session_id == "dev-session-1"
     assert resumed_run.plan["trigger_context"]["resume_source_plan"] == {"plan_steps": ["Verify Apple Sign In"]}
     assert resumed_run.plan["trigger_context"]["human_input_request_ids"] == ["request-1"]
-

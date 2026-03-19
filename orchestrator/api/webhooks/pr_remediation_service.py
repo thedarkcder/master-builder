@@ -233,6 +233,7 @@ def enqueue_pr_remediation_if_needed(
     requested_by = _extract_payload_comment_login(payload=payload)
     triggering_comment_id = _extract_payload_comment_id(payload=payload)
     triggering_comment_url = _extract_payload_comment_url(payload=payload)
+    requested_comment_url = None
     if manual_fix_request is not None:
         if manual_fix_request.parse_error is not None:
             return PrRemediationResult(
@@ -244,8 +245,19 @@ def enqueue_pr_remediation_if_needed(
                 run=None,
                 head_sha=head_sha,
             )
+        requested_comment_url = str(manual_fix_request.comment_url or triggering_comment_url or "").strip()
+        if not requested_comment_url:
+            return PrRemediationResult(
+                triggered=True,
+                issue_key=None,
+                issue_created=False,
+                enqueued=False,
+                reason="manual_fix_missing_comment_url",
+                run=None,
+                head_sha=head_sha,
+            )
         requested_ref, requested_ref_error = resolve_requested_comment_ref(
-            comment_url=str(manual_fix_request.comment_url or "").strip(),
+            comment_url=requested_comment_url,
             repo_full_name=resolved_repo,
             pr_number=resolved_pr_number,
         )

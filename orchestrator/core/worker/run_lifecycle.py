@@ -20,6 +20,19 @@ RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
 
 
+def _with_preserved_trigger_context(*, current_plan: object | None, next_plan: dict) -> dict:
+    if isinstance(next_plan.get("trigger_context"), dict):
+        return next_plan
+    if not isinstance(current_plan, dict):
+        return next_plan
+    trigger_context = current_plan.get("trigger_context")
+    if not isinstance(trigger_context, dict):
+        return next_plan
+    merged = dict(next_plan)
+    merged["trigger_context"] = dict(trigger_context)
+    return merged
+
+
 def _release_run_lock(session: Session, *, run: Run) -> None:
     session.execute(
         delete(RunLock).where(
@@ -159,14 +172,17 @@ def finalize_cancelled_run(
     run: Run,
     stage_updates: list[dict[str, str]],
 ) -> Run:
-    run.plan = {
+    run.plan = _with_preserved_trigger_context(
+        current_plan=run.plan,
+        next_plan={
         "succeeded": False,
         "attempts": 0,
         "summary": ["Run cancelled during execution"],
         "test_guidance": [],
         "pr_url": run.pr_url,
         "stage_updates": stage_updates,
-    }
+        },
+    )
     if run.finished_at is None:
         run.finished_at = datetime.now(timezone.utc)
     _release_run_lock(session, run=run)
@@ -187,7 +203,7 @@ def finalize_workflow_result(
     plan_payload["stage_updates"] = stage_updates
     if execution_context:
         plan_payload["execution_context"] = execution_context
-    run.plan = plan_payload
+    run.plan = _with_preserved_trigger_context(current_plan=run.plan, next_plan=plan_payload)
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)
     if workflow_result.succeeded:
@@ -223,7 +239,7 @@ def requeue_workflow_result_for_capability(
     plan_payload["required_worker_capability"] = required_worker_capability
     plan_payload["required_worker_label"] = required_worker_label
     plan_payload["requeued"] = True
-    run.plan = plan_payload
+    run.plan = _with_preserved_trigger_context(current_plan=run.plan, next_plan=plan_payload)
     run.status = "queued"
     run.last_error = None
     run.started_at = None
@@ -257,7 +273,7 @@ def requeue_workflow_result_for_stale_snapshot(
     plan_payload["requeued"] = True
     plan_payload["stale_branch_snapshot"] = True
     plan_payload["requeue_reason"] = error
-    run.plan = plan_payload
+    run.plan = _with_preserved_trigger_context(current_plan=run.plan, next_plan=plan_payload)
     run.pr_url = None
     run.status = "queued"
     run.last_error = None

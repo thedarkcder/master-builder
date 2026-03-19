@@ -290,6 +290,71 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertEqual(request.resume_session_id, "dev-session-123")
             self.assertEqual(request.resume_source_plan, run.plan["trigger_context"]["resume_source_plan"])
 
+    def test_build_workflow_request_prefers_remediation_trigger_branch_and_base(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            run.plan = {
+                "trigger_context": {
+                    "source": "github_pr_review_feedback",
+                    "pr_number": 14,
+                    "head_ref": "run/gp-122/6fc2dd62-c996-468f-84ba-3ac052c08703",
+                    "base_ref": "main",
+                }
+            }
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                environment={"default_branch": "staging"},
+            )
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
+            checkout_dir.mkdir(parents=True, exist_ok=True)
+            with (
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
+                    return_value=(checkout_dir, "run/tp-1/run-1"),
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.read_run_worktree_metadata",
+                    return_value={"start_point_ref": "origin/main", "start_point_sha": "abc123"},
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
+                    return_value=None,
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service._resolve_branch_from_open_pull_requests",
+                    return_value="feature/tp-1-fallback",
+                ) as open_pr_branch_mock,
+            ):
+                request = build_workflow_request_for_run(
+                    session=SimpleNamespace(),
+                    tenant=tenant,
+                    run=run,
+                    project=project,
+                    effective_policy=effective_policy,
+                    settings=settings,
+                )
+
+            self.assertEqual(
+                request.integration_branch,
+                "run/gp-122/6fc2dd62-c996-468f-84ba-3ac052c08703",
+            )
+            self.assertEqual(request.base_branch, "main")
+            self.assertEqual(request.pr_target_branch, "main")
+            self.assertEqual(run.branch, "run/gp-122/6fc2dd62-c996-468f-84ba-3ac052c08703")
+            open_pr_branch_mock.assert_not_called()
+
     def test_build_workflow_request_includes_answered_human_inputs(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)

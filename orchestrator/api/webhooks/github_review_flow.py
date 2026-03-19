@@ -29,6 +29,7 @@ def process_pull_request_targets(
     publish_inline_review_batch_fn,
     enqueue_pr_remediation_if_needed_fn,
     upsert_sticky_remediation_comment_fn,
+    upsert_manual_fix_followup_comment_fn,
     github_api_error_type,
 ) -> dict[str, object]:
     signals: list[dict[str, object]] = []
@@ -292,6 +293,7 @@ def process_pull_request_targets(
                     "issue_created": False,
                 }
             )
+            continue
         if not green and not allow_pr_remediation:
             remediation.append(
                 {
@@ -304,67 +306,138 @@ def process_pull_request_targets(
                     "issue_created": False,
                 }
             )
-        if remediation_result is not None and remediation_result.triggered:
-            issue_url = tenant_jira_issue_url_fn(
-                session=session,
-                tenant=tenant,
-                issue_key=remediation_result.issue_key,
-            )
-            remediation_run_id = (
-                str(getattr(remediation_result.run, "run_id", "")).strip() or None
-                if remediation_result.run is not None
+            continue
+        if remediation_result is None or not remediation_result.triggered:
+            continue
+        issue_url = tenant_jira_issue_url_fn(
+            session=session,
+            tenant=tenant,
+            issue_key=remediation_result.issue_key,
+        )
+        remediation_run_id = (
+            str(getattr(remediation_result.run, "run_id", "")).strip() or None
+            if remediation_result.run is not None
+            else None
+        )
+        if manual_fix_requested:
+            comment = payload.get("comment")
+            comment_id = comment.get("id") if isinstance(comment, dict) else None
+            comment_url = str(comment.get("html_url") or "").strip() if isinstance(comment, dict) else ""
+            comment_user = comment.get("user") if isinstance(comment, dict) else None
+            requested_by = (
+                str(comment_user.get("login") or "").strip()
+                if isinstance(comment_user, dict)
                 else None
             )
-            try:
-                remediation_comment_result = upsert_sticky_remediation_comment_fn(
-                    github_client=github_client,
-                    repo_full_name=repo_full_name,
-                    pr_number=pr_number,
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                    issue_key=remediation_result.issue_key,
-                    issue_url=issue_url,
-                    issue_created=remediation_result.issue_created,
-                    enqueued=remediation_result.enqueued,
-                    reason=remediation_result.reason,
-                    run_id=remediation_run_id,
-                    head_sha=remediation_result.head_sha,
-                    event=github_event,
-                    action=normalized_action,
-                )
-                remediation_comments.append(
-                    {
-                        "pr_number": pr_number,
-                        "action": remediation_comment_result.action,
-                        "comment_id": coerce_int_or_none(remediation_comment_result.comment_id),
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "github_webhook_remediation_comment_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
-                    request_id,
-                    tenant.tenant_id,
-                    pr_number,
-                    exc,
-                )
-                remediation_comments.append(
-                    {
-                        "pr_number": pr_number,
-                        "action": "failed",
-                        "error": str(exc),
-                    }
-                )
-            remediation.append(
+            run_plan = getattr(remediation_result.run, "plan", None)
+            trigger_context = run_plan.get("trigger_context") if isinstance(run_plan, dict) else None
+            manual_context = (
+                trigger_context.get("manual_fix_request")
+                if isinstance(trigger_context, dict)
+                else None
+            )
+            requested_comment = (
+                manual_context.get("requested_comment")
+                if isinstance(manual_context, dict)
+                else None
+            )
+            requested_comment_url = (
+                str(requested_comment.get("url") or "").strip()
+                if isinstance(requested_comment, dict)
+                else ""
+            )
+            if isinstance(comment_id, int) and comment_id > 0:
+                try:
+                    followup_result = upsert_manual_fix_followup_comment_fn(
+                        github_client=github_client,
+                        repo_full_name=repo_full_name,
+                        pr_number=pr_number,
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        triggering_comment_id=comment_id,
+                        requested_by=requested_by or None,
+                        triggering_comment_url=comment_url or None,
+                        requested_comment_url=requested_comment_url or comment_url or None,
+                        issue_key=remediation_result.issue_key,
+                        issue_url=issue_url,
+                        enqueued=remediation_result.enqueued,
+                        run_id=remediation_run_id,
+                        reason=remediation_result.reason,
+                    )
+                    remediation_comments.append(
+                        {
+                            "pr_number": pr_number,
+                            "action": followup_result.action,
+                            "comment_id": coerce_int_or_none(followup_result.comment_id),
+                            "kind": "manual_fix_followup",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "github_webhook_manual_fix_followup_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                        request_id,
+                        tenant.tenant_id,
+                        pr_number,
+                        exc,
+                    )
+                    remediation_comments.append(
+                        {
+                            "pr_number": pr_number,
+                            "action": "failed",
+                            "error": str(exc),
+                            "kind": "manual_fix_followup",
+                        }
+                    )
+        try:
+            remediation_comment_result = upsert_sticky_remediation_comment_fn(
+                github_client=github_client,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                issue_key=remediation_result.issue_key,
+                issue_url=issue_url,
+                issue_created=remediation_result.issue_created,
+                enqueued=remediation_result.enqueued,
+                reason=remediation_result.reason,
+                run_id=remediation_run_id,
+                head_sha=remediation_result.head_sha,
+                event=github_event,
+                action=normalized_action,
+            )
+            remediation_comments.append(
                 {
                     "pr_number": pr_number,
-                    "enqueued": remediation_result.enqueued,
-                    "reason": remediation_result.reason,
-                    "run_id": remediation_run_id,
-                    "issue_key": remediation_result.issue_key,
-                    "issue_url": issue_url,
-                    "issue_created": remediation_result.issue_created,
+                    "action": remediation_comment_result.action,
+                    "comment_id": coerce_int_or_none(remediation_comment_result.comment_id),
                 }
             )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "github_webhook_remediation_comment_failed request_id=%s tenant_id=%s pr_number=%s error=%s",
+                request_id,
+                tenant.tenant_id,
+                pr_number,
+                exc,
+            )
+            remediation_comments.append(
+                {
+                    "pr_number": pr_number,
+                    "action": "failed",
+                    "error": str(exc),
+                }
+            )
+        remediation.append(
+            {
+                "pr_number": pr_number,
+                "enqueued": remediation_result.enqueued,
+                "reason": remediation_result.reason,
+                "run_id": remediation_run_id,
+                "issue_key": remediation_result.issue_key,
+                "issue_url": issue_url,
+                "issue_created": remediation_result.issue_created,
+            }
+        )
 
     return {
         "signals": signals,
