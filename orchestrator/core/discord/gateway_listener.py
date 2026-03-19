@@ -51,12 +51,28 @@ INTENT_GUILDS = 1 << 0
 INTENT_GUILD_MESSAGES = 1 << 9
 INTENT_MESSAGE_CONTENT = 1 << 15
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
-_PM_ROOM_LIST_KEYS = (
+_ROOM_LIST_KEYS = (
+    "voice_room_channel_ids",
+    "voice_room_thread_channel_ids",
+    "voice_thread_channel_ids",
+    "persona_room_channel_ids",
+    "persona_room_thread_channel_ids",
+    "persona_thread_channel_ids",
+    "room_channel_ids",
+    "room_thread_channel_ids",
     "pm_room_channel_ids",
     "pm_room_thread_channel_ids",
     "pm_thread_channel_ids",
 )
-_PM_ROOM_SINGLE_KEYS = (
+_ROOM_SINGLE_KEYS = (
+    "voice_room_channel_id",
+    "voice_room_thread_channel_id",
+    "voice_thread_channel_id",
+    "persona_room_channel_id",
+    "persona_room_thread_channel_id",
+    "persona_thread_channel_id",
+    "room_channel_id",
+    "room_thread_channel_id",
     "pm_room_channel_id",
     "pm_room_thread_channel_id",
     "pm_thread_channel_id",
@@ -81,10 +97,10 @@ def _ask_reply_components() -> list[dict]:
     ]
 
 
-def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+def _room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
     config = dict(discord_config or {})
     channel_ids: set[str] = set()
-    for key in _PM_ROOM_LIST_KEYS:
+    for key in _ROOM_LIST_KEYS:
         raw_values = config.get(key)
         if not isinstance(raw_values, list):
             continue
@@ -92,14 +108,18 @@ def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set
             normalized = str(value or "").strip()
             if normalized:
                 channel_ids.add(normalized)
-    for key in _PM_ROOM_SINGLE_KEYS:
+    for key in _ROOM_SINGLE_KEYS:
         normalized = str(config.get(key) or "").strip()
         if normalized:
             channel_ids.add(normalized)
     return channel_ids
 
 
-def _project_pm_room_channel_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
+def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return _room_channel_ids_from_discord_config(discord_config)
+
+
+def _project_room_channel_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
     projects = session.execute(
         select(Project).where(
             Project.tenant_id == tenant_id,
@@ -108,8 +128,12 @@ def _project_pm_room_channel_ids(*, session, tenant_id: str) -> set[str]:  # noq
     ).scalars().all()
     channel_ids: set[str] = set()
     for project in projects:
-        channel_ids.update(_pm_room_channel_ids_from_discord_config(project.discord_config or {}))
+        channel_ids.update(_room_channel_ids_from_discord_config(project.discord_config or {}))
     return channel_ids
+
+
+def _project_pm_room_channel_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
+    return _project_room_channel_ids(session=session, tenant_id=tenant_id)
 
 
 def _is_audio_attachment(attachment: dict[str, str]) -> bool:
@@ -375,27 +399,30 @@ class DiscordGatewayListener:
                     }
                 )
         attachments = attachments[:5]
-        should_send_pm_voice_reply = False
-        pm_voice_reply_text: str | None = None
+        should_send_room_voice_reply = False
+        room_voice_reply_text: str | None = None
+        room_voice_reply_persona_id: str | None = None
+        room_voice_reply_persona_name: str | None = None
+        room_voice_reply_config: dict | None = None
 
         with self._session_factory() as session:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
             if tenant is None:
                 return
-            pm_room_channel_ids = _project_pm_room_channel_ids(
+            room_channel_ids = _project_room_channel_ids(
                 session=session,
                 tenant_id=tenant.tenant_id,
             )
-            pm_room_channel_ids.update(
-                _pm_room_channel_ids_from_discord_config(getattr(tenant, "discord_config", None) or {})
+            room_channel_ids.update(
+                _room_channel_ids_from_discord_config(getattr(tenant, "discord_config", None) or {})
             )
             if (
                 not content
-                and channel_id in pm_room_channel_ids
+                and channel_id in room_channel_ids
                 and len(attachments) == 1
                 and _is_audio_attachment(attachments[0])
             ):
-                transcript, error_message = self._transcribe_pm_audio_attachment(
+                transcript, error_message = self._transcribe_room_audio_attachment(
                     attachment=attachments[0],
                     bot_token=bot_token,
                 )
@@ -503,8 +530,12 @@ class DiscordGatewayListener:
                 and not command_text.startswith("!")
             ):
                 command_text = f"!issues followup {command_text}"
-            if channel_id in pm_room_channel_ids and not command_text.startswith("!"):
+            if channel_id in room_channel_ids and not command_text.startswith("!"):
                 command_text = f"!pm {command_text}"
+                command_params = {
+                    **(command_params or {}),
+                    "room_mode": "true",
+                }
 
             message_content = f"<@{user_id}> Command failed due to an internal error."
             components: list[dict] | None = None
@@ -542,9 +573,16 @@ class DiscordGatewayListener:
                         components = build_ask_confirmation_components(request_id)
                 elif command_response.command == "reply" and bool(data.get("recheck_required")):
                     components = _ask_reply_components()
-                elif command_response.command == "pm" and channel_id in pm_room_channel_ids:
-                    should_send_pm_voice_reply = True
-                    pm_voice_reply_text = str(command_response.message or "").strip() or None
+                elif channel_id in room_channel_ids and command_response.command in {"pm", "room"}:
+                    should_send_room_voice_reply = True
+                    room_voice_reply_text = str(command_response.message or "").strip() or None
+                    room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or None
+                    room_voice_reply_persona_name = str(data.get("persona_name") or "").strip() or None
+                    if room_voice_reply_persona_id is None and command_response.command == "pm":
+                        room_voice_reply_persona_id = "pm"
+                    if room_voice_reply_persona_name is None and room_voice_reply_persona_id == "pm":
+                        room_voice_reply_persona_name = "PM"
+                    room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
             except HTTPException as exc:
                 logger.exception(
                     "discord_gateway_command_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
@@ -590,15 +628,31 @@ class DiscordGatewayListener:
                 channel_id,
                 exc,
             )
-        if should_send_pm_voice_reply and pm_voice_reply_text:
-            self._post_pm_voice_reply(
+        if should_send_room_voice_reply and room_voice_reply_text:
+            voice_error = self._post_room_voice_reply(
                 bot_token=bot_token,
                 user_id=user_id,
                 channel_id=channel_id,
-                text=pm_voice_reply_text,
+                text=room_voice_reply_text,
+                persona_id=room_voice_reply_persona_id,
+                persona_name=room_voice_reply_persona_name,
+                room_config=room_voice_reply_config,
             )
+            if voice_error:
+                try:
+                    DiscordApiClient(bot_token=bot_token).post_message(
+                        channel_id=channel_id,
+                        content=f"<@{user_id}> {voice_error}",
+                    )
+                except DiscordApiError as exc:
+                    logger.exception(
+                        "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
+                        user_id,
+                        channel_id,
+                        exc,
+                    )
 
-    def _transcribe_pm_audio_attachment(
+    def _transcribe_room_audio_attachment(
         self,
         *,
         attachment: dict[str, str],
@@ -626,7 +680,7 @@ class DiscordGatewayListener:
                     content_type=str(attachment.get("content_type") or "").strip() or downloaded_content_type,
                 )
             except VoiceTranscriptionError as exc:
-                logger.exception("discord_gateway_pm_audio_transcription_failed error=%s", exc)
+                logger.exception("discord_gateway_room_audio_transcription_failed error=%s", exc)
                 return None, "I couldn't transcribe that audio attachment. Please retry with text."
             if not transcript:
                 return None, "I couldn't transcribe that audio attachment. Please retry with text."
@@ -634,42 +688,51 @@ class DiscordGatewayListener:
         try:
             transcript = str(self._transcribe_audio_attachment(attachment) or "").strip()
         except Exception as exc:
-            logger.exception("discord_gateway_pm_audio_transcription_failed error=%s", exc)
+            logger.exception("discord_gateway_room_audio_transcription_failed error=%s", exc)
             return None, "I couldn't transcribe that audio attachment. Please retry with text."
         if not transcript:
             return None, "I couldn't transcribe that audio attachment. Please retry with text."
         return transcript, None
 
-    def _post_pm_voice_reply(
+    def _post_room_voice_reply(
         self,
         *,
         bot_token: str,
         user_id: str,
         channel_id: str,
         text: str,
-    ) -> None:
-        if not bool(getattr(self._settings, "voice_reply_enabled_default", False)):
-            return
+        persona_id: str | None = None,
+        persona_name: str | None = None,
+        room_config: dict | None = None,
+    ) -> str | None:
         try:
-            audio = synthesize_reply_audio(settings=self._settings, text=text)
+            audio = synthesize_reply_audio(
+                settings=self._settings,
+                text=text,
+                persona_id=persona_id,
+                room_config=room_config,
+            )
         except VoiceReplyError as exc:
-            logger.info("discord_gateway_pm_voice_reply_skipped channel_id=%s reason=%s", channel_id, exc)
-            return
+            logger.warning("discord_gateway_room_voice_reply_failed channel_id=%s reason=%s", channel_id, exc)
+            speaker = str(persona_name or persona_id or "Room persona").strip()
+            return f"Voice reply failed for `{speaker}`: {exc}"
         try:
             DiscordApiClient(bot_token=bot_token).post_message_with_attachment(
                 channel_id=channel_id,
-                content=f"<@{user_id}> Voice reply",
+                content=f"<@{user_id}> Voice reply from {str(persona_name or persona_id or 'room persona').strip()}",
                 filename=audio.filename,
                 file_bytes=audio.audio_bytes,
                 content_type=audio.content_type,
             )
         except (DiscordApiError, ValueError) as exc:
             logger.exception(
-                "discord_gateway_pm_voice_reply_post_failed user_id=%s channel_id=%s error=%s",
+                "discord_gateway_room_voice_reply_post_failed user_id=%s channel_id=%s error=%s",
                 user_id,
                 channel_id,
                 exc,
             )
+            return f"Voice reply post failed: {exc}"
+        return None
 
     def _find_tenant_for_channel(self, *, session, channel_id: str) -> Tenant | None:  # noqa: ANN001
         tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
@@ -681,7 +744,7 @@ class DiscordGatewayListener:
         matched_tenant_ids = {
             str(project.tenant_id)
             for project in projects
-            if channel_id in _pm_room_channel_ids_from_discord_config(project.discord_config or {})
+            if channel_id in _room_channel_ids_from_discord_config(project.discord_config or {})
         }
         if len(matched_tenant_ids) != 1:
             return None

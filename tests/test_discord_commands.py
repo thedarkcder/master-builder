@@ -1185,6 +1185,57 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(command_response.data["jira_seed_result"]["created_issue_keys"], ["TP-501", "TP-502"])
         self.assertEqual(answer_mock.call_args.kwargs["action"], "approve")
 
+    def test_pm_room_mode_routes_to_persona_room_runtime(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_voice_room_turn",
+                return_value=SimpleNamespace(
+                    message="We should keep the MVP to transcription and routing.",
+                    brief={},
+                    persona_id="architect",
+                    persona_role="Architect",
+                    persona_name="Soren",
+                    persona_voice_id="echo",
+                    router_confidence=0.92,
+                    router_reason="The user is asking about system shape and tradeoffs.",
+                    room_config={"persona_names": {"architect": "Soren"}, "persona_voices": {"architect": "echo"}},
+                ),
+            ) as room_mock,
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!pm how should this fit together",
+                    command_params={"room_mode": "true"},
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "pm")
+        self.assertTrue(command_response.data["room_mode"])
+        self.assertEqual(command_response.data["persona_id"], "architect")
+        self.assertEqual(command_response.data["persona_name"], "Soren")
+        self.assertEqual(command_response.data["router"]["confidence"], 0.92)
+        room_mock.assert_called_once()
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            history = list((tenant.discord_config or {}).get("ask_history") or [])
+            self.assertTrue(history)
+            latest_entry = history[-1]
+            self.assertTrue(str(latest_entry.get("question") or "").startswith("room "))
+            self.assertEqual(latest_entry.get("answer"), "architect: We should keep the MVP to transcription and routing.")
+
     def test_ask_command_returns_board_answer(self) -> None:
         with patch(
             "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",

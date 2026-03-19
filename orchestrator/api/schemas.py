@@ -84,6 +84,36 @@ class DiscordConfig(BaseModel):
     notify_events: list[str] = Field(default_factory=list)
     allowed_user_ids: list[str] = Field(default_factory=list)
     allowlist_requests: list[dict] = Field(default_factory=list)
+    voice_room_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_thread_channel_ids: list[str] = Field(default_factory=list)
+    persona_room_channel_ids: list[str] = Field(default_factory=list)
+    persona_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    persona_thread_channel_ids: list[str] = Field(default_factory=list)
+    room_channel_ids: list[str] = Field(default_factory=list)
+    room_thread_channel_ids: list[str] = Field(default_factory=list)
+    pm_room_channel_ids: list[str] = Field(default_factory=list)
+    pm_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    pm_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_channel_id: str | None = None
+    voice_room_thread_channel_id: str | None = None
+    voice_thread_channel_id: str | None = None
+    persona_room_channel_id: str | None = None
+    persona_room_thread_channel_id: str | None = None
+    persona_thread_channel_id: str | None = None
+    room_channel_id: str | None = None
+    room_thread_channel_id: str | None = None
+    pm_room_channel_id: str | None = None
+    pm_room_thread_channel_id: str | None = None
+    pm_thread_channel_id: str | None = None
+    persona_names: dict[str, str] = Field(default_factory=dict)
+    persona_voices: dict[str, str] = Field(default_factory=dict)
+    voice_room_persona_names: dict[str, str] = Field(default_factory=dict)
+    voice_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    room_persona_names: dict[str, str] = Field(default_factory=dict)
+    room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    pm_room_persona_names: dict[str, str] = Field(default_factory=dict)
+    pm_room_persona_voices: dict[str, str] = Field(default_factory=dict)
 
 
 class ProjectDiscordConfig(BaseModel):
@@ -91,6 +121,36 @@ class ProjectDiscordConfig(BaseModel):
     notify_events: list[str] = Field(default_factory=list)
     ask_thread_channel_ids: list[str] = Field(default_factory=list)
     seed_followup_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_thread_channel_ids: list[str] = Field(default_factory=list)
+    persona_room_channel_ids: list[str] = Field(default_factory=list)
+    persona_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    persona_thread_channel_ids: list[str] = Field(default_factory=list)
+    room_channel_ids: list[str] = Field(default_factory=list)
+    room_thread_channel_ids: list[str] = Field(default_factory=list)
+    pm_room_channel_ids: list[str] = Field(default_factory=list)
+    pm_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    pm_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_channel_id: str | None = None
+    voice_room_thread_channel_id: str | None = None
+    voice_thread_channel_id: str | None = None
+    persona_room_channel_id: str | None = None
+    persona_room_thread_channel_id: str | None = None
+    persona_thread_channel_id: str | None = None
+    room_channel_id: str | None = None
+    room_thread_channel_id: str | None = None
+    pm_room_channel_id: str | None = None
+    pm_room_thread_channel_id: str | None = None
+    pm_thread_channel_id: str | None = None
+    persona_names: dict[str, str] = Field(default_factory=dict)
+    persona_voices: dict[str, str] = Field(default_factory=dict)
+    voice_room_persona_names: dict[str, str] = Field(default_factory=dict)
+    voice_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    room_persona_names: dict[str, str] = Field(default_factory=dict)
+    room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    pm_room_persona_names: dict[str, str] = Field(default_factory=dict)
+    pm_room_persona_voices: dict[str, str] = Field(default_factory=dict)
 
 
 class TenantCreate(BaseModel):

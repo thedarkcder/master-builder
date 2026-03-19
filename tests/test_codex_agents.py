@@ -2,7 +2,12 @@ import unittest
 from unittest.mock import patch
 import json
 
-from orchestrator.core.codex_agents import CodexWorkflowAgents, answer_board_question_with_codex
+from orchestrator.core.codex_agents import (
+    CodexWorkflowAgents,
+    answer_board_question_with_codex,
+    answer_voice_room_persona_with_codex,
+    route_voice_room_persona_with_codex,
+)
 from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.workflow.runner import WorkflowRequest
@@ -465,6 +470,74 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(len(captured_logs), 1)
         self.assertEqual(captured_logs[0]["message"], "line-1")
+
+    def test_voice_room_router_normalizes_invalid_persona_and_clamps_confidence(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"persona":"unknown","confidence":2.5,"reason":"ambiguous ask"}',
+                ]
+            ),
+        )
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            payload = route_voice_room_persona_with_codex(
+                runtime=runtime,
+                transcript="What should MVP be?",
+                available_personas=[{"persona_id": "pm"}],
+                invocation_context=CodexInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    command="pm",
+                    stage="voice-room-router",
+                    working_dir="/tmp/test-repo",
+                ),
+                history=[{"question": "hi", "answer": "hello"}],
+                room_context={"project_keys": ["MAB"]},
+            )
+
+        self.assertEqual(payload["persona"], "pm")
+        self.assertEqual(payload["confidence"], 1.0)
+        self.assertEqual(payload["reason"], "ambiguous ask")
+
+    def test_voice_room_persona_answer_accepts_message_only_schema(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"message":"The main integration risk is Discord attachment churn."}',
+                ]
+            ),
+        )
+
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            payload = answer_voice_room_persona_with_codex(
+                runtime=runtime,
+                persona_id="architect",
+                transcript="What is the main risk?",
+                project_keys=["MAB"],
+                issues=[{"key": "MAB-174"}],
+                status_counts={"To Do": 1},
+                invocation_context=CodexInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    command="pm",
+                    stage="voice-room-architect",
+                    working_dir="/tmp/test-repo",
+                ),
+                history=[{"question": "hi", "answer": "hello"}],
+                github_context={"repository": "repo"},
+            )
+
+        self.assertEqual(payload["message"], "The main integration risk is Discord attachment churn.")
+        self.assertEqual(payload["brief"], {})
 
 
 if __name__ == "__main__":

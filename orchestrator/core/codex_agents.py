@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
+from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.agent_tools import allowed_tools_for_stage
 from orchestrator.core.worker_capabilities import normalize_worker_capability
@@ -719,6 +720,96 @@ def answer_pm_question_with_codex(
     normalized_payload["message"] = message
     normalized_payload["brief"] = brief
     return normalized_payload
+
+
+def route_voice_room_persona_with_codex(
+    *,
+    runtime: CodexRuntime,
+    transcript: str,
+    available_personas: list[dict[str, str]],
+    invocation_context: CodexInvocationContext,
+    history: list[dict] | None = None,
+    room_context: dict | None = None,
+) -> dict:
+    normalized_history = history if isinstance(history, list) else []
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/voice_room_router_system.j2"),
+        user_prompt=render_prompt(
+            "discord/voice_room_router_user.j2",
+            transcript=transcript,
+            history_json=json.dumps(normalized_history[-25:]),
+            room_context_json=json.dumps(room_context or {}),
+            available_personas_json=json.dumps(available_personas),
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return a voice-room router JSON object")
+    persona_id = str(payload.get("persona") or "").strip().lower()
+    if persona_id not in {"pm", "architect", "engineer", "qa", "security"}:
+        persona_id = "pm"
+    try:
+        confidence = float(payload.get("confidence"))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    reason = str(payload.get("reason") or "").strip()
+    return {
+        "persona": persona_id,
+        "confidence": confidence,
+        "reason": reason,
+    }
+
+
+def answer_voice_room_persona_with_codex(
+    *,
+    runtime: CodexRuntime,
+    persona_id: str,
+    transcript: str,
+    project_keys: list[str],
+    issues: list[dict],
+    status_counts: dict[str, int],
+    invocation_context: CodexInvocationContext,
+    history: list[dict] | None = None,
+    github_context: dict | None = None,
+    room_context: dict | None = None,
+) -> dict:
+    persona = get_voice_room_persona_definition(persona_id)
+    normalized_history = history if isinstance(history, list) else []
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt(persona.system_prompt_template),
+        user_prompt=render_prompt(
+            persona.user_prompt_template,
+            transcript=transcript,
+            history_json=json.dumps(normalized_history[-25:]),
+            room_context_json=json.dumps(
+                room_context
+                or {
+                    "project_keys": project_keys,
+                    "status_counts": status_counts,
+                    "github_context": github_context or {},
+                    "issues": issues[:40],
+                }
+            ),
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return a voice-room persona JSON object")
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        raise CodexRuntimeError("Codex did not return a voice-room persona message")
+    brief = payload.get("brief")
+    if brief is None:
+        brief = {}
+    if not isinstance(brief, dict):
+        raise CodexRuntimeError("Codex did not return a voice-room brief object")
+    return {
+        "message": message,
+        "brief": brief,
+    }
 
 
 def plan_discord_ask_intent_with_codex(

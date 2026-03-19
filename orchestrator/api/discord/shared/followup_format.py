@@ -63,6 +63,9 @@ def build_command_followup_message(
     lines: list[str] = [f"<@{user_id}>"]
     command_name = str(command_response.command or "").strip().lower()
     response_message = str(command_response.message or "").strip()
+    persona_name = str(response_data.get("persona_name") or "").strip()
+    persona_role = str(response_data.get("persona_role") or "").strip()
+    is_room_mode = bool(response_data.get("room_mode"))
     if command_name == "issues" and created_issue_keys:
         lines[0] = f"{lines[0]} Issue seeding completed."
     elif command_name == "bug" and created_issue_keys:
@@ -74,7 +77,13 @@ def build_command_followup_message(
     elif response_message:
         if command_name in {"ask", "gap"}:
             response_message = _linkify_issue_mentions(response_message)
-        lines[0] = f"{lines[0]} {response_message}"
+        if is_room_mode and persona_name:
+            persona_label = persona_name
+            if persona_role and persona_role.lower() != persona_name.lower():
+                persona_label = f"{persona_name} ({persona_role})"
+            lines[0] = f"{lines[0]} [{persona_label}] {response_message}"
+        else:
+            lines[0] = f"{lines[0]} {response_message}"
 
     if command_name == "link":
         jira_url = str(response_data.get("jira_url") or "").strip()

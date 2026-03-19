@@ -9,7 +9,11 @@ from urllib.error import URLError
 from unittest.mock import patch
 
 from orchestrator.core.config import Settings
-from orchestrator.core.voice.tts import VoiceReplyError, synthesize_reply_audio
+from orchestrator.core.voice.tts import (
+    VoiceReplyError,
+    resolve_voice_reply_persona_metadata,
+    synthesize_reply_audio,
+)
 
 
 class _FakeResponse:
@@ -38,6 +42,46 @@ class VoiceTtsTests(unittest.TestCase):
         with self.assertRaisesRegex(VoiceReplyError, "base URL"):
             synthesize_reply_audio(settings=settings, text="hello")
 
+    def test_resolve_persona_metadata_prefers_room_config_over_global_defaults(self) -> None:
+        settings = Settings(
+            voice_reply_provider="pocket_tts",
+            pocket_tts_base_url="https://tts.example/synthesize",
+            pocket_tts_voice="global-voice",
+        )
+
+        metadata = resolve_voice_reply_persona_metadata(
+            settings=settings,
+            persona_id="qa",
+            room_config={
+                "persona_names": {"qa": "June", "default": "Room Voice"},
+                "persona_voices": {"qa": "serene", "default": "fallback"},
+            },
+        )
+
+        self.assertEqual(metadata.persona_id, "qa")
+        self.assertEqual(metadata.display_name, "June")
+        self.assertEqual(metadata.voice, "serene")
+
+    def test_resolve_persona_metadata_falls_back_to_global_voice_and_persona_name(self) -> None:
+        settings = Settings(
+            voice_reply_provider="pocket_tts",
+            pocket_tts_base_url="https://tts.example/synthesize",
+            pocket_tts_voice="global-voice",
+        )
+
+        metadata = resolve_voice_reply_persona_metadata(
+            settings=settings,
+            persona_id="security",
+            room_config={
+                "persona_names": {"default": "Room Voice"},
+                "persona_voices": {"default": "fallback"},
+            },
+        )
+
+        self.assertEqual(metadata.persona_id, "security")
+        self.assertEqual(metadata.display_name, "Room Voice")
+        self.assertEqual(metadata.voice, "fallback")
+
     def test_synthesize_reply_accepts_raw_audio_response(self) -> None:
         captured: dict[str, object] = {}
 
@@ -60,7 +104,12 @@ class VoiceTtsTests(unittest.TestCase):
             pocket_tts_voice="alloy",
         )
         with patch("orchestrator.core.voice.tts.urlopen", side_effect=_fake_urlopen):
-            audio = synthesize_reply_audio(settings=settings, text=" hello ")
+            audio = synthesize_reply_audio(
+                settings=settings,
+                text=" hello ",
+                persona_id="architect",
+                room_config={"persona_voices": {"architect": "echo"}},
+            )
 
         self.assertEqual(audio.audio_bytes, b"ID3-audio-data")
         self.assertEqual(audio.filename, "reply.mp3")
@@ -69,7 +118,7 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual(str(captured["url"]), "https://tts.example/synthesize")
         self.assertEqual(
             json.loads(bytes(captured["body"] or b"").decode("utf-8")),
-            {"text": "hello", "voice": "alloy"},
+            {"text": "hello", "voice": "echo"},
         )
         self.assertIn("application/json", str(captured["headers"]))
 
