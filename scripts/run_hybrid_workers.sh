@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 WORKER_CHECKOUT_DIR="${ROOT_DIR}/.workdirs"
 mkdir -p "${WORKER_CHECKOUT_DIR}"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$ROOT_DIR")}"
 DOCKER_SERVICES=(postgres api worker knowledge-sync discord-gateway tailscale)
 DOCKER_WAIT_TIMEOUT_SECONDS="${DOCKER_WAIT_TIMEOUT_SECONDS:-300}"
 DOCKER_WAIT_INTERVAL_SECONDS="${DOCKER_WAIT_INTERVAL_SECONDS:-3}"
@@ -25,7 +26,42 @@ if [[ -f ".env" ]]; then
   done < .env
 fi
 
-docker compose up --build -d "${DOCKER_SERVICES[@]}"
+current_service_container_id() {
+  local service="$1"
+  docker ps -a \
+    --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
+    --filter "label=com.docker.compose.service=${service}" \
+    --format '{{.ID}}|{{.Status}}' \
+    | awk -F'|' '$2 !~ /^Dead/ { print $1; exit }'
+}
+
+print_project_container_status() {
+  docker ps -a \
+    --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}" \
+    --format 'table {{.ID}}\t{{.Names}}\t{{.Label "com.docker.compose.service"}}\t{{.Status}}'
+}
+
+all_target_services_have_live_container() {
+  local service
+  for service in "${DOCKER_SERVICES[@]}"; do
+    if [[ -z "$(current_service_container_id "$service")" ]]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+compose_up_output=""
+if ! compose_up_output="$(docker compose up --build -d --remove-orphans "${DOCKER_SERVICES[@]}" 2>&1)"; then
+  printf '%s\n' "$compose_up_output"
+  if [[ "$compose_up_output" == *"Error response from daemon: No such container:"* ]] && all_target_services_have_live_container; then
+    echo "Compose reported a stale replacement container; continuing with live container readiness checks."
+  else
+    exit 1
+  fi
+else
+  printf '%s\n' "$compose_up_output"
+fi
 
 wait_for_docker_services_ready() {
   local timeout_seconds="$1"
@@ -37,7 +73,7 @@ wait_for_docker_services_ready() {
     local all_ready="true"
     for service in "${DOCKER_SERVICES[@]}"; do
       local container_id
-      container_id="$(docker compose ps -q "$service" | head -n 1)"
+      container_id="$(current_service_container_id "$service")"
       if [[ -z "$container_id" ]]; then
         all_ready="false"
         continue
@@ -50,7 +86,7 @@ wait_for_docker_services_ready() {
 
       if [[ "$state_status" == "exited" || "$state_status" == "dead" ]]; then
         echo "Service '$service' container is not running (state=${state_status})."
-        docker compose ps "$service"
+        print_project_container_status
         return 1
       fi
 
@@ -73,7 +109,7 @@ wait_for_docker_services_ready() {
     elapsed="$((now_ts - start_ts))"
     if (( elapsed >= timeout_seconds )); then
       echo "Timed out waiting for Docker services readiness (${timeout_seconds}s)."
-      docker compose ps
+      print_project_container_status
       return 1
     fi
     sleep "$poll_seconds"
