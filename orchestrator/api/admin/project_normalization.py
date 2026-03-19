@@ -7,6 +7,7 @@ from orchestrator.storage.models import Project, Tenant
 DISCORD_INTERNAL_CONFIG_KEYS = {
     "pending_ask_actions",
     "ask_history",
+    "persona_room_history",
     "ask_thread_channel_ids",
     "allowlist_requests",
     "allowed_user_ids",
@@ -20,6 +21,9 @@ PERSONA_DISCORD_CONFIG_KEYS = {
     "room_persona_voices",
     "pm_room_persona_names",
     "pm_room_persona_voices",
+}
+LIVE_VOICE_DISCORD_CONFIG_KEYS = {
+    "live_voice_room_links",
 }
 ROOM_LIST_KEYS = (
     "voice_room_channel_ids",
@@ -84,6 +88,19 @@ def _normalize_channel_id_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _normalize_channel_id_map(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, raw_value in value.items():
+        normalized_key = str(key).strip()
+        normalized_value = str(raw_value).strip()
+        if not normalized_key or not normalized_value:
+            continue
+        normalized[normalized_key] = normalized_value
+    return normalized
+
+
 def _normalize_string_map(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -111,6 +128,22 @@ def normalize_project_discord_config(raw: dict | None) -> dict:
         normalized_events = [str(value).strip() for value in notify_events if str(value).strip()]
         if normalized_events:
             normalized["notify_events"] = normalized_events
+
+    if "live_voice_enabled" in raw:
+        live_voice_enabled = raw.get("live_voice_enabled")
+        if isinstance(live_voice_enabled, bool):
+            normalized["live_voice_enabled"] = live_voice_enabled
+        elif isinstance(live_voice_enabled, str):
+            normalized_value = live_voice_enabled.strip().lower()
+            if normalized_value in {"true", "1", "yes", "on"}:
+                normalized["live_voice_enabled"] = True
+            elif normalized_value in {"false", "0", "no", "off"}:
+                normalized["live_voice_enabled"] = False
+
+    for key in LIVE_VOICE_DISCORD_CONFIG_KEYS:
+        normalized_live_voice_links = _normalize_channel_id_map(raw.get(key))
+        if normalized_live_voice_links:
+            normalized[key] = normalized_live_voice_links
 
     normalized_ask_threads = _normalize_channel_id_list(raw.get("ask_thread_channel_ids"))
     if normalized_ask_threads:
@@ -144,8 +177,10 @@ def with_preserved_discord_system_fields(*, existing: dict, proposed: dict | Non
     preserved_keys = (
         set(DISCORD_INTERNAL_CONFIG_KEYS)
         | set(PERSONA_DISCORD_CONFIG_KEYS)
+        | set(LIVE_VOICE_DISCORD_CONFIG_KEYS)
         | set(ROOM_LIST_KEYS)
         | set(ROOM_SINGLE_KEYS)
+        | {"live_voice_enabled"}
     )
     for key in preserved_keys:
         if key in merged:

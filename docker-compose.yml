@@ -144,6 +144,44 @@ services:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
 
+  discord-live-voice:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-discord-live-voice
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_DISCORD_GUILD_ID: ${ORCHESTRATOR_DISCORD_GUILD_ID:-}
+      ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY:-947102033129}
+      ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS:-3}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER:-whisper}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL:-base}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE:-}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE:-auto}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE:-int8}
+      ORCHESTRATOR_VOICE_REPLY_PROVIDER: ${ORCHESTRATOR_VOICE_REPLY_PROVIDER:-pocket_tts}
+      ORCHESTRATOR_POCKET_TTS_VOICE: ${ORCHESTRATOR_POCKET_TTS_VOICE:-}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator discord-live-voice
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+
   knowledge-sync:
     build:
       context: .

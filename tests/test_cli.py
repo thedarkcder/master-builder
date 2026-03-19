@@ -117,6 +117,12 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         gateway_mock.assert_called_once_with()
 
+    def test_discord_live_voice_command_invokes_runtime(self) -> None:
+        with patch("orchestrator.cli.run_discord_live_voice") as voice_mock:
+            exit_code = cli_main(["discord-live-voice"])
+        self.assertEqual(exit_code, 0)
+        voice_mock.assert_called_once_with()
+
     def test_knowledge_jira_sync_command_invokes_runtime(self) -> None:
         with patch("orchestrator.cli.run_knowledge_jira_sync") as sync_mock:
             exit_code = cli_main(["knowledge-jira-sync"])

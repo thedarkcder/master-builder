@@ -22,10 +22,12 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
-    voice_transcription_provider: Literal["disabled", "openai"] = "disabled"
+    voice_transcription_provider: Literal["disabled", "openai", "whisper"] = "disabled"
     voice_transcription_model: str = "gpt-4o-mini-transcribe"
     voice_transcription_language: str = ""
     voice_transcription_openai_api_key: str = ""
+    voice_transcription_device: str = "auto"
+    voice_transcription_compute_type: str = "int8"
     voice_attachment_max_bytes: int = 25000000
     voice_reply_provider: Literal["disabled", "pocket_tts"] = "disabled"
     voice_reply_enabled_default: bool = False
@@ -64,6 +66,8 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: int = 5
     discord_gateway_lock_key: int = 947102033127
     discord_gateway_poll_seconds: int = 3
+    discord_live_voice_lock_key: int = 947102033129
+    discord_live_voice_poll_seconds: int = 3
     auto_migrate_on_startup: bool = True
     sentry_dsn: str = ""
     sentry_environment: str = "dev"

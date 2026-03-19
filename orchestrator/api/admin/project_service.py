@@ -218,7 +218,9 @@ class AdminProjectService:
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        normalized_discord = self._normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None)
+        normalized_discord = self._normalize_project_discord_config(
+            payload.discord.model_dump(exclude_unset=True) if payload.discord else None
+        )
         if payload.discord is not None:
             try:
                 normalized_discord = self._resolve_project_discord_channel_binding(
@@ -315,7 +317,9 @@ class AdminProjectService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         normalized_discord = self._with_preserved_discord_system_fields(
             existing=dict(project.discord_config or {}),
-            proposed=self._normalize_project_discord_config(payload.discord.model_dump() if payload.discord else None),
+            proposed=self._normalize_project_discord_config(
+                payload.discord.model_dump(exclude_unset=True) if payload.discord else None
+            ),
         )
         if payload.discord is not None:
             try:

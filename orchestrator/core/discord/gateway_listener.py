@@ -404,6 +404,7 @@ class DiscordGatewayListener:
         room_voice_reply_persona_id: str | None = None
         room_voice_reply_persona_name: str | None = None
         room_voice_reply_config: dict | None = None
+        room_source_mode = "text"
 
         with self._session_factory() as session:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
@@ -428,6 +429,7 @@ class DiscordGatewayListener:
                 )
                 if transcript:
                     content = transcript
+                    room_source_mode = "voice_note"
                 else:
                     graceful_message = error_message or (
                         "I detected an audio attachment but couldn't transcribe it. "
@@ -535,6 +537,7 @@ class DiscordGatewayListener:
                 command_params = {
                     **(command_params or {}),
                     "room_mode": "true",
+                    "room_source": room_source_mode,
                 }
 
             message_content = f"<@{user_id}> Command failed due to an internal error."

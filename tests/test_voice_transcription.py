@@ -6,7 +6,11 @@ from urllib.error import HTTPError
 from unittest.mock import patch
 
 from orchestrator.core.config import Settings
-from orchestrator.core.voice.transcription import VoiceTranscriptionError, transcribe_audio_bytes
+from orchestrator.core.voice.transcription import (
+    VoiceTranscriptionError,
+    ensure_transcription_provider_ready,
+    transcribe_audio_bytes,
+)
 
 
 class _FakeResponse:
@@ -106,7 +110,57 @@ class VoiceTranscriptionTests(unittest.TestCase):
                     filename="voice.ogg",
                 )
 
+    def test_transcribe_whisper_uses_local_model_and_joins_segments(self) -> None:
+        class _Segment:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        class _Model:
+            def transcribe(self, audio_array, language=None):  # noqa: ANN001
+                self.audio_array = audio_array
+                self.language = language
+                return iter([_Segment("Build"), _Segment("the PM room")]), object()
+
+        settings = Settings(
+            voice_transcription_provider="whisper",
+            voice_transcription_model="base",
+            voice_transcription_language="en",
+        )
+        model = _Model()
+        with (
+            patch("orchestrator.core.voice.transcription._get_whisper_model", return_value=model),
+            patch("orchestrator.core.voice.transcription._decode_audio_to_float32_mono", return_value=[0.0, 1.0]),
+        ):
+            text = transcribe_audio_bytes(
+                settings=settings,
+                audio_bytes=b"audio-bytes",
+                filename="voice.wav",
+                content_type="audio/wav",
+            )
+        self.assertEqual(text, "Build the PM room")
+        self.assertEqual(model.language, "en")
+
+    def test_ensure_transcription_provider_ready_loads_whisper_model(self) -> None:
+        settings = Settings(
+            voice_transcription_provider="whisper",
+            voice_transcription_model="small",
+        )
+        with patch("orchestrator.core.voice.transcription._get_whisper_model", return_value=object()) as model_mock:
+            ensure_transcription_provider_ready(settings=settings)
+        model_mock.assert_called_once_with(settings=settings)
+
+    def test_ensure_transcription_provider_ready_surfaces_whisper_model_failure(self) -> None:
+        settings = Settings(
+            voice_transcription_provider="whisper",
+            voice_transcription_model="base",
+        )
+        with patch(
+            "orchestrator.core.voice.transcription._get_whisper_model",
+            side_effect=VoiceTranscriptionError("model load failed"),
+        ):
+            with self.assertRaisesRegex(VoiceTranscriptionError, "model load failed"):
+                ensure_transcription_provider_ready(settings=settings)
+
 
 if __name__ == "__main__":
     unittest.main()
-
