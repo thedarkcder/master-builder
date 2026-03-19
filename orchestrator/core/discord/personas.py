@@ -24,6 +24,7 @@ class VoiceRoomPersonaDefinition:
     persona_id: str
     role_label: str
     default_display_name: str
+    default_voice_id: str
     system_prompt_template: str
     user_prompt_template: str
 
@@ -41,6 +42,7 @@ VOICE_ROOM_PERSONAS: dict[str, VoiceRoomPersonaDefinition] = {
         persona_id="pm",
         role_label="PM",
         default_display_name="PM",
+        default_voice_id="alba",
         system_prompt_template="discord/voice_room_pm_system.j2",
         user_prompt_template="discord/voice_room_pm_user.j2",
     ),
@@ -48,6 +50,7 @@ VOICE_ROOM_PERSONAS: dict[str, VoiceRoomPersonaDefinition] = {
         persona_id="architect",
         role_label="Architect",
         default_display_name="Architect",
+        default_voice_id="marius",
         system_prompt_template="discord/voice_room_architect_system.j2",
         user_prompt_template="discord/voice_room_architect_user.j2",
     ),
@@ -55,6 +58,7 @@ VOICE_ROOM_PERSONAS: dict[str, VoiceRoomPersonaDefinition] = {
         persona_id="engineer",
         role_label="Engineer",
         default_display_name="Engineer",
+        default_voice_id="jean",
         system_prompt_template="discord/voice_room_engineer_system.j2",
         user_prompt_template="discord/voice_room_engineer_user.j2",
     ),
@@ -62,6 +66,7 @@ VOICE_ROOM_PERSONAS: dict[str, VoiceRoomPersonaDefinition] = {
         persona_id="qa",
         role_label="QA",
         default_display_name="QA",
+        default_voice_id="cosette",
         system_prompt_template="discord/voice_room_qa_system.j2",
         user_prompt_template="discord/voice_room_qa_user.j2",
     ),
@@ -69,6 +74,7 @@ VOICE_ROOM_PERSONAS: dict[str, VoiceRoomPersonaDefinition] = {
         persona_id="security",
         role_label="Security",
         default_display_name="Security",
+        default_voice_id="javert",
         system_prompt_template="discord/voice_room_security_system.j2",
         user_prompt_template="discord/voice_room_security_user.j2",
     ),
@@ -95,6 +101,7 @@ def list_voice_room_personas() -> list[dict[str, str]]:
                 "persona_id": definition.persona_id,
                 "role_label": definition.role_label,
                 "display_name": definition.default_display_name,
+                "voice_id": definition.default_voice_id,
             }
         )
     return personas
@@ -135,6 +142,8 @@ def resolve_voice_room_persona_profile(
     voice_id = str(persona_voices.get(definition.persona_id) or "").strip() or None
     if voice_id is None:
         voice_id = str(persona_voices.get("default") or "").strip() or None
+    if voice_id is None:
+        voice_id = definition.default_voice_id
 
     return VoiceRoomPersonaProfile(
         persona_id=definition.persona_id,
