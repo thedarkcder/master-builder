@@ -3,7 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from orchestrator.api.webhooks.pr_review_comment_service import (
+    format_sticky_review_comment,
     publish_inline_review_batch,
+    upsert_manual_fix_followup_comment,
     upsert_sticky_remediation_comment,
     upsert_sticky_review_comment,
 )
@@ -69,6 +71,21 @@ def test_upsert_sticky_review_comment_creates_and_updates() -> None:
     assert updated.comment_id == 101
 
 
+def test_format_sticky_review_comment_includes_manual_fix_quick_action() -> None:
+    body = format_sticky_review_comment(
+        signal=_signal(ready=False),
+        findings_result=PrReviewFindingsResult(state="blocked", summary="needs fixes", findings=()),
+        repo_full_name="org/repo",
+        pr_number=10,
+        event="pull_request_review",
+        action="submitted",
+        marker="<!-- marker -->",
+    )
+    assert "@mb fix" in body
+    assert "<comment-url>" in body
+    assert "https://github.com/org/repo/pull/10#issuecomment-new" in body
+
+
 def test_publish_inline_review_batch_filters_to_valid_locations() -> None:
     captured: dict[str, object] = {}
 
@@ -76,7 +93,10 @@ def test_publish_inline_review_batch_filters_to_valid_locations() -> None:
         captured.update(kwargs)
         return SimpleNamespace(review_id=555)
 
-    github_client = SimpleNamespace(submit_pull_request_review=_submit)
+    github_client = SimpleNamespace(
+        list_pull_request_reviews=lambda **_kwargs: [],
+        submit_pull_request_review=_submit,
+    )
     result = publish_inline_review_batch(
         github_client=github_client,
         repo_full_name="org/repo",
@@ -93,6 +113,91 @@ def test_publish_inline_review_batch_filters_to_valid_locations() -> None:
     assert result.review_id == 555
     assert result.inline_count == 1
     assert captured["commit_id"] == "abc123"
+    assert "<!-- codex:inline-review:" in str(captured["body"])
+
+
+def test_publish_inline_review_batch_skips_duplicate_signature_for_same_sha() -> None:
+    captured: dict[str, object] = {}
+
+    def _submit(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(review_id=444)
+
+    initial_client = SimpleNamespace(
+        list_pull_request_reviews=lambda **_kwargs: [],
+        submit_pull_request_review=_submit,
+    )
+    initial_result = publish_inline_review_batch(
+        github_client=initial_client,
+        repo_full_name="org/repo",
+        pr_number=11,
+        head_sha="sha-1",
+        findings=(ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),),
+        changed_paths={"src/a.py"},
+    )
+    assert initial_result.submitted is True
+
+    duplicate_client = SimpleNamespace(
+        list_pull_request_reviews=lambda **_kwargs: [SimpleNamespace(body=str(captured["body"]))],
+        submit_pull_request_review=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("submit_pull_request_review should not be called for duplicate signature")
+        ),
+    )
+    duplicate_result = publish_inline_review_batch(
+        github_client=duplicate_client,
+        repo_full_name="org/repo",
+        pr_number=11,
+        head_sha="sha-1",
+        findings=(ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),),
+        changed_paths={"src/a.py"},
+    )
+    assert duplicate_result.submitted is False
+    assert duplicate_result.review_id is None
+    assert duplicate_result.inline_count == 0
+
+
+def test_publish_inline_review_batch_reposts_when_findings_change_on_same_sha() -> None:
+    first_captured: dict[str, object] = {}
+    second_captured: dict[str, object] = {}
+
+    def _first_submit(**kwargs):
+        first_captured.update(kwargs)
+        return SimpleNamespace(review_id=601)
+
+    first_client = SimpleNamespace(
+        list_pull_request_reviews=lambda **_kwargs: [],
+        submit_pull_request_review=_first_submit,
+    )
+    first_result = publish_inline_review_batch(
+        github_client=first_client,
+        repo_full_name="org/repo",
+        pr_number=12,
+        head_sha="sha-2",
+        findings=(ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),),
+        changed_paths={"src/a.py"},
+    )
+    assert first_result.submitted is True
+
+    def _second_submit(**kwargs):
+        second_captured.update(kwargs)
+        return SimpleNamespace(review_id=602)
+
+    second_client = SimpleNamespace(
+        list_pull_request_reviews=lambda **_kwargs: [SimpleNamespace(body=str(first_captured["body"]))],
+        submit_pull_request_review=_second_submit,
+    )
+    second_result = publish_inline_review_batch(
+        github_client=second_client,
+        repo_full_name="org/repo",
+        pr_number=12,
+        head_sha="sha-2",
+        findings=(ReviewFinding(severity="high", message="worse", path="src/a.py", line=11),),
+        changed_paths={"src/a.py"},
+    )
+    assert second_result.submitted is True
+    assert second_result.review_id == 602
+    assert "<!-- codex:inline-review:" in str(second_captured["body"])
+    assert second_captured["body"] != first_captured["body"]
 
 
 def test_upsert_sticky_remediation_comment_creates_and_updates() -> None:
@@ -144,3 +249,54 @@ def test_upsert_sticky_remediation_comment_creates_and_updates() -> None:
     )
     assert updated.action == "updated"
     assert updated.comment_id == 202
+
+
+def test_upsert_manual_fix_followup_comment_creates_and_updates() -> None:
+    github_client = SimpleNamespace(
+        list_pull_request_issue_comments=lambda **_kwargs: [],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+    )
+    created = upsert_manual_fix_followup_comment(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=9001,
+        requested_by="alice",
+        triggering_comment_url="https://github.com/org/repo/pull/10#issuecomment-9001",
+        requested_comment_url="https://github.com/org/repo/pull/10#discussion_r222",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        enqueued=True,
+        run_id="run-10",
+        reason=None,
+    )
+    assert created.action == "created"
+    assert created.comment_id == 303
+
+    marker_body = "<!-- codex:pr-manual-fix:t1:p1:org/repo:10:9001 -->"
+    github_client = SimpleNamespace(
+        list_pull_request_issue_comments=lambda **_kwargs: [SimpleNamespace(comment_id=303, body=marker_body)],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+    )
+    updated = upsert_manual_fix_followup_comment(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=9001,
+        requested_by="alice",
+        triggering_comment_url="https://github.com/org/repo/pull/10#issuecomment-9001",
+        requested_comment_url="https://github.com/org/repo/pull/10#discussion_r222",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        enqueued=False,
+        run_id=None,
+        reason="manual_fix_comment_not_found",
+    )
+    assert updated.action == "updated"
+    assert updated.comment_id == 303

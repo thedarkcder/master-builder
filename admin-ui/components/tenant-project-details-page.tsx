@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Archive,
@@ -9,9 +9,11 @@ import {
   ExternalLink,
   KeyRound,
   Library,
-  Plus,
+  Pencil,
   RefreshCw,
+  Save,
   SlidersHorizontal,
+  X,
   Trash2,
 } from "lucide-react";
 
@@ -55,7 +57,9 @@ type ProjectFormState = {
   codex_reasoning_effort: "low" | "medium" | "high" | null;
   allow_jira_transitions: OverrideToggleValue;
   allow_pr_creation: OverrideToggleValue;
+  allow_code_reviews: OverrideToggleValue;
   allow_pr_remediation: OverrideToggleValue;
+  allow_manual_pr_fix_requests: OverrideToggleValue;
   allow_label_mutations: OverrideToggleValue;
   allow_auto_merge: OverrideToggleValue;
   require_agents_md: RequireAgentsValue;
@@ -156,7 +160,9 @@ function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState 
         : null,
     allow_jira_transitions: booleanOverrideToState(overrides.allow_jira_transitions),
     allow_pr_creation: booleanOverrideToState(overrides.allow_pr_creation),
+    allow_code_reviews: booleanOverrideToState(overrides.allow_code_reviews),
     allow_pr_remediation: booleanOverrideToState(overrides.allow_pr_remediation),
+    allow_manual_pr_fix_requests: booleanOverrideToState(overrides.allow_manual_pr_fix_requests),
     allow_label_mutations: booleanOverrideToState(overrides.allow_label_mutations),
     allow_auto_merge: booleanOverrideToState(overrides.allow_auto_merge),
     require_agents_md: requireAgentsOverrideToState(overrides.require_agents_md),
@@ -218,10 +224,15 @@ export function TenantProjectDetailsPage() {
 
   // Secrets state
   const [secretRefs, setSecretRefs] = useState<Record<string, string>>({});
-  const [newSecretKey, setNewSecretKey] = useState("");
-  const [newSecretRef, setNewSecretRef] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [secretValue, setSecretValue] = useState("");
+  const [editingSecretKey, setEditingSecretKey] = useState<string | null>(null);
   const [secretsBusy, setSecretsBusy] = useState(false);
   const [secretsStatusLine, setSecretsStatusLine] = useState("");
+  const projectSecretPrefix = useMemo(
+    () => `project/${params.tenantId}/${params.projectId}/`,
+    [params.tenantId, params.projectId]
+  );
 
   async function loadOptions() {
     if (!credentials) return;
@@ -342,7 +353,9 @@ export function TenantProjectDetailsPage() {
     }
     const allowJiraTransitions = booleanStateToOverride(form.allow_jira_transitions);
     const allowPrCreation = booleanStateToOverride(form.allow_pr_creation);
+    const allowCodeReviews = booleanStateToOverride(form.allow_code_reviews);
     const allowPrRemediation = booleanStateToOverride(form.allow_pr_remediation);
+    const allowManualPrFixRequests = booleanStateToOverride(form.allow_manual_pr_fix_requests);
     const allowLabelMutations = booleanStateToOverride(form.allow_label_mutations);
     const allowAutoMerge = booleanStateToOverride(form.allow_auto_merge);
     const knowledgeBaseEnabled = booleanStateToOverride(form.knowledge_base_enabled);
@@ -359,10 +372,20 @@ export function TenantProjectDetailsPage() {
     } else {
       nextPolicyOverrides.allow_pr_creation = allowPrCreation;
     }
+    if (allowCodeReviews === undefined) {
+      delete nextPolicyOverrides.allow_code_reviews;
+    } else {
+      nextPolicyOverrides.allow_code_reviews = allowCodeReviews;
+    }
     if (allowPrRemediation === undefined) {
       delete nextPolicyOverrides.allow_pr_remediation;
     } else {
       nextPolicyOverrides.allow_pr_remediation = allowPrRemediation;
+    }
+    if (allowManualPrFixRequests === undefined) {
+      delete nextPolicyOverrides.allow_manual_pr_fix_requests;
+    } else {
+      nextPolicyOverrides.allow_manual_pr_fix_requests = allowManualPrFixRequests;
     }
     if (allowLabelMutations === undefined) {
       delete nextPolicyOverrides.allow_label_mutations;
@@ -434,8 +457,36 @@ export function TenantProjectDetailsPage() {
     }
   }
 
-  async function saveSecretRefs(nextSecretRefs?: Record<string, string>) {
-    if (!credentials || !project) return;
+  function projectSecretSource(ref: string): "project" | "tenant" | "platform" | "ref" {
+    if (ref.startsWith(projectSecretPrefix)) {
+      return "project";
+    }
+    if (ref.startsWith("tenant/")) {
+      return "tenant";
+    }
+    if (ref.startsWith("platform/")) {
+      return "platform";
+    }
+    return "ref";
+  }
+
+  async function refreshSecrets() {
+    if (!credentials) return;
+    setSecretsBusy(true);
+    try {
+      const payload = await getProject(credentials, params.tenantId, params.projectId);
+      setProject(payload);
+      setSecretRefs(payload.secret_refs ?? {});
+      setSecretsStatusLine(`Loaded ${Object.keys(payload.secret_refs ?? {}).length} project secret(s).`);
+    } catch (error) {
+      setSecretsStatusLine(`Failed to load secrets: ${(error as Error).message}`);
+    } finally {
+      setSecretsBusy(false);
+    }
+  }
+
+  async function saveSecretRefs(nextSecretRefs?: Record<string, string>): Promise<boolean> {
+    if (!credentials || !project) return false;
     const refsToSave = nextSecretRefs ?? secretRefs;
     setSecretsBusy(true);
     try {
@@ -451,27 +502,31 @@ export function TenantProjectDetailsPage() {
       });
       setProject(updated);
       setSecretRefs(updated.secret_refs ?? {});
-      setSecretsStatusLine("Project secrets saved as managed refs.");
+      setSecretsStatusLine("Project secrets saved.");
+      return true;
     } catch (error) {
       setSecretsStatusLine(`Save failed: ${(error as Error).message}`);
+      return false;
     } finally {
       setSecretsBusy(false);
     }
   }
 
-  async function addSecretRef() {
-    const key = newSecretKey.trim();
-    const ref = newSecretRef.trim();
-    if (!key || !ref) {
-      setSecretsStatusLine("Both variable name and a secret value or existing secret ref are required.");
+  async function saveSecret() {
+    const key = secretKey.trim();
+    const value = secretValue.trim();
+    if (!key || !value) {
+      setSecretsStatusLine("Secret key and value are required.");
       return;
     }
-    const nextRefs = { ...secretRefs, [key]: ref };
+    const nextRefs = { ...secretRefs, [key]: value };
     setSecretRefs(nextRefs);
-    setNewSecretKey("");
-    setNewSecretRef("");
     setSecretsStatusLine("");
-    await saveSecretRefs(nextRefs);
+    const saved = await saveSecretRefs(nextRefs);
+    if (!saved) return;
+    setSecretKey("");
+    setSecretValue("");
+    setEditingSecretKey(null);
   }
 
   async function removeSecretRef(key: string) {
@@ -479,7 +534,26 @@ export function TenantProjectDetailsPage() {
     delete nextRefs[key];
     setSecretRefs(nextRefs);
     setSecretsStatusLine("");
-    await saveSecretRefs(nextRefs);
+    const saved = await saveSecretRefs(nextRefs);
+    if (saved && editingSecretKey === key) {
+      setEditingSecretKey(null);
+      setSecretKey("");
+      setSecretValue("");
+    }
+  }
+
+  function startEditingSecret(key: string) {
+    setEditingSecretKey(key);
+    setSecretKey(key);
+    setSecretValue("");
+    setSecretsStatusLine(`Editing ${key}. Existing value is never shown.`);
+  }
+
+  function cancelEditingSecret() {
+    setEditingSecretKey(null);
+    setSecretKey("");
+    setSecretValue("");
+    setSecretsStatusLine("");
   }
 
   return (
@@ -657,8 +731,18 @@ export function TenantProjectDetailsPage() {
                         <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_creation)}</p>
                       </div>
                       <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code review</p>
+                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_code_reviews)}</p>
+                      </div>
+                      <div className="space-y-1">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation</p>
                         <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Manual PR fix requests</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {formatBoolean(project.effective_policy.allow_manual_pr_fix_requests)}
+                        </p>
                       </div>
                       <div className="space-y-1">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Auto merge</p>
@@ -952,6 +1036,18 @@ export function TenantProjectDetailsPage() {
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Code review
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_code_reviews}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_code_reviews: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_code_reviews)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         PR remediation
                       </label>
                       <OverrideSegmentedControl
@@ -961,6 +1057,20 @@ export function TenantProjectDetailsPage() {
                         disabled={busy}
                       />
                       <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Manual PR fix requests
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.allow_manual_pr_fix_requests}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, allow_manual_pr_fix_requests: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Effective: {formatBoolean(project.effective_policy.allow_manual_pr_fix_requests)}
+                      </p>
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -1346,116 +1456,158 @@ export function TenantProjectDetailsPage() {
 
       {/* ── Secrets tab ──────────────────────────────────────────────────── */}
       {activeTab === "secrets" ? (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-                <KeyRound className="h-4 w-4 text-primary" />
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+                <KeyRound className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <CardTitle className="text-base">Project Secrets</CardTitle>
+                <h2 className="text-base font-semibold">Project Secrets</h2>
                 <p className="text-sm text-muted-foreground">
-                  Map variable names to secret values or existing managed refs. Secret values are stored in the managed
-                  secret provider and persisted here as refs for runtime resolution.
+                  Stored as project-scoped managed secrets under{" "}
+                  <code className="rounded bg-muted px-1 font-mono text-xs">{projectSecretPrefix}{"{KEY}"}</code>.
                 </p>
               </div>
             </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {secretsStatusLine ? (
-              <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
-                {secretsStatusLine}
-              </p>
-            ) : null}
+            <Button variant="outline" size="sm" onClick={() => void refreshSecrets()} disabled={secretsBusy}>
+              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${secretsBusy ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
 
-            {/* Add row */}
-            <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-muted/30 px-4 py-3">
-              <div className="space-y-1 flex-1 min-w-32">
-                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Variable name
-                </label>
-                <Input
-                  className="h-8 text-sm font-mono"
-                  value={newSecretKey}
-                  onChange={(e) => setNewSecretKey(e.target.value)}
-                  placeholder="e.g. OPENAI_KEY"
-                  disabled={secretsBusy}
-                />
-              </div>
-              <div className="space-y-1 flex-[2] min-w-48">
-                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Secret value or ref
-                </label>
-                <Input
-                  className="h-8 text-sm font-mono"
-                  value={newSecretRef}
-                  onChange={(e) => setNewSecretRef(e.target.value)}
-                  placeholder="e.g. platform/OPENAI_KEY or an actual secret value"
-                  disabled={secretsBusy}
-                />
-              </div>
-              <Button size="sm" onClick={() => void addSecretRef()} disabled={secretsBusy} className="h-8">
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Add
-              </Button>
-            </div>
+          {secretsStatusLine ? (
+            <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{secretsStatusLine}</p>
+          ) : null}
 
-            {/* Existing entries */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">{editingSecretKey ? "Edit Secret" : "Add Secret"}</CardTitle>
+              {editingSecretKey ? (
+                <p className="text-sm text-warning">
+                  Editing <code className="rounded bg-muted px-1 font-mono text-xs">{editingSecretKey}</code>. The
+                  existing value is never shown.
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Enter a key and value. Values are encrypted and stored as managed project refs.
+                </p>
+              )}
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Secret key
+                  </label>
+                  <Input
+                    value={secretKey}
+                    onChange={(event) => setSecretKey(event.target.value)}
+                    placeholder="e.g. OPENAI_KEY"
+                    className="font-mono"
+                    disabled={secretsBusy || Boolean(editingSecretKey)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {editingSecretKey ? "New value" : "Secret value"}
+                  </label>
+                  <Textarea
+                    value={secretValue}
+                    onChange={(event) => setSecretValue(event.target.value)}
+                    placeholder="Paste secret value here"
+                    className="min-h-[72px] font-mono text-xs"
+                    disabled={secretsBusy}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => void saveSecret()} disabled={secretsBusy}>
+                  <Save className="mr-1.5 h-3.5 w-3.5" />
+                  {editingSecretKey ? "Update" : "Save secret"}
+                </Button>
+                {editingSecretKey ? (
+                  <Button size="sm" variant="ghost" onClick={cancelEditingSecret} disabled={secretsBusy}>
+                    <X className="mr-1.5 h-3.5 w-3.5" />
+                    Cancel edit
+                  </Button>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base">Stored Secrets</CardTitle>
+                {Object.keys(secretRefs).length > 0 ? (
+                  <Badge variant="outline" className="text-xs">
+                    {Object.keys(secretRefs).length} secret{Object.keys(secretRefs).length !== 1 ? "s" : ""}
+                  </Badge>
+                ) : null}
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
             {Object.keys(secretRefs).length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 rounded-lg border bg-muted/20 py-8 text-center">
+              <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
                 <KeyRound className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm font-medium">No secret references configured</p>
-                <p className="text-xs text-muted-foreground">
-                  Add a variable name and secret value or ref above to get started.
-                </p>
+                <p className="text-sm font-medium">No project secrets stored yet</p>
+                <p className="text-xs text-muted-foreground">Add a secret key and value above to get started.</p>
               </div>
             ) : (
-              <div className="overflow-hidden rounded-lg border">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/40">
-                    <tr>
-                      <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Variable name
-                      </th>
-                      <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Secret ref path
-                      </th>
-                      <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {Object.entries(secretRefs).map(([key, ref]) => (
-                      <tr key={key} className="group">
-                        <td className="px-4 py-3 font-mono text-xs font-medium">{key}</td>
-                        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{ref}</td>
-                        <td className="px-4 py-3 text-right">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/40">
+                    <TableHead className="pl-6">Key</TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Value</TableHead>
+                    <TableHead className="text-right pr-6">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {Object.entries(secretRefs).map(([key, ref]) => (
+                    <TableRow key={key} className={editingSecretKey === key ? "bg-warning/5" : undefined}>
+                      <TableCell className="pl-6">
+                        <div className="font-mono text-xs font-medium">{key}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={projectSecretSource(ref) === "project" ? "default" : "outline"} className="text-[11px]">
+                          {projectSecretSource(ref)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">********</TableCell>
+                      <TableCell className="text-right pr-6">
+                        <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 w-7 p-0 opacity-60 hover:opacity-100 hover:text-destructive"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => startEditingSecret(key)}
+                            disabled={secretsBusy}
+                          >
+                            <Pencil className="mr-1 h-3 w-3" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-destructive hover:text-destructive"
                             onClick={() => void removeSecretRef(key)}
                             disabled={secretsBusy}
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            <Trash2 className="mr-1 h-3 w-3" />
+                            Delete
                           </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
-
-            {/* Save footer */}
-            <div className="flex items-center justify-end border-t pt-4">
-              <Button size="sm" onClick={() => void saveSecretRefs()} disabled={secretsBusy || !project}>
-                {secretsBusy ? "Saving…" : "Save secrets"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
     </div>
   );

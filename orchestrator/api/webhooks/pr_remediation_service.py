@@ -14,6 +14,8 @@ from orchestrator.api.webhooks.pr_remediation_enqueue import enqueue_pr_remediat
 from orchestrator.api.webhooks.pr_remediation_policy import (
     coerce_positive_int as _coerce_positive_int,
     is_remediation_trigger as _is_remediation_trigger,
+    parse_manual_pr_fix_request,
+    resolve_requested_comment_ref,
     resolve_pr_remediation_issue_key,
 )
 from orchestrator.storage.models import Project, Run, Tenant
@@ -33,6 +35,64 @@ class PrRemediationResult:
     head_sha: str | None
 
 
+def _extract_payload_comment(payload: dict) -> dict:
+    comment = payload.get("comment")
+    return comment if isinstance(comment, dict) else {}
+
+
+def _extract_payload_comment_id(*, payload: dict) -> int | None:
+    comment_id = _extract_payload_comment(payload).get("id")
+    return comment_id if isinstance(comment_id, int) and comment_id > 0 else None
+
+
+def _extract_payload_comment_login(*, payload: dict) -> str | None:
+    user = _extract_payload_comment(payload).get("user")
+    if not isinstance(user, dict):
+        return None
+    login = str(user.get("login") or "").strip()
+    return login or None
+
+
+def _extract_payload_comment_url(*, payload: dict) -> str | None:
+    comment_url = str(_extract_payload_comment(payload).get("html_url") or "").strip()
+    return comment_url or None
+
+
+def _resolve_requested_comment_payload(
+    *,
+    requested_comment_ref,
+    review_comments,
+    issue_comments,
+) -> dict[str, object] | None:
+    if requested_comment_ref.comment_type == "review_comment":
+        for comment in review_comments:
+            if int(getattr(comment, "comment_id", 0) or 0) != requested_comment_ref.comment_id:
+                continue
+            return {
+                "type": "review_comment",
+                "id": requested_comment_ref.comment_id,
+                "url": requested_comment_ref.comment_url,
+                "body": str(getattr(comment, "body", "") or "").strip(),
+                "path": str(getattr(comment, "path", "") or "").strip() or None,
+                "line": getattr(comment, "line", None),
+                "user_login": str(getattr(comment, "user_login", "") or "").strip() or None,
+            }
+        return None
+    if requested_comment_ref.comment_type == "issue_comment":
+        for comment in issue_comments:
+            if int(getattr(comment, "comment_id", 0) or 0) != requested_comment_ref.comment_id:
+                continue
+            return {
+                "type": "issue_comment",
+                "id": requested_comment_ref.comment_id,
+                "url": requested_comment_ref.comment_url,
+                "body": str(getattr(comment, "body", "") or "").strip(),
+                "user_login": str(getattr(comment, "user_login", "") or "").strip() or None,
+            }
+        return None
+    return None
+
+
 def enqueue_pr_remediation_if_needed(
     *,
     session: Session,
@@ -50,6 +110,7 @@ def enqueue_pr_remediation_if_needed(
 ) -> PrRemediationResult:
     normalized_event = str(event or "").strip().lower()
     normalized_action = str(action or "").strip().lower()
+    manual_fix_request = parse_manual_pr_fix_request(payload=payload)
 
     if not _is_remediation_trigger(event=normalized_event, action=normalized_action, payload=payload):
         return PrRemediationResult(
@@ -168,6 +229,64 @@ def enqueue_pr_remediation_if_needed(
             head_sha=head_sha,
         )
 
+    requested_comment = None
+    requested_by = _extract_payload_comment_login(payload=payload)
+    triggering_comment_id = _extract_payload_comment_id(payload=payload)
+    triggering_comment_url = _extract_payload_comment_url(payload=payload)
+    requested_comment_url = None
+    if manual_fix_request is not None:
+        if manual_fix_request.parse_error is not None:
+            return PrRemediationResult(
+                triggered=True,
+                issue_key=None,
+                issue_created=False,
+                enqueued=False,
+                reason=manual_fix_request.parse_error,
+                run=None,
+                head_sha=head_sha,
+            )
+        requested_comment_url = str(manual_fix_request.comment_url or triggering_comment_url or "").strip()
+        if not requested_comment_url:
+            return PrRemediationResult(
+                triggered=True,
+                issue_key=None,
+                issue_created=False,
+                enqueued=False,
+                reason="manual_fix_missing_comment_url",
+                run=None,
+                head_sha=head_sha,
+            )
+        requested_ref, requested_ref_error = resolve_requested_comment_ref(
+            comment_url=requested_comment_url,
+            repo_full_name=resolved_repo,
+            pr_number=resolved_pr_number,
+        )
+        if requested_ref_error is not None or requested_ref is None:
+            return PrRemediationResult(
+                triggered=True,
+                issue_key=None,
+                issue_created=False,
+                enqueued=False,
+                reason=requested_ref_error or "manual_fix_invalid_comment_url",
+                run=None,
+                head_sha=head_sha,
+            )
+        requested_comment = _resolve_requested_comment_payload(
+            requested_comment_ref=requested_ref,
+            review_comments=review_comments,
+            issue_comments=issue_comments,
+        )
+        if requested_comment is None:
+            return PrRemediationResult(
+                triggered=True,
+                issue_key=None,
+                issue_created=False,
+                enqueued=False,
+                reason="manual_fix_comment_not_found",
+                run=None,
+                head_sha=head_sha,
+            )
+
     issue_key, issue_created, issue_error = resolve_pr_remediation_issue_key(
         session=session,
         tenant=tenant,
@@ -241,6 +360,17 @@ def enqueue_pr_remediation_if_needed(
             reviews=reviews,
             review_comments=review_comments,
             issue_comments=issue_comments,
+            manual_fix_request=(
+                {
+                    "requested_by": requested_by,
+                    "requested_comment": requested_comment,
+                    "triggering_comment_id": triggering_comment_id,
+                    "triggering_comment_url": triggering_comment_url,
+                    "command": "fix",
+                }
+                if requested_comment is not None
+                else None
+            ),
             max_concurrent_runs=max_concurrent_runs,
         )
     except ValueError as exc:

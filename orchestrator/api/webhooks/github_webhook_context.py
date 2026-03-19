@@ -155,6 +155,7 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
         "pull_request",
         "pull_request_review",
         "pull_request_review_comment",
+        "issue_comment",
         "check_suite",
         "check_run",
     }

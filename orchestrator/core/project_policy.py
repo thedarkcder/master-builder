@@ -9,7 +9,9 @@ from orchestrator.core.codex_models import normalize_codex_model, normalize_code
 POLICY_OVERRIDE_FIELDS = {
     "allow_jira_transitions",
     "allow_pr_creation",
+    "allow_code_reviews",
     "allow_pr_remediation",
+    "allow_manual_pr_fix_requests",
     "allow_label_mutations",
     "allow_auto_merge",
     "max_dev_test_review_loops",
@@ -26,7 +28,9 @@ POLICY_OVERRIDE_FIELDS = {
 _BOOLEAN_CAP_FIELDS = {
     "allow_jira_transitions",
     "allow_pr_creation",
+    "allow_code_reviews",
     "allow_pr_remediation",
+    "allow_manual_pr_fix_requests",
     "allow_label_mutations",
     "allow_auto_merge",
     "knowledge_base_enabled",
@@ -35,7 +39,9 @@ _BOOLEAN_CAP_FIELDS = {
 _BOOLEAN_DEFAULTS = {
     "allow_jira_transitions": False,
     "allow_pr_creation": False,
+    "allow_code_reviews": True,
     "allow_pr_remediation": True,
+    "allow_manual_pr_fix_requests": True,
     "allow_label_mutations": False,
     "allow_auto_merge": False,
     "knowledge_base_enabled": True,

@@ -14,9 +14,11 @@ from orchestrator.api.webhooks.github_webhook_context import (
 )
 from orchestrator.api.webhooks.pr_review_comment_service import (
     publish_inline_review_batch,
+    upsert_manual_fix_followup_comment,
     upsert_sticky_remediation_comment,
     upsert_sticky_review_comment,
 )
+from orchestrator.api.webhooks.pr_remediation_policy import parse_manual_pr_fix_request
 from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
@@ -53,6 +55,55 @@ async def ingest_github_webhook_event(
     repo_full_name = context.repo_full_name
     pr_targets = context.pr_targets
 
+    effective_policy = resolve_effective_policy(
+        tenant_policy=getattr(tenant, "policy_config", {}) or {},
+        project_overrides=getattr(project, "policy_overrides", {}) or {},
+    )
+    allow_code_reviews = bool(effective_policy.get("allow_code_reviews", True))
+    allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
+    allow_pr_remediation = allow_code_reviews and bool(effective_policy.get("allow_pr_remediation", True))
+    allow_manual_pr_fix_requests = allow_pr_remediation and bool(
+        effective_policy.get("allow_manual_pr_fix_requests", True)
+    )
+    max_pr_auto_remediation_loops = _coerce_positive_int(
+        effective_policy.get("max_pr_auto_remediation_loops"),
+        default=5,
+    )
+
+    if not allow_code_reviews:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "project_id": project.project_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": True,
+                "repository": repo_full_name,
+                "signals": [],
+                "review_comments": [],
+                "inline_reviews": [],
+                "auto_merge": {
+                    "enabled": False,
+                    "reason": "code_reviews_disabled",
+                    "results": [],
+                },
+                "pr_review": {
+                    "enabled": False,
+                    "reason": "code_reviews_disabled",
+                },
+                "pr_remediation": {
+                    "enabled": False,
+                    "manual_fix_requests_enabled": False,
+                    "reason": "code_reviews_disabled",
+                },
+                "remediation": [],
+                "remediation_comments": [],
+            },
+        )
+
     try:
         github_client, reviewer_gate = build_github_review_runtime(
             session=session,
@@ -81,15 +132,14 @@ async def ingest_github_webhook_event(
             },
         )
 
-    effective_policy = resolve_effective_policy(
-        tenant_policy=getattr(tenant, "policy_config", {}) or {},
-        project_overrides=getattr(project, "policy_overrides", {}) or {},
-    )
-    allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
-    allow_pr_remediation = bool(effective_policy.get("allow_pr_remediation", True))
-    max_pr_auto_remediation_loops = _coerce_positive_int(
-        effective_policy.get("max_pr_auto_remediation_loops"),
-        default=5,
+    _add_manual_fix_eyes_reaction_if_requested(
+        github_event=github_event,
+        payload=payload,
+        github_client=github_client,
+        repo_full_name=repo_full_name,
+        logger=logger,
+        request_id=request_id,
+        tenant_id=tenant.tenant_id,
     )
 
     review_results = process_pull_request_targets(
@@ -105,6 +155,7 @@ async def ingest_github_webhook_event(
         reviewer_gate=reviewer_gate,
         allow_auto_merge=allow_auto_merge,
         allow_pr_remediation=allow_pr_remediation,
+        allow_manual_pr_fix_requests=allow_manual_pr_fix_requests,
         max_pr_auto_remediation_loops=max_pr_auto_remediation_loops,
         session=session,
         settings=settings,
@@ -116,6 +167,7 @@ async def ingest_github_webhook_event(
         publish_inline_review_batch_fn=publish_inline_review_batch,
         enqueue_pr_remediation_if_needed_fn=enqueue_pr_remediation_if_needed,
         upsert_sticky_remediation_comment_fn=upsert_sticky_remediation_comment,
+        upsert_manual_fix_followup_comment_fn=upsert_manual_fix_followup_comment,
         github_api_error_type=GitHubApiError,
     )
 
@@ -155,3 +207,45 @@ def _valid_pr_details(details: object) -> bool:
     head_sha = getattr(details, "head_sha", None)
     title = getattr(details, "title", None)
     return isinstance(head_sha, str) and bool(head_sha.strip()) and isinstance(title, str) and bool(title.strip())
+
+
+def _add_manual_fix_eyes_reaction_if_requested(
+    *,
+    github_event: str,
+    payload: dict,
+    github_client,
+    repo_full_name: str,
+    logger,
+    request_id: str,
+    tenant_id: str,
+) -> None:  # noqa: ANN001
+    normalized_event = str(github_event or "").strip().lower()
+    if normalized_event not in {"issue_comment", "pull_request_review_comment"}:
+        return
+    if parse_manual_pr_fix_request(payload=payload) is None:
+        return
+    comment = payload.get("comment")
+    comment_id = comment.get("id") if isinstance(comment, dict) else None
+    if not isinstance(comment_id, int) or comment_id <= 0:
+        return
+    try:
+        if normalized_event == "issue_comment":
+            github_client.add_issue_comment_reaction(
+                repo_full_name=repo_full_name,
+                comment_id=comment_id,
+                content="eyes",
+            )
+        else:
+            github_client.add_pull_request_review_comment_reaction(
+                repo_full_name=repo_full_name,
+                comment_id=comment_id,
+                content="eyes",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "github_webhook_manual_fix_reaction_failed request_id=%s tenant_id=%s comment_id=%s error=%s",
+            request_id,
+            tenant_id,
+            comment_id,
+            exc,
+        )
