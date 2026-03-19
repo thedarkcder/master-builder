@@ -487,7 +487,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_response.status_code, 200)
         self.assertEqual(update_response.json()["jira"]["ready_trigger_mode"], "transition_only")
 
-    def test_update_tenant_preserves_live_voice_discord_fields_when_omitted(self) -> None:
+    def test_update_tenant_drops_live_voice_discord_fields_when_omitted(self) -> None:
         payload = self._tenant_payload()
         payload["discord"]["live_voice_enabled"] = True
         payload["discord"]["live_voice_room_links"] = {"voice-room-1": "text-room-1"}
@@ -517,11 +517,8 @@ class AdminApiTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(update_response.status_code, 200)
-        self.assertTrue(update_response.json()["discord"]["live_voice_enabled"])
-        self.assertEqual(
-            update_response.json()["discord"]["live_voice_room_links"],
-            {"voice-room-1": "text-room-1"},
-        )
+        self.assertNotIn("live_voice_enabled", update_response.json()["discord"])
+        self.assertNotIn("live_voice_room_links", update_response.json()["discord"])
 
     def test_ready_preview_returns_eligible_issues(self) -> None:
         payload = self._tenant_payload()
@@ -851,6 +848,8 @@ class AdminApiTests(unittest.TestCase):
                     }
                 ],
                 "live_voice_enabled": True,
+                "live_voice_channel_id": "voice-room-1",
+                "live_voice_linked_text_channel_id": "text-room-1",
                 "live_voice_room_links": {"voice-room-1": "text-room-1"},
             }
             session.add(project)
@@ -873,11 +872,10 @@ class AdminApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["discord"]["notify_events"], ["run_failed"])
-        self.assertTrue(response.json()["discord"]["live_voice_enabled"])
-        self.assertEqual(
-            response.json()["discord"]["live_voice_room_links"],
-            {"voice-room-1": "text-room-1"},
-        )
+        self.assertNotIn("live_voice_enabled", response.json()["discord"])
+        self.assertNotIn("live_voice_channel_id", response.json()["discord"])
+        self.assertNotIn("live_voice_linked_text_channel_id", response.json()["discord"])
+        self.assertNotIn("live_voice_room_links", response.json()["discord"])
 
         with session_factory() as session:
             project = session.get(Project, project_id)
@@ -885,8 +883,94 @@ class AdminApiTests(unittest.TestCase):
             discord_config = dict(project.discord_config or {})
             self.assertEqual(discord_config.get("allowed_user_ids"), ["discord-user-1"])
             self.assertEqual(len(discord_config.get("allowlist_requests", [])), 1)
-            self.assertTrue(discord_config.get("live_voice_enabled"))
-            self.assertEqual(discord_config.get("live_voice_room_links"), {"voice-room-1": "text-room-1"})
+            self.assertNotIn("live_voice_enabled", discord_config)
+            self.assertNotIn("live_voice_channel_id", discord_config)
+            self.assertNotIn("live_voice_linked_text_channel_id", discord_config)
+            self.assertNotIn("live_voice_room_links", discord_config)
+
+    def test_update_project_persists_single_live_voice_room_fields(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        default_project = projects_response.json()[0]
+        project_id = default_project["project_id"]
+
+        with patch(
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
+            side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
+        ):
+            response = self.client.put(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+                json={
+                    "name": default_project["name"],
+                    "github_repository": default_project["github_repository"],
+                    "jira_project_key": default_project["jira_project_key"],
+                    "discord": {
+                        "notify_events": ["run_failed"],
+                        "live_voice_enabled": True,
+                        "live_voice_channel_id": "voice-room-9",
+                        "live_voice_linked_text_channel_id": "text-room-9",
+                    },
+                    "is_archived": False,
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["discord"]["live_voice_enabled"])
+        self.assertEqual(response.json()["discord"]["live_voice_channel_id"], "voice-room-9")
+        self.assertEqual(response.json()["discord"]["live_voice_linked_text_channel_id"], "text-room-9")
+        self.assertEqual(response.json()["discord"]["live_voice_room_links"], {"voice-room-9": "text-room-9"})
+
+    def test_update_project_can_clear_single_live_voice_room_fields(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        default_project = projects_response.json()[0]
+        project_id = default_project["project_id"]
+
+        with patch(
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
+            side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
+        ):
+            response = self.client.put(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+                json={
+                    "name": default_project["name"],
+                    "github_repository": default_project["github_repository"],
+                    "jira_project_key": default_project["jira_project_key"],
+                    "discord": {
+                        "notify_events": ["run_failed"],
+                        "live_voice_enabled": False,
+                        "live_voice_channel_id": None,
+                        "live_voice_linked_text_channel_id": None,
+                    },
+                    "is_archived": False,
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["discord"]["live_voice_enabled"])
+        self.assertIsNone(response.json()["discord"]["live_voice_channel_id"])
+        self.assertIsNone(response.json()["discord"]["live_voice_linked_text_channel_id"])
+        self.assertEqual(response.json()["discord"]["live_voice_room_links"], {})
 
     def test_project_discord_channel_name_template_appends_project_when_template_not_project_scoped(self) -> None:
         now = datetime.now(timezone.utc)
