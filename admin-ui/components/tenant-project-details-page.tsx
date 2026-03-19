@@ -774,8 +774,8 @@ export function TenantProjectDetailsPage() {
                     <div className="space-y-1">
                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Allowed commands</p>
                       <p className="text-sm text-foreground">
-                        {project.effective_policy.allowed_commands.length > 0
-                          ? project.effective_policy.allowed_commands.join(", ")
+                        {(project.effective_policy.allowed_commands ?? []).length > 0
+                          ? (project.effective_policy.allowed_commands ?? []).join(", ")
                           : "None"}
                       </p>
                     </div>
@@ -1155,7 +1155,7 @@ export function TenantProjectDetailsPage() {
                         />
                       ) : null}
                       <p className="text-xs text-muted-foreground">
-                        Effective commands: {project.effective_policy.allowed_commands.length > 0 ? project.effective_policy.allowed_commands.join(", ") : "none"}
+                        Effective commands: {(project.effective_policy.allowed_commands ?? []).length > 0 ? (project.effective_policy.allowed_commands ?? []).join(", ") : "none"}
                       </p>
                     </div>
                   </CardContent>

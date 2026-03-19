@@ -9,6 +9,7 @@ import { useAuth } from "@/components/auth-provider";
 import { DiscordSection } from "@/components/tenant-form-sections";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   approveDiscordAllowlistRequest,
   getProject,
@@ -37,6 +38,9 @@ export function ProjectNotificationsContent({
   const [statusLine, setStatusLine] = useState("");
   const [discordEnabled, setDiscordEnabled] = useState(false);
   const [notifyEvents, setNotifyEvents] = useState<string[]>([]);
+  const [liveVoiceEnabled, setLiveVoiceEnabled] = useState(false);
+  const [liveVoiceChannelId, setLiveVoiceChannelId] = useState("");
+  const [linkedTextChannelId, setLinkedTextChannelId] = useState("");
   const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
   const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
 
@@ -50,6 +54,9 @@ export function ProjectNotificationsContent({
         setProject(payload);
         setDiscordEnabled(Boolean(payload.discord));
         setNotifyEvents(payload.discord?.notify_events ?? []);
+        setLiveVoiceEnabled(Boolean(payload.discord?.live_voice_enabled));
+        setLiveVoiceChannelId(payload.discord?.live_voice_channel_id ?? "");
+        setLinkedTextChannelId(payload.discord?.live_voice_linked_text_channel_id ?? "");
         setAllowlistRequests(requests);
         setStatusLine("");
       } catch (error) {
@@ -68,6 +75,10 @@ export function ProjectNotificationsContent({
 
   async function save() {
     if (!credentials || !project) return;
+    if (discordEnabled && liveVoiceEnabled && (!liveVoiceChannelId.trim() || !linkedTextChannelId.trim())) {
+      setStatusLine("Enter both the voice channel ID and linked text channel/thread ID.");
+      return;
+    }
     setBusy(true);
     try {
       const updated = await updateProject(credentials, tenantId, projectId, {
@@ -77,13 +88,33 @@ export function ProjectNotificationsContent({
         policy_overrides: project.policy_overrides,
         environment: project.environment,
         secret_refs: project.secret_refs,
-        discord: discordEnabled ? { notify_events: notifyEvents } : null,
+        discord: discordEnabled
+          ? {
+              ...(project.discord ?? {}),
+              notify_events: notifyEvents,
+              live_voice_enabled: liveVoiceEnabled,
+              live_voice_channel_id: liveVoiceEnabled ? (liveVoiceChannelId.trim() || null) : null,
+              live_voice_linked_text_channel_id: liveVoiceEnabled ? (linkedTextChannelId.trim() || null) : null,
+            }
+          : null,
         is_archived: project.is_archived,
       });
       setProject(updated);
       setDiscordEnabled(Boolean(updated.discord));
       setNotifyEvents(updated.discord?.notify_events ?? []);
-      setStatusLine("Discord settings saved.");
+      setLiveVoiceEnabled(Boolean(updated.discord?.live_voice_enabled));
+      setLiveVoiceChannelId(updated.discord?.live_voice_channel_id ?? "");
+      setLinkedTextChannelId(updated.discord?.live_voice_linked_text_channel_id ?? "");
+      if (updated.discord?.live_voice_enabled) {
+        const savedVoiceChannelId = updated.discord.live_voice_channel_id ?? liveVoiceChannelId.trim();
+        const savedLinkedTextChannelId =
+          updated.discord.live_voice_linked_text_channel_id ?? linkedTextChannelId.trim();
+        setStatusLine(
+          `Discord settings saved. Live voice room ${savedVoiceChannelId} is linked to ${savedLinkedTextChannelId}.`
+        );
+      } else {
+        setStatusLine("Discord settings saved. Live voice is disabled for this project.");
+      }
     } catch (error) {
       setStatusLine(`Save failed: ${(error as Error).message}`);
     } finally {
@@ -126,9 +157,48 @@ export function ProjectNotificationsContent({
             onDiscordEnabledChange={setDiscordEnabled}
             onToggleDiscordNotifyEvent={toggleNotifyEvent}
           />
+          {discordEnabled ? (
+            <div className="space-y-4 rounded-md border p-4">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Live Voice Room</p>
+                <p className="text-xs text-muted-foreground">
+                  Each project supports one live voice room. The linked text channel is where transcripts and persona replies are mirrored.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-input"
+                  checked={liveVoiceEnabled}
+                  onChange={(event) => setLiveVoiceEnabled(event.target.checked)}
+                />
+                <span>Enable live voice rooms for this project</span>
+              </label>
+              {liveVoiceEnabled ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Voice Channel ID</p>
+                    <Input
+                      value={liveVoiceChannelId}
+                      onChange={(event) => setLiveVoiceChannelId(event.target.value)}
+                      placeholder="123456789012345678"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Linked Text Channel / Thread ID</p>
+                    <Input
+                      value={linkedTextChannelId}
+                      onChange={(event) => setLinkedTextChannelId(event.target.value)}
+                      placeholder="987654321098765432"
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="border-t pt-4">
-            <Button size="sm" onClick={() => void save()} disabled={busy || !project}>
-              {busy ? "Saving…" : "Save settings"}
+            <Button type="button" size="sm" onClick={() => void save()} disabled={busy || !project}>
+              {busy ? "Saving…" : "Save Discord settings"}
             </Button>
           </div>
         </CardContent>
@@ -182,6 +252,7 @@ export function ProjectNotificationsContent({
                     </p>
                   </div>
                   <Button
+                    type="button"
                     variant="secondary"
                     size="sm"
                     disabled={allowlistBusyUserId === request.user_id}

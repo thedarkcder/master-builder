@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer
 
 from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
 from orchestrator.core.guardrails import enforce_safe_command
@@ -88,6 +88,8 @@ class DiscordConfig(BaseModel):
     allowlist_requests: list[dict] = Field(default_factory=list)
     live_voice_enabled: bool = False
     live_voice_room_links: dict[str, str] = Field(default_factory=dict)
+    live_voice_channel_id: str | None = None
+    live_voice_linked_text_channel_id: str | None = None
     voice_room_channel_ids: list[str] = Field(default_factory=list)
     voice_room_thread_channel_ids: list[str] = Field(default_factory=list)
     voice_thread_channel_ids: list[str] = Field(default_factory=list)
@@ -118,6 +120,20 @@ class DiscordConfig(BaseModel):
     room_persona_voices: dict[str, str] = Field(default_factory=dict)
     pm_room_persona_names: dict[str, str] = Field(default_factory=dict)
     pm_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+
+    @model_serializer(mode="plain")
+    def serialize_sparse(self) -> dict[str, object]:
+        serialized: dict[str, object] = {}
+        for field_name, field_info in type(self).model_fields.items():
+            value = getattr(self, field_name)
+            explicitly_set = field_name in self.model_fields_set
+            if explicitly_set:
+                serialized[field_name] = value
+                continue
+            default = field_info.default_factory() if field_info.default_factory is not None else field_info.default
+            if value != default:
+                serialized[field_name] = value
+        return serialized
 
 
 class ProjectDiscordConfig(BaseModel):
@@ -127,6 +143,8 @@ class ProjectDiscordConfig(BaseModel):
     seed_followup_thread_channel_ids: list[str] = Field(default_factory=list)
     live_voice_enabled: bool = False
     live_voice_room_links: dict[str, str] = Field(default_factory=dict)
+    live_voice_channel_id: str | None = None
+    live_voice_linked_text_channel_id: str | None = None
     voice_room_channel_ids: list[str] = Field(default_factory=list)
     voice_room_thread_channel_ids: list[str] = Field(default_factory=list)
     voice_thread_channel_ids: list[str] = Field(default_factory=list)
@@ -157,6 +175,20 @@ class ProjectDiscordConfig(BaseModel):
     room_persona_voices: dict[str, str] = Field(default_factory=dict)
     pm_room_persona_names: dict[str, str] = Field(default_factory=dict)
     pm_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+
+    @model_serializer(mode="plain")
+    def serialize_sparse(self) -> dict[str, object]:
+        serialized: dict[str, object] = {}
+        for field_name, field_info in type(self).model_fields.items():
+            value = getattr(self, field_name)
+            explicitly_set = field_name in self.model_fields_set
+            if explicitly_set:
+                serialized[field_name] = value
+                continue
+            default = field_info.default_factory() if field_info.default_factory is not None else field_info.default
+            if value != default:
+                serialized[field_name] = value
+        return serialized
 
 
 class TenantCreate(BaseModel):

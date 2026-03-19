@@ -24,6 +24,8 @@ PERSONA_DISCORD_CONFIG_KEYS = {
 }
 LIVE_VOICE_DISCORD_CONFIG_KEYS = {
     "live_voice_room_links",
+    "live_voice_channel_id",
+    "live_voice_linked_text_channel_id",
 }
 ROOM_LIST_KEYS = (
     "voice_room_channel_ids",
@@ -140,10 +142,30 @@ def normalize_project_discord_config(raw: dict | None) -> dict:
             elif normalized_value in {"false", "0", "no", "off"}:
                 normalized["live_voice_enabled"] = False
 
-    for key in LIVE_VOICE_DISCORD_CONFIG_KEYS:
-        normalized_live_voice_links = _normalize_channel_id_map(raw.get(key))
-        if normalized_live_voice_links:
-            normalized[key] = normalized_live_voice_links
+    live_voice_channel_id_provided = "live_voice_channel_id" in raw
+    live_voice_linked_text_channel_id_provided = "live_voice_linked_text_channel_id" in raw
+    live_voice_room_links_provided = "live_voice_room_links" in raw
+    normalized_live_voice_channel_id = str(raw.get("live_voice_channel_id") or "").strip()
+    normalized_live_voice_linked_text_channel_id = str(raw.get("live_voice_linked_text_channel_id") or "").strip()
+    normalized_live_voice_links = _normalize_channel_id_map(raw.get("live_voice_room_links"))
+
+    if (not normalized_live_voice_channel_id or not normalized_live_voice_linked_text_channel_id) and normalized_live_voice_links:
+        first_voice_channel_id, first_linked_text_channel_id = next(iter(normalized_live_voice_links.items()))
+        normalized_live_voice_channel_id = normalized_live_voice_channel_id or first_voice_channel_id
+        normalized_live_voice_linked_text_channel_id = (
+            normalized_live_voice_linked_text_channel_id or first_linked_text_channel_id
+        )
+
+    if normalized_live_voice_channel_id or live_voice_channel_id_provided:
+        normalized["live_voice_channel_id"] = normalized_live_voice_channel_id or None
+    if normalized_live_voice_linked_text_channel_id or live_voice_linked_text_channel_id_provided:
+        normalized["live_voice_linked_text_channel_id"] = normalized_live_voice_linked_text_channel_id or None
+    if normalized_live_voice_channel_id and normalized_live_voice_linked_text_channel_id:
+        normalized["live_voice_room_links"] = {
+            normalized_live_voice_channel_id: normalized_live_voice_linked_text_channel_id
+        }
+    elif live_voice_room_links_provided or live_voice_channel_id_provided or live_voice_linked_text_channel_id_provided:
+        normalized["live_voice_room_links"] = {}
 
     normalized_ask_threads = _normalize_channel_id_list(raw.get("ask_thread_channel_ids"))
     if normalized_ask_threads:
@@ -174,14 +196,7 @@ def with_preserved_discord_system_fields(*, existing: dict, proposed: dict | Non
     if proposed is None:
         return None
     merged = dict(proposed)
-    preserved_keys = (
-        set(DISCORD_INTERNAL_CONFIG_KEYS)
-        | set(PERSONA_DISCORD_CONFIG_KEYS)
-        | set(LIVE_VOICE_DISCORD_CONFIG_KEYS)
-        | set(ROOM_LIST_KEYS)
-        | set(ROOM_SINGLE_KEYS)
-        | {"live_voice_enabled"}
-    )
+    preserved_keys = set(DISCORD_INTERNAL_CONFIG_KEYS)
     for key in preserved_keys:
         if key in merged:
             continue
