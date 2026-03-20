@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = "aggressive"
     knowledge_context_top_k: int = 5
     knowledge_context_max_chars: int = 3200
+    knowledge_embedding_model: str = "BAAI/bge-small-en-v1.5"
     knowledge_jira_auto_sync_enabled: bool = True
     knowledge_jira_sync_interval_seconds: int = 3600
     knowledge_jira_sync_poll_seconds: int = 30
