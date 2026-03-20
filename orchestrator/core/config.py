@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     voice_reply_enabled_default: bool = False
     pocket_tts_base_url: str = ""
     pocket_tts_voice: str = ""
+    discord_live_voice_transport_command: str = "/usr/local/bin/live-voice-transport"
+    discord_live_voice_transport_startup_timeout_seconds: int = 10
+    discord_live_voice_transport_request_timeout_seconds: int = 10
     codex_cli_command: str = "codex"
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5.4"

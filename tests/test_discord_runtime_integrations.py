@@ -107,6 +107,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             secrets_encryption_key="enc",
             voice_transcription_provider="disabled",
             voice_reply_provider="disabled",
+            voice_reply_enabled_default=False,
             pocket_tts_base_url="",
             pocket_tts_voice="",
         )
@@ -554,11 +555,98 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
                     ],
                 },
                 bot_token="token",
-        )
+            )
 
         command_mock.assert_not_called()
         post_content = str(client_cls.return_value.post_message.call_args.kwargs["content"]).lower()
         self.assertIn("voice transcription", post_content)
+
+    def test_handle_message_create_non_room_audio_only_routes_to_pm_and_posts_voice_reply(self) -> None:
+        listener, _session = self._listener(
+            transcribe_audio_attachment=lambda _attachment: "Summarize the deployment blockers",
+        )
+        listener._settings.voice_reply_provider = "pocket_tts"
+        listener._settings.voice_reply_enabled_default = True
+        tenant = SimpleNamespace(tenant_id="example", discord_config={})
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(
+            command="pm",
+            message="Deployment is blocked on the worker image rebuild.",
+            data={"persona_id": "pm", "persona_name": "PM", "room_config": {}},
+        )
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch.object(listener, "_post_room_voice_reply", return_value=None) as post_voice_reply,
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "tenant-chat-1",
+                    "content": "",
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "url": "https://files/audio.m4a",
+                            "filename": "audio.m4a",
+                            "content_type": "audio/mp4",
+                            "size": 1234,
+                        }
+                    ],
+                },
+                bot_token="token",
+            )
+
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "!pm Summarize the deployment blockers")
+        self.assertIsNone(payload.command_params)
+        client_cls.return_value.post_message.assert_called_once()
+        post_voice_reply.assert_called_once()
+        self.assertEqual(post_voice_reply.call_args.kwargs["text"], "Deployment is blocked on the worker image rebuild.")
+
+    def test_handle_message_create_text_plus_audio_attachment_keeps_original_text_command(self) -> None:
+        listener, _session = self._listener(
+            transcribe_audio_attachment=lambda _attachment: "this should not be used",
+        )
+        tenant = SimpleNamespace(tenant_id="example", discord_config={})
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="pm", message="ok", data={})
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "tenant-chat-1",
+                    "content": "Use the typed command",
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "url": "https://files/audio.m4a",
+                            "filename": "audio.m4a",
+                            "content_type": "audio/mp4",
+                            "size": 1234,
+                        }
+                    ],
+                },
+                bot_token="token",
+            )
+
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "Use the typed command")
 
     def test_find_tenant_for_channel_accepts_voice_room_channel_ids(self) -> None:
         listener, _session = self._listener()
@@ -575,6 +663,8 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_handle_message_create_room_voice_reply_uses_persona_metadata(self) -> None:
         listener, _session = self._listener()
+        listener._settings.voice_reply_provider = "pocket_tts"
+        listener._settings.voice_reply_enabled_default = True
         tenant = SimpleNamespace(tenant_id="example", discord_config={})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(
@@ -623,6 +713,44 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             client_cls.return_value.post_message_with_attachment.call_args.kwargs["content"],
             "<@u1> Voice reply from Soren",
         )
+
+    def test_handle_message_create_room_skips_voice_reply_when_feature_disabled(self) -> None:
+        listener, _session = self._listener()
+        tenant = SimpleNamespace(tenant_id="example", discord_config={})
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(
+            command="pm",
+            message="PM answer",
+            data={
+                "room_mode": True,
+                "persona_id": "pm",
+                "persona_name": "PM",
+                "room_config": {},
+            },
+        )
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value={"voice-room-1"}),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch.object(listener, "_post_room_voice_reply") as post_voice_reply,
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "voice-room-1",
+                    "content": "Need product guidance",
+                    "attachments": [],
+                },
+                bot_token="token",
+            )
+
+        post_voice_reply.assert_not_called()
+        client_cls.return_value.post_message.assert_called_once()
 
     def test_handle_message_create_discord_post_failure_is_swallowed(self) -> None:
         listener, _session = self._listener()

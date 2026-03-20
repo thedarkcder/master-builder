@@ -119,6 +119,36 @@ class LiveVoiceRuntimeTests(unittest.TestCase):
         )
         self.assertFalse(runtime.evaluate_leave(binding=binding, human_member_count=0).should_transition)
 
+    def test_runtime_accepts_completed_audio_turn_without_polling(self) -> None:
+        recorder = _Recorder()
+        runtime = LiveVoiceRuntimeService(
+            callbacks=LiveVoiceCallbacks(
+                on_session_state_changed=recorder.on_session_state_changed,
+                on_turn_finalized=recorder.on_turn_finalized,
+                on_turn_discarded=recorder.on_turn_discarded,
+            ),
+            clock=lambda: datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+        )
+        binding = LiveVoiceRoomBinding(guild_id="guild-1", voice_channel_id="voice-1", text_channel_id="text-1")
+        runtime.register_room(binding=binding, bot_user_id="bot-1")
+        runtime.join_room(binding=binding, human_member_count=1, now=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc))
+
+        turn = runtime.submit_completed_audio_turn(
+            binding=binding,
+            user_id="user-1",
+            audio_bytes=b"pcm",
+            received_at=datetime(2026, 3, 19, 10, 1, tzinfo=timezone.utc),
+            sample_rate_hz=48_000,
+            channels=2,
+            finalization_reason="speech_event",
+        )
+
+        self.assertIsNotNone(turn)
+        self.assertEqual(turn.audio_bytes, b"pcm")
+        self.assertEqual(turn.finalization_reason, "speech_event")
+        self.assertEqual(runtime.get_session(binding=binding).state, LiveVoiceSessionState.LISTENING)
+        self.assertEqual(runtime.get_session(binding=binding).turn_index, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
