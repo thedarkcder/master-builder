@@ -5,10 +5,16 @@ import threading
 import wave
 from dataclasses import dataclass
 from importlib import import_module
+from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Any
+from typing import Sequence
 
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 class VoiceReplyError(RuntimeError):
@@ -42,6 +48,7 @@ _PERSONA_VOICE_KEYS = (
     "pm_room_persona_voices",
 )
 _DEFAULT_PLAYBACK_SPEED = 1.0
+_TRAILING_SILENCE_SECONDS = 0.2
 _MODEL_LOCK = threading.RLock()
 _POCKET_TTS_MODEL: Any | None = None
 _POCKET_TTS_VOICE_STATES: dict[str, Any] = {}
@@ -68,6 +75,38 @@ def synthesize_reply_audio(
             voice=persona_metadata.voice,
         )
     raise VoiceReplyError(f"Unsupported voice reply provider '{provider}'")
+
+
+def ensure_voice_reply_provider_ready(
+    *,
+    settings: Settings,
+    voices: Sequence[str] | None = None,
+) -> list[str]:
+    provider = str(settings.voice_reply_provider or "").strip().lower()
+    if provider in {"", "disabled"}:
+        raise VoiceReplyError("Voice reply is disabled")
+    if provider != "pocket_tts":
+        raise VoiceReplyError(f"Unsupported voice reply provider '{provider}'")
+
+    normalized_voices = _resolve_prewarm_voice_ids(settings=settings, voices=voices)
+    with _MODEL_LOCK:
+        model = _get_pocket_tts_model()
+        for voice in normalized_voices:
+            _get_pocket_tts_voice_state(model=model, voice=voice)
+    return normalized_voices
+
+
+def list_predefined_pocket_tts_voices() -> tuple[str, ...]:
+    predefined = getattr(_load_pocket_tts_utils_module(), "PREDEFINED_VOICES", None)
+    if not isinstance(predefined, dict):
+        raise VoiceReplyError("Pocket TTS predefined voices are unavailable at runtime.")
+
+    voice_ids = {
+        str(voice_id or "").strip().lower()
+        for voice_id in predefined
+        if str(voice_id or "").strip()
+    }
+    return tuple(sorted(voice_ids))
 
 
 def resolve_voice_reply_persona_metadata(
@@ -154,7 +193,7 @@ def _get_pocket_tts_voice_state(*, model: Any, voice: str) -> Any:
     if cached_state is not None:
         return cached_state
     try:
-        cached_state = model.get_state_for_audio_prompt(voice)
+        cached_state = model.get_state_for_audio_prompt(_resolve_pocket_tts_audio_prompt_source(voice))
     except Exception as exc:  # noqa: BLE001
         raise VoiceReplyError(f"Pocket TTS voice '{voice}' failed to load: {exc}") from exc
     _POCKET_TTS_VOICE_STATES[voice] = cached_state
@@ -184,6 +223,107 @@ def _load_pocket_tts_runtime() -> dict[str, Any]:
         "numpy": numpy,
         "signal": scipy_signal,
     }
+
+
+def _load_pocket_tts_utils_module() -> Any:
+    try:
+        return import_module("pocket_tts.utils.utils")
+    except ModuleNotFoundError as exc:
+        raise VoiceReplyError(
+            "Pocket TTS Python package is not installed. Install it with `pip install pocket-tts`."
+        ) from exc
+
+
+def _resolve_pocket_tts_audio_prompt_source(voice: str) -> str | Path:
+    normalized_voice = str(voice or "").strip().lower()
+    pocket_tts_utils = _load_pocket_tts_utils_module()
+    predefined = getattr(pocket_tts_utils, "PREDEFINED_VOICES", None)
+    if isinstance(predefined, dict):
+        predefined_source = predefined.get(normalized_voice)
+        if predefined_source:
+            return _resolve_cached_audio_prompt_path(str(predefined_source))
+    return normalized_voice
+
+
+def _resolve_cached_audio_prompt_path(source: str) -> Path:
+    normalized_source = str(source or "").strip()
+    if not normalized_source:
+        raise VoiceReplyError("Pocket TTS audio prompt source is missing")
+    if normalized_source.startswith("hf://"):
+        return _download_hf_hub_file(normalized_source)
+    pocket_tts_utils = _load_pocket_tts_utils_module()
+    return Path(pocket_tts_utils.download_if_necessary(normalized_source))
+
+
+def _download_hf_hub_file(source: str) -> Path:
+    normalized_source = str(source or "").strip()
+    if not normalized_source.startswith("hf://"):
+        raise VoiceReplyError("Pocket TTS HF source is invalid")
+    trimmed_source = normalized_source.removeprefix("hf://")
+    path_parts = trimmed_source.split("/")
+    if len(path_parts) < 3:
+        raise VoiceReplyError(f"Pocket TTS HF source '{source}' is invalid")
+    repo_id = "/".join(path_parts[:2])
+    filename = "/".join(path_parts[2:])
+    revision = None
+    if "@" in filename:
+        filename, revision = filename.rsplit("@", 1)
+
+    try:
+        huggingface_hub = import_module("huggingface_hub")
+    except ModuleNotFoundError as exc:
+        raise VoiceReplyError("Pocket TTS requires huggingface_hub at runtime.") from exc
+
+    try:
+        cached_path = huggingface_hub.hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision,
+            local_files_only=True,
+        )
+    except Exception:  # noqa: BLE001
+        try:
+            cached_path = huggingface_hub.hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                revision=revision,
+                local_files_only=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise VoiceReplyError(f"Pocket TTS voice asset '{source}' failed to cache: {exc}") from exc
+    return Path(cached_path)
+
+
+def _resolve_prewarm_voice_ids(*, settings: Settings, voices: Sequence[str] | None) -> list[str]:
+    requested_voices: list[str] = []
+    if voices is not None:
+        requested_voices.extend(_normalize_voice_ids(voices))
+    else:
+        requested_voices.extend(list_predefined_pocket_tts_voices())
+        configured_voice = str(settings.pocket_tts_voice or "").strip().lower()
+        if configured_voice:
+            requested_voices.append(configured_voice)
+    return _unique_preserving_order(requested_voices)
+
+
+def _normalize_voice_ids(voices: "Iterable[str]") -> list[str]:
+    normalized: list[str] = []
+    for voice in voices:
+        normalized_voice = str(voice or "").strip().lower()
+        if normalized_voice:
+            normalized.append(normalized_voice)
+    return normalized
+
+
+def _unique_preserving_order(values: "Iterable[str]") -> list[str]:
+    unique_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+    return unique_values
 
 
 def _audio_tensor_to_wav_bytes(
@@ -218,6 +358,10 @@ def _audio_tensor_to_wav_bytes(
 
     pcm = numpy.clip(audio_array, -1.0, 1.0)
     pcm = (pcm * 32767.0).astype(numpy.int16)
+    silence_samples = max(0, int(round(sample_rate * _TRAILING_SILENCE_SECONDS)))
+    if silence_samples:
+        silence = numpy.zeros((pcm.shape[0], silence_samples), dtype=numpy.int16)
+        pcm = numpy.concatenate((pcm, silence), axis=-1)
     interleaved = pcm.T.reshape(-1)
 
     buffer = io.BytesIO()

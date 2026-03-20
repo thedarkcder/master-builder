@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
+from orchestrator.core.observability import current_log_context
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord.gateway_listener import (
     DiscordGatewayListener,
@@ -490,6 +491,42 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!pm Need a product brief for checkout retry failures")
         self.assertEqual(payload.command_params["room_mode"], "true")
 
+    def test_handle_message_create_live_voice_linked_text_channel_routes_plain_text_to_room_mode(self) -> None:
+        listener, session = self._listener()
+        tenant = SimpleNamespace(tenant_id="example", discord_config={})
+        project = SimpleNamespace(
+            discord_config={
+                "live_voice_room_links": {
+                    "voice-room-1": "text-room-1",
+                }
+            }
+        )
+        session.execute.return_value.scalars.return_value.all.return_value = [project]
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="pm", message="ok", data={})
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "text-room-1",
+                    "content": "Need a product brief for checkout retry failures",
+                    "attachments": [],
+                },
+                bot_token="token",
+            )
+
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "!pm Need a product brief for checkout retry failures")
+        self.assertEqual(payload.command_params["room_mode"], "true")
+
     def test_handle_message_create_room_audio_only_uses_transcription_hook(self) -> None:
         listener, _session = self._listener(
             transcribe_audio_attachment=lambda _attachment: "Transcribed PM note from voice memo",
@@ -529,6 +566,52 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!pm Transcribed PM note from voice memo")
         self.assertEqual(payload.command_params["room_mode"], "true")
 
+    def test_handle_message_create_live_voice_linked_text_channel_audio_only_routes_to_room_mode(self) -> None:
+        listener, session = self._listener(
+            transcribe_audio_attachment=lambda _attachment: "Transcribed PM note from voice memo",
+        )
+        tenant = SimpleNamespace(tenant_id="example", discord_config={})
+        project = SimpleNamespace(
+            discord_config={
+                "live_voice_linked_text_channel_id": "text-room-1",
+                "live_voice_channel_id": "voice-room-1",
+            }
+        )
+        session.execute.return_value.scalars.return_value.all.return_value = [project]
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="pm", message="ok", data={})
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
+            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
+        ):
+            listener._handle_message_create(
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "text-room-1",
+                    "content": "",
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "url": "https://files/audio.m4a",
+                            "filename": "audio.m4a",
+                            "content_type": "audio/mp4",
+                            "size": 1234,
+                        }
+                    ],
+                },
+                bot_token="token",
+            )
+
+        payload = command_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload.command, "!pm Transcribed PM note from voice memo")
+        self.assertEqual(payload.command_params["room_mode"], "true")
+        self.assertEqual(payload.command_params["room_source"], "voice_note")
+
     def test_handle_message_create_room_audio_only_without_transcription_posts_guidance(self) -> None:
         listener, _session = self._listener()
         tenant = SimpleNamespace(tenant_id="example", discord_config={})
@@ -561,7 +644,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         post_content = str(client_cls.return_value.post_message.call_args.kwargs["content"]).lower()
         self.assertIn("voice transcription", post_content)
 
-    def test_handle_message_create_non_room_audio_only_routes_to_pm_and_posts_voice_reply(self) -> None:
+    def test_handle_message_create_non_room_audio_only_routes_to_voice_router_and_posts_voice_reply(self) -> None:
         listener, _session = self._listener(
             transcribe_audio_attachment=lambda _attachment: "Summarize the deployment blockers",
         )
@@ -605,10 +688,48 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         payload = command_mock.call_args.kwargs["payload"]
         self.assertEqual(payload.command, "!pm Summarize the deployment blockers")
-        self.assertIsNone(payload.command_params)
-        client_cls.return_value.post_message.assert_called_once()
+        self.assertEqual(payload.command_params, {"voice_mode": "true", "voice_source": "voice_note"})
+        client_cls.return_value.post_message.assert_not_called()
         post_voice_reply.assert_called_once()
         self.assertEqual(post_voice_reply.call_args.kwargs["text"], "Deployment is blocked on the worker image rebuild.")
+        self.assertEqual(post_voice_reply.call_args.kwargs["persona_id"], "pm")
+        self.assertEqual(post_voice_reply.call_args.kwargs["persona_name"], "PM")
+        self.assertEqual(post_voice_reply.call_args.kwargs["content_override"], "ok")
+        self.assertIsNone(post_voice_reply.call_args.kwargs["components"])
+
+    def test_transcribe_room_audio_attachment_scopes_log_context(self) -> None:
+        captured_contexts: list[dict[str, str | None]] = []
+
+        def _transcribe(_attachment):  # noqa: ANN001
+            captured_contexts.append(dict(current_log_context()))
+            return "Transcribed voice note"
+
+        listener, _session = self._listener(transcribe_audio_attachment=_transcribe)
+
+        transcript, error = listener._transcribe_room_audio_attachment(
+            attachment={
+                "url": "https://files/audio.m4a",
+                "filename": "audio.m4a",
+                "content_type": "audio/mp4",
+            },
+            bot_token="token",
+            correlation_id="message-1",
+            tenant_id="example",
+            project_id="project-1",
+        )
+
+        self.assertEqual((transcript, error), ("Transcribed voice note", None))
+        self.assertEqual(
+            captured_contexts,
+            [
+                {
+                    "correlation_id": "message-1",
+                    "tenant_id": "example",
+                    "project_id": "project-1",
+                    "agent_id": None,
+                }
+            ],
+        )
 
     def test_handle_message_create_text_plus_audio_attachment_keeps_original_text_command(self) -> None:
         listener, _session = self._listener(
@@ -709,9 +830,67 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         synth_kwargs = synth_mock.call_args.kwargs
         self.assertEqual(synth_kwargs["persona_id"], "architect")
         self.assertEqual(synth_kwargs["room_config"]["persona_voices"]["architect"], "echo")
+        self.assertEqual(synth_kwargs["text"], "Soren from Architecture. Architect answer")
         self.assertEqual(
             client_cls.return_value.post_message_with_attachment.call_args.kwargs["content"],
-            "<@u1> Voice reply from Soren",
+            "<@u1> Voice reply from Soren from Architecture",
+        )
+
+    def test_post_room_voice_reply_uses_content_override_and_components(self) -> None:
+        listener, _session = self._listener()
+        listener._settings.voice_reply_provider = "pocket_tts"
+        listener._settings.voice_reply_enabled_default = True
+        captured_contexts: list[dict[str, str | None]] = []
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener.synthesize_reply_audio") as synth_mock,
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+        ):
+            def _synthesize(**_kwargs):  # noqa: ANN003
+                captured_contexts.append(dict(current_log_context()))
+                return SimpleNamespace(
+                    filename="reply.mp3",
+                    audio_bytes=b"ID3",
+                    content_type="audio/mpeg",
+                )
+
+            synth_mock.side_effect = _synthesize
+            error = listener._post_room_voice_reply(
+                bot_token="token",
+                user_id="u1",
+                channel_id="voice-room-1",
+                text="PM answer",
+                persona_id="pm",
+                persona_name="PM",
+                persona_role="PM",
+                room_config={},
+                content_override="<@u1> Combined response",
+                components=[{"type": 1}],
+                correlation_id="message-2",
+                tenant_id="example",
+                project_id="project-1",
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(synth_mock.call_args.kwargs["text"], "Andy from Product. PM answer")
+        self.assertEqual(
+            captured_contexts,
+            [
+                {
+                    "correlation_id": "message-2",
+                    "tenant_id": "example",
+                    "project_id": "project-1",
+                    "agent_id": None,
+                }
+            ],
+        )
+        self.assertEqual(
+            client_cls.return_value.post_message_with_attachment.call_args.kwargs["content"],
+            "<@u1> Combined response",
+        )
+        self.assertEqual(
+            client_cls.return_value.post_message_with_attachment.call_args.kwargs["components"],
+            [{"type": 1}],
         )
 
     def test_handle_message_create_room_skips_voice_reply_when_feature_disabled(self) -> None:

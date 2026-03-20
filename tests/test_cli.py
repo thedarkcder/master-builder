@@ -128,3 +128,24 @@ class CliEntrypointTests(unittest.TestCase):
             exit_code = cli_main(["knowledge-jira-sync"])
         self.assertEqual(exit_code, 0)
         sync_mock.assert_called_once_with()
+
+    def test_voice_prewarm_command_invokes_prewarm(self) -> None:
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("orchestrator.cli.prewarm_voice_dependencies") as prewarm_mock,
+        ):
+            prewarm_mock.return_value.transcription_provider = "whisper"
+            prewarm_mock.return_value.transcription_ready = True
+            prewarm_mock.return_value.voice_reply_provider = "pocket_tts"
+            prewarm_mock.return_value.prewarmed_voice_ids = ("alba", "jean")
+            exit_code = cli_main(["voice-prewarm"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["transcription_provider"], "whisper")
+        self.assertTrue(payload["transcription_ready"])
+        self.assertEqual(payload["voice_reply_provider"], "pocket_tts")
+        self.assertEqual(payload["prewarmed_voice_ids"], ["alba", "jean"])
+        prewarm_mock.assert_called_once()

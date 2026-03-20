@@ -75,10 +75,16 @@ export function ProjectNotificationsContent({
 
   async function save() {
     if (!credentials || !project) return;
-    if (discordEnabled && liveVoiceEnabled && (!liveVoiceChannelId.trim() || !linkedTextChannelId.trim())) {
+    const normalizedLiveVoiceChannelId = liveVoiceChannelId.trim();
+    const normalizedLinkedTextChannelId = linkedTextChannelId.trim();
+    if (discordEnabled && liveVoiceEnabled && (!normalizedLiveVoiceChannelId || !normalizedLinkedTextChannelId)) {
       setStatusLine("Enter both the voice channel ID and linked text channel/thread ID.");
       return;
     }
+    const liveVoiceRoomLinks =
+      liveVoiceEnabled && normalizedLiveVoiceChannelId && normalizedLinkedTextChannelId
+        ? { [normalizedLiveVoiceChannelId]: normalizedLinkedTextChannelId }
+        : {};
     setBusy(true);
     try {
       const updated = await updateProject(credentials, tenantId, projectId, {
@@ -93,8 +99,9 @@ export function ProjectNotificationsContent({
               ...(project.discord ?? {}),
               notify_events: notifyEvents,
               live_voice_enabled: liveVoiceEnabled,
-              live_voice_channel_id: liveVoiceEnabled ? (liveVoiceChannelId.trim() || null) : null,
-              live_voice_linked_text_channel_id: liveVoiceEnabled ? (linkedTextChannelId.trim() || null) : null,
+              live_voice_channel_id: liveVoiceEnabled ? (normalizedLiveVoiceChannelId || null) : null,
+              live_voice_linked_text_channel_id: liveVoiceEnabled ? (normalizedLinkedTextChannelId || null) : null,
+              live_voice_room_links: liveVoiceRoomLinks,
             }
           : null,
         is_archived: project.is_archived,
@@ -106,9 +113,9 @@ export function ProjectNotificationsContent({
       setLiveVoiceChannelId(updated.discord?.live_voice_channel_id ?? "");
       setLinkedTextChannelId(updated.discord?.live_voice_linked_text_channel_id ?? "");
       if (updated.discord?.live_voice_enabled) {
-        const savedVoiceChannelId = updated.discord.live_voice_channel_id ?? liveVoiceChannelId.trim();
+        const savedVoiceChannelId = updated.discord.live_voice_channel_id ?? normalizedLiveVoiceChannelId;
         const savedLinkedTextChannelId =
-          updated.discord.live_voice_linked_text_channel_id ?? linkedTextChannelId.trim();
+          updated.discord.live_voice_linked_text_channel_id ?? normalizedLinkedTextChannelId;
         setStatusLine(
           `Discord settings saved. Live voice room ${savedVoiceChannelId} is linked to ${savedLinkedTextChannelId}.`
         );

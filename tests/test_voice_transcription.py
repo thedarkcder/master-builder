@@ -8,6 +8,7 @@ from unittest.mock import patch
 from orchestrator.core.config import Settings
 from orchestrator.core.voice.transcription import (
     VoiceTranscriptionError,
+    _load_whisper_model,
     ensure_transcription_provider_ready,
     transcribe_audio_bytes,
 )
@@ -160,6 +161,30 @@ class VoiceTranscriptionTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(VoiceTranscriptionError, "model load failed"):
                 ensure_transcription_provider_ready(settings=settings)
+
+    def test_load_whisper_model_tries_local_cache_before_network(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class _WhisperModel:
+            def __init__(self, model_name, **kwargs):  # noqa: ANN001
+                calls.append({"model_name": model_name, **kwargs})
+                if kwargs.get("local_files_only"):
+                    raise RuntimeError("missing local cache")
+                self.model_name = model_name
+
+        faster_whisper = type("FW", (), {"WhisperModel": _WhisperModel})()
+
+        model = _load_whisper_model(
+            faster_whisper=faster_whisper,
+            model_name="base",
+            device="cpu",
+            compute_type="int8",
+        )
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0]["local_files_only"])
+        self.assertFalse(calls[1]["local_files_only"])
+        self.assertEqual(model.model_name, "base")
 
 
 if __name__ == "__main__":

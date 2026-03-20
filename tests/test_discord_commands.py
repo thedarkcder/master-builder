@@ -1236,6 +1236,59 @@ class DiscordCommandApiTests(unittest.TestCase):
             self.assertTrue(str(latest_entry.get("question") or "").startswith("room "))
             self.assertEqual(latest_entry.get("answer"), "architect: We should keep the MVP to transcription and routing.")
 
+    def test_pm_voice_mode_routes_to_persona_runtime_with_channel_local_history(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, [{"question": "voice earlier", "answer": "security: older reply"}]),
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_voice_room_turn",
+                return_value=SimpleNamespace(
+                    message="We should add session expiry and audit trails.",
+                    brief={},
+                    persona_id="security",
+                    persona_role="Security",
+                    persona_name="June",
+                    persona_voice_id="echo",
+                    router_confidence=0.95,
+                    router_reason="The note is about auth and controls.",
+                    room_config={"persona_names": {"security": "June"}, "persona_voices": {"security": "echo"}},
+                ),
+            ) as room_mock,
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!pm what should we do about session security",
+                    command_params={"voice_mode": "true"},
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "pm")
+        self.assertFalse(command_response.data["room_mode"])
+        self.assertTrue(command_response.data["voice_mode"])
+        self.assertEqual(command_response.data["persona_id"], "security")
+        self.assertEqual(command_response.data["persona_name"], "June")
+        self.assertEqual(command_response.data["router"]["confidence"], 0.95)
+        room_mock.assert_called_once()
+        self.assertEqual(room_mock.call_args.kwargs["history"], [{"question": "voice earlier", "answer": "security: older reply"}])
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            history = list((tenant.discord_config or {}).get("ask_history") or [])
+            self.assertTrue(history)
+            latest_entry = history[-1]
+            self.assertTrue(str(latest_entry.get("question") or "").startswith("voice "))
+            self.assertEqual(latest_entry.get("answer"), "security: We should add session expiry and audit trails.")
+
     def test_ask_command_returns_board_answer(self) -> None:
         with patch(
             "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",

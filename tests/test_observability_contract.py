@@ -7,6 +7,7 @@ from orchestrator.core.observability import (
     REQUIRED_LOG_FIELDS,
     current_log_context,
     reset_log_context,
+    scoped_log_context,
     set_log_context,
     validate_log_payload,
 )
@@ -64,3 +65,47 @@ class ObservabilityContractTests(unittest.TestCase):
         self.assertIn("environment", missing)
         self.assertIn("metadata", missing)
 
+    def test_formatter_normalizes_empty_scope_fields_and_uses_default_agent_id(self) -> None:
+        formatter = ObservabilityJsonFormatter(
+            environment="test",
+            platform_version="v-test",
+            default_agent_id="api",
+        )
+        record = logging.LogRecord(
+            name="test.logger",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=7,
+            msg="hello",
+            args=(),
+            exc_info=None,
+        )
+
+        payload = json.loads(formatter.format(record))
+
+        self.assertEqual(payload["tenant_id"], "")
+        self.assertEqual(payload["project_id"], "")
+        self.assertEqual(payload["correlation_id"], "")
+        self.assertEqual(payload["agent_id"], "api")
+
+    def test_scoped_log_context_applies_and_resets_context(self) -> None:
+        with scoped_log_context(correlation_id="cid-2", tenant_id="tenant-2", project_id="project-2", agent_id="agent-2"):
+            self.assertEqual(
+                current_log_context(),
+                {
+                    "correlation_id": "cid-2",
+                    "tenant_id": "tenant-2",
+                    "project_id": "project-2",
+                    "agent_id": "agent-2",
+                },
+            )
+
+        self.assertEqual(
+            current_log_context(),
+            {
+                "correlation_id": None,
+                "tenant_id": None,
+                "project_id": None,
+                "agent_id": None,
+            },
+        )

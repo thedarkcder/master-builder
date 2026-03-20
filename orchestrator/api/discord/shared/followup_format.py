@@ -5,6 +5,7 @@ from typing import Pattern
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.discord.personas import format_voice_room_persona_label
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 
 
@@ -65,7 +66,8 @@ def build_command_followup_message(
     response_message = str(command_response.message or "").strip()
     persona_name = str(response_data.get("persona_name") or "").strip()
     persona_role = str(response_data.get("persona_role") or "").strip()
-    is_room_mode = bool(response_data.get("room_mode"))
+    persona_id = str(response_data.get("persona_id") or "").strip()
+    is_voice_mode = bool(response_data.get("room_mode") or response_data.get("voice_mode"))
     if command_name == "issues" and created_issue_keys:
         lines[0] = f"{lines[0]} Issue seeding completed."
     elif command_name == "bug" and created_issue_keys:
@@ -77,11 +79,13 @@ def build_command_followup_message(
     elif response_message:
         if command_name in {"ask", "gap"}:
             response_message = _linkify_issue_mentions(response_message)
-        if is_room_mode and persona_name:
-            persona_label = persona_name
-            if persona_role and persona_role.lower() != persona_name.lower():
-                persona_label = f"{persona_name} ({persona_role})"
-            lines[0] = f"{lines[0]} [{persona_label}] {response_message}"
+        if is_voice_mode:
+            persona_label = format_voice_room_persona_label(
+                persona_id=persona_id,
+                persona_name=persona_name,
+                persona_role=persona_role,
+            )
+            lines[0] = f"{lines[0]} {persona_label}: {response_message}"
         else:
             lines[0] = f"{lines[0]} {response_message}"
 

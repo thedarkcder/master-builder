@@ -272,10 +272,17 @@ class GoJsonLinesLiveVoiceTransportClient:
 
     def _monitor_loop(self, process: subprocess.Popen[str]) -> None:
         return_code = process.wait()
+        active_session_id = DEFAULT_TRANSPORT_SESSION_ID
+        should_emit_failure = False
         with self._process_lock:
+            if self._active_session_id:
+                active_session_id = self._active_session_id
             if self._process is process:
                 self._clear_process_state()
+                should_emit_failure = True
         if self._stop_event.is_set():
+            return
+        if not should_emit_failure:
             return
         _TRANSPORT_LOGGER.warning("live_voice_transport_process_exited return_code=%s", return_code)
         handler = self._event_handler
@@ -283,7 +290,7 @@ class GoJsonLinesLiveVoiceTransportClient:
             handler(
                 {
                     "type": "transport_failed",
-                    "session_id": self._active_session_id or DEFAULT_TRANSPORT_SESSION_ID,
+                    "session_id": active_session_id,
                     "stage": "process_exit",
                     "error": f"Live voice transport process exited with code {return_code}",
                     "retryable": True,
@@ -307,6 +314,8 @@ class GoJsonLinesLiveVoiceTransportClient:
         self._stdin = None
         self._stdout = None
         self._stderr = None
+        self._active_session_id = None
+        self._active_signature = None
 
 
 def build_live_voice_transport_client(

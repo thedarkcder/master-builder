@@ -85,6 +85,45 @@ class LiveVoiceTransportClientTests(unittest.TestCase):
         self.assertEqual(frame["session_id"], "sess-1")
         self.assertEqual(frame["room"], {"guild_id": "guild-1", "channel_id": "voice-1"})
 
+    def test_transport_client_reopens_same_session_after_process_exit(self) -> None:
+        events: list[dict] = []
+        client = GoJsonLinesLiveVoiceTransportClient(
+            command=["/usr/local/bin/live-voice-transport"],
+            bot_token="bot-token",
+            event_handler=events.append,
+        )
+        client._active_session_id = "sess-1"
+        client._active_signature = (("guild-1", "voice-1"),)
+
+        class _ExitedProcess:
+            def wait(self) -> int:
+                return 2
+
+        process = _ExitedProcess()
+        client._process = process  # type: ignore[assignment]
+        client._stdin = io.StringIO()
+        client._stdout = io.StringIO()
+        client._stderr = io.StringIO()
+
+        client._monitor_loop(process)  # type: ignore[arg-type]
+
+        self.assertEqual(events[0]["type"], "transport_failed")
+        self.assertEqual(events[0]["session_id"], "sess-1")
+        self.assertIsNone(client._active_session_id)
+        self.assertIsNone(client._active_signature)
+
+        client._stdin = io.StringIO()
+        client._process = SimpleNamespace(poll=lambda: None)
+        client.sync_session(
+            session_id="sess-1",
+            bot_token="bot-token",
+            rooms=[LiveVoiceTransportRoom(guild_id="guild-1", channel_id="voice-1")],
+        )
+
+        frame = _decode_frame(client._stdin.getvalue().strip())
+        self.assertEqual(frame["type"], "open_session")
+        self.assertEqual(frame["session_id"], "sess-1")
+
     def test_builder_uses_transport_command_from_settings(self) -> None:
         settings = SimpleNamespace(
             discord_live_voice_transport_command="/usr/local/bin/live-voice-transport --flag",
