@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
     worker_poll_interval_seconds: int = 5
+    worker_run_heartbeat_interval_seconds: int = 30
+    worker_run_stale_timeout_seconds: int = 300
+    worker_stale_sweep_interval_seconds: int = 60
     discord_gateway_lock_key: int = 947102033127
     discord_gateway_poll_seconds: int = 3
     discord_live_voice_lock_key: int = 947102033129

@@ -218,9 +218,11 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             session.commit()
             session.refresh(run)
 
-            start_run(session, run=run)
+            start_run(session, run=run, worker_service_instance_id="node-a:1234")
             self.assertEqual(run.status, "running")
             self.assertIsNotNone(run.started_at)
+            self.assertEqual(run.worker_service_instance_id, "node-a:1234")
+            self.assertEqual(run.last_heartbeat_at, run.started_at)
 
             blocked = block_archived_project(session, run=run, project=project)
             self.assertEqual(blocked.status, "blocked")
@@ -356,10 +358,62 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 run=queued,
                 expected_status="queued",
                 max_concurrent_runs=2,
+                worker_service_instance_id="node-a:1234",
             )
             self.assertIsNotNone(started)
             assert started is not None
             self.assertEqual(started.status, "running")
+            self.assertEqual(started.worker_service_instance_id, "node-a:1234")
+            self.assertIsNotNone(started.last_heartbeat_at)
+
+    def test_finalize_workflow_result_returns_run_when_ownership_is_lost(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            run = Run(
+                run_id="run-ownership-lost",
+                tenant_id="tenant-a",
+                issue_key="TA-999",
+                issue_summary="ownership lost",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                last_error=None,
+                plan=None,
+                created_at=now,
+                started_at=now,
+                last_heartbeat_at=now,
+                finished_at=None,
+                project_id="tenant-a-default",
+                worker_service_instance_id="node-b:9999",
+            )
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+
+            workflow_result = WorkflowResult(
+                succeeded=True,
+                plan=PmPlan(
+                    plan_steps=["done"],
+                    acceptance_criteria=["done"],
+                    risks=[],
+                ),
+                pr_url=None,
+                summary=[],
+                test_guidance=[],
+                attempts=1,
+            )
+            finalized = finalize_workflow_result(
+                session,
+                run=run,
+                workflow_result=workflow_result,
+                stage_updates=[{"stage": "task_completed"}],
+                expected_worker_service_instance_id="node-a:1234",
+            )
+            self.assertEqual(finalized.status, "running")
+            self.assertIsNone(finalized.finished_at)
+            self.assertEqual(finalized.worker_service_instance_id, "node-b:9999")
 
     def test_requeue_workflow_result_for_capability_notifies_queue_listener(self) -> None:
         now = datetime.now(timezone.utc)
@@ -378,8 +432,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}},
                 created_at=now,
                 started_at=now,
+                last_heartbeat_at=now,
                 finished_at=None,
                 project_id="tenant-a-default",
+                worker_service_instance_id="node-a:1234",
             )
             session.add(run)
             session.add(
@@ -425,7 +481,9 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(requeued.status, "queued")
             self.assertIsNone(requeued.last_error)
             self.assertIsNone(requeued.started_at)
+            self.assertIsNone(requeued.last_heartbeat_at)
             self.assertIsNone(requeued.finished_at)
+            self.assertIsNone(requeued.worker_service_instance_id)
             self.assertEqual(requeued.plan["required_worker_capability"], "macos")
             self.assertEqual(requeued.plan["required_worker_label"], "macos")
             self.assertTrue(requeued.plan["requeued"])
@@ -460,8 +518,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}},
                 created_at=now,
                 started_at=now,
+                last_heartbeat_at=now,
                 finished_at=None,
                 project_id="tenant-a-default",
+                worker_service_instance_id="node-a:1234",
             )
             session.add(run)
             session.add(
@@ -501,8 +561,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(requeued.status, "queued")
             self.assertIsNone(requeued.last_error)
             self.assertIsNone(requeued.started_at)
+            self.assertIsNone(requeued.last_heartbeat_at)
             self.assertIsNone(requeued.finished_at)
             self.assertIsNone(requeued.pr_url)
+            self.assertIsNone(requeued.worker_service_instance_id)
             self.assertTrue(requeued.plan["requeued"])
             self.assertTrue(requeued.plan["stale_branch_snapshot"])
             self.assertIn("Branch snapshot stale", requeued.plan["requeue_reason"])

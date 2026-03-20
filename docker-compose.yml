@@ -71,13 +71,14 @@ services:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
         
-  worker:
+  worker-runtime:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-worker
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_started
