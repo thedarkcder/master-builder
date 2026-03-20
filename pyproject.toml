@@ -14,6 +14,8 @@ dependencies = [
   "faster-whisper>=1.1.1",
   "fastembed>=0.3.6",
   "fastapi>=0.115.0",
+  "hikari>=2.5.0",
+  "hikari-wave>=0.7.0a1",
   "jinja2>=3.1.0",
   "numpy>=1.26.4",
   "pypdf>=5.4.0",
@@ -30,7 +32,7 @@ dependencies = [
   "py-cord[voice]>=2.7.1",
   "pytesseract>=0.3.13",
   "uvicorn>=0.30.0",
-  "websockets>=12.0",
+  "websockets>=15.0,<16",
 ]
 
 [project.scripts]

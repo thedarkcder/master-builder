@@ -41,7 +41,7 @@ _PERSONA_VOICE_KEYS = (
     "room_persona_voices",
     "pm_room_persona_voices",
 )
-_DEFAULT_PLAYBACK_SPEED = 1.5
+_DEFAULT_PLAYBACK_SPEED = 1.0
 _MODEL_LOCK = threading.RLock()
 _POCKET_TTS_MODEL: Any | None = None
 _POCKET_TTS_VOICE_STATES: dict[str, Any] = {}

@@ -104,7 +104,7 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual(metadata.display_name, "Security")
         self.assertEqual(metadata.voice, "javert")
 
-    def test_synthesize_reply_uses_library_voice_and_applies_speedup(self) -> None:
+    def test_synthesize_reply_uses_library_voice_and_keeps_native_speed(self) -> None:
         settings = Settings(voice_reply_provider="pocket_tts")
         runtime = {
             "TTSModel": _FakeTTSModel,
@@ -130,8 +130,7 @@ class VoiceTtsTests(unittest.TestCase):
             self.assertEqual(wav_file.getframerate(), 24000)
             self.assertEqual(wav_file.getnchannels(), 1)
             frame_count = wav_file.getnframes()
-        self.assertLess(frame_count, 24000)
-        self.assertGreater(frame_count, 15000)
+        self.assertEqual(frame_count, 24000)
 
     def test_synthesize_reply_caches_model_and_voice_state(self) -> None:
         settings = Settings(voice_reply_provider="pocket_tts")

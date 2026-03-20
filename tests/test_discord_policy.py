@@ -22,6 +22,28 @@ def test_channel_ids_from_discord_config_collects_threads() -> None:
     assert values == {"main", "ask-1", "seed-1"}
 
 
+def test_channel_ids_from_discord_config_collects_live_voice_room_ids() -> None:
+    values = channel_ids_from_discord_config(
+        {
+            "channel_id": "main",
+            "live_voice_channel_id": "voice-1",
+            "live_voice_linked_text_channel_id": "text-1",
+        }
+    )
+    assert values == {"main", "voice-1", "text-1"}
+
+
+def test_channel_ids_from_discord_config_collects_project_room_channels() -> None:
+    values = channel_ids_from_discord_config(
+        {
+            "pm_room_channel_ids": ["pm-room-1", " "],
+            "persona_room_thread_channel_id": "persona-thread-1",
+            "room_thread_channel_ids": ["room-thread-1"],
+        }
+    )
+    assert values == {"pm-room-1", "persona-thread-1", "room-thread-1"}
+
+
 def test_can_execute_sensitive_command_returns_reason_when_not_allowed() -> None:
     allowed, reason = can_execute_sensitive_command(
         command_name="run",

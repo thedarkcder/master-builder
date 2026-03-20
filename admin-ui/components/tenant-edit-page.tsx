@@ -672,6 +672,9 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                   disabled={!discordEnabled}
                 />
               </div>
+              <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                Live voice rooms are configured per project on the project Discord page.
+              </p>
               <Button onClick={() => void saveDiscordSettings()} disabled={saving}>
                 {saving ? "Saving..." : "Save"}
               </Button>

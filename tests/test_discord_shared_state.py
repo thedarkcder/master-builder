@@ -241,6 +241,26 @@ class DiscordSharedStateTests(unittest.TestCase):
             {"text-room-1", "thread-room-2"},
         )
 
+    def test_live_voice_room_helpers_support_single_project_fields(self) -> None:
+        config = {
+            "live_voice_enabled": True,
+            "live_voice_channel_id": "voice-room-1",
+            "live_voice_linked_text_channel_id": "text-room-1",
+        }
+        self.assertTrue(state_module.live_voice_enabled_from_discord_config(config))
+        self.assertEqual(
+            state_module.live_voice_room_links_from_discord_config(config),
+            {"voice-room-1": "text-room-1"},
+        )
+        self.assertEqual(
+            state_module.live_voice_room_channel_ids_from_discord_config(config),
+            {"voice-room-1"},
+        )
+        self.assertEqual(
+            state_module.live_voice_linked_channel_ids_from_discord_config(config),
+            {"text-room-1"},
+        )
+
     def test_seed_followup_lifecycle(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(discord_config={}, updated_at=None)

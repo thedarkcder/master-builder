@@ -400,6 +400,7 @@ class DiscordGatewayListener:
                 )
         attachments = attachments[:5]
         should_send_room_voice_reply = False
+        voice_note_reply_requested = False
         room_voice_reply_text: str | None = None
         room_voice_reply_persona_id: str | None = None
         room_voice_reply_persona_name: str | None = None
@@ -417,12 +418,7 @@ class DiscordGatewayListener:
             room_channel_ids.update(
                 _room_channel_ids_from_discord_config(getattr(tenant, "discord_config", None) or {})
             )
-            if (
-                not content
-                and channel_id in room_channel_ids
-                and len(attachments) == 1
-                and _is_audio_attachment(attachments[0])
-            ):
+            if not content and len(attachments) == 1 and _is_audio_attachment(attachments[0]):
                 transcript, error_message = self._transcribe_room_audio_attachment(
                     attachment=attachments[0],
                     bot_token=bot_token,
@@ -430,6 +426,7 @@ class DiscordGatewayListener:
                 if transcript:
                     content = transcript
                     room_source_mode = "voice_note"
+                    voice_note_reply_requested = True
                 else:
                     graceful_message = error_message or (
                         "I detected an audio attachment but couldn't transcribe it. "
@@ -539,6 +536,8 @@ class DiscordGatewayListener:
                     "room_mode": "true",
                     "room_source": room_source_mode,
                 }
+            elif voice_note_reply_requested and not command_text.startswith("!"):
+                command_text = f"!pm {command_text}"
 
             message_content = f"<@{user_id}> Command failed due to an internal error."
             components: list[dict] | None = None
@@ -576,7 +575,11 @@ class DiscordGatewayListener:
                         components = build_ask_confirmation_components(request_id)
                 elif command_response.command == "reply" and bool(data.get("recheck_required")):
                     components = _ask_reply_components()
-                elif channel_id in room_channel_ids and command_response.command in {"pm", "room"}:
+                elif (
+                    channel_id in room_channel_ids
+                    and command_response.command in {"pm", "room"}
+                    and self._room_voice_reply_enabled()
+                ):
                     should_send_room_voice_reply = True
                     room_voice_reply_text = str(command_response.message or "").strip() or None
                     room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or None
@@ -585,6 +588,16 @@ class DiscordGatewayListener:
                         room_voice_reply_persona_id = "pm"
                     if room_voice_reply_persona_name is None and room_voice_reply_persona_id == "pm":
                         room_voice_reply_persona_name = "PM"
+                    room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
+                elif (
+                    voice_note_reply_requested
+                    and command_response.command == "pm"
+                    and self._room_voice_reply_enabled()
+                ):
+                    should_send_room_voice_reply = True
+                    room_voice_reply_text = str(command_response.message or "").strip() or None
+                    room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or "pm"
+                    room_voice_reply_persona_name = str(data.get("persona_name") or "").strip() or "PM"
                     room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
             except HTTPException as exc:
                 logger.exception(
@@ -696,6 +709,12 @@ class DiscordGatewayListener:
         if not transcript:
             return None, "I couldn't transcribe that audio attachment. Please retry with text."
         return transcript, None
+
+    def _room_voice_reply_enabled(self) -> bool:
+        provider = str(getattr(self._settings, "voice_reply_provider", "disabled") or "").strip().lower()
+        if provider in {"", "disabled"}:
+            return False
+        return bool(getattr(self._settings, "voice_reply_enabled_default", False))
 
     def _post_room_voice_reply(
         self,

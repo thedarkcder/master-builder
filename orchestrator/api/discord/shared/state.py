@@ -101,6 +101,11 @@ def live_voice_enabled_from_discord_config(discord_config: dict | None) -> bool:
 
 def _live_voice_room_links_from_discord_config(discord_config: dict | None) -> dict[str, str]:
     config = dict(discord_config or {})
+    single_voice_channel_id = str(config.get("live_voice_channel_id") or "").strip()
+    single_linked_channel_id = str(config.get("live_voice_linked_text_channel_id") or "").strip()
+    if single_voice_channel_id and single_linked_channel_id:
+        return {single_voice_channel_id: single_linked_channel_id}
+
     room_links: dict[str, str] = {}
     for key in LIVE_VOICE_LINK_KEYS:
         raw_value = config.get(key)

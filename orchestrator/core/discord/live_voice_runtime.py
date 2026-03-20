@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from orchestrator.core.discord.live_voice_session import (
     LiveVoiceCallbacks,
@@ -21,19 +21,22 @@ class LiveVoiceRuntimeError(RuntimeError):
     pass
 
 
+@runtime_checkable
 class LiveVoiceTransport(Protocol):
-    def join_voice_channel(self, *, binding: LiveVoiceRoomBinding) -> None: ...
+    def sync_session(self, *, session_id: str, bot_token: str, rooms) -> None: ...  # noqa: ANN001
 
-    def leave_voice_channel(self, *, binding: LiveVoiceRoomBinding) -> None: ...
+    def close_session(self, *, session_id: str | None = None, reason: str = "") -> None: ...
 
     def play_audio(
         self,
         *,
         binding: LiveVoiceRoomBinding,
         audio_bytes: bytes,
-        filename: str,
         content_type: str,
+        metadata=None,  # noqa: ANN001
     ) -> None: ...
+
+    def stop_audio(self, *, binding: LiveVoiceRoomBinding) -> None: ...
 
 
 def _utcnow() -> datetime:
@@ -201,6 +204,59 @@ class LiveVoiceRuntimeService:
             if turn is not None:
                 finalized_turns.append(turn)
         return finalized_turns
+
+    def submit_completed_audio_turn(
+        self,
+        *,
+        binding: LiveVoiceRoomBinding,
+        user_id: str,
+        audio_bytes: bytes,
+        received_at: datetime | None = None,
+        sample_rate_hz: int = 16_000,
+        channels: int = 1,
+        is_bot_audio: bool = False,
+        finalization_reason: str = "completed_audio",
+    ) -> LiveVoiceTurn | None:
+        if not audio_bytes:
+            return None
+
+        session = self._require_session(binding=binding)
+        now = received_at or self.clock()
+        if not self.session_manager.can_accept_audio(
+            session=session,
+            speaker_user_id=user_id,
+            is_bot_audio=is_bot_audio,
+        ):
+            return None
+
+        if session.state == LiveVoiceSessionState.LISTENING:
+            previous = session
+            session = self.session_manager.begin_turn(
+                session=session,
+                speaker_user_id=user_id,
+                now=now,
+            )
+            self._sessions[binding.room_key] = session
+            self.callbacks.emit_session_state_changed(previous=previous, current=session)
+
+        turn = LiveVoiceTurn(
+            binding=binding,
+            turn_index=session.turn_index + 1,
+            user_id=user_id,
+            audio_bytes=bytes(audio_bytes),
+            started_at=now,
+            ended_at=now,
+            sample_rate_hz=int(sample_rate_hz),
+            channels=int(channels),
+            finalization_reason=finalization_reason,
+        )
+
+        previous = session
+        session = self.session_manager.mark_turn_finished(session=session, now=now)
+        self._sessions[binding.room_key] = session
+        self.callbacks.emit_session_state_changed(previous=previous, current=session)
+        self.callbacks.emit_turn_finalized(session=session, turn=turn)
+        return turn
 
     def discard_turn(self, *, binding: LiveVoiceRoomBinding, reason: str) -> None:
         session = self._require_session(binding=binding)
