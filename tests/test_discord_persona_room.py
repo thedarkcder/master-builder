@@ -6,7 +6,12 @@ from unittest.mock import patch
 from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.discord.persona_room import answer_voice_room_turn
-from orchestrator.core.discord.personas import build_voice_room_config, resolve_voice_room_persona_profile
+from orchestrator.core.discord.personas import (
+    build_voice_room_config,
+    build_voice_room_spoken_reply_text,
+    format_voice_room_persona_label,
+    resolve_voice_room_persona_profile,
+)
 
 
 class DiscordPersonaRoomTests(unittest.TestCase):
@@ -70,6 +75,33 @@ class DiscordPersonaRoomTests(unittest.TestCase):
         self.assertEqual(result.persona_voice_id, "secure-voice")
         self.assertEqual(result.router_confidence, 0.87)
         self.assertIn("consent", result.message)
+
+    def test_persona_label_and_spoken_reply_use_name_from_role(self) -> None:
+        self.assertEqual(
+            format_voice_room_persona_label(
+                persona_id="pm",
+                persona_name="Andy",
+                persona_role="PM",
+            ),
+            "Andy from Product",
+        )
+        self.assertEqual(
+            format_voice_room_persona_label(
+                persona_id="pm",
+                persona_name="PM",
+                persona_role="PM",
+            ),
+            "Andy from Product",
+        )
+        self.assertEqual(
+            build_voice_room_spoken_reply_text(
+                message="We should cut scope.",
+                persona_id="engineer",
+                persona_name="Bill",
+                persona_role="Engineer",
+            ),
+            "Bill from Engineering. We should cut scope.",
+        )
 
 
 if __name__ == "__main__":

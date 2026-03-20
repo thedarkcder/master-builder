@@ -13,6 +13,7 @@ from orchestrator.core.discord.live_voice_service import (
     _encode_pcm_wav,
 )
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
+from orchestrator.core.observability import current_log_context
 
 
 class _FakeSidecarClient:
@@ -334,21 +335,32 @@ class LiveVoiceServiceTests(unittest.TestCase):
         )
 
         answer_calls: list[dict] = []
+        transcription_contexts: list[dict[str, str | None]] = []
+        answer_contexts: list[dict[str, str | None]] = []
 
         def _answer_voice_room_turn(**kwargs):  # noqa: ANN003
+            answer_contexts.append(dict(current_log_context()))
             answer_calls.append(kwargs)
             return SimpleNamespace(
                 persona_id="pm",
                 persona_name="PM",
+                persona_role="PM",
                 message="Short answer.",
                 room_config={},
                 router_confidence=0.9,
                 router_reason="product",
             )
 
+        def _transcribe_audio_bytes(**_kwargs):  # noqa: ANN003
+            transcription_contexts.append(dict(current_log_context()))
+            return "What should we do next?"
+
         with (
             patch("orchestrator.core.discord.live_voice_service._encode_pcm_wav", return_value=b"wav"),
-            patch("orchestrator.core.discord.live_voice_service.transcribe_audio_bytes", return_value="What should we do next?"),
+            patch(
+                "orchestrator.core.discord.live_voice_service.transcribe_audio_bytes",
+                side_effect=_transcribe_audio_bytes,
+            ),
             patch(
                 "orchestrator.core.discord.live_voice_service.build_codex_runtime",
                 return_value="runtime",
@@ -373,13 +385,35 @@ class LiveVoiceServiceTests(unittest.TestCase):
         self.assertEqual(answer_call["history"], room_history[-8:])
         self.assertEqual(answer_call["github_context"], {})
         self.assertEqual(answer_call["invocation_context"].reasoning_effort, "low")
+        self.assertEqual(
+            transcription_contexts,
+            [
+                {
+                    "correlation_id": "live-voice:123:456:user-1:1:1",
+                    "tenant_id": "tenant-a",
+                    "project_id": "project-a",
+                    "agent_id": None,
+                }
+            ],
+        )
+        self.assertEqual(
+            answer_contexts,
+            [
+                {
+                    "correlation_id": "live-voice:123:456:user-1:1:1",
+                    "tenant_id": "tenant-a",
+                    "project_id": "project-a",
+                    "agent_id": None,
+                }
+            ],
+        )
         self.assertEqual(len(scheduled_results), 1)
         self.assertEqual(scheduled_results[0][2], 1)
         self.assertEqual(
             notices,
             [
                 ("789", "<@user-1> What should we do next?"),
-                ("789", "**PM:** Short answer."),
+                ("789", "**Andy from Product:** Short answer."),
             ],
         )
 
@@ -469,14 +503,19 @@ class LiveVoiceServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
         result = SimpleNamespace(
             persona_id="persona-1",
             persona_name="Persona One",
+            persona_role="Engineer",
             message="Hello there",
             room_config={},
         )
+        tts_contexts: list[dict[str, str | None]] = []
 
         with patch(
             "orchestrator.core.discord.live_voice_service.synthesize_reply_audio",
-            return_value=SimpleNamespace(audio_bytes=b"wav-bytes"),
-        ):
+            side_effect=lambda **_kwargs: (
+                tts_contexts.append(dict(current_log_context()))
+                or SimpleNamespace(audio_bytes=b"wav-bytes")
+            ),
+        ) as synth_mock:
             service._turn_versions[room.room_key] = 1
             await service._play_persona_reply(room=room, result=result, turn_version=1)
 
@@ -487,6 +526,18 @@ class LiveVoiceServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
                 {"metadata": {"persona_id": "persona-1", "persona_name": "Persona One", "room_key": "123:456"}},
             ),
             service._transport_client.calls,
+        )
+        self.assertEqual(synth_mock.call_args.kwargs["text"], "Persona One from Engineering. Hello there")
+        self.assertEqual(
+            tts_contexts,
+            [
+                {
+                    "correlation_id": "live-voice-reply:123:456:1:persona-1",
+                    "tenant_id": "tenant-a",
+                    "project_id": "project-a",
+                    "agent_id": None,
+                }
+            ],
         )
         self.assertTrue(service._runtime.get_session(binding=room.binding).bot_speaking)
 

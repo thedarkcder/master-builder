@@ -50,6 +50,11 @@ from orchestrator.core.discord.live_voice_transport_client import (
     build_live_voice_transport_client,
 )
 from orchestrator.core.discord.persona_room import answer_voice_room_turn
+from orchestrator.core.discord.personas import (
+    build_voice_room_spoken_reply_text,
+    format_voice_room_persona_label,
+)
+from orchestrator.core.observability import scoped_log_context
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -651,6 +656,27 @@ class DiscordLiveVoiceService:
         with self._turn_worker_lock:
             return self._turn_versions.get(room_key) == turn_version
 
+    @staticmethod
+    def _live_voice_turn_correlation_id(
+        *,
+        room: ConfiguredLiveVoiceRoom,
+        turn: LiveVoiceTurn,
+        turn_version: int,
+    ) -> str:
+        return (
+            f"live-voice:{room.room_key}:{turn.user_id}:{turn.turn_index}:{turn_version}"
+        )
+
+    @staticmethod
+    def _live_voice_reply_correlation_id(
+        *,
+        room: ConfiguredLiveVoiceRoom,
+        result,  # noqa: ANN001
+        turn_version: int,
+    ) -> str:
+        persona_id = str(getattr(result, "persona_id", "") or "").strip() or "unknown"
+        return f"live-voice-reply:{room.room_key}:{turn_version}:{persona_id}"
+
     def _process_turn(self, *, turn: LiveVoiceTurn, turn_version: int) -> None:
         room = self._rooms_by_key.get(turn.room_key)
         if room is None or self._bot_token is None:
@@ -685,6 +711,12 @@ class DiscordLiveVoiceService:
                 tenant_id=tenant.tenant_id,
                 channel_id=room.linked_text_channel_id,
             )
+            scoped_project_id = str(getattr(project, "project_id", "") or "").strip() or None
+            turn_correlation_id = self._live_voice_turn_correlation_id(
+                room=room,
+                turn=turn,
+                turn_version=turn_version,
+            )
 
             wav_bytes = _encode_pcm_wav(
                 pcm_bytes=turn.audio_bytes,
@@ -692,12 +724,17 @@ class DiscordLiveVoiceService:
                 channels=turn.channels,
             )
             try:
-                transcript = transcribe_audio_bytes(
-                    settings=self._settings,
-                    audio_bytes=wav_bytes,
-                    filename="live-voice.wav",
-                    content_type="audio/wav",
-                )
+                with scoped_log_context(
+                    correlation_id=turn_correlation_id,
+                    tenant_id=tenant.tenant_id,
+                    project_id=scoped_project_id,
+                ):
+                    transcript = transcribe_audio_bytes(
+                        settings=self._settings,
+                        audio_bytes=wav_bytes,
+                        filename="live-voice.wav",
+                        content_type="audio/wav",
+                    )
             except VoiceTranscriptionError as exc:
                 self._post_text_notice(
                     channel_id=room.linked_text_channel_id,
@@ -768,27 +805,32 @@ class DiscordLiveVoiceService:
 
             answer_started_at = time.perf_counter()
             try:
-                result = answer_voice_room_turn(
-                    runtime=runtime,
-                    transcript=transcript,
-                    project_keys=project_keys,
-                    issues=[],
-                    status_counts={},
-                    invocation_context=CodexInvocationContext(
-                        channel="discord",
-                        tenant_id=tenant.tenant_id,
-                        project_id=getattr(project, "project_id", None),
-                        command="pm",
-                        stage="live-voice-room",
-                        working_dir=codex_working_dir,
-                        issue_key=normalized_issue_key,
-                        reasoning_effort=_LIVE_VOICE_REASONING_EFFORT,
-                    ),
-                    history=trimmed_history,
-                    github_context={},
-                    tenant_discord_config=getattr(tenant, "discord_config", None) or {},
-                    project_discord_config=getattr(project, "discord_config", None) or {},
-                )
+                with scoped_log_context(
+                    correlation_id=turn_correlation_id,
+                    tenant_id=tenant.tenant_id,
+                    project_id=scoped_project_id,
+                ):
+                    result = answer_voice_room_turn(
+                        runtime=runtime,
+                        transcript=transcript,
+                        project_keys=project_keys,
+                        issues=[],
+                        status_counts={},
+                        invocation_context=CodexInvocationContext(
+                            channel="discord",
+                            tenant_id=tenant.tenant_id,
+                            project_id=getattr(project, "project_id", None),
+                            command="pm",
+                            stage="live-voice-room",
+                            working_dir=codex_working_dir,
+                            issue_key=normalized_issue_key,
+                            reasoning_effort=_LIVE_VOICE_REASONING_EFFORT,
+                        ),
+                        history=trimmed_history,
+                        github_context={},
+                        tenant_discord_config=getattr(tenant, "discord_config", None) or {},
+                        project_discord_config=getattr(project, "discord_config", None) or {},
+                    )
             except CodexRuntimeError as exc:
                 session.commit()
                 self._post_text_notice(
@@ -833,9 +875,14 @@ class DiscordLiveVoiceService:
             channel_id=room.linked_text_channel_id,
             content=f"<@{turn.user_id}> {transcript}",
         )
+        persona_label = format_voice_room_persona_label(
+            persona_id=result.persona_id,
+            persona_name=result.persona_name,
+            persona_role=getattr(result, "persona_role", None),
+        )
         self._post_text_notice(
             channel_id=room.linked_text_channel_id,
-            content=f"**{result.persona_name}:** {result.message}",
+            content=f"**{persona_label}:** {result.message}",
         )
         logger.info(
             "discord_live_voice_turn_answered room_key=%s persona_id=%s response_chars=%s",
@@ -898,25 +945,45 @@ class DiscordLiveVoiceService:
             return
 
         tts_started_at = time.perf_counter()
+        reply_correlation_id = self._live_voice_reply_correlation_id(
+            room=room,
+            result=result,
+            turn_version=turn_version,
+        )
         try:
-            audio = synthesize_reply_audio(
-                settings=self._settings,
-                text=result.message,
-                persona_id=result.persona_id,
-                room_config=result.room_config,
-            )
+            with scoped_log_context(
+                correlation_id=reply_correlation_id,
+                tenant_id=room.tenant_id,
+                project_id=room.project_id,
+            ):
+                audio = synthesize_reply_audio(
+                    settings=self._settings,
+                    text=build_voice_room_spoken_reply_text(
+                        message=result.message,
+                        persona_id=result.persona_id,
+                        persona_name=result.persona_name,
+                        persona_role=getattr(result, "persona_role", None),
+                    ),
+                    persona_id=result.persona_id,
+                    room_config=result.room_config,
+                )
         except (VoiceReplyError, LiveVoiceAudioError) as exc:
+            persona_label = format_voice_room_persona_label(
+                persona_id=result.persona_id,
+                persona_name=result.persona_name,
+                persona_role=getattr(result, "persona_role", None),
+            )
             self._post_text_notice(
                 channel_id=room.linked_text_channel_id,
-                content=f"Live voice reply failed for {result.persona_name}: {exc}",
+                content=f"Live voice reply failed for {persona_label}: {exc}",
             )
             return
-            logger.info(
-                "discord_live_voice_tts_ready room_key=%s persona_id=%s tts_ms=%s",
-                room.room_key,
-                result.persona_id,
-                round((time.perf_counter() - tts_started_at) * 1000, 2),
-            )
+        logger.info(
+            "discord_live_voice_tts_ready room_key=%s persona_id=%s tts_ms=%s",
+            room.room_key,
+            result.persona_id,
+            round((time.perf_counter() - tts_started_at) * 1000, 2),
+        )
         if not self._turn_version_is_current(room_key=room.room_key, turn_version=turn_version):
             logger.info(
                 "discord_live_voice_playback_skipped room_key=%s turn_version=%s reason=superseded_before_playback",
@@ -932,17 +999,22 @@ class DiscordLiveVoiceService:
 
         playback_started_at = time.perf_counter()
         try:
-            await asyncio.to_thread(
-                self._transport_client.play_audio,
-                binding=room.binding,
-                audio_bytes=audio.audio_bytes,
-                content_type="audio/wav",
-                metadata={
-                    "persona_id": result.persona_id,
-                    "persona_name": result.persona_name,
-                    "room_key": room.room_key,
-                },
-            )
+            with scoped_log_context(
+                correlation_id=reply_correlation_id,
+                tenant_id=room.tenant_id,
+                project_id=room.project_id,
+            ):
+                await asyncio.to_thread(
+                    self._transport_client.play_audio,
+                    binding=room.binding,
+                    audio_bytes=audio.audio_bytes,
+                    content_type="audio/wav",
+                    metadata={
+                        "persona_id": result.persona_id,
+                        "persona_name": result.persona_name,
+                        "room_key": room.room_key,
+                    },
+                )
             logger.info(
                 "discord_live_voice_playback_dispatched room_key=%s persona_id=%s playback_dispatch_ms=%s",
                 room.room_key,
@@ -951,9 +1023,14 @@ class DiscordLiveVoiceService:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("discord_live_voice_playback_failed room_key=%s persona_id=%s", room.room_key, result.persona_id)
+            persona_label = format_voice_room_persona_label(
+                persona_id=result.persona_id,
+                persona_name=result.persona_name,
+                persona_role=getattr(result, "persona_role", None),
+            )
             self._post_text_notice(
                 channel_id=room.linked_text_channel_id,
-                content=f"Live voice reply failed for {result.persona_name}: {exc}",
+                content=f"Live voice reply failed for {persona_label}: {exc}",
             )
             with self._runtime_lock:
                 session = self._runtime.get_session(binding=room.binding)

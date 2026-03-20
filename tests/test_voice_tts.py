@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import unittest
 import wave
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -11,6 +12,7 @@ from orchestrator.core.config import Settings
 from orchestrator.core.voice import tts as tts_module
 from orchestrator.core.voice.tts import (
     VoiceReplyError,
+    ensure_voice_reply_provider_ready,
     resolve_voice_reply_persona_metadata,
     synthesize_reply_audio,
 )
@@ -101,7 +103,7 @@ class VoiceTtsTests(unittest.TestCase):
             room_config={},
         )
 
-        self.assertEqual(metadata.display_name, "Security")
+        self.assertEqual(metadata.display_name, "June")
         self.assertEqual(metadata.voice, "javert")
 
     def test_synthesize_reply_uses_library_voice_and_keeps_native_speed(self) -> None:
@@ -123,14 +125,19 @@ class VoiceTtsTests(unittest.TestCase):
         self.assertEqual(audio.content_type, "audio/wav")
         self.assertEqual(audio.filename, "voice_reply.wav")
         self.assertEqual(_FakeTTSModel.load_calls, 1)
-        self.assertEqual(_FakeTTSModel.model.loaded_voices, ["marius"])
-        self.assertEqual(_FakeTTSModel.model.generated, [("state:marius", "hello", True)])
+        self.assertEqual(len(_FakeTTSModel.model.loaded_voices), 1)
+        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[0]).endswith("/marius.safetensors"))
+        self.assertEqual(len(_FakeTTSModel.model.generated), 1)
+        generated_state, generated_text, copy_state = _FakeTTSModel.model.generated[0]
+        self.assertTrue(str(generated_state).endswith("/marius.safetensors"))
+        self.assertEqual(generated_text, "hello")
+        self.assertTrue(copy_state)
 
         with wave.open(io.BytesIO(audio.audio_bytes), "rb") as wav_file:
             self.assertEqual(wav_file.getframerate(), 24000)
             self.assertEqual(wav_file.getnchannels(), 1)
             frame_count = wav_file.getnframes()
-        self.assertEqual(frame_count, 24000)
+        self.assertEqual(frame_count, 28800)
 
     def test_synthesize_reply_caches_model_and_voice_state(self) -> None:
         settings = Settings(voice_reply_provider="pocket_tts")
@@ -145,11 +152,73 @@ class VoiceTtsTests(unittest.TestCase):
             synthesize_reply_audio(settings=settings, text="second", persona_id="pm")
 
         self.assertEqual(_FakeTTSModel.load_calls, 1)
-        self.assertEqual(_FakeTTSModel.model.loaded_voices, ["alba"])
-        self.assertEqual(
-            _FakeTTSModel.model.generated,
-            [("state:alba", "first", True), ("state:alba", "second", True)],
+        self.assertEqual(len(_FakeTTSModel.model.loaded_voices), 1)
+        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[0]).endswith("/alba.safetensors"))
+        self.assertEqual(len(_FakeTTSModel.model.generated), 2)
+        first_state, first_text, first_copy = _FakeTTSModel.model.generated[0]
+        second_state, second_text, second_copy = _FakeTTSModel.model.generated[1]
+        self.assertTrue(str(first_state).endswith("/alba.safetensors"))
+        self.assertTrue(str(second_state).endswith("/alba.safetensors"))
+        self.assertEqual((first_text, first_copy), ("first", True))
+        self.assertEqual((second_text, second_copy), ("second", True))
+
+    def test_ensure_voice_reply_provider_ready_prewarms_predefined_voices(self) -> None:
+        settings = Settings(
+            voice_reply_provider="pocket_tts",
+            pocket_tts_voice="jean",
         )
+        runtime = {
+            "TTSModel": _FakeTTSModel,
+            "numpy": np,
+            "signal": __import__("scipy.signal", fromlist=["resample"]),
+        }
+
+        with (
+            patch("orchestrator.core.voice.tts._load_pocket_tts_runtime", return_value=runtime),
+            patch(
+                "orchestrator.core.voice.tts.list_predefined_pocket_tts_voices",
+                return_value=("alba", "jean"),
+            ),
+        ):
+            warmed_voice_ids = ensure_voice_reply_provider_ready(settings=settings)
+
+        self.assertEqual(warmed_voice_ids, ["alba", "jean"])
+        self.assertEqual(_FakeTTSModel.load_calls, 1)
+        self.assertEqual(len(_FakeTTSModel.model.loaded_voices), 2)
+        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[0]).endswith("/alba.safetensors"))
+        self.assertTrue(str(_FakeTTSModel.model.loaded_voices[1]).endswith("/jean.safetensors"))
+
+    def test_predefined_voice_uses_cached_hf_asset_before_network(self) -> None:
+        huggingface_hub = type("Hub", (), {})()
+        recorded_calls: list[dict[str, object]] = []
+
+        def _fake_hf_hub_download(**kwargs):  # noqa: ANN003
+            recorded_calls.append(kwargs)
+            return "/tmp/alba.safetensors"
+
+        huggingface_hub.hf_hub_download = _fake_hf_hub_download
+        pocket_tts_utils = type("Utils", (), {"PREDEFINED_VOICES": {"alba": "hf://repo/name/path/alba.safetensors@rev"}})()
+
+        runtime = {
+            "TTSModel": _FakeTTSModel,
+            "numpy": np,
+            "signal": __import__("scipy.signal", fromlist=["resample"]),
+        }
+
+        with (
+            patch("orchestrator.core.voice.tts._load_pocket_tts_runtime", return_value=runtime),
+            patch("orchestrator.core.voice.tts._load_pocket_tts_utils_module", return_value=pocket_tts_utils),
+            patch("orchestrator.core.voice.tts.import_module", return_value=huggingface_hub),
+        ):
+            synthesize_reply_audio(
+                settings=Settings(voice_reply_provider="pocket_tts"),
+                text="hello",
+                persona_id="pm",
+            )
+
+        self.assertEqual(len(recorded_calls), 1)
+        self.assertTrue(recorded_calls[0]["local_files_only"])
+        self.assertEqual(_FakeTTSModel.model.loaded_voices, [Path("/tmp/alba.safetensors")])
 
     def test_synthesize_reply_surfaces_missing_package(self) -> None:
         settings = Settings(voice_reply_provider="pocket_tts")

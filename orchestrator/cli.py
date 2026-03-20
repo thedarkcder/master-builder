@@ -15,6 +15,7 @@ from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
 from orchestrator.core.knowledge_jira_sync_runtime import run_knowledge_jira_sync
 from orchestrator.core.runs import enqueue_run, resolve_precheck_outcome_for_enqueue
+from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Run, Tenant
@@ -38,6 +39,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
     subparsers.add_parser("migrate", help="Apply DB migrations")
+    subparsers.add_parser("voice-prewarm", help="Prewarm voice model dependencies")
 
     run_parser = subparsers.add_parser("run", help="Queue a manual run for a tenant issue")
     run_parser.add_argument("--tenant", required=True, help="Tenant identifier")
@@ -203,6 +205,23 @@ def _handle_agent_tool(
             return 1
 
 
+def _handle_voice_prewarm() -> int:
+    settings = get_settings()
+    result = prewarm_voice_dependencies(settings=settings)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "transcription_provider": result.transcription_provider,
+                "transcription_ready": result.transcription_ready,
+                "voice_reply_provider": result.voice_reply_provider,
+                "prewarmed_voice_ids": list(result.prewarmed_voice_ids),
+            }
+        )
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -226,6 +245,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "migrate":
         run_migrations()
         return 0
+
+    if args.command == "voice-prewarm":
+        return _handle_voice_prewarm()
 
     if args.command == "run":
         return _handle_run(tenant_id=args.tenant, issue_key=args.issue)

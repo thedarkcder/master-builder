@@ -221,8 +221,9 @@ def _get_whisper_model(*, settings: Settings) -> object:
                 "Whisper transcription requires the `faster-whisper` package to be installed."
             ) from exc
         try:
-            model = faster_whisper.WhisperModel(
-                model_name,
+            model = _load_whisper_model(
+                faster_whisper=faster_whisper,
+                model_name=model_name,
                 device=device,
                 compute_type=compute_type,
             )
@@ -230,6 +231,30 @@ def _get_whisper_model(*, settings: Settings) -> object:
             raise VoiceTranscriptionError(f"Whisper model load failed: {exc}") from exc
         _WHISPER_MODELS[cache_key] = model
         return model
+
+
+def _load_whisper_model(
+    *,
+    faster_whisper: object,
+    model_name: str,
+    device: str,
+    compute_type: str,
+) -> object:
+    whisper_model_cls = getattr(faster_whisper, "WhisperModel")
+    local_first_kwargs = {
+        "device": device,
+        "compute_type": compute_type,
+        "local_files_only": True,
+    }
+    try:
+        return whisper_model_cls(model_name, **local_first_kwargs)
+    except Exception:  # noqa: BLE001
+        return whisper_model_cls(
+            model_name,
+            device=device,
+            compute_type=compute_type,
+            local_files_only=False,
+        )
 
 
 def _decode_audio_to_float32_mono(

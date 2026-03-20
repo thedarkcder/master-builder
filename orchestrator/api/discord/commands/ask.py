@@ -98,14 +98,15 @@ def _pm_history_answer(answer: str) -> str:
     return compact
 
 
-def _voice_room_history_question(question: str) -> str:
+def _voice_turn_history_question(*, question: str, room_mode: bool) -> str:
     compact = " ".join(question.strip().split())
     if len(compact) > 220:
         compact = f"{compact[:217]}..."
-    return f"room {compact}".strip()
+    prefix = "room" if room_mode else "voice"
+    return f"{prefix} {compact}".strip()
 
 
-def _voice_room_history_answer(*, answer: str, persona_id: str) -> str:
+def _voice_turn_history_answer(*, answer: str, persona_id: str) -> str:
     compact = " ".join(str(answer).strip().split())
     if len(compact) > 380:
         compact = f"{compact[:377]}..."
@@ -147,8 +148,10 @@ def dispatch_ask_command(
             )
         command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
         is_voice_room_mode = str(command_params.get("room_mode") or "").strip().lower() in {"1", "true", "yes"}
+        is_voice_mode = str(command_params.get("voice_mode") or "").strip().lower() in {"1", "true", "yes"}
+        is_routed_voice_mode = is_voice_room_mode or is_voice_mode
         first_token = arguments[0].strip().lower()
-        approval_requested = first_token == "approve" and not is_voice_room_mode
+        approval_requested = first_token == "approve" and not is_routed_voice_mode
         question_tokens = arguments[1:] if approval_requested else arguments
         question = " ".join(question_tokens).strip()
         if not question:
@@ -181,24 +184,27 @@ def dispatch_ask_command(
         )
         scoped_project = session.get(Project, scoped_project_id) if scoped_project_id else None
         project_discord_config = scoped_project.discord_config if scoped_project is not None else {}
-        if is_voice_room_mode:
+        if is_routed_voice_mode:
             linked_text_channel_id = str(command_params.get("linked_text_channel_id") or "").strip() or None
             voice_channel_id = str(command_params.get("voice_channel_id") or "").strip() or None
-            room_id = _room_history_service.resolve_room_id(
-                room_id=str(command_params.get("room_id") or "").strip() or None,
-                channel_id=normalized_channel_id,
-                linked_text_channel_id=linked_text_channel_id,
-                voice_channel_id=voice_channel_id,
-            )
             room_source_mode = str(command_params.get("room_source") or "text").strip().lower() or "text"
             history_owner = scoped_project if scoped_project is not None else tenant
-            room_history = _room_history_service.recent_room_history(
-                discord_config=getattr(history_owner, "discord_config", None),
-                room_id=room_id,
-                channel_id=normalized_channel_id,
-                linked_text_channel_id=linked_text_channel_id,
-                voice_channel_id=voice_channel_id,
-            )
+            room_history = _history_context
+            room_id = None
+            if is_voice_room_mode:
+                room_id = _room_history_service.resolve_room_id(
+                    room_id=str(command_params.get("room_id") or "").strip() or None,
+                    channel_id=normalized_channel_id,
+                    linked_text_channel_id=linked_text_channel_id,
+                    voice_channel_id=voice_channel_id,
+                )
+                room_history = _room_history_service.recent_room_history(
+                    discord_config=getattr(history_owner, "discord_config", None),
+                    room_id=room_id,
+                    channel_id=normalized_channel_id,
+                    linked_text_channel_id=linked_text_channel_id,
+                    voice_channel_id=voice_channel_id,
+                )
             try:
                 voice_room_result = answer_voice_room_turn(
                     runtime=runtime,
@@ -231,55 +237,57 @@ def dispatch_ask_command(
                 tenant=tenant,
                 user_id=normalized_user_id,
                 channel_id=normalized_channel_id,
-                question=_voice_room_history_question(question),
-                answer=_voice_room_history_answer(
+                question=_voice_turn_history_question(question=question, room_mode=is_voice_room_mode),
+                answer=_voice_turn_history_answer(
                     answer=voice_room_result.message,
                     persona_id=voice_room_result.persona_id,
                 ),
                 issue_key=normalized_issue_key,
                 status_name=requested_status,
             )
-            updated_room_config, _ = _room_history_service.append_room_history_entry(
-                discord_config=getattr(history_owner, "discord_config", None),
-                room_id=room_id,
-                channel_id=normalized_channel_id,
-                linked_text_channel_id=linked_text_channel_id,
-                voice_channel_id=voice_channel_id,
-                speaker_type="user",
-                source_mode=room_source_mode,
-                text=question,
-                user_id=normalized_user_id,
-                issue_key=normalized_issue_key,
-                status_name=requested_status,
-            )
-            updated_room_config, _ = _room_history_service.append_room_history_entry(
-                discord_config=updated_room_config,
-                room_id=room_id,
-                channel_id=normalized_channel_id,
-                linked_text_channel_id=linked_text_channel_id,
-                voice_channel_id=voice_channel_id,
-                speaker_type="persona",
-                source_mode=room_source_mode,
-                text=voice_room_result.message,
-                persona_id=voice_room_result.persona_id,
-                issue_key=normalized_issue_key,
-                status_name=requested_status,
-                metadata={
-                    "router_confidence": voice_room_result.router_confidence,
-                    "router_reason": voice_room_result.router_reason,
-                },
-            )
-            history_owner.discord_config = dict(updated_room_config)
-            if hasattr(history_owner, "updated_at"):
-                history_owner.updated_at = datetime.now(timezone.utc)
-            session.commit()
+            if is_voice_room_mode:
+                updated_room_config, _ = _room_history_service.append_room_history_entry(
+                    discord_config=getattr(history_owner, "discord_config", None),
+                    room_id=room_id,
+                    channel_id=normalized_channel_id,
+                    linked_text_channel_id=linked_text_channel_id,
+                    voice_channel_id=voice_channel_id,
+                    speaker_type="user",
+                    source_mode=room_source_mode,
+                    text=question,
+                    user_id=normalized_user_id,
+                    issue_key=normalized_issue_key,
+                    status_name=requested_status,
+                )
+                updated_room_config, _ = _room_history_service.append_room_history_entry(
+                    discord_config=updated_room_config,
+                    room_id=room_id,
+                    channel_id=normalized_channel_id,
+                    linked_text_channel_id=linked_text_channel_id,
+                    voice_channel_id=voice_channel_id,
+                    speaker_type="persona",
+                    source_mode=room_source_mode,
+                    text=voice_room_result.message,
+                    persona_id=voice_room_result.persona_id,
+                    issue_key=normalized_issue_key,
+                    status_name=requested_status,
+                    metadata={
+                        "router_confidence": voice_room_result.router_confidence,
+                        "router_reason": voice_room_result.router_reason,
+                    },
+                )
+                history_owner.discord_config = dict(updated_room_config)
+                if hasattr(history_owner, "updated_at"):
+                    history_owner.updated_at = datetime.now(timezone.utc)
+                session.commit()
             return DiscordCommandResponse(
                 ok=True,
                 command="pm",
                 message=voice_room_result.message,
                 data={
                     "pm_mode": True,
-                    "room_mode": True,
+                    "room_mode": is_voice_room_mode,
+                    "voice_mode": True,
                     "question": question,
                     "issue_key": normalized_issue_key,
                     "status": requested_status,

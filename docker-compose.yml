@@ -140,6 +140,7 @@ services:
       ORCHESTRATOR_POCKET_TTS_VOICE: ${ORCHESTRATOR_POCKET_TTS_VOICE:-}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
       HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
     command:
       - /bin/sh
       - -ceu
@@ -148,6 +149,7 @@ services:
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-gateway
     volumes:
       - codex-home:/root/.codex
@@ -184,6 +186,7 @@ services:
       ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS:-10}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
       HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
     command:
       - /bin/sh
       - -ceu
@@ -192,6 +195,7 @@ services:
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-live-voice
     volumes:
       - codex-home:/root/.codex

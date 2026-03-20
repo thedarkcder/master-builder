@@ -148,7 +148,51 @@ class DiscordFollowupFormatTests(unittest.TestCase):
             issue_key_pattern=pattern,
         )
 
-        self.assertIn("<@u7> [Ava (PM)] We should keep the MVP to voice capture and routing.", message)
+        self.assertIn("<@u7> Ava from Product: We should keep the MVP to voice capture and routing.", message)
+
+    def test_voice_mode_prefixes_persona_label_without_room_mode(self) -> None:
+        pattern = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+        response = self._response(
+            command="pm",
+            message="We need stricter session expiry and audit logging.",
+            data={
+                "voice_mode": True,
+                "persona_id": "security",
+                "persona_name": "June",
+                "persona_role": "Security",
+            },
+        )
+
+        message = build_command_followup_message(
+            user_id="u8",
+            command_response=response,
+            jira_browse_base_url=None,
+            issue_key_pattern=pattern,
+        )
+
+        self.assertIn("<@u8> June from Security: We need stricter session expiry and audit logging.", message)
+
+    def test_voice_mode_falls_back_from_generic_persona_name_to_default_display_name(self) -> None:
+        pattern = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+        response = self._response(
+            command="pm",
+            message="We should unblock Apple auth first.",
+            data={
+                "voice_mode": True,
+                "persona_id": "engineer",
+                "persona_name": "Engineer",
+                "persona_role": "Engineer",
+            },
+        )
+
+        message = build_command_followup_message(
+            user_id="u9",
+            command_response=response,
+            jira_browse_base_url=None,
+            issue_key_pattern=pattern,
+        )
+
+        self.assertIn("<@u9> Bill from Engineering: We should unblock Apple auth first.", message)
 
     def test_content_truncation_and_created_issue_overflow(self) -> None:
         pattern = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")

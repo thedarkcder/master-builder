@@ -52,6 +52,7 @@ def create_app() -> FastAPI:
         settings.log_level,
         environment=settings.sentry_environment,
         platform_version=settings.sentry_release or "dev-local",
+        default_agent_id="api",
     )
     initialize_sentry(settings=settings)
     cors_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]

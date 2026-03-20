@@ -18,10 +18,18 @@ from orchestrator.api.discord.shared.followup_format import (
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
 )
-from orchestrator.api.discord.shared.state import find_seed_followup_context
+from orchestrator.api.discord.shared.state import (
+    find_seed_followup_context,
+    live_voice_linked_channel_ids_from_discord_config,
+)
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.core.config import Settings
+from orchestrator.core.observability import scoped_log_context
+from orchestrator.core.discord.personas import (
+    build_voice_room_spoken_reply_text,
+    format_voice_room_persona_label,
+)
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.run_human_input_service import (
     pending_human_input_for_thread,
@@ -34,6 +42,7 @@ from orchestrator.core.platform_secret_service import (
 from orchestrator.core.discord.thread_context import get_thread_issue_key
 from orchestrator.core.voice import VoiceTranscriptionError, download_audio_bytes, transcribe_audio_bytes
 from orchestrator.core.voice.tts import VoiceReplyError, synthesize_reply_audio
+from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -112,6 +121,7 @@ def _room_channel_ids_from_discord_config(discord_config: dict | None) -> set[st
         normalized = str(config.get(key) or "").strip()
         if normalized:
             channel_ids.add(normalized)
+    channel_ids.update(live_voice_linked_channel_ids_from_discord_config(config))
     return channel_ids
 
 
@@ -404,6 +414,7 @@ class DiscordGatewayListener:
         room_voice_reply_text: str | None = None
         room_voice_reply_persona_id: str | None = None
         room_voice_reply_persona_name: str | None = None
+        room_voice_reply_persona_role: str | None = None
         room_voice_reply_config: dict | None = None
         room_source_mode = "text"
 
@@ -411,6 +422,13 @@ class DiscordGatewayListener:
             tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
             if tenant is None:
                 return
+            project = resolve_project_for_discord_channel(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                channel_id=channel_id,
+            )
+            project_id = str(getattr(project, "project_id", "") or "").strip() or None
+            message_correlation_id = str(payload.get("id") or "").strip() or None
             room_channel_ids = _project_room_channel_ids(
                 session=session,
                 tenant_id=tenant.tenant_id,
@@ -422,6 +440,9 @@ class DiscordGatewayListener:
                 transcript, error_message = self._transcribe_room_audio_attachment(
                     attachment=attachments[0],
                     bot_token=bot_token,
+                    correlation_id=message_correlation_id,
+                    tenant_id=tenant.tenant_id,
+                    project_id=project_id,
                 )
                 if transcript:
                     content = transcript
@@ -538,6 +559,11 @@ class DiscordGatewayListener:
                 }
             elif voice_note_reply_requested and not command_text.startswith("!"):
                 command_text = f"!pm {command_text}"
+                command_params = {
+                    **(command_params or {}),
+                    "voice_mode": "true",
+                    "voice_source": room_source_mode,
+                }
 
             message_content = f"<@{user_id}> Command failed due to an internal error."
             components: list[dict] | None = None
@@ -584,6 +610,7 @@ class DiscordGatewayListener:
                     room_voice_reply_text = str(command_response.message or "").strip() or None
                     room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or None
                     room_voice_reply_persona_name = str(data.get("persona_name") or "").strip() or None
+                    room_voice_reply_persona_role = str(data.get("persona_role") or "").strip() or None
                     if room_voice_reply_persona_id is None and command_response.command == "pm":
                         room_voice_reply_persona_id = "pm"
                     if room_voice_reply_persona_name is None and room_voice_reply_persona_id == "pm":
@@ -598,6 +625,7 @@ class DiscordGatewayListener:
                     room_voice_reply_text = str(command_response.message or "").strip() or None
                     room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or "pm"
                     room_voice_reply_persona_name = str(data.get("persona_name") or "").strip() or "PM"
+                    room_voice_reply_persona_role = str(data.get("persona_role") or "").strip() or None
                     room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
             except HTTPException as exc:
                 logger.exception(
@@ -631,20 +659,11 @@ class DiscordGatewayListener:
                 )
                 message_content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
 
-        try:
-            DiscordApiClient(bot_token=bot_token).post_message(
-                channel_id=channel_id,
-                content=message_content,
-                components=components,
-            )
-        except DiscordApiError as exc:
-            logger.exception(
-                "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
-                user_id,
-                channel_id,
-                exc,
-            )
-        if should_send_room_voice_reply and room_voice_reply_text:
+        combined_voice_reply_attempted = False
+        primary_response_sent = False
+        voice_error: str | None = None
+        if voice_note_reply_requested and should_send_room_voice_reply and room_voice_reply_text:
+            combined_voice_reply_attempted = True
             voice_error = self._post_room_voice_reply(
                 bot_token=bot_token,
                 user_id=user_id,
@@ -652,27 +671,66 @@ class DiscordGatewayListener:
                 text=room_voice_reply_text,
                 persona_id=room_voice_reply_persona_id,
                 persona_name=room_voice_reply_persona_name,
+                persona_role=room_voice_reply_persona_role,
                 room_config=room_voice_reply_config,
+                content_override=message_content,
+                components=components,
+                correlation_id=message_correlation_id,
+                tenant_id=tenant.tenant_id,
+                project_id=project_id,
             )
-            if voice_error:
-                try:
-                    DiscordApiClient(bot_token=bot_token).post_message(
-                        channel_id=channel_id,
-                        content=f"<@{user_id}> {voice_error}",
-                    )
-                except DiscordApiError as exc:
-                    logger.exception(
-                        "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
-                        user_id,
-                        channel_id,
-                        exc,
-                    )
+            primary_response_sent = voice_error is None
+        if not primary_response_sent:
+            try:
+                DiscordApiClient(bot_token=bot_token).post_message(
+                    channel_id=channel_id,
+                    content=message_content,
+                    components=components,
+                )
+                primary_response_sent = True
+            except DiscordApiError as exc:
+                logger.exception(
+                    "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
+                    user_id,
+                    channel_id,
+                    exc,
+                )
+        if should_send_room_voice_reply and room_voice_reply_text and not combined_voice_reply_attempted:
+            voice_error = self._post_room_voice_reply(
+                bot_token=bot_token,
+                user_id=user_id,
+                channel_id=channel_id,
+                text=room_voice_reply_text,
+                persona_id=room_voice_reply_persona_id,
+                persona_name=room_voice_reply_persona_name,
+                persona_role=room_voice_reply_persona_role,
+                room_config=room_voice_reply_config,
+                correlation_id=message_correlation_id,
+                tenant_id=tenant.tenant_id,
+                project_id=project_id,
+            )
+        if voice_error:
+            try:
+                DiscordApiClient(bot_token=bot_token).post_message(
+                    channel_id=channel_id,
+                    content=f"<@{user_id}> {voice_error}",
+                )
+            except DiscordApiError as exc:
+                logger.exception(
+                    "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
+                    user_id,
+                    channel_id,
+                    exc,
+                )
 
     def _transcribe_room_audio_attachment(
         self,
         *,
         attachment: dict[str, str],
         bot_token: str,
+        correlation_id: str | None = None,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         if self._transcribe_audio_attachment is None:
             provider = str(getattr(self._settings, "voice_transcription_provider", "disabled") or "").strip().lower()
@@ -685,16 +743,21 @@ class DiscordGatewayListener:
                     ),
                 )
             try:
-                audio_bytes, downloaded_content_type = download_audio_bytes(
-                    url=str(attachment.get("url") or ""),
-                    bot_token=bot_token,
-                )
-                transcript = transcribe_audio_bytes(
-                    settings=self._settings,
-                    audio_bytes=audio_bytes,
-                    filename=str(attachment.get("filename") or "").strip() or "voice-note.ogg",
-                    content_type=str(attachment.get("content_type") or "").strip() or downloaded_content_type,
-                )
+                with scoped_log_context(
+                    correlation_id=correlation_id,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                ):
+                    audio_bytes, downloaded_content_type = download_audio_bytes(
+                        url=str(attachment.get("url") or ""),
+                        bot_token=bot_token,
+                    )
+                    transcript = transcribe_audio_bytes(
+                        settings=self._settings,
+                        audio_bytes=audio_bytes,
+                        filename=str(attachment.get("filename") or "").strip() or "voice-note.ogg",
+                        content_type=str(attachment.get("content_type") or "").strip() or downloaded_content_type,
+                    )
             except VoiceTranscriptionError as exc:
                 logger.exception("discord_gateway_room_audio_transcription_failed error=%s", exc)
                 return None, "I couldn't transcribe that audio attachment. Please retry with text."
@@ -702,7 +765,12 @@ class DiscordGatewayListener:
                 return None, "I couldn't transcribe that audio attachment. Please retry with text."
             return transcript, None
         try:
-            transcript = str(self._transcribe_audio_attachment(attachment) or "").strip()
+            with scoped_log_context(
+                correlation_id=correlation_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+            ):
+                transcript = str(self._transcribe_audio_attachment(attachment) or "").strip()
         except Exception as exc:
             logger.exception("discord_gateway_room_audio_transcription_failed error=%s", exc)
             return None, "I couldn't transcribe that audio attachment. Please retry with text."
@@ -725,26 +793,51 @@ class DiscordGatewayListener:
         text: str,
         persona_id: str | None = None,
         persona_name: str | None = None,
+        persona_role: str | None = None,
         room_config: dict | None = None,
+        content_override: str | None = None,
+        components: list[dict] | None = None,
+        correlation_id: str | None = None,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
     ) -> str | None:
+        persona_label = format_voice_room_persona_label(
+            persona_id=persona_id,
+            persona_name=persona_name,
+            persona_role=persona_role,
+        )
         try:
-            audio = synthesize_reply_audio(
-                settings=self._settings,
-                text=text,
-                persona_id=persona_id,
-                room_config=room_config,
-            )
+            with scoped_log_context(
+                correlation_id=correlation_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+            ):
+                audio = synthesize_reply_audio(
+                    settings=self._settings,
+                    text=build_voice_room_spoken_reply_text(
+                        message=text,
+                        persona_id=persona_id,
+                        persona_name=persona_name,
+                        persona_role=persona_role,
+                    ),
+                    persona_id=persona_id,
+                    room_config=room_config,
+                )
         except VoiceReplyError as exc:
             logger.warning("discord_gateway_room_voice_reply_failed channel_id=%s reason=%s", channel_id, exc)
-            speaker = str(persona_name or persona_id or "Room persona").strip()
+            speaker = persona_label
             return f"Voice reply failed for `{speaker}`: {exc}"
         try:
+            attachment_content = str(content_override or "").strip()
+            if not attachment_content:
+                attachment_content = f"<@{user_id}> Voice reply from {persona_label}"
             DiscordApiClient(bot_token=bot_token).post_message_with_attachment(
                 channel_id=channel_id,
-                content=f"<@{user_id}> Voice reply from {str(persona_name or persona_id or 'room persona').strip()}",
+                content=attachment_content,
                 filename=audio.filename,
                 file_bytes=audio.audio_bytes,
                 content_type=audio.content_type,
+                components=components,
             )
         except (DiscordApiError, ValueError) as exc:
             logger.exception(

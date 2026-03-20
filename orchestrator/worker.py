@@ -113,7 +113,12 @@ async def _run_worker_slot(*, session_factory, stop_event: asyncio.Event) -> Non
 
 async def run_worker() -> None:
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(
+        settings.log_level,
+        environment=settings.sentry_environment,
+        platform_version=settings.sentry_release or "dev-local",
+        default_agent_id=str(settings.agent_id or "").strip() or "worker",
+    )
     session_factory = create_session_factory()
 
     stop_event = asyncio.Event()

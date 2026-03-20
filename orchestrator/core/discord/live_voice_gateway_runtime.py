@@ -37,7 +37,12 @@ def _leader_lock_healthcheck(*, conn) -> bool:  # noqa: ANN001
 
 def run_discord_live_voice() -> None:
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(
+        settings.log_level,
+        environment=settings.sentry_environment,
+        platform_version=settings.sentry_release or "dev-local",
+        default_agent_id="discord-live-voice",
+    )
     _run_live_voice_leader_loop(settings=settings)
 
 
