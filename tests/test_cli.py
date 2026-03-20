@@ -129,6 +129,21 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         sync_mock.assert_called_once_with()
 
+    def test_knowledge_prewarm_command_invokes_prewarm(self) -> None:
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("orchestrator.cli.prewarm_knowledge_dependencies") as prewarm_mock,
+        ):
+            prewarm_mock.return_value.embedding_model = "BAAI/bge-small-en-v1.5"
+            exit_code = cli_main(["knowledge-prewarm"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["embedding_model"], "BAAI/bge-small-en-v1.5")
+        prewarm_mock.assert_called_once()
+
     def test_voice_prewarm_command_invokes_prewarm(self) -> None:
         output = io.StringIO()
         with (
