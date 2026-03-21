@@ -322,7 +322,7 @@ def process_pull_request_targets(
             remediation_result = None
             should_attempt_remediation = False
             if manual_fix_requested:
-                should_attempt_remediation = allow_manual_pr_fix_requests and allow_pr_remediation
+                should_attempt_remediation = allow_manual_pr_fix_requests
             elif remediation_trigger and allow_pr_remediation:
                 should_attempt_remediation = True
             elif full_review_trigger and not green and allow_pr_remediation:
@@ -357,7 +357,7 @@ def process_pull_request_targets(
                 }
             )
             continue
-        if manual_fix_requested and allow_pr_remediation and not allow_manual_pr_fix_requests:
+        if manual_fix_requested and not allow_manual_pr_fix_requests:
             remediation.append(
                 {
                     "pr_number": pr_number,
@@ -370,7 +370,7 @@ def process_pull_request_targets(
                 }
             )
             continue
-        if not green and not allow_pr_remediation:
+        if not manual_fix_requested and not green and not allow_pr_remediation:
             remediation.append(
                 {
                     "pr_number": pr_number,

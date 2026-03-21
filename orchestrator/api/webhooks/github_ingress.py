@@ -62,15 +62,17 @@ async def ingest_github_webhook_event(
     allow_code_reviews = bool(effective_policy.get("allow_code_reviews", True))
     allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
     allow_pr_remediation = allow_code_reviews and bool(effective_policy.get("allow_pr_remediation", True))
-    allow_manual_pr_fix_requests = allow_pr_remediation and bool(
-        effective_policy.get("allow_manual_pr_fix_requests", True)
+    allow_manual_pr_fix_requests = bool(effective_policy.get("allow_manual_pr_fix_requests", True))
+    manual_fix_requested = (
+        github_event in {"issue_comment", "pull_request_review_comment"}
+        and parse_manual_pr_fix_request(payload=payload) is not None
     )
     max_pr_auto_remediation_loops = _coerce_positive_int(
         effective_policy.get("max_pr_auto_remediation_loops"),
         default=5,
     )
 
-    if not allow_code_reviews:
+    if not allow_code_reviews and not manual_fix_requested:
         return JSONResponse(
             status_code=status.HTTP_202_ACCEPTED,
             content={
@@ -96,7 +98,7 @@ async def ingest_github_webhook_event(
                 },
                 "pr_remediation": {
                     "enabled": False,
-                    "manual_fix_requests_enabled": False,
+                    "manual_fix_requests_enabled": allow_manual_pr_fix_requests,
                     "reason": "code_reviews_disabled",
                 },
                 "remediation": [],

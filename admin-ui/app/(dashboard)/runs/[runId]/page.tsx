@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -25,7 +25,7 @@ import {
   type RunRerunPayload,
   type TokenTimelineRecord
 } from "@/lib/api";
-import { buildUrlWithQuery, readQueryString } from "@/lib/url-state";
+import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 
 type InvocationTelemetry = {
   event_kind: string;
@@ -331,8 +331,8 @@ export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
   const pathname = usePathname();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { credentials, ready } = useAuth();
+  const routeContext = useMemo(() => resolveRunRouteContext(pathname), [pathname]);
   const [run, setRun] = useState<RunRecord | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [logs, setLogs] = useState<RunLogEventRecord[]>([]);
@@ -348,20 +348,18 @@ export default function RunDetailPage() {
   const [logStreamFilter, setLogStreamFilter] = useState("all");
   const [loadingOlderLogs, setLoadingOlderLogs] = useState(false);
   const [hasMoreLogs, setHasMoreLogs] = useState(false);
-  const projectContextId = String(searchParams.get("projectId") || "").trim();
-  const activePanel = useMemo<RunPanelTab>(() => {
-    const rawPanel = readQueryString(searchParams, "panel", "overview").trim().toLowerCase();
-    return PANEL_TABS.some((tab) => tab.id === rawPanel) ? (rawPanel as RunPanelTab) : "overview";
-  }, [searchParams]);
+  const projectContextId = routeContext.projectId ?? "";
+  const activePanel = routeContext.panel;
   const setActivePanel = useCallback((nextPanel: RunPanelTab) => {
-    router.replace(
-      buildUrlWithQuery(pathname, searchParams, {
+    router.push(
+      buildRunDetailPath({
+        tenantId: routeContext.tenantId ?? run?.tenant_id ?? null,
+        projectId: routeContext.projectId ?? null,
+        runId: params.runId,
         panel: nextPanel,
-        projectId: projectContextId || undefined,
-      }),
-      { scroll: false }
+      })
     );
-  }, [pathname, projectContextId, router, searchParams]);
+  }, [params.runId, routeContext.projectId, routeContext.tenantId, router, run?.tenant_id]);
   const [chatVisibleCount, setChatVisibleCount] = useState(CHAT_PAGE_SIZE);
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const chatListRef = useRef<HTMLUListElement | null>(null);
@@ -408,21 +406,6 @@ export default function RunDetailPage() {
       void loadRun();
     }
   }, [ready, credentials, loadRun]);
-
-  useEffect(() => {
-    if (!run) {
-      return;
-    }
-    const normalizedProjectId = projectContextId || run.project_id || undefined;
-    const nextUrl = buildUrlWithQuery(pathname, searchParams, {
-      panel: activePanel,
-      projectId: normalizedProjectId,
-    });
-    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
-    if (nextUrl !== currentUrl) {
-      router.replace(nextUrl, { scroll: false });
-    }
-  }, [activePanel, pathname, projectContextId, router, run, searchParams]);
 
   useEffect(() => {
     if (!run || !credentials) {
@@ -490,7 +473,11 @@ export default function RunDetailPage() {
       const nextRun = await rerunRun(credentials, cancelled.run_id, { mode: "fresh" });
       setStatusLine(`Force-cancelled ${cancelled.run_id} and queued rerun ${nextRun.run_id}.`);
       router.push(
-        `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}${projectContextId ? `?projectId=${encodeURIComponent(projectContextId)}` : ""}`
+        buildRunDetailPath({
+          tenantId: run.tenant_id,
+          projectId: projectContextId || null,
+          runId: nextRun.run_id,
+        })
       );
     } catch (error) {
       setStatusLine(`Failed to force rerun: ${(error as Error).message}`);
@@ -797,7 +784,11 @@ export default function RunDetailPage() {
       const nextRun = await rerunRun(credentials, run.run_id, payload);
       setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
       router.push(
-        `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}${projectContextId ? `?projectId=${encodeURIComponent(projectContextId)}` : ""}`
+        buildRunDetailPath({
+          tenantId: run.tenant_id,
+          projectId: projectContextId || null,
+          runId: nextRun.run_id,
+        })
       );
     } catch (error) {
       setStatusLine(`Failed to rerun: ${(error as Error).message}`);
@@ -1265,7 +1256,7 @@ export default function RunDetailPage() {
                   run
                     ? (
                         projectContextId
-                          ? `/tenants/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}?tab=runs`
+                          ? `/tenants/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
                           : `/tenants/${encodeURIComponent(run.tenant_id)}/runs`
                       )
                     : "/tenants/select"

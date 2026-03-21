@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import {
@@ -20,6 +20,7 @@ import {
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useAuth } from "@/components/auth-provider";
 import { getRun, type TenantRecord, getTenant, listProjects, type ProjectRecord } from "@/lib/api";
+import { resolveRunRouteContext } from "@/lib/dashboard-paths";
 import {
   Sidebar,
   SidebarContent,
@@ -75,18 +76,15 @@ function tenantAvatarColor(id: string): string {
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { credentials, ready, logout } = useAuth();
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
   const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\//);
-  const tenantRunMatch = pathname.match(/^\/tenants\/([^/]+)\/runs\/([^/]+)$/);
-  const globalRunMatch = pathname.match(/^\/runs\/([^/]+)$/);
-  const runMatch = tenantRunMatch ?? globalRunMatch;
+  const projectMatch = pathname.match(/^\/tenants\/([^/]+)\/projects\/([^/]+)(?:\/|$)/);
+  const runContext = resolveRunRouteContext(pathname);
   const [runTenantId, setRunTenantId] = useState<string | null>(null);
-  const [runProjectId, setRunProjectId] = useState<string | null>(null);
   const tenantId = tenantMatch ? tenantMatch[1] : runTenantId;
-  const projectContextId = String(searchParams.get("projectId") || "").trim() || runProjectId;
+  const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
 
   useEffect(() => {
     if (ready && !credentials) {
@@ -96,28 +94,24 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, [credentials, logout, ready, router]);
 
   useEffect(() => {
-    if (!credentials || !runMatch) {
+    if (!credentials || !runContext.runId) {
       setRunTenantId(null);
-      setRunProjectId(null);
       return;
     }
     let cancelled = false;
-    const runId = decodeURIComponent(runMatch[runMatch.length - 1]);
-    void getRun(credentials, runId)
+    void getRun(credentials, runContext.runId)
       .then((run) => {
         if (!cancelled) {
           setRunTenantId(run.tenant_id);
-          setRunProjectId(run.project_id || null);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setRunTenantId(null);
-          setRunProjectId(null);
         }
       });
     return () => { cancelled = true; };
-  }, [credentials, runMatch]);
+  }, [credentials, runContext.runId]);
 
   useEffect(() => {
     if (!credentials || !tenantId) {
@@ -256,7 +250,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               <SidebarMenu>
                 {navItems.map((item) => {
                   const active = item.matchPrefix
-                    ? pathname.startsWith(item.matchPrefix) && !(item.label === "Pipeline" && Boolean(runMatch) && Boolean(projectContextId))
+                    ? pathname.startsWith(item.matchPrefix) && !(item.label === "Pipeline" && Boolean(runContext.runId) && Boolean(projectContextId))
                     : pathname === item.href;
                   return (
                     <SidebarMenuItem key={item.href}>
@@ -286,7 +280,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                   const active =
                     pathname === projectHref ||
                     pathname.startsWith(`${projectHref}/`) ||
-                    (Boolean(runMatch) && project.project_id === projectContextId);
+                    (Boolean(runContext.runId) && project.project_id === projectContextId);
                   return (
                     <SidebarMenuItem key={project.project_id}>
                       <SidebarMenuButton asChild isActive={active}>
