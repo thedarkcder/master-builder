@@ -55,6 +55,25 @@ def _imported_modules(module_path: Path) -> set[str]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
+    def test_production_modules_do_not_construct_raw_transport_action(self) -> None:
+        production_modules = sorted(ORCHESTRATOR_ROOT.rglob("*.py"))
+        self.assertTrue(production_modules)
+
+        violations: list[str] = []
+        for module_path in production_modules:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == "TransportAction":
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Raw TransportAction construction found; use typed transport actions instead: {violations}",
+        )
+
     def test_discord_command_handlers_do_not_import_provider_clients_directly(self) -> None:
         command_modules = sorted((ROOT / "orchestrator" / "api" / "discord" / "commands").glob("*.py"))
         self.assertTrue(command_modules)
