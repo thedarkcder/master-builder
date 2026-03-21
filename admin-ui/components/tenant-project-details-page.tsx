@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import {
   Archive,
   ArrowLeft,
@@ -41,7 +41,7 @@ import {
   type RunRecord,
   type RunStatus,
 } from "@/lib/api";
-import { buildUrlWithQuery, readQueryNumber, readQueryString } from "@/lib/url-state";
+import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
 type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
@@ -196,8 +196,6 @@ function formatBoolean(value: boolean): string {
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
   const pathname = usePathname();
-  const router = useRouter();
-  const searchParams = useSearchParams();
   const { credentials, ready } = useAuth();
 
   // Project state
@@ -215,6 +213,14 @@ export function TenantProjectDetailsPage() {
   // Runs state
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsBusy, setRunsBusy] = useState(false);
+  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
+  const [runIssueFilter, setRunIssueFilter] = useState("");
+  const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
+  const [runPrFilter, setRunPrFilter] = useState<"any" | "none" | "has_value">("any");
+  const [runFromDate, setRunFromDate] = useState("");
+  const [runToDate, setRunToDate] = useState("");
+  const [runPage, setRunPage] = useState(1);
+  const [runPageSize, setRunPageSize] = useState<25 | 50 | 100>(25);
 
   // Secrets state
   const [secretRefs, setSecretRefs] = useState<Record<string, string>>({});
@@ -227,46 +233,7 @@ export function TenantProjectDetailsPage() {
     () => `project/${params.tenantId}/${params.projectId}/`,
     [params.tenantId, params.projectId]
   );
-  const activeTab = useMemo<Tab>(() => {
-    const rawTab = readQueryString(searchParams, "tab", "overview").trim().toLowerCase();
-    return TABS.some((tab) => tab.id === rawTab) ? (rawTab as Tab) : "overview";
-  }, [searchParams]);
-  const activeSettingsSection = useMemo<SettingsSection>(() => {
-    const rawSection = readQueryString(searchParams, "section", "general").trim().toLowerCase();
-    return SETTINGS_SECTIONS.some((section) => section.id === rawSection)
-      ? (rawSection as SettingsSection)
-      : "general";
-  }, [searchParams]);
-  const runIssueFilter = readQueryString(searchParams, "runIssue", "");
-  const runStatusFilter = useMemo<RunStatus | "all">(() => {
-    const rawStatus = readQueryString(searchParams, "runStatus", "all").trim().toLowerCase();
-    return rawStatus === "all" || RUN_STATUSES.includes(rawStatus as RunStatus)
-      ? (rawStatus as RunStatus | "all")
-      : "all";
-  }, [searchParams]);
-  const runPrFilter = useMemo<"any" | "none" | "has_value">(() => {
-    const rawPr = readQueryString(searchParams, "runPr", "any").trim().toLowerCase();
-    return rawPr === "none" || rawPr === "has_value" ? rawPr : "any";
-  }, [searchParams]);
-  const runFromDate = readQueryString(searchParams, "runFrom", "");
-  const runToDate = readQueryString(searchParams, "runTo", "");
-  const runPage = Math.max(1, readQueryNumber(searchParams, "runPage", 1));
-  const runPageSize = useMemo(() => {
-    const rawPageSize = readQueryNumber(searchParams, "runPageSize", 25);
-    return rawPageSize === 50 || rawPageSize === 100 ? rawPageSize : 25;
-  }, [searchParams]);
-
-  function replaceProjectQuery(entries: Record<string, boolean | number | string | readonly string[] | null | undefined>) {
-    router.replace(buildUrlWithQuery(pathname, searchParams, entries), { scroll: false });
-  }
-
-  function setActiveTab(nextTab: Tab) {
-    replaceProjectQuery({ tab: nextTab });
-  }
-
-  function setActiveSettingsSection(nextSection: SettingsSection) {
-    replaceProjectQuery({ section: nextSection });
-  }
+  const activeTab = useMemo<Tab>(() => resolveProjectSection(pathname) ?? "overview", [pathname]);
 
   async function loadOptions() {
     if (!credentials) return;
@@ -341,39 +308,14 @@ export function TenantProjectDetailsPage() {
   }, [ready, credentials, params.tenantId, params.projectId]);
 
   useEffect(() => {
-    if (ready && credentials && project) void loadRuns();
-  }, [ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
+    if (ready && credentials && project && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
+  }, [activeTab, ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
 
   useEffect(() => {
-    const nextUrl = buildUrlWithQuery(pathname, searchParams, {
-      tab: activeTab,
-      section: activeSettingsSection,
-      runIssue: runIssueFilter,
-      runStatus: runStatusFilter,
-      runPr: runPrFilter,
-      runFrom: runFromDate,
-      runTo: runToDate,
-      runPage,
-      runPageSize,
-    });
-    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
-    if (nextUrl !== currentUrl) {
-      router.replace(nextUrl, { scroll: false });
+    if (activeTab !== "settings") {
+      setActiveSettingsSection("general");
     }
-  }, [
-    activeSettingsSection,
-    activeTab,
-    pathname,
-    router,
-    runFromDate,
-    runIssueFilter,
-    runPage,
-    runPageSize,
-    runPrFilter,
-    runStatusFilter,
-    runToDate,
-    searchParams,
-  ]);
+  }, [activeTab]);
 
   async function toggleArchive() {
     if (!credentials || !project) return;
@@ -645,9 +587,9 @@ export function TenantProjectDetailsPage() {
       <div className="border-b">
         <nav className="flex gap-1 -mb-px">
           {TABS.map((tab) => (
-            <button
+            <Link
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              href={buildProjectSectionPath(params.tenantId, params.projectId, tab.id)}
               className={`px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap border-b-2 ${
                 activeTab === tab.id
                   ? "border-primary text-foreground"
@@ -655,7 +597,7 @@ export function TenantProjectDetailsPage() {
               }`}
             >
               {tab.label}
-            </button>
+            </Link>
           ))}
         </nav>
       </div>
@@ -679,8 +621,8 @@ export function TenantProjectDetailsPage() {
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Button size="sm" onClick={() => setActiveTab("settings")}>
-                          Open settings
+                        <Button asChild size="sm">
+                          <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Open settings</Link>
                         </Button>
                         <Button asChild size="sm" variant="outline">
                           <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
@@ -731,8 +673,8 @@ export function TenantProjectDetailsPage() {
                     <CardTitle className="text-base">Quick navigation</CardTitle>
                   </CardHeader>
                   <CardContent className="grid gap-2 sm:grid-cols-2">
-                    <Button variant="outline" size="sm" onClick={() => setActiveTab("settings")}>
-                      Settings
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Settings</Link>
                     </Button>
                     <Button asChild variant="outline" size="sm">
                       <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
@@ -744,11 +686,11 @@ export function TenantProjectDetailsPage() {
                         Add knowledge
                       </Link>
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setActiveTab("notifications")}>
-                      Notifications
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setActiveTab("secrets")}>
-                      Secrets
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "secrets")}>Secrets</Link>
                     </Button>
                   </CardContent>
                 </Card>
@@ -1337,14 +1279,20 @@ export function TenantProjectDetailsPage() {
               <Input
                 className="h-8 w-40 text-sm"
                 value={runIssueFilter}
-                onChange={(e) => replaceProjectQuery({ runIssue: e.target.value, runPage: 1 })}
+                onChange={(e) => {
+                  setRunIssueFilter(e.target.value);
+                  setRunPage(1);
+                }}
                 placeholder="Issue / summary"
                 disabled={runsBusy}
               />
               <select
                 className="h-8 w-36 rounded-md border border-input bg-background px-2 text-sm"
                 value={runStatusFilter}
-                onChange={(e) => replaceProjectQuery({ runStatus: e.target.value as RunStatus | "all", runPage: 1 })}
+                onChange={(e) => {
+                  setRunStatusFilter(e.target.value as RunStatus | "all");
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               >
                 <option value="all">Status: Any</option>
@@ -1357,7 +1305,10 @@ export function TenantProjectDetailsPage() {
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                 value={runPrFilter}
-                onChange={(e) => replaceProjectQuery({ runPr: e.target.value as "any" | "none" | "has_value", runPage: 1 })}
+                onChange={(e) => {
+                  setRunPrFilter(e.target.value as "any" | "none" | "has_value");
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               >
                 <option value="any">PR: Any</option>
@@ -1368,20 +1319,29 @@ export function TenantProjectDetailsPage() {
                 type="date"
                 className="h-8 w-36 text-sm"
                 value={runFromDate}
-                onChange={(e) => replaceProjectQuery({ runFrom: e.target.value, runPage: 1 })}
+                onChange={(e) => {
+                  setRunFromDate(e.target.value);
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               />
               <Input
                 type="date"
                 className="h-8 w-36 text-sm"
                 value={runToDate}
-                onChange={(e) => replaceProjectQuery({ runTo: e.target.value, runPage: 1 })}
+                onChange={(e) => {
+                  setRunToDate(e.target.value);
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               />
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                 value={String(runPageSize)}
-                onChange={(e) => replaceProjectQuery({ runPageSize: Number(e.target.value), runPage: 1 })}
+                onChange={(e) => {
+                  setRunPageSize(Number(e.target.value) as 25 | 50 | 100);
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               >
                 <option value="25">25 / page</option>
@@ -1401,15 +1361,14 @@ export function TenantProjectDetailsPage() {
                 size="sm"
                 variant="ghost"
                 className="h-8"
-                onClick={() => replaceProjectQuery({
-                  runIssue: "",
-                  runStatus: "all",
-                  runPr: "any",
-                  runFrom: "",
-                  runTo: "",
-                  runPage: 1,
-                  runPageSize,
-                })}
+                onClick={() => {
+                  setRunIssueFilter("");
+                  setRunStatusFilter("all");
+                  setRunPrFilter("any");
+                  setRunFromDate("");
+                  setRunToDate("");
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               >
                 Clear
@@ -1441,7 +1400,11 @@ export function TenantProjectDetailsPage() {
                         <TableCell className="pl-4 font-medium">
                           <Link
                             className="text-primary hover:underline"
-                            href={`/tenants/${encodeURIComponent(params.tenantId)}/runs/${encodeURIComponent(run.run_id)}?projectId=${encodeURIComponent(params.projectId)}`}
+                            href={buildRunDetailPath({
+                              tenantId: params.tenantId,
+                              projectId: params.projectId,
+                              runId: run.run_id,
+                            })}
                           >
                             {run.issue_summary?.trim() || run.issue_key || run.run_id}
                           </Link>
@@ -1492,7 +1455,7 @@ export function TenantProjectDetailsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => replaceProjectQuery({ runPage: Math.max(1, runPage - 1) })}
+                onClick={() => setRunPage((prev) => Math.max(1, prev - 1))}
                 disabled={runsBusy || runPage <= 1}
               >
                 ← Prev
@@ -1501,7 +1464,7 @@ export function TenantProjectDetailsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => replaceProjectQuery({ runPage: runPage + 1 })}
+                onClick={() => setRunPage((prev) => prev + 1)}
                 disabled={runsBusy || runs.length < runPageSize}
               >
                 Next →

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -20,13 +20,7 @@ import {
   type TokenOverviewRecord,
   type TokenOverviewSeriesPoint
 } from "@/lib/api";
-import {
-  buildUrlWithQuery,
-  readQueryArray,
-  readQueryBoolean,
-  readQueryNumber,
-  readQueryString,
-} from "@/lib/url-state";
+import { buildRunDetailPath } from "@/lib/dashboard-paths";
 
 type TokenOverviewStatus = {
   project_id: string;
@@ -117,9 +111,6 @@ function IssueKeySelector(props: {
 
 export default function TenantTokenOverviewPage() {
   const params = useParams<{ tenantId: string }>();
-  const pathname = usePathname();
-  const router = useRouter();
-  const searchParams = useSearchParams();
   const { credentials, ready } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -127,46 +118,30 @@ export default function TenantTokenOverviewPage() {
   const [busy, setBusy] = useState(false);
   const [statusLine, setStatusLine] = useState("Load token overview to inspect efficiency trends.");
   const [overview, setOverview] = useState<TokenOverviewRecord | null>(null);
-  const page = Math.max(1, readQueryNumber(searchParams, "page", 1));
-  const pageSize = useMemo(() => {
-    const rawPageSize = readQueryNumber(searchParams, "pageSize", 20);
-    return rawPageSize === 10 || rawPageSize === 50 ? rawPageSize : 20;
-  }, [searchParams]);
-  const filters = useMemo<TokenOverviewStatus>(() => ({
-    project_id: readQueryString(searchParams, "projectId", ""),
-    issue_keys: readQueryArray(searchParams, "issues"),
-    run_status: readQueryString(searchParams, "status", ""),
-    from: readQueryString(searchParams, "from", ""),
-    to: readQueryString(searchParams, "to", ""),
-    stage: readQueryString(searchParams, "stage", ""),
-    attempt: readQueryString(searchParams, "attempt", ""),
-    model: readQueryString(searchParams, "model", ""),
-    only_retried: readQueryBoolean(searchParams, "onlyRetried", false),
-    only_with_test_stage: readQueryBoolean(searchParams, "onlyWithTestStage", false),
-  }), [searchParams]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
+  const [filters, setFilters] = useState<TokenOverviewStatus>({
+    project_id: "",
+    issue_keys: [],
+    run_status: "",
+    from: "",
+    to: "",
+    stage: "",
+    attempt: "",
+    model: "",
+    only_retried: false,
+    only_with_test_stage: false,
+  });
 
   const issueOptions = useMemo(() => issueOptionsFromRuns(runsForFilters), [runsForFilters]);
   const runStatusOptions = useMemo(() => statusOptionsFromRuns(runsForFilters), [runsForFilters]);
 
   const applyFilters = useCallback(
     (updater: (prev: TokenOverviewStatus) => TokenOverviewStatus) => {
-      const next = updater(filters);
-      router.replace(buildUrlWithQuery(pathname, searchParams, {
-        projectId: next.project_id,
-        issues: next.issue_keys,
-        status: next.run_status,
-        from: next.from,
-        to: next.to,
-        stage: next.stage,
-        attempt: next.attempt,
-        model: next.model,
-        onlyRetried: next.only_retried,
-        onlyWithTestStage: next.only_with_test_stage,
-        page: 1,
-        pageSize,
-      }), { scroll: false });
+      setFilters((prev) => updater(prev));
+      setPage(1);
     },
-    [filters, pageSize, pathname, router, searchParams]
+    []
   );
 
   const loadOverview = useCallback(async () => {
@@ -215,25 +190,13 @@ export default function TenantTokenOverviewPage() {
       const hasCurrentProject = filters.project_id && projectPayload.some((project) => project.project_id === filters.project_id);
       const nextProjectId = hasCurrentProject ? filters.project_id : (projectPayload[0]?.project_id ?? "");
       if (nextProjectId !== filters.project_id) {
-        router.replace(buildUrlWithQuery(pathname, searchParams, {
-          projectId: nextProjectId,
-          issues: [],
-          status: "",
-          from: filters.from,
-          to: filters.to,
-          stage: filters.stage,
-          attempt: filters.attempt,
-          model: filters.model,
-          onlyRetried: filters.only_retried,
-          onlyWithTestStage: filters.only_with_test_stage,
-          page: 1,
-          pageSize,
-        }), { scroll: false });
+        setFilters((prev) => ({ ...prev, project_id: nextProjectId, issue_keys: [], run_status: "" }));
+        setPage(1);
       }
     } catch (error) {
       setStatusLine(`Failed to load projects: ${(error as Error).message}`);
     }
-  }, [credentials, filters, pageSize, pathname, router, searchParams, tenantId]);
+  }, [credentials, filters.project_id, tenantId]);
 
   const loadRunsForFilters = useCallback(
     async (projectId: string) => {
@@ -243,20 +206,8 @@ export default function TenantTokenOverviewPage() {
       if (!projectId) {
         setRunsForFilters([]);
         if (filters.issue_keys.length || filters.run_status) {
-          router.replace(buildUrlWithQuery(pathname, searchParams, {
-            projectId: "",
-            issues: [],
-            status: "",
-            from: filters.from,
-            to: filters.to,
-            stage: filters.stage,
-            attempt: filters.attempt,
-            model: filters.model,
-            onlyRetried: filters.only_retried,
-            onlyWithTestStage: filters.only_with_test_stage,
-            page: 1,
-            pageSize,
-          }), { scroll: false });
+          setFilters((prev) => ({ ...prev, issue_keys: [], run_status: "" }));
+          setPage(1);
         }
         return;
       }
@@ -273,27 +224,14 @@ export default function TenantTokenOverviewPage() {
         const nextStatuses = statusOptionsFromRuns(orderedRuns);
         const nextStatus = filters.run_status && nextStatuses.includes(filters.run_status) ? filters.run_status : "";
         if (nextIssues.length !== filters.issue_keys.length || nextStatus !== filters.run_status) {
-          router.replace(buildUrlWithQuery(pathname, searchParams, {
-            projectId,
-            issues: nextIssues,
-            status: nextStatus,
-            from: filters.from,
-            to: filters.to,
-            stage: filters.stage,
-            attempt: filters.attempt,
-            model: filters.model,
-            onlyRetried: filters.only_retried,
-            onlyWithTestStage: filters.only_with_test_stage,
-            page,
-            pageSize,
-          }), { scroll: false });
+          setFilters((prev) => ({ ...prev, issue_keys: nextIssues, run_status: nextStatus }));
         }
       } catch (error) {
         setRunsForFilters([]);
         setStatusLine(`Failed to load runs for filters: ${(error as Error).message}`);
       }
     },
-    [credentials, filters, page, pageSize, pathname, router, searchParams, tenantId]
+    [credentials, filters.issue_keys, filters.run_status, tenantId]
   );
 
   useEffect(() => {
@@ -313,27 +251,6 @@ export default function TenantTokenOverviewPage() {
       void loadOverview();
     }
   }, [ready, credentials, loadOverview]);
-
-  useEffect(() => {
-    const nextUrl = buildUrlWithQuery(pathname, searchParams, {
-      projectId: filters.project_id,
-      issues: filters.issue_keys,
-      status: filters.run_status,
-      from: filters.from,
-      to: filters.to,
-      stage: filters.stage,
-      attempt: filters.attempt,
-      model: filters.model,
-      onlyRetried: filters.only_retried,
-      onlyWithTestStage: filters.only_with_test_stage,
-      page,
-      pageSize,
-    });
-    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
-    if (nextUrl !== currentUrl) {
-      router.replace(nextUrl, { scroll: false });
-    }
-  }, [filters, page, pageSize, pathname, router, searchParams]);
 
   const seriesByDay = useMemo<TokenOverviewSeriesPoint[]>(() => overview?.series_by_day ?? [], [overview]);
   const trendSeries = useMemo(
@@ -442,22 +359,21 @@ export default function TenantTokenOverviewPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() =>
-                router.replace(buildUrlWithQuery(pathname, searchParams, {
-                  projectId: "",
-                  issues: [],
-                  status: "",
+              onClick={() => {
+                setFilters({
+                  project_id: "",
+                  issue_keys: [],
+                  run_status: "",
                   from: "",
                   to: "",
                   stage: "",
                   attempt: "",
                   model: "",
-                  onlyRetried: false,
-                  onlyWithTestStage: false,
-                  page: 1,
-                  pageSize,
-                }), { scroll: false })
-              }
+                  only_retried: false,
+                  only_with_test_stage: false,
+                });
+                setPage(1);
+              }}
               disabled={busy}
             >
               Clear
@@ -467,22 +383,10 @@ export default function TenantTokenOverviewPage() {
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-xs"
                 value={String(pageSize)}
-                onChange={(e) =>
-                  router.replace(buildUrlWithQuery(pathname, searchParams, {
-                    projectId: filters.project_id,
-                    issues: filters.issue_keys,
-                    status: filters.run_status,
-                    from: filters.from,
-                    to: filters.to,
-                    stage: filters.stage,
-                    attempt: filters.attempt,
-                    model: filters.model,
-                    onlyRetried: filters.only_retried,
-                    onlyWithTestStage: filters.only_with_test_stage,
-                    page: 1,
-                    pageSize: Number(e.target.value),
-                  }), { scroll: false })
-                }
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value) as 10 | 20 | 50);
+                  setPage(1);
+                }}
               >
                 <option value="10">10</option>
                 <option value="20">20</option>
@@ -610,7 +514,11 @@ export default function TenantTokenOverviewPage() {
                         <TableCell>
                           <Link
                             className="text-primary hover:underline"
-                            href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}${filters.project_id ? `?projectId=${encodeURIComponent(filters.project_id)}` : ""}`}
+                            href={buildRunDetailPath({
+                              tenantId,
+                              projectId: filters.project_id || null,
+                              runId: run.run_id,
+                            })}
                           >
                             {run.run_id}
                           </Link>
@@ -670,22 +578,7 @@ export default function TenantTokenOverviewPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() =>
-                router.replace(buildUrlWithQuery(pathname, searchParams, {
-                  projectId: filters.project_id,
-                  issues: filters.issue_keys,
-                  status: filters.run_status,
-                  from: filters.from,
-                  to: filters.to,
-                  stage: filters.stage,
-                  attempt: filters.attempt,
-                  model: filters.model,
-                  onlyRetried: filters.only_retried,
-                  onlyWithTestStage: filters.only_with_test_stage,
-                  page: Math.max(1, page - 1),
-                  pageSize,
-                }), { scroll: false })
-              }
+              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
               disabled={busy || page <= 1}
             >
               ← Prev
@@ -694,22 +587,7 @@ export default function TenantTokenOverviewPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() =>
-                router.replace(buildUrlWithQuery(pathname, searchParams, {
-                  projectId: filters.project_id,
-                  issues: filters.issue_keys,
-                  status: filters.run_status,
-                  from: filters.from,
-                  to: filters.to,
-                  stage: filters.stage,
-                  attempt: filters.attempt,
-                  model: filters.model,
-                  onlyRetried: filters.only_retried,
-                  onlyWithTestStage: filters.only_with_test_stage,
-                  page: page + 1,
-                  pageSize,
-                }), { scroll: false })
-              }
+              onClick={() => setPage((prev) => prev + 1)}
               disabled={busy || !overview || overview.top_costly_runs.length < pageSize}
             >
               Next →
