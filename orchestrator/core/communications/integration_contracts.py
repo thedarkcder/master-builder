@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from orchestrator.core.communications.contracts import CommunicationEvent, InboundMessage
+from orchestrator.core.communications.contracts import (
+    CommunicationEvent,
+    InboundMessage,
+    TransportAction,
+)
 
 
 class InboundAdapter(Protocol):
@@ -20,6 +24,11 @@ class OutboundAdapter(Protocol):
 
 class CapabilityProvider(Protocol):
     pass
+
+
+class TransportActionExecutor(Protocol):
+    def execute(self, *, action: TransportAction) -> None:
+        ...
 
 
 class InteractiveReplyTransport(Protocol):

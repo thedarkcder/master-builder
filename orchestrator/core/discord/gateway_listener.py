@@ -5,14 +5,46 @@ import json
 import logging
 import re
 import threading
-from uuid import uuid4
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
-from fastapi import HTTPException
 from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
+from orchestrator.api.discord.interactions.application import (
+    build_discord_interaction_ingress_result,
+)
+from orchestrator.api.discord.messages.application import (
+    DiscordMessageIngressDeps,
+    build_discord_message_ingress_result,
+)
+from orchestrator.api.discord.interactions.auth import (
+    ASK_REPLY_OPEN_CUSTOM_ID,
+    _discord_autocomplete_response,
+    _discord_interaction_deferred_response,
+    _discord_interaction_modal_response,
+    _discord_interaction_response,
+    _discord_modal_text_value,
+    _parse_ask_confirmation_custom_id,
+    _parse_ask_reply_modal_custom_id,
+)
+from orchestrator.api.discord.interactions.dispatcher import DiscordInteractionDispatchDeps
+from orchestrator.api.discord.interactions.followup import (
+    _decision_gate_issue_for_thread as _interaction_decision_gate_issue_for_thread,
+    _run_discord_application_command_followup,
+    _run_discord_ask_confirmation_followup,
+    _run_discord_command_followup,
+    _run_discord_decision_gate_reply_followup,
+)
+from orchestrator.api.discord.interactions.followup_transport import (
+    send_discord_interaction_callback,
+)
+from orchestrator.api.discord.interactions.parser import (
+    _discord_issue_autocomplete_choices,
+    _find_focused_discord_option,
+    _find_tenant_for_discord_channel,
+)
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,
@@ -22,9 +54,15 @@ from orchestrator.api.discord.shared.state import (
     find_seed_followup_context,
     live_voice_linked_channel_ids_from_discord_config,
 )
-from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
+from orchestrator.core.communications import (
+    DiscordChannelMessageWithAttachmentAction,
+    IngressResult,
+    TransportAction,
+    TransportEnvelope,
+)
 from orchestrator.core.config import Settings
+from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 from orchestrator.core.observability import scoped_log_context
 from orchestrator.core.discord.personas import (
     build_voice_room_spoken_reply_text,
@@ -357,10 +395,12 @@ class DiscordGatewayListener:
                         logger.info("discord_gateway_ready session_id=%s", self._session_id)
                         continue
 
-                    if event_type != "MESSAGE_CREATE":
+                    if event_type == "INTERACTION_CREATE":
+                        await self._handle_interaction_create(data)
                         continue
 
-                    await asyncio.to_thread(self._handle_message_create, data, bot_token)
+                    if event_type == "MESSAGE_CREATE":
+                        await asyncio.to_thread(self._handle_message_create, data, bot_token)
             finally:
                 heartbeat_task.cancel()
                 try:
@@ -376,352 +416,140 @@ class DiscordGatewayListener:
             await asyncio.sleep(wait_seconds)
             await websocket.send(json.dumps({"op": 1, "d": self._sequence}))
 
-    def _handle_message_create(self, payload: dict, bot_token: str) -> None:
-        author = payload.get("author")
-        if isinstance(author, dict) and author.get("bot") is True:
-            return
+    def _interaction_dispatch_deps(self) -> DiscordInteractionDispatchDeps:
+        return DiscordInteractionDispatchDeps(
+            ask_reply_open_custom_id=ASK_REPLY_OPEN_CUSTOM_ID,
+            autocomplete_response=_discord_autocomplete_response,
+            interaction_response=_discord_interaction_response,
+            interaction_modal_response=_discord_interaction_modal_response,
+            interaction_deferred_response=_discord_interaction_deferred_response,
+            parse_ask_confirmation_custom_id=_parse_ask_confirmation_custom_id,
+            parse_ask_reply_modal_custom_id=_parse_ask_reply_modal_custom_id,
+            discord_modal_text_value=_discord_modal_text_value,
+            find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
+            find_focused_discord_option=_find_focused_discord_option,
+            discord_issue_autocomplete_choices=_discord_issue_autocomplete_choices,
+            decision_gate_issue_for_thread=_interaction_decision_gate_issue_for_thread,
+            run_discord_ask_confirmation_followup=_run_discord_ask_confirmation_followup,
+            run_discord_command_followup=_run_discord_command_followup,
+            run_discord_decision_gate_reply_followup=_run_discord_decision_gate_reply_followup,
+            run_discord_application_command_followup=_run_discord_application_command_followup,
+            task_scheduler=asyncio.create_task,
+            logger=logger,
+        )
 
-        channel_id = str(payload.get("channel_id") or "").strip()
-        if not channel_id:
-            return
-        user_id = str((author or {}).get("id") or "").strip()
-        if not user_id:
-            return
-        content = str(payload.get("content") or "").strip()
-        if content.startswith("/"):
-            return
-        raw_attachments = payload.get("attachments")
-        attachments: list[dict[str, str]] = []
-        if isinstance(raw_attachments, list):
-            for item in raw_attachments:
-                if not isinstance(item, dict):
-                    continue
-                url = str(item.get("url") or "").strip()
-                if not url:
-                    continue
-                attachments.append(
-                    {
-                        "id": str(item.get("id") or "").strip(),
-                        "url": url,
-                        "filename": str(item.get("filename") or "").strip(),
-                        "content_type": str(item.get("content_type") or "").strip(),
-                        "size": str(item.get("size") or "").strip(),
-                    }
-                )
-        attachments = attachments[:5]
-        should_send_room_voice_reply = False
-        voice_note_reply_requested = False
-        room_voice_reply_text: str | None = None
-        room_voice_reply_persona_id: str | None = None
-        room_voice_reply_persona_name: str | None = None
-        room_voice_reply_persona_role: str | None = None
-        room_voice_reply_config: dict | None = None
-        room_source_mode = "text"
+    def _message_dispatch_deps(self, *, bot_token: str) -> DiscordMessageIngressDeps:
+        return DiscordMessageIngressDeps(
+            find_tenant_for_channel=self._find_tenant_for_channel,
+            resolve_project_for_discord_channel=resolve_project_for_discord_channel,
+            project_room_channel_ids=_project_room_channel_ids,
+            room_channel_ids_from_discord_config=_room_channel_ids_from_discord_config,
+            is_audio_attachment=_is_audio_attachment,
+            transcribe_audio_attachment=lambda **kwargs: self._transcribe_room_audio_attachment(
+                bot_token=bot_token,
+                **kwargs,
+            ),
+            pending_human_input_for_thread=pending_human_input_for_thread,
+            resume_run_from_human_input_reply=resume_run_from_human_input_reply,
+            decision_gate_issue_for_thread=_decision_gate_issue_for_thread,
+            project_seed_followup_thread_ids=_project_seed_followup_thread_ids,
+            project_seed_followup_thread_project_keys=_project_seed_followup_thread_project_keys,
+            find_seed_followup_context=find_seed_followup_context,
+            execute_tenant_discord_command=execute_tenant_discord_command,
+            resolve_tenant_jira_browse_base_url=resolve_tenant_jira_browse_base_url,
+            build_command_followup_message=build_command_followup_message,
+            build_ask_confirmation_components=build_ask_confirmation_components,
+            ask_reply_components=_ask_reply_components,
+            issue_key_pattern=_ISSUE_KEY_PATTERN,
+            room_voice_reply_enabled=self._room_voice_reply_enabled,
+            build_room_voice_reply_action=self._build_room_voice_reply_action,
+            emit_hard_error=emit_hard_error,
+            logger=logger,
+            settings=self._settings,
+        )
 
-        with self._session_factory() as session:
-            tenant = self._find_tenant_for_channel(session=session, channel_id=channel_id)
-            if tenant is None:
-                return
-            project = resolve_project_for_discord_channel(
-                session=session,
-                tenant_id=tenant.tenant_id,
-                channel_id=channel_id,
-            )
-            project_id = str(getattr(project, "project_id", "") or "").strip() or None
-            message_correlation_id = str(payload.get("id") or "").strip() or None
-            room_channel_ids = _project_room_channel_ids(
-                session=session,
-                tenant_id=tenant.tenant_id,
-            )
-            room_channel_ids.update(
-                _room_channel_ids_from_discord_config(getattr(tenant, "discord_config", None) or {})
-            )
-            if not content and len(attachments) == 1 and _is_audio_attachment(attachments[0]):
-                transcript, error_message = self._transcribe_room_audio_attachment(
-                    attachment=attachments[0],
-                    bot_token=bot_token,
-                    correlation_id=message_correlation_id,
-                    tenant_id=tenant.tenant_id,
-                    project_id=project_id,
-                )
-                if transcript:
-                    content = transcript
-                    room_source_mode = "voice_note"
-                    voice_note_reply_requested = True
-                else:
-                    graceful_message = error_message or (
-                        "I detected an audio attachment but couldn't transcribe it. "
-                        "Please send text or configure voice transcription."
-                    )
+    def _execute_ingress_result(self, *, result: IngressResult, bot_token: str | None = None) -> None:
+        executor = DiscordTransportExecutor(
+            bot_token=bot_token,
+            interaction_callback_sender=send_discord_interaction_callback,
+            client_factory=DiscordApiClient,
+        )
+        for deferred in result.deferred_work:
+            task = asyncio.create_task(deferred.runner())
+            if deferred.on_scheduled is not None:
+                deferred.on_scheduled(task)
+        for action in result.actions:
+            try:
+                executor.execute(action=action)
+            except DiscordApiError as exc:
+                channel_id = getattr(action, "channel_id", None)
+                logger.exception("discord_gateway_post_failed channel_id=%s error=%s", channel_id, exc)
+                if isinstance(action, DiscordChannelMessageWithAttachmentAction) and action.failure_user_id and bot_token:
                     try:
                         DiscordApiClient(bot_token=bot_token).post_message(
-                            channel_id=channel_id,
-                            content=f"<@{user_id}> {graceful_message}",
+                            channel_id=action.channel_id,
+                            content=f"<@{action.failure_user_id}> Voice reply post failed: {exc}",
                         )
-                    except DiscordApiError as exc:
+                    except DiscordApiError as fallback_exc:
                         logger.exception(
-                            "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
-                            user_id,
-                            channel_id,
-                            exc,
+                            "discord_gateway_post_failed channel_id=%s error=%s",
+                            action.channel_id,
+                            fallback_exc,
                         )
-                    return
-            if not content:
-                return
-            pending_human_input = pending_human_input_for_thread(
-                session=session,
-                tenant_id=tenant.tenant_id,
-                thread_channel_id=channel_id,
-            )
-            if pending_human_input is not None and not content.startswith("!"):
-                try:
-                    resumed_run = resume_run_from_human_input_reply(
-                        session=session,
-                        settings=self._settings,
-                        request=pending_human_input,
-                        reply_text=content,
-                        source_ref=str(payload.get("id") or "").strip() or None,
-                    )
-                    message_content = (
-                        f"<@{user_id}> Captured input for `{pending_human_input.issue_key}` "
-                        f"and queued resumed run `{resumed_run.run_id}`."
-                    )
-                except Exception as exc:
-                    logger.exception(
-                        "discord_gateway_human_input_resume_failed tenant_id=%s user_id=%s channel_id=%s request_id=%s error=%s",
-                        tenant.tenant_id,
-                        user_id,
-                        channel_id,
-                        pending_human_input.request_id,
-                        exc,
-                    )
-                    message_content = f"<@{user_id}> Failed to capture the requested input: {exc}"
-                try:
-                    DiscordApiClient(bot_token=bot_token).post_message(
-                        channel_id=channel_id,
-                        content=message_content,
-                    )
-                except DiscordApiError as exc:
-                    logger.exception(
-                        "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
-                        user_id,
-                        channel_id,
-                        exc,
-                    )
-                return
-            decision_gate_issue_key = _decision_gate_issue_for_thread(
-                session=session,
-                tenant_id=tenant.tenant_id,
-                channel_id=channel_id,
-            )
-            if decision_gate_issue_key and not content.startswith("!"):
-                command_text = "!reply"
-                command_params = {
-                    "issue_key": decision_gate_issue_key,
-                    "reply_text": content,
-                    "source_ref": str(payload.get("id") or "").strip(),
-                }
-            else:
-                command_text = content
-                command_params = None
-            seed_followup_thread_ids = _project_seed_followup_thread_ids(
-                session=session,
-                tenant_id=tenant.tenant_id,
-            )
-            seed_followup_thread_project_keys = _project_seed_followup_thread_project_keys(
-                session=session,
-                tenant_id=tenant.tenant_id,
-            )
-
-            seed_followup_context = find_seed_followup_context(
-                tenant=tenant,
-                channel_id=channel_id,
-            )
-            if seed_followup_context is None and channel_id in seed_followup_thread_ids:
-                seed_followup_context = find_seed_followup_context(
-                    tenant=tenant,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    project_key=seed_followup_thread_project_keys.get(channel_id),
+            except RuntimeError as exc:
+                logger.warning(
+                    "discord_gateway_unsupported_transport_action kind=%s error=%s",
+                    getattr(action, "kind", type(action).__name__),
+                    exc,
                 )
-            if (
-                channel_id in seed_followup_thread_ids
-                and seed_followup_context is not None
-                and not command_text.startswith("!")
-            ):
-                command_text = f"!issues followup {command_text}"
-            if channel_id in room_channel_ids and not command_text.startswith("!"):
-                command_text = f"!pm {command_text}"
-                command_params = {
-                    **(command_params or {}),
-                    "room_mode": "true",
-                    "room_source": room_source_mode,
-                }
-            elif voice_note_reply_requested and not command_text.startswith("!"):
-                command_text = f"!pm {command_text}"
-                command_params = {
-                    **(command_params or {}),
-                    "voice_mode": "true",
-                    "voice_source": room_source_mode,
-                }
 
-            message_content = f"<@{user_id}> Command failed due to an internal error."
-            components: list[dict] | None = None
-            try:
-                command_response = execute_tenant_discord_command(
-                    tenant_id=tenant.tenant_id,
-                    payload=DiscordCommandRequest(
-                        user_id=user_id,
-                        channel_id=channel_id,
-                        command=command_text,
-                        command_params=command_params,
-                        attachments=attachments,
-                    ),
+    async def _handle_interaction_create(self, payload: dict) -> None:
+        interaction_id = str(payload.get("id") or "").strip()
+        interaction_token = str(payload.get("token") or "").strip()
+        if not interaction_id or not interaction_token:
+            logger.warning(
+                "discord_gateway_interaction_ignored reason=missing_context interaction_id=%s",
+                interaction_id,
+            )
+            return
+
+        request_id = str(uuid4())
+        try:
+            with self._session_factory() as session:
+                result = await build_discord_interaction_ingress_result(
+                    payload=payload,
                     session=session,
-                    require_ask_confirmation=True,
-                    allow_plain_ask=True,
-                )
-                message_content = build_command_followup_message(
-                    user_id=user_id,
-                    command_response=command_response,
-                    jira_browse_base_url=resolve_tenant_jira_browse_base_url(
-                        session=session,
-                        tenant=tenant,
+                    envelope=TransportEnvelope(
+                        transport="discord_gateway",
+                        event_type="interaction_create",
+                        request_id=request_id,
+                        payload=payload,
                     ),
-                    issue_key_pattern=_ISSUE_KEY_PATTERN,
+                    dispatch_deps=self._interaction_dispatch_deps(),
                 )
-                data = command_response.data if isinstance(command_response.data, dict) else {}
-                if (
-                    command_response.command == "ask"
-                    and bool(data.get("requires_confirmation"))
-                    and isinstance(data.get("request_id"), str)
-                ):
-                    request_id = str(data.get("request_id") or "").strip()
-                    if request_id:
-                        components = build_ask_confirmation_components(request_id)
-                elif command_response.command == "reply" and bool(data.get("recheck_required")):
-                    components = _ask_reply_components()
-                elif (
-                    channel_id in room_channel_ids
-                    and command_response.command in {"pm", "room"}
-                    and self._room_voice_reply_enabled()
-                ):
-                    should_send_room_voice_reply = True
-                    room_voice_reply_text = str(command_response.message or "").strip() or None
-                    room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or None
-                    room_voice_reply_persona_name = str(data.get("persona_name") or "").strip() or None
-                    room_voice_reply_persona_role = str(data.get("persona_role") or "").strip() or None
-                    if room_voice_reply_persona_id is None and command_response.command == "pm":
-                        room_voice_reply_persona_id = "pm"
-                    if room_voice_reply_persona_name is None and room_voice_reply_persona_id == "pm":
-                        room_voice_reply_persona_name = "PM"
-                    room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
-                elif (
-                    voice_note_reply_requested
-                    and command_response.command == "pm"
-                    and self._room_voice_reply_enabled()
-                ):
-                    should_send_room_voice_reply = True
-                    room_voice_reply_text = str(command_response.message or "").strip() or None
-                    room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or "pm"
-                    room_voice_reply_persona_name = str(data.get("persona_name") or "").strip() or "PM"
-                    room_voice_reply_persona_role = str(data.get("persona_role") or "").strip() or None
-                    room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
-            except HTTPException as exc:
-                logger.exception(
-                    "discord_gateway_command_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
-                    tenant.tenant_id,
-                    user_id,
-                    channel_id,
-                    exc.detail,
-                    exc,
-                )
-                message_content = f"<@{user_id}> Command failed: {exc.detail}"
-            except Exception as exc:
-                error_ref = uuid4().hex[:8]
-                logger.exception(
-                    "discord_gateway_command_failed tenant_id=%s user_id=%s channel_id=%s error_ref=%s error=%s",
-                    tenant.tenant_id,
-                    user_id,
-                    channel_id,
-                    error_ref,
-                    exc,
-                )
-                emit_hard_error(
-                    event="discord_gateway_command_failed",
-                    error_ref=error_ref,
-                    exc=exc,
-                    context={
-                        "tenant_id": tenant.tenant_id,
-                        "user_id": user_id,
-                        "channel_id": channel_id,
-                    },
-                )
-                message_content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
+            self._execute_ingress_result(result=result)
+        except Exception as exc:
+            logger.exception(
+                "discord_gateway_interaction_failed request_id=%s interaction_id=%s error=%s",
+                request_id,
+                interaction_id,
+                exc,
+            )
+            emit_hard_error(
+                event="discord_gateway_interaction_failed",
+                error_ref=request_id[:8],
+                exc=exc,
+                context={"interaction_id": interaction_id},
+            )
 
-        combined_voice_reply_attempted = False
-        primary_response_sent = False
-        voice_error: str | None = None
-        if voice_note_reply_requested and should_send_room_voice_reply and room_voice_reply_text:
-            combined_voice_reply_attempted = True
-            voice_error = self._post_room_voice_reply(
-                bot_token=bot_token,
-                user_id=user_id,
-                channel_id=channel_id,
-                text=room_voice_reply_text,
-                persona_id=room_voice_reply_persona_id,
-                persona_name=room_voice_reply_persona_name,
-                persona_role=room_voice_reply_persona_role,
-                room_config=room_voice_reply_config,
-                content_override=message_content,
-                components=components,
-                correlation_id=message_correlation_id,
-                tenant_id=tenant.tenant_id,
-                project_id=project_id,
+    def _handle_message_create(self, payload: dict, bot_token: str) -> None:
+        with self._session_factory() as session:
+            result = build_discord_message_ingress_result(
+                payload=payload,
+                session=session,
+                deps=self._message_dispatch_deps(bot_token=bot_token),
             )
-            primary_response_sent = voice_error is None
-        if not primary_response_sent:
-            try:
-                DiscordApiClient(bot_token=bot_token).post_message(
-                    channel_id=channel_id,
-                    content=message_content,
-                    components=components,
-                )
-                primary_response_sent = True
-            except DiscordApiError as exc:
-                logger.exception(
-                    "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
-                    user_id,
-                    channel_id,
-                    exc,
-                )
-        if should_send_room_voice_reply and room_voice_reply_text and not combined_voice_reply_attempted:
-            voice_error = self._post_room_voice_reply(
-                bot_token=bot_token,
-                user_id=user_id,
-                channel_id=channel_id,
-                text=room_voice_reply_text,
-                persona_id=room_voice_reply_persona_id,
-                persona_name=room_voice_reply_persona_name,
-                persona_role=room_voice_reply_persona_role,
-                room_config=room_voice_reply_config,
-                correlation_id=message_correlation_id,
-                tenant_id=tenant.tenant_id,
-                project_id=project_id,
-            )
-        if voice_error:
-            try:
-                DiscordApiClient(bot_token=bot_token).post_message(
-                    channel_id=channel_id,
-                    content=f"<@{user_id}> {voice_error}",
-                )
-            except DiscordApiError as exc:
-                logger.exception(
-                    "discord_gateway_post_failed user_id=%s channel_id=%s error=%s",
-                    user_id,
-                    channel_id,
-                    exc,
-                )
+        self._execute_ingress_result(result=result, bot_token=bot_token)
 
     def _transcribe_room_audio_attachment(
         self,
@@ -784,10 +612,9 @@ class DiscordGatewayListener:
             return False
         return bool(getattr(self._settings, "voice_reply_enabled_default", False))
 
-    def _post_room_voice_reply(
+    def _build_room_voice_reply_action(
         self,
         *,
-        bot_token: str,
         user_id: str,
         channel_id: str,
         text: str,
@@ -800,7 +627,9 @@ class DiscordGatewayListener:
         correlation_id: str | None = None,
         tenant_id: str | None = None,
         project_id: str | None = None,
-    ) -> str | None:
+        fallback_content_on_failure: str | None = None,
+        fallback_components_on_failure: list[dict] | None = None,
+    ) -> tuple[TransportAction | None, str | None]:
         persona_label = format_voice_room_persona_label(
             persona_id=persona_id,
             persona_name=persona_name,
@@ -825,20 +654,65 @@ class DiscordGatewayListener:
                 )
         except VoiceReplyError as exc:
             logger.warning("discord_gateway_room_voice_reply_failed channel_id=%s reason=%s", channel_id, exc)
-            speaker = persona_label
-            return f"Voice reply failed for `{speaker}`: {exc}"
-        try:
-            attachment_content = str(content_override or "").strip()
-            if not attachment_content:
-                attachment_content = f"<@{user_id}> Voice reply from {persona_label}"
-            DiscordApiClient(bot_token=bot_token).post_message_with_attachment(
+            return None, f"Voice reply failed for `{persona_label}`: {exc}"
+
+        attachment_content = str(content_override or "").strip()
+        if not attachment_content:
+            attachment_content = f"<@{user_id}> Voice reply from {persona_label}"
+        return (
+            DiscordChannelMessageWithAttachmentAction(
                 channel_id=channel_id,
                 content=attachment_content,
                 filename=audio.filename,
                 file_bytes=audio.audio_bytes,
                 content_type=audio.content_type,
                 components=components,
-            )
+                fallback_content_on_failure=fallback_content_on_failure,
+                fallback_components_on_failure=fallback_components_on_failure,
+                failure_user_id=user_id,
+            ),
+            None,
+        )
+
+    def _post_room_voice_reply(
+        self,
+        *,
+        bot_token: str,
+        user_id: str,
+        channel_id: str,
+        text: str,
+        persona_id: str | None = None,
+        persona_name: str | None = None,
+        persona_role: str | None = None,
+        room_config: dict | None = None,
+        content_override: str | None = None,
+        components: list[dict] | None = None,
+        correlation_id: str | None = None,
+        tenant_id: str | None = None,
+        project_id: str | None = None,
+    ) -> str | None:
+        action, error = self._build_room_voice_reply_action(
+            user_id=user_id,
+            channel_id=channel_id,
+            text=text,
+            persona_id=persona_id,
+            persona_name=persona_name,
+            persona_role=persona_role,
+            room_config=room_config,
+            content_override=content_override,
+            components=components,
+            correlation_id=correlation_id,
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+        if action is None:
+            return error
+        try:
+            DiscordTransportExecutor(
+                bot_token=bot_token,
+                interaction_callback_sender=send_discord_interaction_callback,
+                client_factory=DiscordApiClient,
+            ).execute(action=action)
         except (DiscordApiError, ValueError) as exc:
             logger.exception(
                 "discord_gateway_room_voice_reply_post_failed user_id=%s channel_id=%s error=%s",

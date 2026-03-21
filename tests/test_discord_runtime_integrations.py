@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
+from orchestrator.core.communications import (
+    DiscordChannelMessageWithAttachmentAction,
+    DiscordInteractionResponseAction,
+    IngressResult,
+)
 from orchestrator.core.observability import current_log_context
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord.gateway_listener import (
@@ -134,6 +140,44 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         client_cls.assert_not_called()
+
+    def test_handle_interaction_create_dispatches_and_sends_callback(self) -> None:
+        listener, _session = self._listener()
+        payload = {
+            "id": "interaction-1",
+            "token": "token-1",
+            "type": 2,
+            "application_id": "app-1",
+            "channel_id": "channel-1",
+            "user": {"id": "user-1"},
+            "data": {"name": "bug", "options": [{"type": 3, "name": "summary", "value": "Login fails"}]},
+        }
+        result = IngressResult(
+            actions=(
+                DiscordInteractionResponseAction(
+                    interaction_id="interaction-1",
+                    interaction_token="token-1",
+                    status_code=200,
+                    body=b'{"type":5,"data":{"flags":64}}',
+                ),
+            )
+        )
+
+        with (
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_discord_interaction_ingress_result",
+                new=AsyncMock(return_value=result),
+            ) as build_mock,
+            patch("orchestrator.core.discord.gateway_listener.send_discord_interaction_callback") as callback_mock,
+        ):
+            asyncio.run(listener._handle_interaction_create(payload))
+
+        build_mock.assert_called_once()
+        callback_mock.assert_called_once_with(
+            interaction_id="interaction-1",
+            interaction_token="token-1",
+            response_body=b'{"type":5,"data":{"flags":64}}',
+        )
 
     def test_decision_gate_issue_for_thread_falls_back_to_tenant_mapping(self) -> None:
         session = MagicMock()
@@ -657,6 +701,17 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             message="Deployment is blocked on the worker image rebuild.",
             data={"persona_id": "pm", "persona_name": "PM", "room_config": {}},
         )
+        voice_action = DiscordChannelMessageWithAttachmentAction(
+            channel_id="tenant-chat-1",
+            content="ok",
+            filename="reply.mp3",
+            file_bytes=b"ID3",
+            content_type="audio/mpeg",
+            components=None,
+            failure_user_id="u1",
+            fallback_content_on_failure="ok",
+            fallback_components_on_failure=None,
+        )
 
         with (
             patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value=set()),
@@ -665,7 +720,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
-            patch.object(listener, "_post_room_voice_reply", return_value=None) as post_voice_reply,
+            patch.object(listener, "_build_room_voice_reply_action", return_value=(voice_action, None)) as build_voice_reply,
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
         ):
             listener._handle_message_create(
@@ -690,12 +745,13 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!pm Summarize the deployment blockers")
         self.assertEqual(payload.command_params, {"voice_mode": "true", "voice_source": "voice_note"})
         client_cls.return_value.post_message.assert_not_called()
-        post_voice_reply.assert_called_once()
-        self.assertEqual(post_voice_reply.call_args.kwargs["text"], "Deployment is blocked on the worker image rebuild.")
-        self.assertEqual(post_voice_reply.call_args.kwargs["persona_id"], "pm")
-        self.assertEqual(post_voice_reply.call_args.kwargs["persona_name"], "PM")
-        self.assertEqual(post_voice_reply.call_args.kwargs["content_override"], "ok")
-        self.assertIsNone(post_voice_reply.call_args.kwargs["components"])
+        build_voice_reply.assert_called_once()
+        self.assertEqual(build_voice_reply.call_args.kwargs["text"], "Deployment is blocked on the worker image rebuild.")
+        self.assertEqual(build_voice_reply.call_args.kwargs["persona_id"], "pm")
+        self.assertEqual(build_voice_reply.call_args.kwargs["persona_name"], "PM")
+        self.assertEqual(build_voice_reply.call_args.kwargs["content_override"], "ok")
+        self.assertIsNone(build_voice_reply.call_args.kwargs["components"])
+        client_cls.return_value.post_message_with_attachment.assert_called_once()
 
     def test_transcribe_room_audio_attachment_scopes_log_context(self) -> None:
         captured_contexts: list[dict[str, str | None]] = []

@@ -78,7 +78,7 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             for name, value in context_patches.items():
                 stack.enter_context(patch(f"orchestrator.api.webhooks.github_webhook_context.{name}", value))
             for name, value in ingress_patches.items():
-                stack.enter_context(patch(f"orchestrator.api.webhooks.github_ingress.{name}", value))
+                stack.enter_context(patch(f"orchestrator.api.webhooks.github_application.{name}", value))
             return await ingest_github_webhook_event(request=request, session=session, settings=settings, request_id="req-1")
 
     async def test_ping_event(self) -> None:

@@ -15,6 +15,11 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.api.schemas import DiscordCommandResponse
+from orchestrator.core.communications import (
+    HttpJsonResponseAction,
+    HttpJsonResponseBytesAction,
+    IngressResult,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -154,14 +159,29 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.webhook.ingest_jira_webhook_event",
-                new=AsyncMock(return_value={"ok": True}),
+                "orchestrator.api.routes.webhook.build_jira_webhook_ingress_result",
+                new=AsyncMock(
+                    return_value=IngressResult(
+                        actions=(
+                            HttpJsonResponseAction(status_code=200, content={"ok": True}),
+                        )
+                    )
+                ),
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.webhook_github.ingest_github_webhook_event",
-                new=AsyncMock(return_value=JSONResponse(status_code=200, content={"ok": True})),
+                "orchestrator.api.routes.webhook_github.build_github_webhook_ingress_result",
+                new=AsyncMock(
+                    return_value=IngressResult(
+                        actions=(
+                            HttpJsonResponseBytesAction(
+                                status_code=200,
+                                body=JSONResponse(status_code=200, content={"ok": True}).body,
+                            ),
+                        )
+                    )
+                ),
             )
         )
         self.patch_stack.enter_context(
