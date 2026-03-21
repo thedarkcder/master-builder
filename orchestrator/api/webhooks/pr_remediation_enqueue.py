@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.runs import RUN_DEDUPE_SCOPE_PR_REMEDIATION, enqueue_run
 
 
 def enqueue_pr_remediation_run(
@@ -101,6 +101,7 @@ def enqueue_pr_remediation_run(
         delivery_id=None,
         precheck_outcome=resolve_enqueue_precheck_outcome(source="github_pr_remediation"),
         max_concurrent_runs=max_concurrent_runs,
+        dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
     )
     run = enqueue_result.run
     if enqueue_result.enqueued:

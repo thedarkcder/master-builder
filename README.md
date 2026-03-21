@@ -46,7 +46,7 @@ PY
 Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
 For containers, run one-time login and keep the shared Codex auth volume:
 ```bash
-docker compose run --rm worker codex login --device-auth
+docker compose run --rm worker-runtime codex login --device-auth
 ```
 
 ## Jira release-train automation (repo-level)
@@ -192,8 +192,8 @@ The worker image now includes:
 
 Quick checks:
 ```bash
-docker compose run --rm worker java -version
-docker compose run --rm worker sdkmanager --version
+docker compose run --rm worker-runtime java -version
+docker compose run --rm worker-runtime sdkmanager --version
 ```
 
 Swift/iOS note:

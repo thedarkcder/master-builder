@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +19,13 @@ import {
   type TokenStageDiagnosticsCompareRecord,
   type TokenStageDiagnosticsRecord
 } from "@/lib/api";
+import {
+  buildUrlWithQuery,
+  readQueryArray,
+  readQueryBoolean,
+  readQueryNumber,
+  readQueryString,
+} from "@/lib/url-state";
 
 type FilterState = {
   project_id: string;
@@ -131,34 +138,48 @@ function IssueKeySelector(props: {
 
 export default function TenantStageDiagnosticsPage() {
   const params = useParams<{ tenantId: string }>();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const tenantId = decodeURIComponent(params.tenantId);
   const { credentials, ready } = useAuth();
-  const [filters, setFilters] = useState<FilterState>({
-    project_id: "",
-    issue_keys: [],
-    run_status: "",
-    stage: "",
-    attempt: "",
-    model: "",
-    from: "",
-    to: "",
-    only_retried: false,
-    only_with_test_stage: false,
-  });
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [runsForFilters, setRunsForFilters] = useState<RunRecord[]>([]);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
   const [busy, setBusy] = useState(false);
   const [statusLine, setStatusLine] = useState("Load diagnostics to inspect stage inefficiencies.");
   const [results, setResults] = useState<TokenStageDiagnosticsRecord | null>(null);
-  const [compareProjectIds, setCompareProjectIds] = useState<string[]>([]);
-  const [compareMetric, setCompareMetric] = useState<"avg_delta" | "avg_uncached_delta" | "retry_impact_index" | "run_count">("avg_delta");
-  const [normalizeCompare, setNormalizeCompare] = useState(true);
-  const [compareViewMode, setCompareViewMode] = useState<"overlay" | "small_multiples">("overlay");
   const [compareBusy, setCompareBusy] = useState(false);
   const [compareStatusLine, setCompareStatusLine] = useState("Select at least two projects to compare stage profiles.");
   const [compareResults, setCompareResults] = useState<TokenStageDiagnosticsCompareRecord | null>(null);
+  const page = Math.max(1, readQueryNumber(searchParams, "page", 1));
+  const pageSize = useMemo(() => {
+    const rawPageSize = readQueryNumber(searchParams, "pageSize", 20);
+    return rawPageSize === 10 || rawPageSize === 50 ? rawPageSize : 20;
+  }, [searchParams]);
+  const filters = useMemo<FilterState>(() => ({
+    project_id: readQueryString(searchParams, "projectId", ""),
+    issue_keys: readQueryArray(searchParams, "issues"),
+    run_status: readQueryString(searchParams, "status", ""),
+    stage: readQueryString(searchParams, "stage", ""),
+    attempt: readQueryString(searchParams, "attempt", ""),
+    model: readQueryString(searchParams, "model", ""),
+    from: readQueryString(searchParams, "from", ""),
+    to: readQueryString(searchParams, "to", ""),
+    only_retried: readQueryBoolean(searchParams, "onlyRetried", false),
+    only_with_test_stage: readQueryBoolean(searchParams, "onlyWithTestStage", false),
+  }), [searchParams]);
+  const compareProjectIds = useMemo(() => readQueryArray(searchParams, "compareProjectIds"), [searchParams]);
+  const compareMetric = useMemo<"avg_delta" | "avg_uncached_delta" | "retry_impact_index" | "run_count">(() => {
+    const rawMetric = readQueryString(searchParams, "compareMetric", "avg_delta");
+    return rawMetric === "avg_uncached_delta" || rawMetric === "retry_impact_index" || rawMetric === "run_count"
+      ? rawMetric
+      : "avg_delta";
+  }, [searchParams]);
+  const normalizeCompare = readQueryBoolean(searchParams, "normalizeCompare", true);
+  const compareViewMode = useMemo<"overlay" | "small_multiples">(() => {
+    const rawView = readQueryString(searchParams, "compareView", "overlay");
+    return rawView === "small_multiples" ? "small_multiples" : "overlay";
+  }, [searchParams]);
 
   const issueOptions = useMemo(() => issueOptionsFromRuns(runsForFilters), [runsForFilters]);
   const runStatusOptions = useMemo(() => statusOptionsFromRuns(runsForFilters), [runsForFilters]);
@@ -166,6 +187,9 @@ export default function TenantStageDiagnosticsPage() {
     () => Object.fromEntries(projects.map((project) => [project.project_id, project.name])),
     [projects]
   );
+  const replaceDiagnosticsQuery = useCallback((entries: Record<string, boolean | number | string | readonly string[] | null | undefined>) => {
+    router.replace(buildUrlWithQuery(pathname, searchParams, entries), { scroll: false });
+  }, [pathname, router, searchParams]);
 
   const load = useCallback(async () => {
     if (!credentials) {
@@ -225,21 +249,32 @@ export default function TenantStageDiagnosticsPage() {
     try {
       const projectPayload = await listProjects(credentials, tenantId);
       setProjects(projectPayload);
-      setFilters((current) => {
-        if (!projectPayload.length) {
-          return current.project_id || current.issue_keys.length || current.run_status
-            ? { ...current, project_id: "", issue_keys: [], run_status: "" }
-            : current;
-        }
-        if (current.project_id && projectPayload.some((project) => project.project_id === current.project_id)) {
-          return current;
-        }
-        return { ...current, project_id: projectPayload[0]?.project_id ?? "", issue_keys: [], run_status: "" };
-      });
+      const hasCurrentProject = filters.project_id && projectPayload.some((project) => project.project_id === filters.project_id);
+      const nextProjectId = hasCurrentProject ? filters.project_id : (projectPayload[0]?.project_id ?? "");
+      if (nextProjectId !== filters.project_id) {
+        replaceDiagnosticsQuery({
+          projectId: nextProjectId,
+          issues: [],
+          status: "",
+          stage: filters.stage,
+          attempt: filters.attempt,
+          model: filters.model,
+          from: filters.from,
+          to: filters.to,
+          onlyRetried: filters.only_retried,
+          onlyWithTestStage: filters.only_with_test_stage,
+          compareProjectIds,
+          compareMetric,
+          normalizeCompare,
+          compareView: compareViewMode,
+          page: 1,
+          pageSize,
+        });
+      }
     } catch (error) {
       setStatusLine(`Failed to load projects: ${(error as Error).message}`);
     }
-  }, [credentials, tenantId]);
+  }, [compareMetric, compareProjectIds, compareViewMode, credentials, filters, normalizeCompare, pageSize, replaceDiagnosticsQuery, tenantId]);
 
   const loadRunsForFilters = useCallback(
     async (projectId: string) => {
@@ -248,9 +283,26 @@ export default function TenantStageDiagnosticsPage() {
       }
       if (!projectId) {
         setRunsForFilters([]);
-        setFilters((current) =>
-          current.issue_keys.length || current.run_status ? { ...current, issue_keys: [], run_status: "" } : current
-        );
+        if (filters.issue_keys.length || filters.run_status) {
+          replaceDiagnosticsQuery({
+            projectId: "",
+            issues: [],
+            status: "",
+            stage: filters.stage,
+            attempt: filters.attempt,
+            model: filters.model,
+            from: filters.from,
+            to: filters.to,
+            onlyRetried: filters.only_retried,
+            onlyWithTestStage: filters.only_with_test_stage,
+            compareProjectIds,
+            compareMetric,
+            normalizeCompare,
+            compareView: compareViewMode,
+            page: 1,
+            pageSize,
+          });
+        }
         return;
       }
       try {
@@ -263,20 +315,34 @@ export default function TenantStageDiagnosticsPage() {
         setRunsForFilters(orderedRuns);
         const issueOptions = issueOptionsFromRuns(orderedRuns);
         const statusOptions = statusOptionsFromRuns(orderedRuns);
-        setFilters((current) => {
-          const nextIssues = current.issue_keys.filter((issue) => issueOptions.includes(issue));
-          return {
-            ...current,
-            issue_keys: nextIssues,
-            run_status: statusOptions.includes(current.run_status) ? current.run_status : "",
-          };
-        });
+        const nextIssues = filters.issue_keys.filter((issue) => issueOptions.includes(issue));
+        const nextStatus = statusOptions.includes(filters.run_status) ? filters.run_status : "";
+        if (nextIssues.length !== filters.issue_keys.length || nextStatus !== filters.run_status) {
+          replaceDiagnosticsQuery({
+            projectId,
+            issues: nextIssues,
+            status: nextStatus,
+            stage: filters.stage,
+            attempt: filters.attempt,
+            model: filters.model,
+            from: filters.from,
+            to: filters.to,
+            onlyRetried: filters.only_retried,
+            onlyWithTestStage: filters.only_with_test_stage,
+            compareProjectIds,
+            compareMetric,
+            normalizeCompare,
+            compareView: compareViewMode,
+            page,
+            pageSize,
+          });
+        }
       } catch (error) {
         setRunsForFilters([]);
         setStatusLine(`Failed to load runs for filters: ${(error as Error).message}`);
       }
     },
-    [credentials, tenantId]
+    [compareMetric, compareProjectIds, compareViewMode, credentials, filters, normalizeCompare, page, pageSize, replaceDiagnosticsQuery, tenantId]
   );
 
   useEffect(() => {
@@ -349,6 +415,31 @@ export default function TenantStageDiagnosticsPage() {
       void loadCompare();
     }
   }, [ready, credentials, loadCompare]);
+
+  useEffect(() => {
+    const nextUrl = buildUrlWithQuery(pathname, searchParams, {
+      projectId: filters.project_id,
+      issues: filters.issue_keys,
+      status: filters.run_status,
+      stage: filters.stage,
+      attempt: filters.attempt,
+      model: filters.model,
+      from: filters.from,
+      to: filters.to,
+      onlyRetried: filters.only_retried,
+      onlyWithTestStage: filters.only_with_test_stage,
+      compareProjectIds,
+      compareMetric,
+      normalizeCompare,
+      compareView: compareViewMode,
+      page,
+      pageSize,
+    });
+    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+    if (nextUrl !== currentUrl) {
+      router.replace(nextUrl, { scroll: false });
+    }
+  }, [compareMetric, compareProjectIds, compareViewMode, filters, normalizeCompare, page, pageSize, pathname, router, searchParams]);
 
   const scatterData = useMemo(
     () =>
@@ -449,12 +540,12 @@ export default function TenantStageDiagnosticsPage() {
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={filters.project_id}
             onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                project_id: event.target.value,
-                issue_keys: [],
-                run_status: "",
-              }))
+              replaceDiagnosticsQuery({
+                projectId: event.target.value,
+                issues: [],
+                status: "",
+                page: 1,
+              })
             }
           >
             <option value="">Select project</option>
@@ -468,18 +559,13 @@ export default function TenantStageDiagnosticsPage() {
             issueOptions={issueOptions}
             selectedIssues={filters.issue_keys}
             disabled={!filters.project_id || issueOptions.length === 0}
-            onChange={(next) =>
-              setFilters((current) => ({
-                ...current,
-                issue_keys: next,
-              }))
-            }
+            onChange={(next) => replaceDiagnosticsQuery({ issues: next, page: 1 })}
           />
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={filters.run_status}
             disabled={!filters.project_id}
-            onChange={(event) => setFilters((current) => ({ ...current, run_status: event.target.value }))}
+            onChange={(event) => replaceDiagnosticsQuery({ status: event.target.value, page: 1 })}
           >
             <option value="">Any status</option>
             {runStatusOptions.map((status) => (
@@ -491,7 +577,7 @@ export default function TenantStageDiagnosticsPage() {
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={filters.stage}
-            onChange={(event) => setFilters((current) => ({ ...current, stage: event.target.value }))}
+            onChange={(event) => replaceDiagnosticsQuery({ stage: event.target.value, page: 1 })}
           >
             <option value="">Any stage</option>
             <option value="pm">pm</option>
@@ -503,7 +589,7 @@ export default function TenantStageDiagnosticsPage() {
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={filters.attempt}
-            onChange={(event) => setFilters((current) => ({ ...current, attempt: event.target.value }))}
+            onChange={(event) => replaceDiagnosticsQuery({ attempt: event.target.value, page: 1 })}
           >
             <option value="">Any attempt</option>
             {attemptOptions().map((attempt) => (
@@ -515,25 +601,25 @@ export default function TenantStageDiagnosticsPage() {
           <Input
             value={filters.model}
             placeholder="Model (optional)"
-            onChange={(event) => setFilters((current) => ({ ...current, model: event.target.value }))}
+            onChange={(event) => replaceDiagnosticsQuery({ model: event.target.value, page: 1 })}
           />
           <Input
             type="date"
             value={filters.from}
-            onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))}
+            onChange={(event) => replaceDiagnosticsQuery({ from: event.target.value, page: 1 })}
           />
           <Input
             type="date"
             value={filters.to}
-            onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))}
+            onChange={(event) => replaceDiagnosticsQuery({ to: event.target.value, page: 1 })}
           />
           <div className="flex items-center gap-4 text-sm">
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={filters.only_retried} onChange={(e) => setFilters((c) => ({ ...c, only_retried: e.target.checked }))} />
+              <input type="checkbox" checked={filters.only_retried} onChange={(e) => replaceDiagnosticsQuery({ onlyRetried: e.target.checked, page: 1 })} />
               Only retried runs
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={filters.only_with_test_stage} onChange={(e) => setFilters((c) => ({ ...c, only_with_test_stage: e.target.checked }))} />
+              <input type="checkbox" checked={filters.only_with_test_stage} onChange={(e) => replaceDiagnosticsQuery({ onlyWithTestStage: e.target.checked, page: 1 })} />
               Only with test stage
             </label>
           </div>
@@ -556,7 +642,9 @@ export default function TenantStageDiagnosticsPage() {
                   className="h-28 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
                   value={compareProjectIds}
                   onChange={(event) =>
-                    setCompareProjectIds(Array.from(event.currentTarget.selectedOptions).map((option) => option.value))
+                    replaceDiagnosticsQuery({
+                      compareProjectIds: Array.from(event.currentTarget.selectedOptions).map((option) => option.value)
+                    })
                   }
                 >
                   {projects.map((project) => (
@@ -572,7 +660,9 @@ export default function TenantStageDiagnosticsPage() {
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                   value={compareMetric}
                   onChange={(event) =>
-                    setCompareMetric(event.target.value as "avg_delta" | "avg_uncached_delta" | "retry_impact_index" | "run_count")
+                    replaceDiagnosticsQuery({
+                      compareMetric: event.target.value as "avg_delta" | "avg_uncached_delta" | "retry_impact_index" | "run_count"
+                    })
                   }
                 >
                   <option value="avg_delta">Avg Delta</option>
@@ -587,7 +677,7 @@ export default function TenantStageDiagnosticsPage() {
                   <select
                     className="h-9 rounded-md border border-input bg-background px-2"
                     value={compareViewMode}
-                    onChange={(event) => setCompareViewMode(event.target.value as "overlay" | "small_multiples")}
+                    onChange={(event) => replaceDiagnosticsQuery({ compareView: event.target.value as "overlay" | "small_multiples" })}
                   >
                     <option value="overlay">Overlay</option>
                     <option value="small_multiples">Small multiples</option>
@@ -597,7 +687,7 @@ export default function TenantStageDiagnosticsPage() {
                   <input
                     type="checkbox"
                     checked={normalizeCompare}
-                    onChange={(event) => setNormalizeCompare(event.target.checked)}
+                    onChange={(event) => replaceDiagnosticsQuery({ normalizeCompare: event.target.checked })}
                   />
                   Normalize per stage
                 </label>
@@ -657,18 +747,23 @@ export default function TenantStageDiagnosticsPage() {
           <Button
             variant="outline"
             onClick={() => {
-              setPage(1);
-              setFilters({
-                project_id: "",
-                issue_keys: [],
-                run_status: "",
+              replaceDiagnosticsQuery({
+                projectId: "",
+                issues: [],
+                status: "",
                 stage: "",
                 attempt: "",
                 model: "",
                 from: "",
                 to: "",
-                only_retried: false,
-                only_with_test_stage: false,
+                onlyRetried: false,
+                onlyWithTestStage: false,
+                compareProjectIds,
+                compareMetric,
+                normalizeCompare,
+                compareView: compareViewMode,
+                page: 1,
+                pageSize,
               });
             }}
             disabled={busy}
@@ -681,8 +776,10 @@ export default function TenantStageDiagnosticsPage() {
               className="h-9 rounded-md border border-input bg-background px-2"
               value={String(pageSize)}
               onChange={(event) => {
-                setPageSize(Number(event.target.value));
-                setPage(1);
+                replaceDiagnosticsQuery({
+                  pageSize: Number(event.target.value),
+                  page: 1,
+                });
               }}
             >
               <option value="10">10</option>
@@ -871,7 +968,7 @@ export default function TenantStageDiagnosticsPage() {
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  onClick={() => replaceDiagnosticsQuery({ page: Math.max(1, page - 1) })}
                   disabled={busy || page <= 1}
                 >
                   Previous
@@ -879,7 +976,7 @@ export default function TenantStageDiagnosticsPage() {
                 <span className="text-sm">Page {page}</span>
                 <Button
                   variant="outline"
-                  onClick={() => setPage((current) => current + 1)}
+                  onClick={() => replaceDiagnosticsQuery({ page: page + 1 })}
                   disabled={busy || (results?.heavy_commands ?? []).length < pageSize}
                 >
                   Next

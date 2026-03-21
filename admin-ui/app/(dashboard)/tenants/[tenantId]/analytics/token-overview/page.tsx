@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -20,6 +20,13 @@ import {
   type TokenOverviewRecord,
   type TokenOverviewSeriesPoint
 } from "@/lib/api";
+import {
+  buildUrlWithQuery,
+  readQueryArray,
+  readQueryBoolean,
+  readQueryNumber,
+  readQueryString,
+} from "@/lib/url-state";
 
 type TokenOverviewStatus = {
   project_id: string;
@@ -110,37 +117,56 @@ function IssueKeySelector(props: {
 
 export default function TenantTokenOverviewPage() {
   const params = useParams<{ tenantId: string }>();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { credentials, ready } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
-  const [filters, setFilters] = useState<TokenOverviewStatus>({
-    project_id: "",
-    issue_keys: [],
-    run_status: "",
-    from: "",
-    to: "",
-    stage: "",
-    attempt: "",
-    model: "",
-    only_retried: false,
-    only_with_test_stage: false,
-  });
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [runsForFilters, setRunsForFilters] = useState<RunRecord[]>([]);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
   const [busy, setBusy] = useState(false);
   const [statusLine, setStatusLine] = useState("Load token overview to inspect efficiency trends.");
   const [overview, setOverview] = useState<TokenOverviewRecord | null>(null);
+  const page = Math.max(1, readQueryNumber(searchParams, "page", 1));
+  const pageSize = useMemo(() => {
+    const rawPageSize = readQueryNumber(searchParams, "pageSize", 20);
+    return rawPageSize === 10 || rawPageSize === 50 ? rawPageSize : 20;
+  }, [searchParams]);
+  const filters = useMemo<TokenOverviewStatus>(() => ({
+    project_id: readQueryString(searchParams, "projectId", ""),
+    issue_keys: readQueryArray(searchParams, "issues"),
+    run_status: readQueryString(searchParams, "status", ""),
+    from: readQueryString(searchParams, "from", ""),
+    to: readQueryString(searchParams, "to", ""),
+    stage: readQueryString(searchParams, "stage", ""),
+    attempt: readQueryString(searchParams, "attempt", ""),
+    model: readQueryString(searchParams, "model", ""),
+    only_retried: readQueryBoolean(searchParams, "onlyRetried", false),
+    only_with_test_stage: readQueryBoolean(searchParams, "onlyWithTestStage", false),
+  }), [searchParams]);
 
   const issueOptions = useMemo(() => issueOptionsFromRuns(runsForFilters), [runsForFilters]);
   const runStatusOptions = useMemo(() => statusOptionsFromRuns(runsForFilters), [runsForFilters]);
 
   const applyFilters = useCallback(
     (updater: (prev: TokenOverviewStatus) => TokenOverviewStatus) => {
-      setFilters((prev) => updater(prev));
-      setPage(1);
+      const next = updater(filters);
+      router.replace(buildUrlWithQuery(pathname, searchParams, {
+        projectId: next.project_id,
+        issues: next.issue_keys,
+        status: next.run_status,
+        from: next.from,
+        to: next.to,
+        stage: next.stage,
+        attempt: next.attempt,
+        model: next.model,
+        onlyRetried: next.only_retried,
+        onlyWithTestStage: next.only_with_test_stage,
+        page: 1,
+        pageSize,
+      }), { scroll: false });
     },
-    []
+    [filters, pageSize, pathname, router, searchParams]
   );
 
   const loadOverview = useCallback(async () => {
@@ -186,19 +212,28 @@ export default function TenantTokenOverviewPage() {
     try {
       const projectPayload = await listProjects(credentials, tenantId);
       setProjects(projectPayload);
-      setFilters((current) => {
-        if (!projectPayload.length) {
-          return current.project_id ? { ...current, project_id: "", issue_keys: [], run_status: "" } : current;
-        }
-        if (current.project_id && projectPayload.some((project) => project.project_id === current.project_id)) {
-          return current;
-        }
-        return { ...current, project_id: projectPayload[0]?.project_id ?? "", issue_keys: [], run_status: "" };
-      });
+      const hasCurrentProject = filters.project_id && projectPayload.some((project) => project.project_id === filters.project_id);
+      const nextProjectId = hasCurrentProject ? filters.project_id : (projectPayload[0]?.project_id ?? "");
+      if (nextProjectId !== filters.project_id) {
+        router.replace(buildUrlWithQuery(pathname, searchParams, {
+          projectId: nextProjectId,
+          issues: [],
+          status: "",
+          from: filters.from,
+          to: filters.to,
+          stage: filters.stage,
+          attempt: filters.attempt,
+          model: filters.model,
+          onlyRetried: filters.only_retried,
+          onlyWithTestStage: filters.only_with_test_stage,
+          page: 1,
+          pageSize,
+        }), { scroll: false });
+      }
     } catch (error) {
       setStatusLine(`Failed to load projects: ${(error as Error).message}`);
     }
-  }, [credentials, tenantId]);
+  }, [credentials, filters, pageSize, pathname, router, searchParams, tenantId]);
 
   const loadRunsForFilters = useCallback(
     async (projectId: string) => {
@@ -207,7 +242,22 @@ export default function TenantTokenOverviewPage() {
       }
       if (!projectId) {
         setRunsForFilters([]);
-        setFilters((current) => (current.issue_keys.length || current.run_status ? { ...current, issue_keys: [], run_status: "" } : current));
+        if (filters.issue_keys.length || filters.run_status) {
+          router.replace(buildUrlWithQuery(pathname, searchParams, {
+            projectId: "",
+            issues: [],
+            status: "",
+            from: filters.from,
+            to: filters.to,
+            stage: filters.stage,
+            attempt: filters.attempt,
+            model: filters.model,
+            onlyRetried: filters.only_retried,
+            onlyWithTestStage: filters.only_with_test_stage,
+            page: 1,
+            pageSize,
+          }), { scroll: false });
+        }
         return;
       }
       try {
@@ -218,23 +268,32 @@ export default function TenantTokenOverviewPage() {
         });
         const orderedRuns = [...runPayload].sort((a, b) => b.created_at.localeCompare(a.created_at));
         setRunsForFilters(orderedRuns);
-        setFilters((current) => {
-          const issueOptions = issueOptionsFromRuns(orderedRuns);
-          const nextIssues = current.issue_keys.filter((issue) => issueOptions.includes(issue));
-          const runStatuses = statusOptionsFromRuns(orderedRuns);
-          const nextStatus = current.run_status && runStatuses.includes(current.run_status) ? current.run_status : "";
-          return {
-            ...current,
-            issue_keys: nextIssues,
-            run_status: nextStatus,
-          };
-        });
+        const nextIssueOptions = issueOptionsFromRuns(orderedRuns);
+        const nextIssues = filters.issue_keys.filter((issue) => nextIssueOptions.includes(issue));
+        const nextStatuses = statusOptionsFromRuns(orderedRuns);
+        const nextStatus = filters.run_status && nextStatuses.includes(filters.run_status) ? filters.run_status : "";
+        if (nextIssues.length !== filters.issue_keys.length || nextStatus !== filters.run_status) {
+          router.replace(buildUrlWithQuery(pathname, searchParams, {
+            projectId,
+            issues: nextIssues,
+            status: nextStatus,
+            from: filters.from,
+            to: filters.to,
+            stage: filters.stage,
+            attempt: filters.attempt,
+            model: filters.model,
+            onlyRetried: filters.only_retried,
+            onlyWithTestStage: filters.only_with_test_stage,
+            page,
+            pageSize,
+          }), { scroll: false });
+        }
       } catch (error) {
         setRunsForFilters([]);
         setStatusLine(`Failed to load runs for filters: ${(error as Error).message}`);
       }
     },
-    [credentials, tenantId]
+    [credentials, filters, page, pageSize, pathname, router, searchParams, tenantId]
   );
 
   useEffect(() => {
@@ -254,6 +313,27 @@ export default function TenantTokenOverviewPage() {
       void loadOverview();
     }
   }, [ready, credentials, loadOverview]);
+
+  useEffect(() => {
+    const nextUrl = buildUrlWithQuery(pathname, searchParams, {
+      projectId: filters.project_id,
+      issues: filters.issue_keys,
+      status: filters.run_status,
+      from: filters.from,
+      to: filters.to,
+      stage: filters.stage,
+      attempt: filters.attempt,
+      model: filters.model,
+      onlyRetried: filters.only_retried,
+      onlyWithTestStage: filters.only_with_test_stage,
+      page,
+      pageSize,
+    });
+    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+    if (nextUrl !== currentUrl) {
+      router.replace(nextUrl, { scroll: false });
+    }
+  }, [filters, page, pageSize, pathname, router, searchParams]);
 
   const seriesByDay = useMemo<TokenOverviewSeriesPoint[]>(() => overview?.series_by_day ?? [], [overview]);
   const trendSeries = useMemo(
@@ -359,12 +439,51 @@ export default function TenantTokenOverviewPage() {
             <Button size="sm" onClick={() => void loadOverview()} disabled={busy}>
               {busy ? "Loading..." : "Apply"}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => { setPage(1); setFilters({ project_id: "", issue_keys: [], run_status: "", from: "", to: "", stage: "", attempt: "", model: "", only_retried: false, only_with_test_stage: false }); }} disabled={busy}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                router.replace(buildUrlWithQuery(pathname, searchParams, {
+                  projectId: "",
+                  issues: [],
+                  status: "",
+                  from: "",
+                  to: "",
+                  stage: "",
+                  attempt: "",
+                  model: "",
+                  onlyRetried: false,
+                  onlyWithTestStage: false,
+                  page: 1,
+                  pageSize,
+                }), { scroll: false })
+              }
+              disabled={busy}
+            >
               Clear
             </Button>
             <div className="ml-auto flex items-center gap-2 text-sm">
               Page size
-              <select className="h-8 rounded-md border border-input bg-background px-2 text-xs" value={String(pageSize)} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+              <select
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                value={String(pageSize)}
+                onChange={(e) =>
+                  router.replace(buildUrlWithQuery(pathname, searchParams, {
+                    projectId: filters.project_id,
+                    issues: filters.issue_keys,
+                    status: filters.run_status,
+                    from: filters.from,
+                    to: filters.to,
+                    stage: filters.stage,
+                    attempt: filters.attempt,
+                    model: filters.model,
+                    onlyRetried: filters.only_retried,
+                    onlyWithTestStage: filters.only_with_test_stage,
+                    page: 1,
+                    pageSize: Number(e.target.value),
+                  }), { scroll: false })
+                }
+              >
                 <option value="10">10</option>
                 <option value="20">20</option>
                 <option value="50">50</option>
@@ -491,7 +610,7 @@ export default function TenantTokenOverviewPage() {
                         <TableCell>
                           <Link
                             className="text-primary hover:underline"
-                            href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
+                            href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}${filters.project_id ? `?projectId=${encodeURIComponent(filters.project_id)}` : ""}`}
                           >
                             {run.run_id}
                           </Link>
@@ -548,9 +667,53 @@ export default function TenantTokenOverviewPage() {
         <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
           <p>{statusLine}</p>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setPage((c) => Math.max(1, c - 1))} disabled={busy || page <= 1}>← Prev</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                router.replace(buildUrlWithQuery(pathname, searchParams, {
+                  projectId: filters.project_id,
+                  issues: filters.issue_keys,
+                  status: filters.run_status,
+                  from: filters.from,
+                  to: filters.to,
+                  stage: filters.stage,
+                  attempt: filters.attempt,
+                  model: filters.model,
+                  onlyRetried: filters.only_retried,
+                  onlyWithTestStage: filters.only_with_test_stage,
+                  page: Math.max(1, page - 1),
+                  pageSize,
+                }), { scroll: false })
+              }
+              disabled={busy || page <= 1}
+            >
+              ← Prev
+            </Button>
             <span>Page {page}</span>
-            <Button variant="outline" size="sm" onClick={() => setPage((c) => c + 1)} disabled={busy || !overview || overview.top_costly_runs.length < pageSize}>Next →</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                router.replace(buildUrlWithQuery(pathname, searchParams, {
+                  projectId: filters.project_id,
+                  issues: filters.issue_keys,
+                  status: filters.run_status,
+                  from: filters.from,
+                  to: filters.to,
+                  stage: filters.stage,
+                  attempt: filters.attempt,
+                  model: filters.model,
+                  onlyRetried: filters.only_retried,
+                  onlyWithTestStage: filters.only_with_test_stage,
+                  page: page + 1,
+                  pageSize,
+                }), { scroll: false })
+              }
+              disabled={busy || !overview || overview.top_costly_runs.length < pageSize}
+            >
+              Next →
+            </Button>
           </div>
         </div>
       </div>

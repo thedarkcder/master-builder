@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import {
@@ -75,13 +75,18 @@ function tenantAvatarColor(id: string): string {
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { credentials, ready, logout } = useAuth();
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
   const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\//);
-  const runMatch = pathname.match(/^\/runs\/([^/]+)$/);
+  const tenantRunMatch = pathname.match(/^\/tenants\/([^/]+)\/runs\/([^/]+)$/);
+  const globalRunMatch = pathname.match(/^\/runs\/([^/]+)$/);
+  const runMatch = tenantRunMatch ?? globalRunMatch;
   const [runTenantId, setRunTenantId] = useState<string | null>(null);
+  const [runProjectId, setRunProjectId] = useState<string | null>(null);
   const tenantId = tenantMatch ? tenantMatch[1] : runTenantId;
+  const projectContextId = String(searchParams.get("projectId") || "").trim() || runProjectId;
 
   useEffect(() => {
     if (ready && !credentials) {
@@ -93,16 +98,23 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!credentials || !runMatch) {
       setRunTenantId(null);
+      setRunProjectId(null);
       return;
     }
     let cancelled = false;
-    const runId = decodeURIComponent(runMatch[1]);
+    const runId = decodeURIComponent(runMatch[runMatch.length - 1]);
     void getRun(credentials, runId)
       .then((run) => {
-        if (!cancelled) setRunTenantId(run.tenant_id);
+        if (!cancelled) {
+          setRunTenantId(run.tenant_id);
+          setRunProjectId(run.project_id || null);
+        }
       })
       .catch(() => {
-        if (!cancelled) setRunTenantId(null);
+        if (!cancelled) {
+          setRunTenantId(null);
+          setRunProjectId(null);
+        }
       });
     return () => { cancelled = true; };
   }, [credentials, runMatch]);
@@ -244,7 +256,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               <SidebarMenu>
                 {navItems.map((item) => {
                   const active = item.matchPrefix
-                    ? pathname.startsWith(item.matchPrefix)
+                    ? pathname.startsWith(item.matchPrefix) && !(item.label === "Pipeline" && Boolean(runMatch) && Boolean(projectContextId))
                     : pathname === item.href;
                   return (
                     <SidebarMenuItem key={item.href}>
@@ -271,7 +283,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                 </SidebarMenuItem>
                 {tenantProjects.map((project) => {
                   const projectHref = `/tenants/${decodedTenantId}/projects/${encodeURIComponent(project.project_id)}`;
-                  const active = pathname === projectHref || pathname.startsWith(`${projectHref}/`);
+                  const active =
+                    pathname === projectHref ||
+                    pathname.startsWith(`${projectHref}/`) ||
+                    (Boolean(runMatch) && project.project_id === projectContextId);
                   return (
                     <SidebarMenuItem key={project.project_id}>
                       <SidebarMenuButton asChild isActive={active}>

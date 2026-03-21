@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
@@ -93,6 +93,16 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             )
             session.commit()
 
+    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
+        return session.get(
+            RunLock,
+            {
+                "tenant_id": "tenant-a",
+                "issue_key": issue_key,
+                "dedupe_scope": dedupe_scope,
+            },
+        )
+
     def test_resolve_project_for_run_and_bind_run_project(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -149,7 +159,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 failed_run.last_error,
                 "No active project mapping found for issue ZZ-404",
             )
-            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "ZZ-404"})
+            lock = self._get_lock(session, issue_key="ZZ-404")
             self.assertIsNone(lock)
 
     def test_fail_project_repository_checkout_releases_lock(self) -> None:
@@ -180,7 +190,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 failed_run.last_error,
                 "Project repository checkout failed: clone failed",
             )
-            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-401"})
+            lock = self._get_lock(session, issue_key="TA-401")
             self.assertIsNone(lock)
 
     def test_start_block_and_finalize_workflow_result(self) -> None:
@@ -211,6 +221,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 RunLock(
                     tenant_id="tenant-a",
                     issue_key="TA-200",
+                    dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
                     run_id="run-2",
                     locked_at=now,
                 )
@@ -268,7 +279,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 finalized.plan.get("trigger_context"),
                 {"source": "github_pr_review_feedback", "pr_number": 6},
             )
-            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-200"})
+            lock = self._get_lock(session, issue_key="TA-200")
             self.assertIsNone(lock)
 
     def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
@@ -442,6 +453,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 RunLock(
                     tenant_id="tenant-a",
                     issue_key="TA-202",
+                    dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
                     run_id="run-capability-requeue",
                     locked_at=now,
                 )
@@ -498,7 +510,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 run_id="run-capability-requeue",
                 issue_key="TA-202",
             )
-            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-202"})
+            lock = self._get_lock(session, issue_key="TA-202")
             self.assertIsNone(lock)
 
     def test_requeue_workflow_result_for_stale_snapshot_notifies_queue_listener(self) -> None:
@@ -528,6 +540,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 RunLock(
                     tenant_id="tenant-a",
                     issue_key="TA-203",
+                    dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
                     run_id="run-stale-requeue",
                     locked_at=now,
                 )
@@ -579,5 +592,5 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                 run_id="run-stale-requeue",
                 issue_key="TA-203",
             )
-            lock = session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-203"})
+            lock = self._get_lock(session, issue_key="TA-203")
             self.assertIsNone(lock)
