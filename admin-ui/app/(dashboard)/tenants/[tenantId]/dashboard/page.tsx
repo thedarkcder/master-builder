@@ -77,7 +77,7 @@ export default function TenantDashboardPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">{tenant?.name ?? tenantId}</h1>
           <p className="text-sm text-muted-foreground">Tenant workspace overview.</p>
