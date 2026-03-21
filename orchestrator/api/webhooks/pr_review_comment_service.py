@@ -4,6 +4,15 @@ from dataclasses import dataclass
 import hashlib
 import json
 
+from sqlalchemy.orm import Session
+
+from orchestrator.api.webhooks.pr_review_publication_state import (
+    PR_REVIEW_PUBLICATION_KIND_INLINE,
+    PR_REVIEW_PUBLICATION_KIND_STICKY,
+    acquire_review_publication,
+    mark_review_publication_failed,
+    mark_review_publication_published,
+)
 from orchestrator.core.pr_review_findings import PrReviewFindingsResult, ReviewFinding
 from orchestrator.core.reviewer import ReviewerSignal
 from orchestrator.tools.github_app import (
@@ -140,15 +149,19 @@ def format_sticky_remediation_comment(
 
 def upsert_sticky_review_comment(
     *,
+    session: Session,
+    request_id: str,
     github_client: GitHubAppClient,
     repo_full_name: str,
     pr_number: int,
     tenant_id: str,
     project_id: str,
+    head_sha: str,
     signal: ReviewerSignal,
     findings_result: PrReviewFindingsResult,
     event: str,
     action: str | None,
+    logger,
 ) -> StickyReviewCommentResult:
     marker = build_review_marker(
         tenant_id=tenant_id,
@@ -165,24 +178,67 @@ def upsert_sticky_review_comment(
         action=action,
         marker=marker,
     )
+    signature = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    acquisition = acquire_review_publication(
+        session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        head_sha=str(head_sha or "").strip() or "unknown",
+        review_kind=PR_REVIEW_PUBLICATION_KIND_STICKY,
+        signature=signature,
+        request_id=request_id,
+    )
+    if not acquisition.acquired:
+        logger.info(
+            "github_review_publication_skipped request_id=%s tenant_id=%s project_id=%s repo=%s pr_number=%s head_sha=%s kind=%s reason=%s",
+            request_id,
+            tenant_id,
+            project_id,
+            repo_full_name,
+            pr_number,
+            str(head_sha or "").strip() or "unknown",
+            PR_REVIEW_PUBLICATION_KIND_STICKY,
+            acquisition.reason or "duplicate_signature",
+        )
+        return StickyReviewCommentResult(action="skipped", comment_id=None)
     comments = github_client.list_pull_request_issue_comments(
         repo_full_name=repo_full_name,
         pr_number=pr_number,
     )
-    existing = next((comment for comment in comments if marker in comment.body), None)
-    if existing is None:
-        created = github_client.create_pull_request_issue_comment(
+    try:
+        existing = next((comment for comment in comments if marker in comment.body), None)
+        if existing is None:
+            created = github_client.create_pull_request_issue_comment(
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                body=body,
+            )
+            mark_review_publication_published(
+                session,
+                publication=acquisition.publication,
+                review_id=None,
+            )
+            return StickyReviewCommentResult(action="created", comment_id=created.comment_id)
+        updated = github_client.update_issue_comment(
             repo_full_name=repo_full_name,
-            pr_number=pr_number,
+            comment_id=existing.comment_id,
             body=body,
         )
-        return StickyReviewCommentResult(action="created", comment_id=created.comment_id)
-    updated = github_client.update_issue_comment(
-        repo_full_name=repo_full_name,
-        comment_id=existing.comment_id,
-        body=body,
-    )
-    return StickyReviewCommentResult(action="updated", comment_id=updated.comment_id)
+        mark_review_publication_published(
+            session,
+            publication=acquisition.publication,
+            review_id=None,
+        )
+        return StickyReviewCommentResult(action="updated", comment_id=updated.comment_id)
+    except Exception as exc:
+        mark_review_publication_failed(
+            session,
+            publication=acquisition.publication,
+            error=str(exc),
+        )
+        raise
 
 
 def upsert_sticky_remediation_comment(
@@ -333,12 +389,17 @@ def upsert_manual_fix_followup_comment(
 
 def publish_inline_review_batch(
     *,
+    session: Session,
+    request_id: str,
     github_client: GitHubAppClient,
     repo_full_name: str,
     pr_number: int,
     head_sha: str,
+    tenant_id: str,
+    project_id: str,
     findings: tuple[ReviewFinding, ...],
     changed_paths: set[str],
+    logger,
 ) -> InlineReviewPublishResult:
     drafts: list[PullRequestInlineCommentDraft] = []
     seen: set[tuple[str, int, str]] = set()
@@ -362,27 +423,65 @@ def publish_inline_review_batch(
         return InlineReviewPublishResult(submitted=False, review_id=None, inline_count=0)
 
     signature = _build_inline_review_signature(head_sha=head_sha, drafts=drafts)
+    acquisition = acquire_review_publication(
+        session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        head_sha=str(head_sha or "").strip() or "unknown",
+        review_kind=PR_REVIEW_PUBLICATION_KIND_INLINE,
+        signature=signature,
+        request_id=request_id,
+    )
+    if not acquisition.acquired:
+        logger.info(
+            "github_review_publication_skipped request_id=%s tenant_id=%s project_id=%s repo=%s pr_number=%s head_sha=%s kind=%s reason=%s",
+            request_id,
+            tenant_id,
+            project_id,
+            repo_full_name,
+            pr_number,
+            str(head_sha or "").strip() or "unknown",
+            PR_REVIEW_PUBLICATION_KIND_INLINE,
+            acquisition.reason or "duplicate_signature",
+        )
+        return InlineReviewPublishResult(submitted=False, review_id=None, inline_count=0)
     if _inline_review_signature_exists(
         github_client=github_client,
         repo_full_name=repo_full_name,
         pr_number=pr_number,
         signature=signature,
     ):
+        mark_review_publication_published(
+            session,
+            publication=acquisition.publication,
+            review_id=None,
+        )
         return InlineReviewPublishResult(submitted=False, review_id=None, inline_count=0)
 
     marker = _build_inline_review_marker(signature=signature)
-    review_result: PullRequestReviewSubmissionResult = github_client.submit_pull_request_review(
-        repo_full_name=repo_full_name,
-        pr_number=pr_number,
-        commit_id=head_sha,
-        body=f"Codex inline review findings.\n\n{marker}",
-        comments=drafts,
-    )
-    return InlineReviewPublishResult(
-        submitted=True,
+    try:
+        review_result: PullRequestReviewSubmissionResult = github_client.submit_pull_request_review(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            commit_id=head_sha,
+            body=f"Codex inline review findings.\n\n{marker}",
+            comments=drafts,
+        )
+    except Exception as exc:
+        mark_review_publication_failed(
+            session,
+            publication=acquisition.publication,
+            error=str(exc),
+        )
+        raise
+    mark_review_publication_published(
+        session,
+        publication=acquisition.publication,
         review_id=review_result.review_id,
-        inline_count=len(drafts),
     )
+    return InlineReviewPublishResult(submitted=True, review_id=review_result.review_id, inline_count=len(drafts))
 
 
 def _build_inline_review_signature(

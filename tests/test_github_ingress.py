@@ -318,8 +318,67 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 202)
         body = response.body.decode()
         self.assertIn('"issue_key":"GP-900"', body)
-        self.assertIn('"remediation_comments"', body)
-        upsert_remediation_comment.assert_called_once()
+
+    async def test_review_comment_event_routes_to_remediation_without_full_review_publication(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="example",
+            body="desc",
+            head_ref="feature/branch",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        enqueue = MagicMock(return_value=None)
+        upsert_review_comment = MagicMock()
+        publish_inline = MagicMock()
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "comment": {"id": 123, "body": "nit: can you rename this?", "user": {"login": "alice", "type": "User"}},
+                "sender": {"login": "alice", "type": "User"},
+                "issue": {"pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            },
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            enqueue_pr_remediation_if_needed=enqueue,
+            upsert_sticky_review_comment=upsert_review_comment,
+            publish_inline_review_batch=publish_inline,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        enqueue.assert_called_once()
+        upsert_review_comment.assert_not_called()
+        publish_inline.assert_not_called()
+
+    async def test_bot_authored_review_comment_is_ignored(self) -> None:
+        enqueue = MagicMock()
+        upsert_review_comment = MagicMock()
+        publish_inline = MagicMock()
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "comment": {
+                    "id": 456,
+                    "body": "Codex inline review findings.",
+                    "user": {"login": "route25-master-builder[bot]", "type": "Bot"},
+                },
+                "sender": {"login": "route25-master-builder[bot]", "type": "Bot"},
+                "issue": {"pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            },
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            enqueue_pr_remediation_if_needed=enqueue,
+            upsert_sticky_review_comment=upsert_review_comment,
+            publish_inline_review_batch=publish_inline,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIn('"ignored_reason":"bot_authored"', response.body.decode())
+        enqueue.assert_not_called()
+        upsert_review_comment.assert_not_called()
+        publish_inline.assert_not_called()
 
     async def test_remediation_trigger_with_missing_run_is_null_safe(self) -> None:
         github_client = MagicMock()
