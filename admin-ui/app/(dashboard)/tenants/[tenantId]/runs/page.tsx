@@ -89,8 +89,9 @@ export default function TenantRunsPage() {
       <Card>
         {/* Filter toolbar */}
         <CardHeader className="pb-3">
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="flex items-center gap-1.5 text-muted-foreground">
+          <div className="overflow-x-auto -mx-1 px-1">
+            <div className="flex min-w-max flex-nowrap items-end gap-2 md:min-w-0 md:flex-wrap">
+            <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
               <SlidersHorizontal className="h-4 w-4" />
               <span className="text-xs font-medium uppercase tracking-wide">Filters</span>
             </div>
@@ -152,7 +153,7 @@ export default function TenantRunsPage() {
               placeholder="To"
             />
 
-            <div className="ml-auto flex items-center gap-1.5">
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {hasFilters ? (
                 <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={clearFilters}>
                   <X className="mr-1 h-3 w-3" />
@@ -175,6 +176,7 @@ export default function TenantRunsPage() {
                 <option value="50">50 / page</option>
                 <option value="100">100 / page</option>
               </select>
+            </div>
             </div>
           </div>
         </CardHeader>

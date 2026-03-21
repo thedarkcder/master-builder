@@ -584,8 +584,8 @@ export function TenantProjectDetailsPage() {
       </div>
 
       {/* Underline tab bar */}
-      <div className="border-b">
-        <nav className="flex gap-1 -mb-px">
+      <div className="border-b overflow-x-auto">
+        <nav className="-mb-px flex min-w-max gap-1" aria-label="Project sections">
           {TABS.map((tab) => (
             <Link
               key={tab.id}
@@ -1274,7 +1274,8 @@ export function TenantProjectDetailsPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Filter toolbar */}
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2.5">
+            <div className="overflow-x-auto rounded-lg border bg-muted/30">
+              <div className="flex min-w-max flex-nowrap items-center gap-2 px-3 py-2.5 md:min-w-0 md:flex-wrap">
               <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <Input
                 className="h-8 w-40 text-sm"
@@ -1373,6 +1374,7 @@ export function TenantProjectDetailsPage() {
               >
                 Clear
               </Button>
+              </div>
             </div>
 
             {runs.length === 0 ? (

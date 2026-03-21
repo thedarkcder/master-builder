@@ -1175,10 +1175,11 @@ export default function RunDetailPage() {
     <div className="space-y-0">
       {/* Page header — metadata strip */}
       <div className="mb-6 space-y-3">
-        {/* Row 1: status + id + actions */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Row 1: status + id + chips; actions wrap on narrow screens */}
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
           {run ? <StatusBadge status={run.status} /> : null}
-          <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono">{run?.run_id ?? params.runId}</code>
+          <code className="max-w-full truncate rounded bg-muted px-2 py-0.5 text-xs font-mono">{run?.run_id ?? params.runId}</code>
           {run?.issue_key ? (
             run.issue_url ? (
               <Link
@@ -1203,13 +1204,14 @@ export default function RunDetailPage() {
               PR <ArrowLeft className="h-3 w-3 rotate-[135deg]" />
             </Link>
           ) : null}
-          <div className="ml-auto flex items-center gap-1.5">
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void loadRun()} disabled={busy}>
+          </div>
+          <div className="flex min-h-9 flex-wrap items-center gap-1.5 sm:ml-auto">
+            <Button variant="outline" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0" onClick={() => void loadRun()} disabled={busy}>
               {busy ? "Refreshing..." : "Refresh"}
             </Button>
             {isRerunnable ? (
               <details className="relative">
-                <summary className="flex h-7 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground">
+                <summary className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
                   {rerunBusy ? "Requeueing..." : "Rerun"}
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 min-w-64 rounded-md border border-border bg-background p-1 shadow-lg">
@@ -1246,11 +1248,11 @@ export default function RunDetailPage() {
               </details>
             ) : null}
             {isActiveRun ? (
-              <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => void handleForceRerun()} disabled={forceRerunBusy}>
+              <Button variant="secondary" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0" onClick={() => void handleForceRerun()} disabled={forceRerunBusy}>
                 {forceRerunBusy ? "Force rerunning..." : "Force Rerun"}
               </Button>
             ) : null}
-            <Button asChild variant="outline" size="sm" className="h-7 text-xs">
+            <Button asChild variant="outline" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0">
               <Link
                 href={
                   run
@@ -1355,14 +1357,15 @@ export default function RunDetailPage() {
           </div>
 
           {/* Tab bar — underline style */}
-          <div className="border-b mb-6">
-            <nav className="-mb-px flex gap-0">
+          <div className="mb-6 border-b overflow-x-auto">
+            <nav className="-mb-px flex min-w-max gap-0" aria-label="Run detail panels">
               {PANEL_TABS.map((tab) => (
                 <button
                   key={tab.id}
+                  type="button"
                   onClick={() => setActivePanel(tab.id)}
                   className={[
-                    "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                    "inline-flex items-center whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
                     activePanel === tab.id
                       ? "border-primary text-foreground"
                       : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
@@ -1452,7 +1455,7 @@ export default function RunDetailPage() {
                         </Card>
                       ))}
                     </div>
-                    <div className="rounded-md border bg-muted/20 p-3">
+                    <div className="min-w-0 overflow-x-auto rounded-md border bg-muted/20 p-3">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token lane by turn</p>
                       <TokenStackedBarChart
                         data={tokenTimelineChartData}
