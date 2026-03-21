@@ -17,6 +17,7 @@ from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
     reset_agent_observability_for_tests,
 )
+from orchestrator.core.runs import RUN_DEDUPE_SCOPE_PR_REMEDIATION
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -1135,6 +1136,74 @@ class AdminApiTests(unittest.TestCase):
         self.assertIsNone(body["orchestrated_session_id"])
         self.assertEqual(body["plan"]["trigger_context"]["rerun_mode"], "fresh")
 
+    def test_rerun_failed_run_is_not_blocked_by_active_pr_remediation_run(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Run(
+                        run_id="run-failed-rerun-remediation-source",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-1001",
+                        issue_summary="failed run",
+                        issue_description="Objective: rerun from admin.",
+                        repo_url="https://github.com/example/repo",
+                        branch=None,
+                        pr_url=None,
+                        status="failed",
+                        last_error="boom",
+                        plan={"plan": {"plan_steps": ["restore auth flow"]}},
+                        created_at=now,
+                        started_at=now,
+                        finished_at=now,
+                    ),
+                    Run(
+                        run_id="run-active-pr-remediation",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-1001",
+                        issue_summary="TP-1001: PR remediation for #42",
+                        issue_description="Automated remediation run triggered from GitHub PR #42.",
+                        repo_url="https://github.com/example/repo",
+                        branch="feature/tp-1001",
+                        pr_url="https://github.com/example/repo/pull/42",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+                        status="queued",
+                        last_error=None,
+                        plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 42}},
+                        created_at=now + timedelta(seconds=1),
+                        started_at=None,
+                        finished_at=None,
+                    ),
+                    RunLock(
+                        tenant_id="tenant-a",
+                        issue_key="TP-1001",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+                        run_id="run-active-pr-remediation",
+                        locked_at=now + timedelta(seconds=1),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/runs/run-failed-rerun-remediation-source/rerun",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertNotIn(response.json()["run_id"], {"run-failed-rerun-remediation-source", "run-active-pr-remediation"})
+
     def test_resume_rerun_from_dev_stage_copies_session_and_plan(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -1231,6 +1300,7 @@ class AdminApiTests(unittest.TestCase):
                 RunLock(
                     tenant_id="tenant-a",
                     issue_key="TP-998",
+                    dedupe_scope="issue_execution",
                     run_id="run-active-cancel",
                     locked_at=now,
                 )

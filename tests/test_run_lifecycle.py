@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import (
+    RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+    RUN_DEDUPE_SCOPE_PR_REMEDIATION,
     RUN_STATUS_BLOCKED,
     RUN_STATUS_SUCCEEDED,
     RunStateTransitionError,
@@ -77,6 +79,16 @@ class RunLifecycleTests(unittest.TestCase):
             )
             session.commit()
 
+    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
+        return session.get(
+            RunLock,
+            {
+                "tenant_id": "tenant-runs",
+                "issue_key": issue_key,
+                "dedupe_scope": dedupe_scope,
+            },
+        )
+
     def test_enqueue_is_idempotent_for_active_issue(self) -> None:
         with self.session_factory() as session:
             first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
@@ -87,9 +99,39 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(second.reason, "run_already_active")
             self.assertEqual(second.run.run_id, first.run.run_id)
 
-            lock = session.get(RunLock, {"tenant_id": "tenant-runs", "issue_key": "TP-901"})
+            lock = self._get_lock(session, issue_key="TP-901")
             self.assertIsNotNone(lock)
             self.assertEqual(lock.run_id, first.run.run_id)
+
+    def test_enqueue_allows_parallel_pr_remediation_and_issue_execution(self) -> None:
+        with self.session_factory() as session:
+            issue_run = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-907",
+                dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+            )
+            remediation_run = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-907",
+                dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+            )
+
+            self.assertTrue(issue_run.enqueued)
+            self.assertTrue(remediation_run.enqueued)
+            self.assertNotEqual(issue_run.run.run_id, remediation_run.run.run_id)
+            self.assertEqual(self._get_lock(session, issue_key="TP-907").run_id, issue_run.run.run_id)
+            self.assertEqual(
+                self._get_lock(
+                    session,
+                    issue_key="TP-907",
+                    dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+                ).run_id,
+                remediation_run.run.run_id,
+            )
 
     def test_enqueue_deduplicates_delivery_identifier(self) -> None:
         with self.session_factory() as session:
@@ -152,7 +194,7 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(completed.started_at)
             self.assertIsNotNone(completed.finished_at)
 
-            lock = session.get(RunLock, {"tenant_id": "tenant-runs", "issue_key": "TP-903"})
+            lock = self._get_lock(session, issue_key="TP-903")
             self.assertIsNone(lock)
 
     def test_failure_path_marks_blocked_and_cleans_up_lock(self) -> None:
@@ -170,7 +212,7 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(blocked.last_error, "jira label mutation failed")
             self.assertIsNotNone(blocked.finished_at)
 
-            lock = session.get(RunLock, {"tenant_id": "tenant-runs", "issue_key": "TP-904"})
+            lock = self._get_lock(session, issue_key="TP-904")
             self.assertIsNone(lock)
 
     def test_invalid_state_transition_is_rejected(self) -> None:
@@ -197,6 +239,7 @@ class RunLifecycleTests(unittest.TestCase):
             stale_lock = RunLock(
                 tenant_id="tenant-runs",
                 issue_key="TP-906",
+                dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
                 run_id=first.run.run_id,
                 locked_at=datetime.now(timezone.utc),
             )

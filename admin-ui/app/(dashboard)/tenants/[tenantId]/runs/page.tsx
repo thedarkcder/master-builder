@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ExternalLink, RefreshCw, SlidersHorizontal, X } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { listRuns, RUN_STATUSES, type RunRecord, type RunStatus } from "@/lib/api";
+import { buildUrlWithQuery, readQueryNumber, readQueryString } from "@/lib/url-state";
 import { cn } from "@/lib/utils";
 
 function statusBorderClass(status: string): string {
@@ -25,19 +26,37 @@ function statusBorderClass(status: string): string {
 
 export default function TenantRunsPage() {
   const params = useParams<{ tenantId: string }>();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { credentials, ready } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
 
   const [runs, setRuns] = useState<RunRecord[]>([]);
-  const [issueFilter, setIssueFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<RunStatus | "all">("all");
-  const [prFilter, setPrFilter] = useState<"any" | "none" | "has_value">("any");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
   const [loading, setLoading] = useState(false);
   const [totalLoaded, setTotalLoaded] = useState<number | null>(null);
+  const issueFilter = readQueryString(searchParams, "issue", "");
+  const statusFilter = useMemo<RunStatus | "all">(() => {
+    const rawStatus = readQueryString(searchParams, "status", "all").trim().toLowerCase();
+    return rawStatus === "all" || RUN_STATUSES.includes(rawStatus as RunStatus)
+      ? (rawStatus as RunStatus | "all")
+      : "all";
+  }, [searchParams]);
+  const prFilter = useMemo<"any" | "none" | "has_value">(() => {
+    const rawPr = readQueryString(searchParams, "pr", "any").trim().toLowerCase();
+    return rawPr === "none" || rawPr === "has_value" ? rawPr : "any";
+  }, [searchParams]);
+  const fromDate = readQueryString(searchParams, "from", "");
+  const toDate = readQueryString(searchParams, "to", "");
+  const page = Math.max(1, readQueryNumber(searchParams, "page", 1));
+  const pageSize = useMemo(() => {
+    const rawPageSize = readQueryNumber(searchParams, "pageSize", 25);
+    return rawPageSize === 50 || rawPageSize === 100 ? rawPageSize : 25;
+  }, [searchParams]);
+
+  const replaceRunsQuery = useCallback((entries: Record<string, boolean | number | string | readonly string[] | null | undefined>) => {
+    router.replace(buildUrlWithQuery(pathname, searchParams, entries), { scroll: false });
+  }, [pathname, router, searchParams]);
 
   const loadRuns = useCallback(async () => {
     if (!credentials) return;
@@ -68,13 +87,32 @@ export default function TenantRunsPage() {
     if (ready && credentials) void loadRuns();
   }, [ready, credentials, loadRuns]);
 
+  useEffect(() => {
+    const nextUrl = buildUrlWithQuery(pathname, searchParams, {
+      issue: issueFilter,
+      status: statusFilter,
+      pr: prFilter,
+      from: fromDate,
+      to: toDate,
+      page,
+      pageSize,
+    });
+    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+    if (nextUrl !== currentUrl) {
+      router.replace(nextUrl, { scroll: false });
+    }
+  }, [fromDate, issueFilter, page, pageSize, pathname, prFilter, router, searchParams, statusFilter, toDate]);
+
   function clearFilters() {
-    setIssueFilter("");
-    setStatusFilter("all");
-    setPrFilter("any");
-    setFromDate("");
-    setToDate("");
-    setPage(1);
+    replaceRunsQuery({
+      issue: "",
+      status: "all",
+      pr: "any",
+      from: "",
+      to: "",
+      page: 1,
+      pageSize,
+    });
   }
 
   const hasFilters = issueFilter || statusFilter !== "all" || prFilter !== "any" || fromDate || toDate;
@@ -98,13 +136,13 @@ export default function TenantRunsPage() {
             <Input
               className="h-8 w-36 text-sm"
               value={issueFilter}
-              onChange={(e) => { setIssueFilter(e.target.value); setPage(1); }}
+              onChange={(e) => replaceRunsQuery({ issue: e.target.value, page: 1 })}
               placeholder="Issue key"
             />
             <select
               className="h-8 w-32 rounded-md border border-input bg-background px-2 text-sm"
               value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value as RunStatus | "all"); setPage(1); }}
+              onChange={(e) => replaceRunsQuery({ status: e.target.value as RunStatus | "all", page: 1 })}
             >
               <option value="all">Status: Any</option>
               {RUN_STATUSES.map((status) => (
@@ -116,7 +154,7 @@ export default function TenantRunsPage() {
             <select
               className="h-8 rounded-md border border-input bg-background px-2 text-sm"
               value={prFilter}
-              onChange={(e) => { setPrFilter(e.target.value as "any" | "none" | "has_value"); setPage(1); }}
+              onChange={(e) => replaceRunsQuery({ pr: e.target.value as "any" | "none" | "has_value", page: 1 })}
             >
               <option value="any">PR: Any</option>
               <option value="none">PR: None</option>
@@ -126,14 +164,14 @@ export default function TenantRunsPage() {
               className="h-8 w-32 text-sm"
               type="date"
               value={fromDate}
-              onChange={(e) => { setFromDate(e.target.value); setPage(1); }}
+              onChange={(e) => replaceRunsQuery({ from: e.target.value, page: 1 })}
               placeholder="From"
             />
             <Input
               className="h-8 w-32 text-sm"
               type="date"
               value={toDate}
-              onChange={(e) => { setToDate(e.target.value); setPage(1); }}
+              onChange={(e) => replaceRunsQuery({ to: e.target.value, page: 1 })}
               placeholder="To"
             />
 
@@ -151,7 +189,7 @@ export default function TenantRunsPage() {
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-xs"
                 value={String(pageSize)}
-                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                onChange={(e) => replaceRunsQuery({ pageSize: Number(e.target.value), page: 1 })}
               >
                 <option value="25">25 / page</option>
                 <option value="50">50 / page</option>
@@ -251,7 +289,7 @@ export default function TenantRunsPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                onClick={() => replaceRunsQuery({ page: Math.max(1, page - 1) })}
                 disabled={loading || page <= 1}
               >
                 ← Prev
@@ -261,7 +299,7 @@ export default function TenantRunsPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => setPage((p) => p + 1)}
+                onClick={() => replaceRunsQuery({ page: page + 1 })}
                 disabled={loading || runs.length < pageSize}
               >
                 Next →

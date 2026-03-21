@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Archive,
   ArrowLeft,
@@ -41,6 +41,7 @@ import {
   type RunRecord,
   type RunStatus,
 } from "@/lib/api";
+import { buildUrlWithQuery, readQueryNumber, readQueryString } from "@/lib/url-state";
 
 type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
@@ -194,10 +195,10 @@ function formatBoolean(value: boolean): string {
 
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { credentials, ready } = useAuth();
-
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
-  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
 
   // Project state
   const [project, setProject] = useState<ProjectRecord | null>(null);
@@ -214,13 +215,6 @@ export function TenantProjectDetailsPage() {
   // Runs state
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsBusy, setRunsBusy] = useState(false);
-  const [runIssueFilter, setRunIssueFilter] = useState("");
-  const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
-  const [runPrFilter, setRunPrFilter] = useState<"any" | "none" | "has_value">("any");
-  const [runFromDate, setRunFromDate] = useState("");
-  const [runToDate, setRunToDate] = useState("");
-  const [runPage, setRunPage] = useState(1);
-  const [runPageSize, setRunPageSize] = useState(25);
 
   // Secrets state
   const [secretRefs, setSecretRefs] = useState<Record<string, string>>({});
@@ -233,6 +227,46 @@ export function TenantProjectDetailsPage() {
     () => `project/${params.tenantId}/${params.projectId}/`,
     [params.tenantId, params.projectId]
   );
+  const activeTab = useMemo<Tab>(() => {
+    const rawTab = readQueryString(searchParams, "tab", "overview").trim().toLowerCase();
+    return TABS.some((tab) => tab.id === rawTab) ? (rawTab as Tab) : "overview";
+  }, [searchParams]);
+  const activeSettingsSection = useMemo<SettingsSection>(() => {
+    const rawSection = readQueryString(searchParams, "section", "general").trim().toLowerCase();
+    return SETTINGS_SECTIONS.some((section) => section.id === rawSection)
+      ? (rawSection as SettingsSection)
+      : "general";
+  }, [searchParams]);
+  const runIssueFilter = readQueryString(searchParams, "runIssue", "");
+  const runStatusFilter = useMemo<RunStatus | "all">(() => {
+    const rawStatus = readQueryString(searchParams, "runStatus", "all").trim().toLowerCase();
+    return rawStatus === "all" || RUN_STATUSES.includes(rawStatus as RunStatus)
+      ? (rawStatus as RunStatus | "all")
+      : "all";
+  }, [searchParams]);
+  const runPrFilter = useMemo<"any" | "none" | "has_value">(() => {
+    const rawPr = readQueryString(searchParams, "runPr", "any").trim().toLowerCase();
+    return rawPr === "none" || rawPr === "has_value" ? rawPr : "any";
+  }, [searchParams]);
+  const runFromDate = readQueryString(searchParams, "runFrom", "");
+  const runToDate = readQueryString(searchParams, "runTo", "");
+  const runPage = Math.max(1, readQueryNumber(searchParams, "runPage", 1));
+  const runPageSize = useMemo(() => {
+    const rawPageSize = readQueryNumber(searchParams, "runPageSize", 25);
+    return rawPageSize === 50 || rawPageSize === 100 ? rawPageSize : 25;
+  }, [searchParams]);
+
+  function replaceProjectQuery(entries: Record<string, boolean | number | string | readonly string[] | null | undefined>) {
+    router.replace(buildUrlWithQuery(pathname, searchParams, entries), { scroll: false });
+  }
+
+  function setActiveTab(nextTab: Tab) {
+    replaceProjectQuery({ tab: nextTab });
+  }
+
+  function setActiveSettingsSection(nextSection: SettingsSection) {
+    replaceProjectQuery({ section: nextSection });
+  }
 
   async function loadOptions() {
     if (!credentials) return;
@@ -308,7 +342,38 @@ export function TenantProjectDetailsPage() {
 
   useEffect(() => {
     if (ready && credentials && project) void loadRuns();
-  }, [ready, credentials, project, runPage, runPageSize]);
+  }, [ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
+
+  useEffect(() => {
+    const nextUrl = buildUrlWithQuery(pathname, searchParams, {
+      tab: activeTab,
+      section: activeSettingsSection,
+      runIssue: runIssueFilter,
+      runStatus: runStatusFilter,
+      runPr: runPrFilter,
+      runFrom: runFromDate,
+      runTo: runToDate,
+      runPage,
+      runPageSize,
+    });
+    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+    if (nextUrl !== currentUrl) {
+      router.replace(nextUrl, { scroll: false });
+    }
+  }, [
+    activeSettingsSection,
+    activeTab,
+    pathname,
+    router,
+    runFromDate,
+    runIssueFilter,
+    runPage,
+    runPageSize,
+    runPrFilter,
+    runStatusFilter,
+    runToDate,
+    searchParams,
+  ]);
 
   async function toggleArchive() {
     if (!credentials || !project) return;
@@ -1258,7 +1323,7 @@ export function TenantProjectDetailsPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => { setRunPage(1); void loadRuns(); }}
+                onClick={() => void loadRuns()}
                 disabled={runsBusy}
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${runsBusy ? "animate-spin" : ""}`} />
@@ -1272,14 +1337,14 @@ export function TenantProjectDetailsPage() {
               <Input
                 className="h-8 w-40 text-sm"
                 value={runIssueFilter}
-                onChange={(e) => setRunIssueFilter(e.target.value)}
+                onChange={(e) => replaceProjectQuery({ runIssue: e.target.value, runPage: 1 })}
                 placeholder="Issue / summary"
                 disabled={runsBusy}
               />
               <select
                 className="h-8 w-36 rounded-md border border-input bg-background px-2 text-sm"
                 value={runStatusFilter}
-                onChange={(e) => setRunStatusFilter(e.target.value as RunStatus | "all")}
+                onChange={(e) => replaceProjectQuery({ runStatus: e.target.value as RunStatus | "all", runPage: 1 })}
                 disabled={runsBusy}
               >
                 <option value="all">Status: Any</option>
@@ -1292,7 +1357,7 @@ export function TenantProjectDetailsPage() {
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                 value={runPrFilter}
-                onChange={(e) => setRunPrFilter(e.target.value as "any" | "none" | "has_value")}
+                onChange={(e) => replaceProjectQuery({ runPr: e.target.value as "any" | "none" | "has_value", runPage: 1 })}
                 disabled={runsBusy}
               >
                 <option value="any">PR: Any</option>
@@ -1303,20 +1368,20 @@ export function TenantProjectDetailsPage() {
                 type="date"
                 className="h-8 w-36 text-sm"
                 value={runFromDate}
-                onChange={(e) => setRunFromDate(e.target.value)}
+                onChange={(e) => replaceProjectQuery({ runFrom: e.target.value, runPage: 1 })}
                 disabled={runsBusy}
               />
               <Input
                 type="date"
                 className="h-8 w-36 text-sm"
                 value={runToDate}
-                onChange={(e) => setRunToDate(e.target.value)}
+                onChange={(e) => replaceProjectQuery({ runTo: e.target.value, runPage: 1 })}
                 disabled={runsBusy}
               />
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                 value={String(runPageSize)}
-                onChange={(e) => { setRunPageSize(Number(e.target.value)); setRunPage(1); }}
+                onChange={(e) => replaceProjectQuery({ runPageSize: Number(e.target.value), runPage: 1 })}
                 disabled={runsBusy}
               >
                 <option value="25">25 / page</option>
@@ -1327,7 +1392,7 @@ export function TenantProjectDetailsPage() {
                 size="sm"
                 variant="secondary"
                 className="h-8"
-                onClick={() => { setRunPage(1); void loadRuns(); }}
+                onClick={() => void loadRuns()}
                 disabled={runsBusy}
               >
                 Apply
@@ -1336,14 +1401,15 @@ export function TenantProjectDetailsPage() {
                 size="sm"
                 variant="ghost"
                 className="h-8"
-                onClick={() => {
-                  setRunIssueFilter("");
-                  setRunStatusFilter("all");
-                  setRunPrFilter("any");
-                  setRunFromDate("");
-                  setRunToDate("");
-                  setRunPage(1);
-                }}
+                onClick={() => replaceProjectQuery({
+                  runIssue: "",
+                  runStatus: "all",
+                  runPr: "any",
+                  runFrom: "",
+                  runTo: "",
+                  runPage: 1,
+                  runPageSize,
+                })}
                 disabled={runsBusy}
               >
                 Clear
@@ -1375,7 +1441,7 @@ export function TenantProjectDetailsPage() {
                         <TableCell className="pl-4 font-medium">
                           <Link
                             className="text-primary hover:underline"
-                            href={`/tenants/${encodeURIComponent(params.tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
+                            href={`/tenants/${encodeURIComponent(params.tenantId)}/runs/${encodeURIComponent(run.run_id)}?projectId=${encodeURIComponent(params.projectId)}`}
                           >
                             {run.issue_summary?.trim() || run.issue_key || run.run_id}
                           </Link>
@@ -1426,7 +1492,7 @@ export function TenantProjectDetailsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setRunPage((p) => Math.max(1, p - 1))}
+                onClick={() => replaceProjectQuery({ runPage: Math.max(1, runPage - 1) })}
                 disabled={runsBusy || runPage <= 1}
               >
                 ← Prev
@@ -1435,7 +1501,7 @@ export function TenantProjectDetailsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setRunPage((p) => p + 1)}
+                onClick={() => replaceProjectQuery({ runPage: runPage + 1 })}
                 disabled={runsBusy || runs.length < runPageSize}
               >
                 Next →

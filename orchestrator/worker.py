@@ -7,7 +7,6 @@ from contextlib import suppress
 
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.exc import OperationalError
 
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
@@ -50,8 +49,6 @@ class WorkerDependencyFailure(RuntimeError):
 
 
 def _is_retryable_database_error(exc: BaseException) -> bool:
-    if isinstance(exc, OperationalError):
-        return True
     if not isinstance(exc, DBAPIError):
         return False
     if getattr(exc, "connection_invalidated", False):

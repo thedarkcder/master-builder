@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -25,6 +25,7 @@ import {
   type RunRerunPayload,
   type TokenTimelineRecord
 } from "@/lib/api";
+import { buildUrlWithQuery, readQueryString } from "@/lib/url-state";
 
 type InvocationTelemetry = {
   event_kind: string;
@@ -108,6 +109,13 @@ type RerunSessionOption = {
   sessionId: string | null;
   isLastSession: boolean;
 };
+
+const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "agents", label: "Agents" },
+  { id: "diagnostics", label: "Diagnostics" },
+  { id: "cost", label: "Cost" }
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -321,6 +329,9 @@ function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, 
 
 export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { credentials, ready } = useAuth();
   const [run, setRun] = useState<RunRecord | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
@@ -337,7 +348,20 @@ export default function RunDetailPage() {
   const [logStreamFilter, setLogStreamFilter] = useState("all");
   const [loadingOlderLogs, setLoadingOlderLogs] = useState(false);
   const [hasMoreLogs, setHasMoreLogs] = useState(false);
-  const [activePanel, setActivePanel] = useState<RunPanelTab>("overview");
+  const projectContextId = String(searchParams.get("projectId") || "").trim();
+  const activePanel = useMemo<RunPanelTab>(() => {
+    const rawPanel = readQueryString(searchParams, "panel", "overview").trim().toLowerCase();
+    return PANEL_TABS.some((tab) => tab.id === rawPanel) ? (rawPanel as RunPanelTab) : "overview";
+  }, [searchParams]);
+  const setActivePanel = useCallback((nextPanel: RunPanelTab) => {
+    router.replace(
+      buildUrlWithQuery(pathname, searchParams, {
+        panel: nextPanel,
+        projectId: projectContextId || undefined,
+      }),
+      { scroll: false }
+    );
+  }, [pathname, projectContextId, router, searchParams]);
   const [chatVisibleCount, setChatVisibleCount] = useState(CHAT_PAGE_SIZE);
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const chatListRef = useRef<HTMLUListElement | null>(null);
@@ -384,6 +408,21 @@ export default function RunDetailPage() {
       void loadRun();
     }
   }, [ready, credentials, loadRun]);
+
+  useEffect(() => {
+    if (!run) {
+      return;
+    }
+    const normalizedProjectId = projectContextId || run.project_id || undefined;
+    const nextUrl = buildUrlWithQuery(pathname, searchParams, {
+      panel: activePanel,
+      projectId: normalizedProjectId,
+    });
+    const currentUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+    if (nextUrl !== currentUrl) {
+      router.replace(nextUrl, { scroll: false });
+    }
+  }, [activePanel, pathname, projectContextId, router, run, searchParams]);
 
   useEffect(() => {
     if (!run || !credentials) {
@@ -450,7 +489,9 @@ export default function RunDetailPage() {
       const cancelled = await cancelRun(credentials, run.run_id);
       const nextRun = await rerunRun(credentials, cancelled.run_id, { mode: "fresh" });
       setStatusLine(`Force-cancelled ${cancelled.run_id} and queued rerun ${nextRun.run_id}.`);
-      window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
+      router.push(
+        `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}${projectContextId ? `?projectId=${encodeURIComponent(projectContextId)}` : ""}`
+      );
     } catch (error) {
       setStatusLine(`Failed to force rerun: ${(error as Error).message}`);
     } finally {
@@ -755,7 +796,9 @@ export default function RunDetailPage() {
     try {
       const nextRun = await rerunRun(credentials, run.run_id, payload);
       setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
-      window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
+      router.push(
+        `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}${projectContextId ? `?projectId=${encodeURIComponent(projectContextId)}` : ""}`
+      );
     } catch (error) {
       setStatusLine(`Failed to rerun: ${(error as Error).message}`);
     } finally {
@@ -1137,13 +1180,6 @@ export default function RunDetailPage() {
     return () => window.cancelAnimationFrame(raf);
   }, [activePanel, chatAutoScroll, visibleChatTimelineEntries.length]);
 
-  const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
-    { id: "overview", label: "Overview" },
-    { id: "agents", label: "Agents" },
-    { id: "diagnostics", label: "Diagnostics" },
-    { id: "cost", label: "Cost" }
-  ];
-
   return (
     <div className="space-y-0">
       {/* Page header — metadata strip */}
@@ -1224,7 +1260,17 @@ export default function RunDetailPage() {
               </Button>
             ) : null}
             <Button asChild variant="outline" size="sm" className="h-7 text-xs">
-              <Link href={run ? `/tenants/${encodeURIComponent(run.tenant_id)}/runs` : "/tenants/select"}>
+              <Link
+                href={
+                  run
+                    ? (
+                        projectContextId
+                          ? `/tenants/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}?tab=runs`
+                          : `/tenants/${encodeURIComponent(run.tenant_id)}/runs`
+                      )
+                    : "/tenants/select"
+                }
+              >
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
                 Back
               </Link>

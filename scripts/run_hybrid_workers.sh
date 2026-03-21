@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+WORKER_CHECKOUT_DIR="${ROOT_DIR}/.workdirs"
+mkdir -p "${WORKER_CHECKOUT_DIR}"
 
 export ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND="${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND:-/usr/local/bin/live-voice-transport}"
 export ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS="${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS:-10}"
@@ -11,6 +13,22 @@ ADMIN_UI_PORT="${ADMIN_UI_PORT:-4100}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$ROOT_DIR")}"
 DOCKER_WAIT_TIMEOUT_SECONDS="${DOCKER_WAIT_TIMEOUT_SECONDS:-300}"
 DOCKER_WAIT_INTERVAL_SECONDS="${DOCKER_WAIT_INTERVAL_SECONDS:-3}"
+
+if [[ -f ".env" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
+      if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      fi
+      export "${key}=${value}"
+    fi
+  done < .env
+fi
 
 DOCKER_SERVICES=(
   postgres
@@ -174,6 +192,15 @@ restart_existing_admin_ui_if_owned() {
   return 0
 }
 
+UI_PID=""
+cleanup() {
+  if [[ -n "${UI_PID}" ]] && kill -0 "${UI_PID}" >/dev/null 2>&1; then
+    echo "Stopping local admin UI (pid=${UI_PID})..."
+    kill "${UI_PID}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
 cleanup_dead_project_containers
 
 run_compose_up
@@ -191,9 +218,37 @@ if [[ ! -f "${ROOT_DIR}/admin-ui/package.json" ]]; then
   exit 1
 fi
 
+VENV_DIR="${ROOT_DIR}/.venv"
+if [[ ! -d "${VENV_DIR}" ]]; then
+  echo "Creating virtual environment at ${VENV_DIR}..."
+  python3 -m venv "${VENV_DIR}"
+fi
+
+export ORCHESTRATOR_DATABASE_URL="${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator}"
+export POSTGRES_URL="${POSTGRES_URL:-${ORCHESTRATOR_DATABASE_URL}}"
+export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"
+export ORCHESTRATOR_AGENT_ID="${ORCHESTRATOR_AGENT_ID:-worker-macos-local}"
+export ORCHESTRATOR_CODEX_SANDBOX_MODE="${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}"
+export REMOVED_PRIVATE_CREDENTIAL"${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR:-${WORKER_CHECKOUT_DIR}}"
+
+echo "Installing/updating Python dependencies in ${VENV_DIR}..."
+"${VENV_DIR}/bin/python" -m pip install --upgrade pip
+"${VENV_DIR}/bin/pip" install -e .
+
 cd "${ROOT_DIR}/admin-ui"
 if [[ -n "$(admin_ui_listener_pids)" ]]; then
   restart_existing_admin_ui_if_owned
 fi
 echo "Starting local admin UI with npm run dev..."
-exec npm run dev
+npm run dev &
+UI_PID="$!"
+echo "Local admin UI started (pid=${UI_PID})"
+
+cd "${ROOT_DIR}"
+echo "Hybrid worker mode started."
+echo "Docker worker capability: linux (container)"
+echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"
+echo "Local Codex sandbox: ${ORCHESTRATOR_CODEX_SANDBOX_MODE}"
+echo "Shared repo checkout dir: ${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR}"
+echo "Starting local worker..."
+exec "${VENV_DIR}/bin/python" -m orchestrator worker

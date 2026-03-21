@@ -222,6 +222,27 @@ class WorkerTests(unittest.TestCase):
 
         self.assertEqual(process_mock.call_count, 2)
 
+    def test_run_worker_slot_reraises_non_retryable_operational_errors(self) -> None:
+        import orchestrator.worker as worker_module
+        from sqlalchemy.exc import OperationalError
+
+        process_mock = MagicMock(
+            side_effect=OperationalError(
+                "SELECT 1",
+                {},
+                Exception("password authentication failed for user \"orchestrator\""),
+            )
+        )
+
+        with patch.object(worker_module, "_process_next_queued_run_once", new=process_mock):
+            with self.assertRaisesRegex(OperationalError, "password authentication failed"):
+                asyncio.run(
+                    worker_module._run_worker_slot(
+                        session_factory=MagicMock(),
+                        stop_event=asyncio.Event(),
+                    )
+                )
+
     def test_run_worker_slot_reraises_non_retryable_errors(self) -> None:
         import orchestrator.worker as worker_module
 

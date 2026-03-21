@@ -13,6 +13,7 @@ from orchestrator.core.worker.run_health import (
     recover_stale_running_runs,
     touch_run_heartbeat,
 )
+from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import AgentLifecycleEvent, Run, RunLock, RunLogEvent, Tenant
@@ -50,6 +51,16 @@ class WorkerRunHealthTests(unittest.TestCase):
                 )
             )
             session.commit()
+
+    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
+        return session.get(
+            RunLock,
+            {
+                "tenant_id": "tenant-a",
+                "issue_key": issue_key,
+                "dedupe_scope": dedupe_scope,
+            },
+        )
 
     def test_touch_run_heartbeat_updates_only_current_owner(self) -> None:
         now = datetime.now(timezone.utc)
@@ -140,16 +151,28 @@ class WorkerRunHealthTests(unittest.TestCase):
             session.add_all([running, terminal])
             session.add_all(
                 [
-                    RunLock(tenant_id="tenant-a", issue_key="TA-2", run_id="run-active", locked_at=now),
-                    RunLock(tenant_id="tenant-a", issue_key="TA-3", run_id="run-terminal", locked_at=now),
+                    RunLock(
+                        tenant_id="tenant-a",
+                        issue_key="TA-2",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                        run_id="run-active",
+                        locked_at=now,
+                    ),
+                    RunLock(
+                        tenant_id="tenant-a",
+                        issue_key="TA-3",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                        run_id="run-terminal",
+                        locked_at=now,
+                    ),
                 ]
             )
             session.commit()
 
             removed = cleanup_orphan_run_locks(session=session)
             self.assertEqual(removed, 1)
-            self.assertIsNotNone(session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-2"}))
-            self.assertIsNone(session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-3"}))
+            self.assertIsNotNone(self._get_lock(session, issue_key="TA-2"))
+            self.assertIsNone(self._get_lock(session, issue_key="TA-3"))
 
     def test_recover_stale_running_runs_marks_failed_and_preserves_fresh_runs(self) -> None:
         now = datetime.now(timezone.utc)
@@ -217,9 +240,27 @@ class WorkerRunHealthTests(unittest.TestCase):
             )
             session.add_all(
                 [
-                    RunLock(tenant_id="tenant-a", issue_key="TA-10", run_id="run-stale-heartbeat", locked_at=stale_started),
-                    RunLock(tenant_id="tenant-a", issue_key="TA-11", run_id="run-stale-no-heartbeat", locked_at=stale_started),
-                    RunLock(tenant_id="tenant-a", issue_key="TA-12", run_id="run-fresh-no-heartbeat", locked_at=fresh_started),
+                    RunLock(
+                        tenant_id="tenant-a",
+                        issue_key="TA-10",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                        run_id="run-stale-heartbeat",
+                        locked_at=stale_started,
+                    ),
+                    RunLock(
+                        tenant_id="tenant-a",
+                        issue_key="TA-11",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                        run_id="run-stale-no-heartbeat",
+                        locked_at=stale_started,
+                    ),
+                    RunLock(
+                        tenant_id="tenant-a",
+                        issue_key="TA-12",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                        run_id="run-fresh-no-heartbeat",
+                        locked_at=fresh_started,
+                    ),
                 ]
             )
             session.commit()
@@ -250,9 +291,9 @@ class WorkerRunHealthTests(unittest.TestCase):
             assert fresh_run is not None
             self.assertEqual(fresh_run.status, "running")
 
-            self.assertIsNone(session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-10"}))
-            self.assertIsNone(session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-11"}))
-            self.assertIsNotNone(session.get(RunLock, {"tenant_id": "tenant-a", "issue_key": "TA-12"}))
+            self.assertIsNone(self._get_lock(session, issue_key="TA-10"))
+            self.assertIsNone(self._get_lock(session, issue_key="TA-11"))
+            self.assertIsNotNone(self._get_lock(session, issue_key="TA-12"))
 
             stale_logs = session.execute(
                 select(RunLogEvent).where(RunLogEvent.run_id == "run-stale-heartbeat")
