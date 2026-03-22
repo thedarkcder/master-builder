@@ -7,7 +7,11 @@ from fastapi import status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from orchestrator.api.webhooks.github_event_classifier import resolve_github_policy_state
+from orchestrator.api.webhooks.github_event_classifier import (
+    classify_github_trigger_state,
+    empty_github_review_summary,
+    resolve_github_policy_state,
+)
 from orchestrator.api.webhooks.github_manual_fix_planner import plan_manual_fix_reaction_actions
 from orchestrator.api.webhooks.github_review_planner import plan_pull_request_targets
 from orchestrator.api.webhooks.github_webhook_context import (
@@ -62,8 +66,13 @@ async def build_github_webhook_ingress_result(
         github_event=github_event,
         payload=payload,
     )
+    trigger_state = classify_github_trigger_state(
+        github_event=github_event,
+        normalized_action=normalized_action,
+        payload=payload,
+    )
 
-    if not policy_state.allow_code_reviews and not policy_state.manual_fix_requested:
+    if not policy_state.allow_code_reviews and not trigger_state.manual_fix_requested:
         return _http_json_result(
             status_code=status.HTTP_202_ACCEPTED,
             content={
@@ -139,6 +148,75 @@ async def build_github_webhook_ingress_result(
         payload=payload,
         repo_full_name=repo_full_name,
     )
+    if trigger_state.ignored_reason is not None:
+        logger.info(
+            "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=%s sender=%s",
+            envelope.request_id,
+            tenant.tenant_id,
+            project.project_id,
+            repo_full_name,
+            github_event,
+            normalized_action or "none",
+            trigger_state.ignored_reason,
+            trigger_state.sender_login or "unknown",
+        )
+        return _http_json_result(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": envelope.request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "project_id": project.project_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": True,
+                "repository": repo_full_name,
+                **empty_github_review_summary(
+                    allow_auto_merge=policy_state.allow_auto_merge,
+                    allow_pr_remediation=policy_state.allow_pr_remediation,
+                    allow_manual_pr_fix_requests=policy_state.allow_manual_pr_fix_requests,
+                    full_review_trigger=False,
+                    ignored_reason=trigger_state.ignored_reason,
+                ),
+            },
+            extra_actions=planned_actions,
+        )
+    if (
+        not trigger_state.full_review_trigger
+        and not trigger_state.remediation_trigger
+        and not trigger_state.manual_fix_requested
+    ):
+        logger.info(
+            "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=unsupported_event sender=%s",
+            envelope.request_id,
+            tenant.tenant_id,
+            project.project_id,
+            repo_full_name,
+            github_event,
+            normalized_action or "none",
+            trigger_state.sender_login or "unknown",
+        )
+        return _http_json_result(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": envelope.request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "project_id": project.project_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": True,
+                "repository": repo_full_name,
+                **empty_github_review_summary(
+                    allow_auto_merge=policy_state.allow_auto_merge,
+                    allow_pr_remediation=policy_state.allow_pr_remediation,
+                    allow_manual_pr_fix_requests=policy_state.allow_manual_pr_fix_requests,
+                    full_review_trigger=False,
+                    ignored_reason="unsupported_event",
+                ),
+            },
+            extra_actions=planned_actions,
+        )
 
     review_plan = plan_pull_request_targets(
         request_id=envelope.request_id,
@@ -149,6 +227,9 @@ async def build_github_webhook_ingress_result(
         payload=payload,
         github_event=github_event,
         normalized_action=normalized_action,
+        full_review_trigger=trigger_state.full_review_trigger,
+        remediation_trigger=trigger_state.remediation_trigger,
+        manual_fix_requested=trigger_state.manual_fix_requested,
         github_client=github_client,
         reviewer_gate=reviewer_gate,
         allow_auto_merge=policy_state.allow_auto_merge,
