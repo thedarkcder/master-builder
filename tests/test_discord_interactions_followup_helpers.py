@@ -870,7 +870,12 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             patch("orchestrator.api.discord.interactions.followup.get_settings", return_value=settings),
             patch("orchestrator.api.discord.interactions.followup.execute_discord_ingress_command", return_value=command_response),
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup_runtime.resolve_platform_secret_ref", return_value="token"),
+            patch("orchestrator.core.discord.transport_executor.resolve_project_for_channel", return_value=project),
+            patch(
+                "orchestrator.core.discord.transport_executor.project_ask_thread_channel_ids_for_tenant",
+                side_effect=[set(), {"thread-1"}],
+            ),
             patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as send_interaction_followup_mock,
         ):
             client = MagicMock()

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
+from orchestrator.storage.models import DecisionCycle
 from orchestrator.tools.github_app import PullRequestSummary
 
 
@@ -856,6 +857,92 @@ def test_decision_read_state_does_not_require_repo_checkout() -> None:
 
     assert payload == {"ok": True}
     execute_mock.assert_called_once()
+
+
+def test_decision_read_state_returns_case_cycle_answers_and_recent_evidence() -> None:
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "decision_planner"
+        issue_key = "GP-124"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/missing-repo")
+
+    case = SimpleNamespace(
+        case_id="case-1",
+        state="blocked",
+        classification="both",
+        blocked_reason="missing_decision_input",
+        active_cycle_id="cycle-1",
+        metadata_json={"source": "discord"},
+    )
+    cycle = SimpleNamespace(
+        cycle_id="cycle-1",
+        status="open",
+        classification="both",
+        reason="Need one product answer",
+        question_set_json=[{"question_id": "q1", "question": "Which user segment comes first?"}],
+        unresolved_question_ids_json=["q1"],
+        metadata_json={"asked_via": "discord"},
+    )
+    answer = SimpleNamespace(
+        question_id="q0",
+        question_text="What problem are we solving?",
+        status="answered",
+        normalized_answer="Reduce drop-off during onboarding",
+        metadata_json={"notes": "Captured from voice note"},
+        updated_at=SimpleNamespace(isoformat=lambda: "2026-03-22T22:00:00+00:00"),
+    )
+    evidence = SimpleNamespace(
+        evidence_id="ev-1",
+        source_transport="discord",
+        source_ref="message-123",
+        raw_text="We need to cut onboarding friction.",
+        question_ids_json=["q0"],
+        normalized_answers_json={"problem": "Cut onboarding friction"},
+        created_at=SimpleNamespace(isoformat=lambda: "2026-03-22T22:01:00+00:00"),
+    )
+
+    session = MagicMock()
+    session.get.side_effect = lambda cls, key: cycle if cls is DecisionCycle and key == "cycle-1" else None
+    session.execute.side_effect = [
+        SimpleNamespace(scalar_one_or_none=lambda: case),
+        SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [answer])),
+        SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [evidence])),
+    ]
+
+    with patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()):
+        payload = execute_agent_tool(
+            session=session,  # type: ignore[arg-type]
+            settings=None,
+            tenant_id="route25",
+            project_id="route25-default",
+            run_id="run-1",
+            issue_key="GP-124",
+            stage="decision_planner",
+            tool_name="decision.read_state",
+            tool_args={},
+        )
+
+    assert payload["issue_key"] == "GP-124"
+    assert payload["case"]["case_id"] == "case-1"
+    assert payload["case"]["classification"] == "both"
+    assert payload["active_cycle"]["cycle_id"] == "cycle-1"
+    assert payload["active_cycle"]["questions"] == [{"question_id": "q1", "question": "Which user segment comes first?"}]
+    assert payload["answers"][0]["question_id"] == "q0"
+    assert payload["answers"][0]["notes"] == "Captured from voice note"
+    assert payload["recent_evidence"][0]["evidence_id"] == "ev-1"
+    assert payload["recent_evidence"][0]["normalized_answers"] == {"problem": "Cut onboarding friction"}
 
 
 def test_repo_read_requires_repo_checkout() -> None:
