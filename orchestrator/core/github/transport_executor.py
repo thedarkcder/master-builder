@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.pr_review_comment_service import (
     publish_inline_review_batch,
+    upsert_manual_fix_issue_comment_reply,
     upsert_manual_fix_review_thread_reply,
     upsert_sticky_remediation_comment,
     upsert_sticky_remediation_review_thread_reply,
@@ -14,6 +15,7 @@ from orchestrator.api.webhooks.pr_review_comment_service import (
 from orchestrator.core.communications import (
     GitHubInlineReviewBatchAction,
     GitHubIssueCommentReactionAction,
+    GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
     GitHubPullRequestReviewCommentReactionAction,
@@ -61,6 +63,9 @@ class GitHubTransportExecutor:
             return
         if isinstance(action, GitHubManualFixReviewThreadReplyAction):
             self._execute_manual_fix_review_thread_reply(action=action)
+            return
+        if isinstance(action, GitHubManualFixIssueCommentReplyAction):
+            self._execute_manual_fix_issue_comment_reply(action=action)
             return
         if isinstance(action, GitHubPullRequestMergeAction):
             self._execute_pull_request_merge(action=action)
@@ -132,6 +137,7 @@ class GitHubTransportExecutor:
                 head_sha=action.head_sha,
                 event=action.event,
                 action=action.action_name,
+                status_label=action.status_label,
             )
         except Exception as exc:  # noqa: BLE001
             self._logger.warning(
@@ -163,6 +169,7 @@ class GitHubTransportExecutor:
                 head_sha=action.head_sha,
                 event=action.event,
                 action=action.action_name,
+                status_label=action.status_label,
             )
         except Exception as exc:  # noqa: BLE001
             self._logger.warning(
@@ -189,10 +196,42 @@ class GitHubTransportExecutor:
                 enqueued=action.enqueued,
                 run_id=action.run_id,
                 reason=action.reason,
+                status_label=action.status_label,
+                pr_url=action.pr_url,
+                change_summary=action.change_summary,
             )
         except Exception as exc:  # noqa: BLE001
             self._logger.warning(
                 "github_transport_action_failed kind=manual_fix_followup repo=%s pr_number=%s error=%s",
+                action.repo_full_name,
+                action.pr_number,
+                exc,
+            )
+
+    def _execute_manual_fix_issue_comment_reply(self, *, action: GitHubManualFixIssueCommentReplyAction) -> None:
+        try:
+            upsert_manual_fix_issue_comment_reply(
+                github_client=self._github_client,
+                repo_full_name=action.repo_full_name,
+                pr_number=action.pr_number,
+                tenant_id=action.tenant_id,
+                project_id=action.project_id,
+                triggering_comment_id=action.triggering_comment_id,
+                requested_by=action.requested_by,
+                triggering_comment_url=action.triggering_comment_url,
+                instruction_text=action.instruction_text,
+                issue_key=action.issue_key,
+                issue_url=action.issue_url,
+                enqueued=action.enqueued,
+                run_id=action.run_id,
+                reason=action.reason,
+                status_label=action.status_label,
+                pr_url=action.pr_url,
+                change_summary=action.change_summary,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "github_transport_action_failed kind=manual_fix_issue_comment_reply repo=%s pr_number=%s error=%s",
                 action.repo_full_name,
                 action.pr_number,
                 exc,

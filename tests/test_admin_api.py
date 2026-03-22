@@ -849,8 +849,6 @@ class AdminApiTests(unittest.TestCase):
                     }
                 ],
                 "live_voice_enabled": True,
-                "live_voice_channel_id": "voice-room-1",
-                "live_voice_linked_text_channel_id": "text-room-1",
                 "live_voice_room_links": {"voice-room-1": "text-room-1"},
             }
             session.add(project)
@@ -874,8 +872,6 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["discord"]["notify_events"], ["run_failed"])
         self.assertNotIn("live_voice_enabled", response.json()["discord"])
-        self.assertNotIn("live_voice_channel_id", response.json()["discord"])
-        self.assertNotIn("live_voice_linked_text_channel_id", response.json()["discord"])
         self.assertNotIn("live_voice_room_links", response.json()["discord"])
 
         with session_factory() as session:
@@ -885,11 +881,9 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(discord_config.get("allowed_user_ids"), ["discord-user-1"])
             self.assertEqual(len(discord_config.get("allowlist_requests", [])), 1)
             self.assertNotIn("live_voice_enabled", discord_config)
-            self.assertNotIn("live_voice_channel_id", discord_config)
-            self.assertNotIn("live_voice_linked_text_channel_id", discord_config)
             self.assertNotIn("live_voice_room_links", discord_config)
 
-    def test_update_project_persists_single_live_voice_room_fields(self) -> None:
+    def test_update_project_persists_live_voice_room_links(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -917,8 +911,10 @@ class AdminApiTests(unittest.TestCase):
                     "discord": {
                         "notify_events": ["run_failed"],
                         "live_voice_enabled": True,
-                        "live_voice_channel_id": "voice-room-9",
-                        "live_voice_linked_text_channel_id": "text-room-9",
+                        "live_voice_room_links": {
+                            "voice-room-9": "text-room-9",
+                            "voice-room-10": "text-room-10",
+                        },
                     },
                     "is_archived": False,
                 },
@@ -927,11 +923,15 @@ class AdminApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["discord"]["live_voice_enabled"])
-        self.assertEqual(response.json()["discord"]["live_voice_channel_id"], "voice-room-9")
-        self.assertEqual(response.json()["discord"]["live_voice_linked_text_channel_id"], "text-room-9")
-        self.assertEqual(response.json()["discord"]["live_voice_room_links"], {"voice-room-9": "text-room-9"})
+        self.assertEqual(
+            response.json()["discord"]["live_voice_room_links"],
+            {
+                "voice-room-9": "text-room-9",
+                "voice-room-10": "text-room-10",
+            },
+        )
 
-    def test_update_project_can_clear_single_live_voice_room_fields(self) -> None:
+    def test_update_project_can_clear_live_voice_room_links(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post(
@@ -959,8 +959,7 @@ class AdminApiTests(unittest.TestCase):
                     "discord": {
                         "notify_events": ["run_failed"],
                         "live_voice_enabled": False,
-                        "live_voice_channel_id": None,
-                        "live_voice_linked_text_channel_id": None,
+                        "live_voice_room_links": {},
                     },
                     "is_archived": False,
                 },
@@ -969,8 +968,6 @@ class AdminApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["discord"]["live_voice_enabled"])
-        self.assertIsNone(response.json()["discord"]["live_voice_channel_id"])
-        self.assertIsNone(response.json()["discord"]["live_voice_linked_text_channel_id"])
         self.assertEqual(response.json()["discord"]["live_voice_room_links"], {})
 
     def test_project_discord_channel_name_template_appends_project_when_template_not_project_scoped(self) -> None:

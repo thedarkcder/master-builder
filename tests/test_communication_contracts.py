@@ -20,6 +20,7 @@ from orchestrator.core.communications.contracts import (
     DiscordThreadReplyAction,
     GitHubInlineReviewBatchAction,
     GitHubIssueCommentReactionAction,
+    GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
     GitHubPullRequestReviewCommentReactionAction,
@@ -325,6 +326,7 @@ class CommunicationContractsTests(unittest.TestCase):
             patch(
                 "orchestrator.core.github.transport_executor.upsert_sticky_remediation_review_thread_reply"
             ) as sticky_remediation_thread_reply,
+            patch("orchestrator.core.github.transport_executor.upsert_manual_fix_issue_comment_reply") as manual_fix_issue_reply,
             patch("orchestrator.core.github.transport_executor.upsert_manual_fix_review_thread_reply") as manual_fix_reply,
         ):
             executor.execute(
@@ -406,6 +408,23 @@ class CommunicationContractsTests(unittest.TestCase):
                 )
             )
             executor.execute(
+                action=GitHubManualFixIssueCommentReplyAction(
+                    repo_full_name="org/repo",
+                    pr_number=11,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    triggering_comment_id=101,
+                    requested_by="alice",
+                    triggering_comment_url="https://github.com/comment",
+                    instruction_text="fix the flaky test",
+                    issue_key="GP-1",
+                    issue_url="https://jira/GP-1",
+                    enqueued=True,
+                    run_id="run-1",
+                    reason=None,
+                )
+            )
+            executor.execute(
                 action=GitHubPullRequestMergeAction(
                     repo_full_name="org/repo",
                     pr_number=11,
@@ -418,6 +437,7 @@ class CommunicationContractsTests(unittest.TestCase):
         sticky_remediation.assert_called_once()
         sticky_remediation_thread_reply.assert_called_once()
         manual_fix_reply.assert_called_once()
+        manual_fix_issue_reply.assert_called_once()
 
         github_client.merge_pull_request.assert_called_once_with(
             repo_full_name="org/repo",

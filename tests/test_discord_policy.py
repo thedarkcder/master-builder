@@ -26,11 +26,13 @@ def test_channel_ids_from_discord_config_collects_live_voice_room_ids() -> None:
     values = channel_ids_from_discord_config(
         {
             "channel_id": "main",
-            "live_voice_channel_id": "voice-1",
-            "live_voice_linked_text_channel_id": "text-1",
+            "live_voice_room_links": {
+                "voice-1": "text-1",
+                " voice-2 ": " text-2 ",
+            },
         }
     )
-    assert values == {"main", "voice-1", "text-1"}
+    assert values == {"main", "voice-1", "text-1", "voice-2", "text-2"}
 
 
 def test_channel_ids_from_discord_config_collects_project_room_channels() -> None:

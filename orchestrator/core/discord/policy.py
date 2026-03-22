@@ -93,13 +93,6 @@ def channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
         if normalized:
             allowed.add(normalized)
 
-    live_voice_channel_id = str(discord_config.get("live_voice_channel_id") or "").strip()
-    live_voice_linked_text_channel_id = str(discord_config.get("live_voice_linked_text_channel_id") or "").strip()
-    if live_voice_channel_id:
-        allowed.add(live_voice_channel_id)
-    if live_voice_linked_text_channel_id:
-        allowed.add(live_voice_linked_text_channel_id)
-
     raw_live_voice_room_links = discord_config.get("live_voice_room_links")
     if isinstance(raw_live_voice_room_links, dict):
         for voice_channel_id, linked_text_channel_id in raw_live_voice_room_links.items():

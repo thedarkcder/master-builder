@@ -88,8 +88,6 @@ class DiscordConfig(BaseModel):
     allowlist_requests: list[dict] = Field(default_factory=list)
     live_voice_enabled: bool = False
     live_voice_room_links: dict[str, str] = Field(default_factory=dict)
-    live_voice_channel_id: str | None = None
-    live_voice_linked_text_channel_id: str | None = None
     voice_room_channel_ids: list[str] = Field(default_factory=list)
     voice_room_thread_channel_ids: list[str] = Field(default_factory=list)
     voice_thread_channel_ids: list[str] = Field(default_factory=list)
@@ -143,8 +141,6 @@ class ProjectDiscordConfig(BaseModel):
     seed_followup_thread_channel_ids: list[str] = Field(default_factory=list)
     live_voice_enabled: bool = False
     live_voice_room_links: dict[str, str] = Field(default_factory=dict)
-    live_voice_channel_id: str | None = None
-    live_voice_linked_text_channel_id: str | None = None
     voice_room_channel_ids: list[str] = Field(default_factory=list)
     voice_room_thread_channel_ids: list[str] = Field(default_factory=list)
     voice_thread_channel_ids: list[str] = Field(default_factory=list)

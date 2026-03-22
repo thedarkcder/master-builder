@@ -6,6 +6,7 @@ from uuid import uuid4
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
 from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.worker_capabilities import (
     normalize_worker_capability,
@@ -524,7 +525,7 @@ def process_next_queued_run(
         run_id=run.run_id,
     )
 
-    return finalize_workflow_result_fn(
+    finalized_run = finalize_workflow_result_fn(
         session,
         run=run,
         workflow_result=workflow_result,
@@ -532,6 +533,26 @@ def process_next_queued_run(
         execution_context=_execution_context(workflow_request=workflow_request),
         expected_worker_service_instance_id=worker_service_instance_id,
     )
+    try:
+        publish_manual_pr_remediation_completion(
+            session=session,
+            tenant=tenant,
+            project=project,
+            run=finalized_run,
+            workflow_result=workflow_result,
+            settings=settings,
+            issue_url=jira_issue_url,
+            logger_override=logger,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "manual_pr_remediation_completion_publish_failed tenant_id=%s project_id=%s run_id=%s error=%s",
+            finalized_run.tenant_id,
+            project.project_id,
+            finalized_run.run_id,
+            exc,
+        )
+    return finalized_run
 
 
 def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: ANN001

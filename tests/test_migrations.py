@@ -1,4 +1,6 @@
 import unittest
+import json
+from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -107,3 +109,113 @@ class MigrationTests(unittest.TestCase):
 
         self.assertIn("pg_advisory_xact_lock", contents)
         self.assertIn("CREATE EXTENSION IF NOT EXISTS vector", contents)
+
+    def test_live_voice_room_links_migration_rewrites_legacy_discord_config(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            run_migrations(database_url=database_url)
+
+            engine = create_engine(database_url)
+            now = datetime.now(timezone.utc).isoformat()
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO tenants (
+                            tenant_id, name, is_enabled, jira_config, github_config, repos_config,
+                            policy_config, discord_config, created_at, updated_at
+                        ) VALUES (
+                            :tenant_id, :name, :is_enabled, :jira_config, :github_config, :repos_config,
+                            :policy_config, :discord_config, :created_at, :updated_at
+                        )
+                        """
+                    ),
+                    {
+                        "tenant_id": "tenant-a",
+                        "name": "Tenant A",
+                        "is_enabled": True,
+                        "jira_config": json.dumps({}),
+                        "github_config": json.dumps({}),
+                        "repos_config": json.dumps({}),
+                        "policy_config": json.dumps({}),
+                        "discord_config": json.dumps(
+                            {
+                                "live_voice_channel_id": "voice-room-1",
+                                "live_voice_linked_text_channel_id": "text-room-1",
+                            }
+                        ),
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO projects (
+                            project_id, tenant_id, name, github_repository, jira_project_key,
+                            policy_overrides, environment, secret_refs, discord_config, is_archived,
+                            created_at, updated_at
+                        ) VALUES (
+                            :project_id, :tenant_id, :name, :github_repository, :jira_project_key,
+                            :policy_overrides, :environment, :secret_refs, :discord_config, :is_archived,
+                            :created_at, :updated_at
+                        )
+                        """
+                    ),
+                    {
+                        "project_id": "project-a",
+                        "tenant_id": "tenant-a",
+                        "name": "Project A",
+                        "github_repository": "https://github.com/example/repo",
+                        "jira_project_key": "MAB",
+                        "policy_overrides": json.dumps({}),
+                        "environment": json.dumps({}),
+                        "secret_refs": json.dumps({}),
+                        "discord_config": json.dumps(
+                            {
+                                "live_voice_channel_id": "voice-room-1",
+                                "live_voice_linked_text_channel_id": "text-room-1",
+                                "live_voice_room_links": {
+                                    "voice-room-1": "text-room-1",
+                                    "voice-room-2": "text-room-2",
+                                },
+                            }
+                        ),
+                        "is_archived": False,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                connection.execute(text("UPDATE alembic_version SET version_num = '20260322_0033'"))
+
+            run_migrations(database_url=database_url)
+
+            with engine.begin() as connection:
+                tenant_config = json.loads(
+                    connection.execute(
+                        text("SELECT discord_config FROM tenants WHERE tenant_id = 'tenant-a'")
+                    ).scalar_one()
+                )
+                project_config = json.loads(
+                    connection.execute(
+                        text("SELECT discord_config FROM projects WHERE project_id = 'project-a'")
+                    ).scalar_one()
+                )
+
+            self.assertEqual(
+                tenant_config,
+                {
+                    "live_voice_room_links": {
+                        "voice-room-1": "text-room-1",
+                    }
+                },
+            )
+            self.assertEqual(
+                project_config,
+                {
+                    "live_voice_room_links": {
+                        "voice-room-1": "text-room-1",
+                        "voice-room-2": "text-room-2",
+                    }
+                },
+            )
