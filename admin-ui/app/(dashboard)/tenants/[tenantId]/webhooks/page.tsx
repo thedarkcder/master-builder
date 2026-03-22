@@ -276,7 +276,7 @@ export default function TenantWebhooksPage() {
             </p>
             <p><span className="font-medium text-foreground">Last delivery ID</span> {diagnostics?.last_delivery_id || "none"}</p>
             {diagnostics?.last_error ? (
-              <p className="rounded border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-destructive">
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-destructive break-words">
                 <span className="font-medium">Last error</span> {diagnostics.last_error}
               </p>
             ) : null}

@@ -1292,41 +1292,45 @@ export default function RunDetailPage() {
         ) : null}
       </div>
 
-      {statusLine ? (
-        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {statusLine}
+      {statusLine || (run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage) ? (
+        <div className="mb-8 space-y-4">
+          {statusLine ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive">
+              {statusLine}
+            </div>
+          ) : null}
+          {run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage ? (
+            <Card className="border-destructive/40 bg-destructive/5 shadow-sm">
+              <CardHeader className="space-y-1 px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
+                <CardTitle className="text-base font-semibold text-destructive">Failure Reason</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 px-5 pb-5 text-xs sm:px-6 sm:pb-6">
+                <p className="break-words whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
+                {secondaryFailureDetail ? (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive sm:p-4">
+                    <p className="font-medium">Additional diagnostic context</p>
+                    <p className="mt-2 break-words whitespace-pre-wrap">{secondaryFailureDetail}</p>
+                  </div>
+                ) : null}
+                {terminalFailureHighlights.length > 0 ? (
+                  <ul className="list-disc space-y-2 pl-5 text-destructive">
+                    {terminalFailureHighlights.map((item, idx) => (
+                      <li key={`failure-highlight-${idx}`} className="break-words whitespace-pre-wrap">
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
-      ) : null}
-      {run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage ? (
-        <Card className="mb-4 border-destructive/30 bg-destructive/5">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-destructive">Failure Reason</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-xs">
-            <p className="whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
-            {secondaryFailureDetail ? (
-              <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-destructive">
-                <p className="font-medium">Additional diagnostic context</p>
-                <p className="mt-1 whitespace-pre-wrap">{secondaryFailureDetail}</p>
-              </div>
-            ) : null}
-            {terminalFailureHighlights.length > 0 ? (
-              <ul className="list-disc space-y-1 pl-4 text-destructive">
-                {terminalFailureHighlights.map((item, idx) => (
-                  <li key={`failure-highlight-${idx}`} className="whitespace-pre-wrap">
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </CardContent>
-        </Card>
       ) : null}
 
       {run ? (
         <>
           {/* Pipeline stage bar */}
-          <div className="mb-6 flex items-center gap-2 overflow-x-auto">
+          <div className="mb-6 mt-1 flex items-center gap-2 overflow-x-auto">
             {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
               const progress = stageProgress[stage];
               const isRunning = progress.status === "running";
@@ -1429,7 +1433,7 @@ export default function RunDetailPage() {
             <div className="space-y-4">
               {tokenTimelineBusy ? <p className="text-sm text-muted-foreground">Loading cost data...</p> : null}
               {!tokenTimelineBusy && tokenTimelineError ? (
-                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive">
                   {tokenTimelineError}
                 </div>
               ) : null}
@@ -1649,12 +1653,12 @@ export default function RunDetailPage() {
                           return (
                             <li
                               key={entry.key}
-                              className="rounded-lg border-l-2 border-destructive bg-destructive/5 p-2.5"
+                              className="rounded-lg border-l-2 border-destructive bg-destructive/5 p-3 sm:p-4"
                             >
-                              <p className="mb-1 text-[10px] text-muted-foreground">
+                              <p className="mb-2 text-[10px] text-muted-foreground">
                                 {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)} · {entry.speaker}
                               </p>
-                              <p className="whitespace-pre-wrap text-destructive">{entry.text}</p>
+                              <p className="break-words whitespace-pre-wrap text-destructive">{entry.text}</p>
                             </li>
                           );
                         }
