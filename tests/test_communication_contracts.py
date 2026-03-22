@@ -30,6 +30,7 @@ from orchestrator.core.communications.contracts import (
     InboundMessage,
     IngressResult,
     ProjectScope,
+    TransportEnvelope,
 )
 from orchestrator.api.transport_runtime import HttpTransportExecutor, execute_http_ingress_result
 from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
@@ -141,6 +142,34 @@ class CommunicationContractsTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 202)
         side_effect_executor.execute.assert_called_once()
+
+    def test_http_ingress_logs_contract_lifecycle_events(self) -> None:
+        side_effect_executor = MagicMock()
+        with self.assertLogs("orchestrator.api.transport_runtime", level="INFO") as captured:
+            response = execute_http_ingress_result(
+                result=IngressResult(
+                    actions=(
+                        GitHubIssueCommentReactionAction(
+                            repo_full_name="org/repo",
+                            comment_id=101,
+                            content="eyes",
+                        ),
+                        HttpJsonResponseAction(status_code=202, content={"accepted": True}),
+                    )
+                ),
+                envelope=TransportEnvelope(
+                    transport="github_webhook",
+                    event_type="issue_comment",
+                    request_id="req-1",
+                    tenant_id_hint="route25",
+                ),
+                transport_action_executors=(side_effect_executor,),
+            )
+        self.assertEqual(response.status_code, 202)
+        joined = "\n".join(captured.output)
+        self.assertIn("transport_ingress_result_built", joined)
+        self.assertIn("transport_action_executed", joined)
+        self.assertIn("transport_http_response_selected", joined)
 
     def test_discord_transport_executor_supports_typed_actions(self) -> None:
         callback_sender = MagicMock()

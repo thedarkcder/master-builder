@@ -259,17 +259,37 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg="Non-route API allowlist drifted; update list only with explicit architectural decision.",
         )
 
-    def test_production_modules_do_not_reference_interactive_reply_transport(self) -> None:
+    def test_http_transport_adapters_do_not_import_provider_executors_directly(self) -> None:
+        adapter_modules = sorted((ROOT / "orchestrator" / "api" / "routes").glob("webhook*.py")) + sorted(
+            (ROOT / "orchestrator" / "api" / "webhooks").glob("*_ingress.py")
+        )
+        banned_imports = {
+            "orchestrator.core.discord.transport_executor",
+            "orchestrator.core.github.transport_executor",
+        }
+        violations: list[str] = []
+        for module_path in adapter_modules:
+            for module_name in _imported_modules(module_path):
+                if module_name in banned_imports:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"HTTP transport adapters should not import provider executors directly: {violations}",
+        )
+
+    def test_production_modules_do_not_reference_reply_transport_compatibility_shims(self) -> None:
+        banned_names = {"InteractiveReplyTransport", "DiscordReplyTransport"}
         violations: list[str] = []
         for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
             tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
             for node in ast.walk(tree):
-                if isinstance(node, ast.Name) and node.id == "InteractiveReplyTransport":
+                if isinstance(node, ast.Name) and node.id in banned_names:
                     violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
         self.assertEqual(
             violations,
             [],
-            msg=f"InteractiveReplyTransport should not have production references: {violations}",
+            msg=f"Reply transport compatibility shims should not have production references: {violations}",
         )
 
 

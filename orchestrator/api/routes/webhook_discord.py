@@ -200,15 +200,17 @@ async def ingest_discord_webhook(
     session: Session = Depends(get_session),
 ) -> object:
     request_id = request.headers.get("X-Request-Id") or str(uuid4())
+    envelope = TransportEnvelope(
+        transport="discord_webhook",
+        event_type="command_webhook",
+        request_id=request_id,
+        tenant_id_hint=tenant_id,
+    )
     result = await build_discord_webhook_ingress_result(
         tenant_id=tenant_id,
         request=request,
         session=session,
         request_id=request_id,
-        envelope=TransportEnvelope(
-            transport="discord_webhook",
-            event_type="command_webhook",
-            request_id=request_id,
-        ),
+        envelope=envelope,
     )
-    return execute_http_ingress_result(result=result, task_scheduler=asyncio.create_task)
+    return execute_http_ingress_result(result=result, envelope=envelope, task_scheduler=asyncio.create_task)
