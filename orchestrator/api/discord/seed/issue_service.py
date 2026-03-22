@@ -44,6 +44,37 @@ def _optional_string(*, issue_index: int, field_name: str, raw_value: object) ->
     return raw_value.strip()
 
 
+def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_jira_oauth_context_fn):  # noqa: ANN001
+    try:
+        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+    except (ValueError, JiraOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to seed Jira issues: {exc}",
+        ) from exc
+
+    if not isinstance(oauth, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to seed Jira issues: Jira OAuth context is incomplete",
+        )
+    client = oauth.get("client")
+    access_token = str(oauth.get("access_token") or "").strip()
+    connection = oauth.get("connection")
+    cloud_id = str(getattr(connection, "cloud_id", "") or "").strip()
+    if client is None or not access_token or connection is None or not cloud_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to seed Jira issues: Jira OAuth context is incomplete",
+        )
+    return {
+        "client": client,
+        "access_token": access_token,
+        "connection": connection,
+        "cloud_id": cloud_id,
+    }
+
+
 def validate_seed_followup_context(
     *,
     session,
@@ -218,11 +249,16 @@ def seed_issues_with_codex(
     if not issue_inputs:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid issue drafts")
 
+    oauth = _resolve_seed_oauth_context(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+    )
     try:
-        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
         existing_issues = oauth["client"].search_issues_by_jql(
             access_token=oauth["access_token"],
-            cloud_id=oauth["connection"].cloud_id,
+            cloud_id=oauth["cloud_id"],
             jql=f'project = "{project_key}" ORDER BY updated DESC',
             max_results=100,
         )
@@ -244,7 +280,7 @@ def seed_issues_with_codex(
             matched_issue_keys.add(matched.key)
             oauth["client"].update_issue_fields(
                 access_token=oauth["access_token"],
-                cloud_id=oauth["connection"].cloud_id,
+                cloud_id=oauth["cloud_id"],
                 issue_id_or_key=matched.key,
                 summary=issue_input.summary,
                 description=issue_input.description,
@@ -255,14 +291,14 @@ def seed_issues_with_codex(
         create_result = (
             oauth["client"].create_issues_bulk(
                 access_token=oauth["access_token"],
-                cloud_id=oauth["connection"].cloud_id,
+                cloud_id=oauth["cloud_id"],
                 project_key=project_key,
                 issues=to_create,
             )
             if to_create and allow_create
             else None
         )
-    except (ValueError, JiraOAuthError) as exc:
+    except (ValueError, TypeError, AttributeError, JiraOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to seed Jira issues: {exc}",

@@ -125,6 +125,74 @@ class DiscordApiClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "content"):
             client.post_message(channel_id="c1", content=" ")
 
+    def test_post_message_with_attachment_uses_multipart(self) -> None:
+        captured = {}
+
+        def _fake_urlopen(request, timeout=30):  # noqa: ANN001, ARG001
+            captured["method"] = request.get_method()
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            captured["body"] = request.data
+            return _FakeResponse(b'{"id":"m-audio"}')
+
+        client = DiscordApiClient(bot_token="token")
+        with patch("orchestrator.tools.discord_api.urlopen", side_effect=_fake_urlopen):
+            result = client.post_message_with_attachment(
+                channel_id=" c1 ",
+                content=" hello ",
+                filename=" reply.mp3 ",
+                file_bytes=b"\x00\x01\x02",
+                content_type="audio/mpeg",
+                components=[{"type": 1, "components": []}],
+            )
+
+        self.assertEqual(result, {"id": "m-audio"})
+        self.assertEqual(captured["method"], "POST")
+        self.assertIn("/channels/c1/messages", str(captured["url"]))
+        normalized_headers = {str(k).lower(): str(v) for k, v in captured["headers"].items()}
+        self.assertIn("multipart/form-data; boundary=", normalized_headers.get("content-type", ""))
+        body = bytes(captured["body"] or b"")
+        self.assertIn(b'name="payload_json"', body)
+        self.assertIn(b'"content":"hello"', body)
+        self.assertIn(b'name="files[0]"; filename="reply.mp3"', body)
+        self.assertIn(b"Content-Type: audio/mpeg", body)
+        self.assertIn(b"\x00\x01\x02", body)
+
+    def test_post_message_with_attachment_validates_inputs(self) -> None:
+        client = DiscordApiClient(bot_token="token")
+        with self.assertRaisesRegex(ValueError, "channel ID"):
+            client.post_message_with_attachment(
+                channel_id=" ",
+                content="hello",
+                filename="reply.mp3",
+                file_bytes=b"a",
+            )
+        with self.assertRaisesRegex(ValueError, "filename"):
+            client.post_message_with_attachment(
+                channel_id="c1",
+                content="hello",
+                filename=" ",
+                file_bytes=b"a",
+            )
+        with self.assertRaisesRegex(ValueError, "payload"):
+            client.post_message_with_attachment(
+                channel_id="c1",
+                content="hello",
+                filename="reply.mp3",
+                file_bytes=b"",
+            )
+
+    def test_post_message_with_attachment_validates_response_type(self) -> None:
+        client = DiscordApiClient(bot_token="token")
+        with patch.object(client, "_request_multipart", return_value=[]):
+            with self.assertRaisesRegex(DiscordApiError, "not an object"):
+                client.post_message_with_attachment(
+                    channel_id="c1",
+                    content="hello",
+                    filename="reply.mp3",
+                    file_bytes=b"a",
+                )
+
     def test_get_channel_and_get_message_validate_types(self) -> None:
         client = DiscordApiClient(bot_token="token")
         with patch.object(client, "_request_json", return_value={"id": "c1"}):

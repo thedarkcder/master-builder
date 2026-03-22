@@ -12,6 +12,13 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
 from orchestrator.api.discord.shared.state import command_matches
+from orchestrator.core.communications import (
+    DiscordAskWithThreadAction,
+    DiscordInteractionFollowupAction,
+    DiscordSeedWithThreadAction,
+    DiscordThreadReplyAction,
+)
+from orchestrator.core.communications.integration_contracts import TransportActionExecutor
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.storage.models import Tenant
@@ -31,7 +38,7 @@ class DiscordFollowupExecutionDeps:
     build_command_followup_message: Callable[..., str]
     ask_confirmation_components: Callable[[str], list[dict]]
     ask_reply_components: Callable[[], list[dict]]
-    reply_transport: object
+    transport_executor: TransportActionExecutor
     consume_pending_ask_action: Callable[..., dict | None]
 
 
@@ -135,15 +142,15 @@ async def run_discord_command_followup(
                             if command_response.command == "ask" and not reply_to_message_id:
                                 initial_thread_attempted = True
                                 try:
-                                    deps.reply_transport.send_ask_with_thread(
-                                        session=session,
-                                        settings=settings,
-                                        tenant=tenant,
-                                        channel_id=channel_id,
-                                        user_id=user_id,
-                                        content=content,
-                                        components=components,
-                                        issue_key=issue_key,
+                                    deps.transport_executor.execute(
+                                        action=DiscordAskWithThreadAction(
+                                            tenant_id=tenant.tenant_id,
+                                            channel_id=channel_id,
+                                            user_id=user_id,
+                                            content=content,
+                                            components=components,
+                                            issue_key=issue_key,
+                                        )
                                     )
                                     sent_to_thread = True
                                 except (DiscordApiError, RuntimeError, ValueError) as exc:
@@ -165,15 +172,15 @@ async def run_discord_command_followup(
                                 )
                                 if followup_request_id:
                                     try:
-                                        deps.reply_transport.send_seed_with_thread(
-                                            session=session,
-                                            settings=settings,
-                                            tenant=tenant,
-                                            channel_id=channel_id,
-                                            user_id=user_id,
-                                            content=content,
-                                            request_id=followup_request_id,
-                                            questions=questions,
+                                        deps.transport_executor.execute(
+                                            action=DiscordSeedWithThreadAction(
+                                                tenant_id=tenant.tenant_id,
+                                                channel_id=channel_id,
+                                                user_id=user_id,
+                                                content=content,
+                                                request_id=followup_request_id,
+                                                questions=questions,
+                                            )
                                         )
                                         sent_to_thread = True
                                     except (DiscordApiError, RuntimeError, ValueError) as exc:
@@ -212,14 +219,14 @@ async def run_discord_command_followup(
                         content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
                     if reply_to_message_id and not sent_to_thread:
                         try:
-                            deps.reply_transport.send_thread_reply(
-                                session=session,
-                                settings=settings,
-                                tenant=tenant,
-                                channel_id=channel_id,
-                                reply_to_message_id=reply_to_message_id,
-                                content=content,
-                                components=components,
+                            deps.transport_executor.execute(
+                                action=DiscordThreadReplyAction(
+                                    tenant_id=tenant.tenant_id,
+                                    channel_id=channel_id,
+                                    reply_to_message_id=reply_to_message_id,
+                                    content=content,
+                                    components=components,
+                                )
                             )
                             sent_to_thread = True
                         except (DiscordApiError, RuntimeError, ValueError) as exc:
@@ -232,15 +239,15 @@ async def run_discord_command_followup(
                             )
                     if not sent_to_thread and not reply_to_message_id and not initial_thread_attempted:
                         try:
-                            deps.reply_transport.send_ask_with_thread(
-                                session=session,
-                                settings=settings,
-                                tenant=tenant,
-                                channel_id=channel_id,
-                                user_id=user_id,
-                                content=content,
-                                components=components,
-                                issue_key=issue_key,
+                            deps.transport_executor.execute(
+                                action=DiscordAskWithThreadAction(
+                                    tenant_id=tenant.tenant_id,
+                                    channel_id=channel_id,
+                                    user_id=user_id,
+                                    content=content,
+                                    components=components,
+                                    issue_key=issue_key,
+                                )
                             )
                             sent_to_thread = True
                         except (DiscordApiError, RuntimeError, ValueError) as exc:
@@ -268,14 +275,16 @@ async def run_discord_command_followup(
             content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
         if not sent_to_thread:
             try:
-                deps.reply_transport.send_interaction_followup(
-                    application_id=application_id,
-                    interaction_token=interaction_token,
-                    content=content,
-                    ephemeral=False,
-                    components=components,
-                    reply_to_message_id=reply_to_message_id,
-                    channel_id=channel_id,
+                deps.transport_executor.execute(
+                    action=DiscordInteractionFollowupAction(
+                        application_id=application_id,
+                        interaction_token=interaction_token,
+                        content=content,
+                        ephemeral=False,
+                        components=components,
+                        reply_to_message_id=reply_to_message_id,
+                        channel_id=channel_id,
+                    )
                 )
             except DiscordInteractionWebhookExpiredError as exc:
                 logger.exception(
@@ -291,14 +300,14 @@ async def run_discord_command_followup(
                             tenant = session.get(Tenant, tenant_id)
                             if tenant is not None and tenant.is_enabled:
                                 fallback_message_id = reply_to_message_id or f"interaction-{correlation_id}"
-                                deps.reply_transport.send_thread_reply(
-                                    session=session,
-                                    settings=settings,
-                                    tenant=tenant,
-                                    channel_id=channel_id,
-                                    reply_to_message_id=fallback_message_id,
-                                    content=content,
-                                    components=components,
+                                deps.transport_executor.execute(
+                                    action=DiscordThreadReplyAction(
+                                        tenant_id=tenant.tenant_id,
+                                        channel_id=channel_id,
+                                        reply_to_message_id=fallback_message_id,
+                                        content=content,
+                                        components=components,
+                                    )
                                 )
                                 sent_to_thread = True
                     except Exception as fallback_exc:  # pragma: no cover
@@ -435,11 +444,13 @@ async def run_discord_ask_confirmation_followup(
         )
         content = f"<@{user_id}> Approved action failed due to an internal error. Ref: `{error_ref}`"
     try:
-        deps.reply_transport.send_interaction_followup(
-            application_id=application_id,
-            interaction_token=interaction_token,
-            content=content,
-            ephemeral=False,
+        deps.transport_executor.execute(
+            action=DiscordInteractionFollowupAction(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                content=content,
+                ephemeral=False,
+            )
         )
     except Exception as exc:  # pragma: no cover
         _emit_followup_send_failed(

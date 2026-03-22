@@ -22,6 +22,20 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
+    voice_transcription_provider: Literal["disabled", "openai", "whisper"] = "disabled"
+    voice_transcription_model: str = "gpt-4o-mini-transcribe"
+    voice_transcription_language: str = ""
+    voice_transcription_openai_api_key: str = ""
+    voice_transcription_device: str = "auto"
+    voice_transcription_compute_type: str = "int8"
+    voice_attachment_max_bytes: int = 25000000
+    voice_reply_provider: Literal["disabled", "pocket_tts"] = "disabled"
+    voice_reply_enabled_default: bool = False
+    pocket_tts_base_url: str = ""
+    pocket_tts_voice: str = ""
+    discord_live_voice_transport_command: str = "/usr/local/bin/live-voice-transport"
+    discord_live_voice_transport_startup_timeout_seconds: int = 10
+    discord_live_voice_transport_request_timeout_seconds: int = 10
     codex_cli_command: str = "codex"
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5.4"
@@ -42,6 +56,7 @@ class Settings(BaseSettings):
     knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = "aggressive"
     knowledge_context_top_k: int = 5
     knowledge_context_max_chars: int = 3200
+    knowledge_embedding_model: str = "BAAI/bge-small-en-v1.5"
     knowledge_jira_auto_sync_enabled: bool = True
     knowledge_jira_sync_interval_seconds: int = 3600
     knowledge_jira_sync_poll_seconds: int = 30
@@ -53,8 +68,13 @@ class Settings(BaseSettings):
     run_logs_initial_limit: int = 200
     project_repo_checkout_base_dir: str = "/tmp/master-builder-project-repos"
     worker_poll_interval_seconds: int = 5
+    worker_run_heartbeat_interval_seconds: int = 30
+    worker_run_stale_timeout_seconds: int = 300
+    worker_stale_sweep_interval_seconds: int = 60
     discord_gateway_lock_key: int = 947102033127
     discord_gateway_poll_seconds: int = 3
+    discord_live_voice_lock_key: int = 947102033129
+    discord_live_voice_poll_seconds: int = 3
     auto_migrate_on_startup: bool = True
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
@@ -63,6 +83,7 @@ class Settings(BaseSettings):
     agent_id: str = "worker-linux-local"
     worker_capabilities: str = "linux"
     worker_workspace_key: str = ""
+    discord_command_sync_lock_key: int = 947102033130
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",

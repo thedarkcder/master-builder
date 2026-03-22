@@ -71,13 +71,14 @@ services:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
         
-  worker:
+  worker-runtime:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-worker
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_started
@@ -130,7 +131,17 @@ services:
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY: ${ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY:-947102033127}
       ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS:-3}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER:-whisper}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL:-base}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE:-}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE:-auto}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE:-int8}
+      ORCHESTRATOR_VOICE_REPLY_PROVIDER: ${ORCHESTRATOR_VOICE_REPLY_PROVIDER:-pocket_tts}
+      ORCHESTRATOR_VOICE_REPLY_ENABLED_DEFAULT: ${ORCHESTRATOR_VOICE_REPLY_ENABLED_DEFAULT:-true}
+      ORCHESTRATOR_POCKET_TTS_VOICE: ${ORCHESTRATOR_POCKET_TTS_VOICE:-}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
     command:
       - /bin/sh
       - -ceu
@@ -139,10 +150,59 @@ services:
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-gateway
     volumes:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
+      - huggingface-cache:/root/.cache/huggingface
+      - pocket-tts-cache:/root/.cache/pocket_tts
+
+  discord-live-voice:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-discord-live-voice
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_DISCORD_GUILD_ID: ${ORCHESTRATOR_DISCORD_GUILD_ID:-}
+      ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY:-947102033129}
+      ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS:-3}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_PROVIDER:-whisper}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_MODEL:-base}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_LANGUAGE:-}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_DEVICE:-auto}
+      ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE: ${ORCHESTRATOR_VOICE_TRANSCRIPTION_COMPUTE_TYPE:-int8}
+      ORCHESTRATOR_VOICE_REPLY_PROVIDER: ${ORCHESTRATOR_VOICE_REPLY_PROVIDER:-pocket_tts}
+      ORCHESTRATOR_POCKET_TTS_VOICE: ${ORCHESTRATOR_POCKET_TTS_VOICE:-}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND:-/usr/local/bin/live-voice-transport}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS:-10}
+      ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS: ${ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS:-10}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
+        python -m orchestrator discord-live-voice
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+      - huggingface-cache:/root/.cache/huggingface
+      - pocket-tts-cache:/root/.cache/pocket_tts
 
   knowledge-sync:
     build:
@@ -168,6 +228,8 @@ services:
       ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_MAX_ISSUES: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_MAX_ISSUES:-500}
       ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INVALID_TOKEN_BACKOFF_SECONDS: ${ORCHESTRATOR_KNOWLEDGE_JIRA_SYNC_INVALID_TOKEN_BACKOFF_SECONDS:-21600}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
     command:
       - /bin/sh
       - -ceu
@@ -176,10 +238,12 @@ services:
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
+        HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
         python -m orchestrator knowledge-jira-sync
     volumes:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
+      - huggingface-cache:/root/.cache/huggingface
 
   admin-ui:
     build:
@@ -222,3 +286,5 @@ volumes:
   tailscale-state:
   runner-data:
   codex-home:
+  huggingface-cache:
+  pocket-tts-cache:

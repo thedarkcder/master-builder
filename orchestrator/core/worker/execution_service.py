@@ -14,6 +14,7 @@ from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
 from orchestrator.core.worker.queue_selector import select_next_queued_run
+from orchestrator.core.worker.run_health import WorkerRunHeartbeatController, worker_service_instance_id
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
     block_archived_project,
@@ -162,6 +163,12 @@ def _process_next_queued_run_impl(
         fail_project_repository_checkout_fn=fail_project_repository_checkout,
         cleanup_run_workspaces_fn=cleanup_run_workspaces,
         start_run_fn=start_run,
+        build_run_heartbeat_controller_fn=lambda *, run_id, worker_service_instance_id, heartbeat_interval_seconds: WorkerRunHeartbeatController(
+            database_url=get_settings().database_url,
+            run_id=run_id,
+            worker_service_instance_id=worker_service_instance_id,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        ),
         bind_run_project_fn=bind_run_project,
         workflow_request_for_run_fn=_workflow_request_for_run,
         fail_guardrail_violation_fn=fail_guardrail_violation,
@@ -180,6 +187,7 @@ def _process_next_queued_run_impl(
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: get_settings().agent_id,
+        resolve_worker_service_instance_id_fn=worker_service_instance_id,
         run_status_queued=RUN_STATUS_QUEUED,
         run_status_running=RUN_STATUS_RUNNING,
         run_status_failed=RUN_STATUS_FAILED,

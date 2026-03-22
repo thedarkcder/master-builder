@@ -11,6 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from orchestrator.api.discord.ingress.executor import register_discord_command_executor
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
 from orchestrator.api.routes.admin_codex import router as admin_codex_router
+from orchestrator.api.routes.admin_discord_commands import (
+    router as admin_discord_commands_router,
+)
 from orchestrator.api.routes.admin_discord_allowlist import (
     router as admin_discord_allowlist_router,
 )
@@ -52,6 +55,7 @@ def create_app() -> FastAPI:
         settings.log_level,
         environment=settings.sentry_environment,
         platform_version=settings.sentry_release or "dev-local",
+        default_agent_id="api",
     )
     initialize_sentry(settings=settings)
     cors_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
@@ -197,6 +201,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_tenants_router)
     app.include_router(admin_auth_router)
     app.include_router(admin_codex_router)
+    app.include_router(admin_discord_commands_router)
     app.include_router(admin_discord_allowlist_router)
     app.include_router(admin_github_router)
     app.include_router(admin_jira_router)

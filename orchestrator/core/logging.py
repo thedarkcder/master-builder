@@ -5,7 +5,13 @@ from orchestrator.core.guardrails import SensitiveDataRedactionFilter
 from orchestrator.core.observability import ObservabilityJsonFormatter
 
 
-def configure_logging(level: str = "INFO", *, environment: str = "dev", platform_version: str = "unknown") -> None:
+def configure_logging(
+    level: str = "INFO",
+    *,
+    environment: str = "dev",
+    platform_version: str = "unknown",
+    default_agent_id: str = "",
+) -> None:
     normalized_level = level.upper()
     logging.config.dictConfig(
         {
@@ -21,6 +27,7 @@ def configure_logging(level: str = "INFO", *, environment: str = "dev", platform
                     "()": ObservabilityJsonFormatter,
                     "environment": environment,
                     "platform_version": platform_version,
+                    "default_agent_id": default_agent_id,
                 }
             },
             "handlers": {

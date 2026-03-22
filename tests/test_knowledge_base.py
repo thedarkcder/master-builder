@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
+import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from orchestrator.core.knowledge_base import (
+    _build_knowledge_text_embedding_model,
+    _knowledge_text_embedding_model,
     build_knowledge_prompt_context,
     create_knowledge_asset,
     sync_project_knowledge_from_jira,
@@ -12,6 +17,28 @@ from orchestrator.core.knowledge_base import (
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeFact, Project, Tenant
+
+
+def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env() -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeTextEmbedding:
+        def __init__(self, *, model_name: str, **kwargs) -> None:  # noqa: ANN003
+            captured["model_name"] = model_name
+            captured["kwargs"] = kwargs
+
+    with (
+        patch.dict(os.environ, {"HF_HOME": "/tmp/hf-cache", "HF_HUB_OFFLINE": "1"}, clear=False),
+        patch.dict(sys.modules, {"fastembed": SimpleNamespace(TextEmbedding=_FakeTextEmbedding)}),
+    ):
+        _knowledge_text_embedding_model.cache_clear()
+        try:
+            _build_knowledge_text_embedding_model()
+        finally:
+            _knowledge_text_embedding_model.cache_clear()
+
+    assert captured["model_name"] == "BAAI/bge-small-en-v1.5"
+    assert captured["kwargs"] == {"cache_dir": "/tmp/hf-cache", "local_files_only": True}
 
 
 def test_build_knowledge_prompt_context_requires_project_scope() -> None:

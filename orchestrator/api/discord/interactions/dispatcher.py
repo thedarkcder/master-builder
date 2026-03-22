@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 @dataclass(frozen=True)
 class DiscordInteractionDispatchDeps:
+    transport_source: str
     ask_reply_open_custom_id: str
     autocomplete_response: Callable[..., JSONResponse]
     interaction_response: Callable[..., JSONResponse]
@@ -61,38 +62,72 @@ async def dispatch_discord_interaction(
 def _handle_autocomplete(*, payload: dict, session, deps: DiscordInteractionDispatchDeps) -> JSONResponse:
     channel_id = payload.get("channel_id")
     if not isinstance(channel_id, str) or not channel_id.strip():
+        deps.logger.info(
+            "discord_autocomplete_empty source=%s reason=missing_channel_id",
+            deps.transport_source,
+        )
         return deps.autocomplete_response(choices=[])
-    tenant = deps.find_tenant_for_discord_channel(session=session, channel_id=channel_id.strip())
+    normalized_channel_id = channel_id.strip()
+    tenant = deps.find_tenant_for_discord_channel(session=session, channel_id=normalized_channel_id)
     if tenant is None:
+        deps.logger.info(
+            "discord_autocomplete_empty source=%s reason=channel_unmapped channel_id=%s",
+            deps.transport_source,
+            normalized_channel_id,
+        )
         return deps.autocomplete_response(choices=[])
 
     data = payload.get("data")
     if not isinstance(data, dict):
+        deps.logger.info(
+            "discord_autocomplete_empty source=%s reason=missing_data channel_id=%s tenant_id=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            tenant.tenant_id,
+        )
         return deps.autocomplete_response(choices=[])
     command_name = str(data.get("name") or "").strip().lower()
     focused = deps.find_focused_discord_option(data.get("options"))
     if focused is None:
+        deps.logger.info(
+            "discord_autocomplete_empty source=%s reason=missing_focused_option channel_id=%s tenant_id=%s command_name=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            tenant.tenant_id,
+            command_name,
+        )
         return deps.autocomplete_response(choices=[])
     focused_name, focused_value = focused
     supports_issue_autocomplete = (
-        (command_name in {"run", "link", "gap"} and focused_name == "issue_key")
+        (command_name in {"run", "link", "gap", "bug"} and focused_name == "issue_key")
         or (command_name in {"retry"} and focused_name == "target")
         or (command_name in {"ask"} and focused_name == "issue_key")
     )
     if not supports_issue_autocomplete:
+        deps.logger.info(
+            "discord_autocomplete_empty source=%s reason=unsupported_option channel_id=%s tenant_id=%s command_name=%s focused_name=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            tenant.tenant_id,
+            command_name,
+            focused_name,
+        )
         return deps.autocomplete_response(choices=[])
     try:
         choices = deps.discord_issue_autocomplete_choices(
             session=session,
             tenant=tenant,
-            channel_id=channel_id.strip(),
+            channel_id=normalized_channel_id,
             current_value=focused_value,
         )
     except HTTPException as exc:
         deps.logger.exception(
-            "discord_autocomplete_failed tenant_id=%s channel_id=%s detail=%s error=%s",
+            "discord_autocomplete_failed source=%s tenant_id=%s channel_id=%s command_name=%s focused_name=%s detail=%s error=%s",
+            deps.transport_source,
             tenant.tenant_id,
-            channel_id.strip(),
+            normalized_channel_id,
+            command_name,
+            focused_name,
             exc.detail,
             exc,
         )

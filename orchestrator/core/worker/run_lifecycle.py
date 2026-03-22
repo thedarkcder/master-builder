@@ -68,11 +68,14 @@ def start_run(
     run: Run,
     expected_status: str | None = None,
     max_concurrent_runs: int | None = None,
+    worker_service_instance_id: str | None = None,
 ) -> Run | None:
     started_at = datetime.now(timezone.utc)
     if expected_status is None:
         run.status = RUN_STATUS_RUNNING
         run.started_at = started_at
+        run.last_heartbeat_at = started_at
+        run.worker_service_instance_id = str(worker_service_instance_id or "").strip() or None
         session.commit()
         session.refresh(run)
         return run
@@ -93,6 +96,8 @@ def start_run(
         .values(
             status=RUN_STATUS_RUNNING,
             started_at=started_at,
+            last_heartbeat_at=started_at,
+            worker_service_instance_id=str(worker_service_instance_id or "").strip() or None,
         )
     )
     if int(result.rowcount or 0) == 0:
@@ -100,9 +105,44 @@ def start_run(
         return None
     run.status = RUN_STATUS_RUNNING
     run.started_at = started_at
+    run.last_heartbeat_at = started_at
+    run.worker_service_instance_id = str(worker_service_instance_id or "").strip() or None
     session.commit()
     session.refresh(run)
     return run
+
+
+def _refresh_owned_run(
+    session: Session,
+    *,
+    run: Run,
+    expected_worker_service_instance_id: str | None,
+    allow_statuses: set[str],
+) -> Run:
+    session.refresh(run)
+    expected_owner = str(expected_worker_service_instance_id or "").strip()
+    if not expected_owner:
+        return run
+    if run.status not in allow_statuses:
+        return run
+    current_owner = str(run.worker_service_instance_id or "").strip()
+    if current_owner != expected_owner:
+        return run
+    return run
+
+
+def _run_is_owned_by(
+    *,
+    run: Run,
+    expected_worker_service_instance_id: str | None,
+    allow_statuses: set[str],
+) -> bool:
+    expected_owner = str(expected_worker_service_instance_id or "").strip()
+    if not expected_owner:
+        return True
+    if run.status not in allow_statuses:
+        return False
+    return str(run.worker_service_instance_id or "").strip() == expected_owner
 
 
 def resolve_project_for_run(session: Session, *, run: Run) -> Project | None:
@@ -171,7 +211,20 @@ def finalize_cancelled_run(
     *,
     run: Run,
     stage_updates: list[dict[str, str]],
+    expected_worker_service_instance_id: str | None = None,
 ) -> Run:
+    run = _refresh_owned_run(
+        session,
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={run.status},
+    )
+    if not _run_is_owned_by(
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={run.status},
+    ):
+        return run
     run.plan = _with_preserved_trigger_context(
         current_plan=run.plan,
         next_plan={
@@ -198,7 +251,20 @@ def finalize_workflow_result(
     workflow_result: WorkflowResult,
     stage_updates: list[dict[str, str]],
     execution_context: dict[str, str] | None = None,
+    expected_worker_service_instance_id: str | None = None,
 ) -> Run:
+    run = _refresh_owned_run(
+        session,
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    )
+    if not _run_is_owned_by(
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    ):
+        return run
     plan_payload = workflow_result.to_plan_payload()
     plan_payload["stage_updates"] = stage_updates
     if execution_context:
@@ -231,7 +297,20 @@ def requeue_workflow_result_for_capability(
     required_worker_capability: str,
     required_worker_label: str,
     execution_context: dict[str, str] | None = None,
+    expected_worker_service_instance_id: str | None = None,
 ) -> Run:
+    run = _refresh_owned_run(
+        session,
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    )
+    if not _run_is_owned_by(
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    ):
+        return run
     plan_payload = workflow_result.to_plan_payload()
     plan_payload["stage_updates"] = stage_updates
     if execution_context:
@@ -243,7 +322,9 @@ def requeue_workflow_result_for_capability(
     run.status = "queued"
     run.last_error = None
     run.started_at = None
+    run.last_heartbeat_at = None
     run.finished_at = None
+    run.worker_service_instance_id = None
     notify_run_enqueued(
         session,
         tenant_id=run.tenant_id,
@@ -265,7 +346,20 @@ def requeue_workflow_result_for_stale_snapshot(
     stage_updates: list[dict[str, str]],
     error: str,
     execution_context: dict[str, str] | None = None,
+    expected_worker_service_instance_id: str | None = None,
 ) -> Run:
+    run = _refresh_owned_run(
+        session,
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    )
+    if not _run_is_owned_by(
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    ):
+        return run
     plan_payload = workflow_result.to_plan_payload()
     plan_payload["stage_updates"] = stage_updates
     if execution_context:
@@ -278,7 +372,9 @@ def requeue_workflow_result_for_stale_snapshot(
     run.status = "queued"
     run.last_error = None
     run.started_at = None
+    run.last_heartbeat_at = None
     run.finished_at = None
+    run.worker_service_instance_id = None
     notify_run_enqueued(
         session,
         tenant_id=run.tenant_id,

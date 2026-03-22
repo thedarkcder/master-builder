@@ -6,6 +6,7 @@ from uuid import uuid4
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
 from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.worker_capabilities import (
     normalize_worker_capability,
@@ -65,6 +66,7 @@ def process_next_queued_run(
     fail_project_repository_checkout_fn,
     cleanup_run_workspaces_fn,
     start_run_fn,
+    build_run_heartbeat_controller_fn,
     bind_run_project_fn,
     workflow_request_for_run_fn,
     fail_guardrail_violation_fn,
@@ -83,6 +85,7 @@ def process_next_queued_run(
     transition_issue_status_fn,
     emit_agent_event_fn,
     resolve_agent_id_fn,
+    resolve_worker_service_instance_id_fn,
     run_status_queued: str,
     run_status_running: str,
     run_status_failed: str,
@@ -91,6 +94,8 @@ def process_next_queued_run(
 ):  # noqa: ANN001
     settings = settings_fn()
     worker_workspace_key = resolve_worker_workspace_key(settings=settings)
+    agent_id = resolve_agent_id_fn()
+    worker_service_instance_id = resolve_worker_service_instance_id_fn()
     run = None
     tenant = None
     run_claimed = False
@@ -117,6 +122,7 @@ def process_next_queued_run(
             run=run,
             expected_status=run_status_queued,
             max_concurrent_runs=max_concurrent_runs,
+            worker_service_instance_id=worker_service_instance_id,
         )
         if started_run is not None:
             run = started_run
@@ -131,7 +137,6 @@ def process_next_queued_run(
         )
     if not run_claimed or run is None or tenant is None:
         return None
-    agent_id = resolve_agent_id_fn()
 
     emit_agent_event_fn(
         event_type="ISSUE_ASSIGNED",
@@ -282,7 +287,16 @@ def process_next_queued_run(
             settings=settings,
         )
 
-    workflow_result = runner.run(workflow_request, test_feedback_hook=_emit_test_feedback)
+    heartbeat_controller = build_run_heartbeat_controller_fn(
+        run_id=run.run_id,
+        worker_service_instance_id=worker_service_instance_id,
+        heartbeat_interval_seconds=max(5, int(getattr(settings, "worker_run_heartbeat_interval_seconds", 30))),
+    )
+    heartbeat_controller.start()
+    try:
+        workflow_result = runner.run(workflow_request, test_feedback_hook=_emit_test_feedback)
+    finally:
+        heartbeat_controller.stop()
     _emit_orchestrated_trace_logs(
         session=session,
         run=run,
@@ -298,6 +312,20 @@ def process_next_queued_run(
         send_jira_message_fn=send_jira_message_fn,
     )
     session.refresh(run)
+    if (
+        str(run.worker_service_instance_id or "").strip() != str(worker_service_instance_id or "").strip()
+        or run.status not in {run_status_running, run_status_cancelled}
+    ):
+        logger.warning(
+            "worker_run_ownership_lost run_id=%s tenant_id=%s issue_key=%s status=%s current_owner=%s expected_owner=%s",
+            run.run_id,
+            run.tenant_id,
+            run.issue_key,
+            run.status,
+            run.worker_service_instance_id,
+            worker_service_instance_id,
+        )
+        return run
     if run.status == run_status_cancelled:
         _cleanup_run_workspaces_safe(
             cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
@@ -307,7 +335,12 @@ def process_next_queued_run(
             project_id=project.project_id,
             run_id=run.run_id,
         )
-        return finalize_cancelled_run_fn(session, run=run, stage_updates=notifier.stage_updates)
+        return finalize_cancelled_run_fn(
+            session,
+            run=run,
+            stage_updates=notifier.stage_updates,
+            expected_worker_service_instance_id=worker_service_instance_id,
+        )
     if workflow_result.plan is not None:
         notifier.append(
             plan_posted_update_fn(
@@ -361,6 +394,7 @@ def process_next_queued_run(
                 stage_updates=notifier.stage_updates,
                 error=error_text,
                 execution_context=_execution_context(workflow_request=workflow_request),
+                expected_worker_service_instance_id=worker_service_instance_id,
             )
     if workflow_result.pr_url:
         notifier.append(
@@ -417,6 +451,7 @@ def process_next_queued_run(
                 required_worker_capability=capability_requeue_target,
                 required_worker_label=required_worker_label,
                 execution_context=_execution_context(workflow_request=workflow_request),
+                expected_worker_service_instance_id=worker_service_instance_id,
             )
         error_text = (
             workflow_result.diagnostics.message
@@ -490,13 +525,34 @@ def process_next_queued_run(
         run_id=run.run_id,
     )
 
-    return finalize_workflow_result_fn(
+    finalized_run = finalize_workflow_result_fn(
         session,
         run=run,
         workflow_result=workflow_result,
         stage_updates=notifier.stage_updates,
         execution_context=_execution_context(workflow_request=workflow_request),
+        expected_worker_service_instance_id=worker_service_instance_id,
     )
+    try:
+        publish_manual_pr_remediation_completion(
+            session=session,
+            tenant=tenant,
+            project=project,
+            run=finalized_run,
+            workflow_result=workflow_result,
+            settings=settings,
+            issue_url=jira_issue_url,
+            logger_override=logger,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "manual_pr_remediation_completion_publish_failed tenant_id=%s project_id=%s run_id=%s error=%s",
+            finalized_run.tenant_id,
+            project.project_id,
+            finalized_run.run_id,
+            exc,
+        )
+    return finalized_run
 
 
 def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: ANN001

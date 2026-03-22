@@ -193,13 +193,13 @@ def _resolve_integration_branch(
     base_branch: str,
     remediation_head_branch: str | None = None,
 ) -> str:
-    run_branch = _normalize_branch(getattr(run, "branch", None))
-    if run_branch:
-        return run_branch
-
     if remediation_head_branch:
         run.branch = remediation_head_branch
         return remediation_head_branch
+
+    run_branch = _normalize_branch(getattr(run, "branch", None))
+    if run_branch:
+        return run_branch
 
     reused_branch = _resolve_branch_from_open_pull_requests(
         session=session,

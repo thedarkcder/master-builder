@@ -52,6 +52,7 @@ def execute_tenant_command_ingress(
             "link": (handlers.simple,),
             "request": (handlers.simple,),
             "ask": (handlers.ask,),
+            "pm": (handlers.ask,),
             "bug": (handlers.bug_gap,),
             "gap": (handlers.bug_gap,),
             "issues": (handlers.issues,),

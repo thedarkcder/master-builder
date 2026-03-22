@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { ThemeProvider } from "next-themes";
 
 import { AuthProvider } from "@/components/auth-provider";
@@ -7,6 +7,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Master Builder",
   description: "AI orchestration platform admin dashboard"
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

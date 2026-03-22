@@ -97,6 +97,7 @@ def create_pr_remediation_bug_issue_key(
     reviews: list,
     review_comments: list,
     issue_comments: list,
+    manual_fix_request: dict[str, object] | None = None,
 ) -> str:
     connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
     if not connection_id:
@@ -134,6 +135,7 @@ def create_pr_remediation_bug_issue_key(
         reviews=reviews,
         review_comments=review_comments,
         issue_comments=issue_comments,
+        manual_fix_request=manual_fix_request,
     )
     create_result = client.create_issues_bulk(
         access_token=access_token,
@@ -169,6 +171,7 @@ def build_pr_remediation_bug_description(
     reviews: list,
     review_comments: list,
     issue_comments: list,
+    manual_fix_request: dict[str, object] | None = None,
 ) -> str:
     lines = [
         "Automated bug created for PR remediation.",
@@ -179,6 +182,35 @@ def build_pr_remediation_bug_description(
         f"Head SHA: {str(head_sha or '').strip() or 'unknown'}",
         f"Trigger: {event}/{action}",
     ]
+    if isinstance(manual_fix_request, dict):
+        lines.extend(["", "Manual request: yes"])
+        requested_by = str(manual_fix_request.get("requested_by") or "").strip()
+        if requested_by:
+            lines.append(f"Requested by: {requested_by}")
+        requested_comment = manual_fix_request.get("requested_comment")
+        if isinstance(requested_comment, dict):
+            comment_url = str(requested_comment.get("url") or "").strip()
+            if comment_url:
+                lines.append(f"Command comment: {comment_url}")
+            comment_body = truncate(str(requested_comment.get("body") or "").replace("\n", " ").strip(), limit=240)
+            if comment_body:
+                lines.append(f"Comment body: {comment_body}")
+        instruction_text = truncate(str(manual_fix_request.get("instruction_text") or "").strip(), limit=240)
+        if instruction_text:
+            lines.append(f"Instruction: {instruction_text}")
+        code_context = manual_fix_request.get("code_context")
+        if isinstance(code_context, dict):
+            path = str(code_context.get("path") or "").strip() or "unknown"
+            line_value = code_context.get("line")
+            location = f"{path}:{line_value}" if isinstance(line_value, int) and line_value > 0 else path
+            lines.extend(["", f"Referenced code: {location}"])
+            snippet = str(code_context.get("snippet") or "").rstrip()
+            if snippet:
+                lines.append("```")
+                lines.extend(snippet.splitlines())
+                lines.append("```")
+        return "\n".join(lines).strip()
+
     failing_checks = [
         f"{str(item.name or '').strip()}: {str(item.conclusion or item.status or '').strip() or 'unknown'}"
         for item in checks

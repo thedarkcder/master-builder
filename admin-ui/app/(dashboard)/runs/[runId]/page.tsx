@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -25,6 +25,7 @@ import {
   type RunRerunPayload,
   type TokenTimelineRecord
 } from "@/lib/api";
+import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 
 type InvocationTelemetry = {
   event_kind: string;
@@ -108,6 +109,13 @@ type RerunSessionOption = {
   sessionId: string | null;
   isLastSession: boolean;
 };
+
+const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "agents", label: "Agents" },
+  { id: "diagnostics", label: "Diagnostics" },
+  { id: "cost", label: "Cost" }
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -321,7 +329,10 @@ function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, 
 
 export default function RunDetailPage() {
   const params = useParams<{ runId: string }>();
+  const pathname = usePathname();
+  const router = useRouter();
   const { credentials, ready } = useAuth();
+  const routeContext = useMemo(() => resolveRunRouteContext(pathname), [pathname]);
   const [run, setRun] = useState<RunRecord | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [logs, setLogs] = useState<RunLogEventRecord[]>([]);
@@ -337,7 +348,18 @@ export default function RunDetailPage() {
   const [logStreamFilter, setLogStreamFilter] = useState("all");
   const [loadingOlderLogs, setLoadingOlderLogs] = useState(false);
   const [hasMoreLogs, setHasMoreLogs] = useState(false);
-  const [activePanel, setActivePanel] = useState<RunPanelTab>("overview");
+  const projectContextId = routeContext.projectId ?? "";
+  const activePanel = routeContext.panel;
+  const setActivePanel = useCallback((nextPanel: RunPanelTab) => {
+    router.push(
+      buildRunDetailPath({
+        tenantId: routeContext.tenantId ?? run?.tenant_id ?? null,
+        projectId: routeContext.projectId ?? null,
+        runId: params.runId,
+        panel: nextPanel,
+      })
+    );
+  }, [params.runId, routeContext.projectId, routeContext.tenantId, router, run?.tenant_id]);
   const [chatVisibleCount, setChatVisibleCount] = useState(CHAT_PAGE_SIZE);
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const chatListRef = useRef<HTMLUListElement | null>(null);
@@ -450,7 +472,13 @@ export default function RunDetailPage() {
       const cancelled = await cancelRun(credentials, run.run_id);
       const nextRun = await rerunRun(credentials, cancelled.run_id, { mode: "fresh" });
       setStatusLine(`Force-cancelled ${cancelled.run_id} and queued rerun ${nextRun.run_id}.`);
-      window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
+      router.push(
+        buildRunDetailPath({
+          tenantId: run.tenant_id,
+          projectId: projectContextId || null,
+          runId: nextRun.run_id,
+        })
+      );
     } catch (error) {
       setStatusLine(`Failed to force rerun: ${(error as Error).message}`);
     } finally {
@@ -755,7 +783,13 @@ export default function RunDetailPage() {
     try {
       const nextRun = await rerunRun(credentials, run.run_id, payload);
       setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
-      window.location.href = `/tenants/${encodeURIComponent(run.tenant_id)}/runs/${encodeURIComponent(nextRun.run_id)}`;
+      router.push(
+        buildRunDetailPath({
+          tenantId: run.tenant_id,
+          projectId: projectContextId || null,
+          runId: nextRun.run_id,
+        })
+      );
     } catch (error) {
       setStatusLine(`Failed to rerun: ${(error as Error).message}`);
     } finally {
@@ -1137,21 +1171,15 @@ export default function RunDetailPage() {
     return () => window.cancelAnimationFrame(raf);
   }, [activePanel, chatAutoScroll, visibleChatTimelineEntries.length]);
 
-  const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
-    { id: "overview", label: "Overview" },
-    { id: "agents", label: "Agents" },
-    { id: "diagnostics", label: "Diagnostics" },
-    { id: "cost", label: "Cost" }
-  ];
-
   return (
     <div className="space-y-0">
       {/* Page header — metadata strip */}
       <div className="mb-6 space-y-3">
-        {/* Row 1: status + id + actions */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Row 1: status + id + chips; actions wrap on narrow screens */}
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
           {run ? <StatusBadge status={run.status} /> : null}
-          <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono">{run?.run_id ?? params.runId}</code>
+          <code className="max-w-full truncate rounded bg-muted px-2 py-0.5 text-xs font-mono">{run?.run_id ?? params.runId}</code>
           {run?.issue_key ? (
             run.issue_url ? (
               <Link
@@ -1176,13 +1204,14 @@ export default function RunDetailPage() {
               PR <ArrowLeft className="h-3 w-3 rotate-[135deg]" />
             </Link>
           ) : null}
-          <div className="ml-auto flex items-center gap-1.5">
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void loadRun()} disabled={busy}>
+          </div>
+          <div className="flex min-h-9 flex-wrap items-center gap-1.5 sm:ml-auto">
+            <Button variant="outline" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0" onClick={() => void loadRun()} disabled={busy}>
               {busy ? "Refreshing..." : "Refresh"}
             </Button>
             {isRerunnable ? (
               <details className="relative">
-                <summary className="flex h-7 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground">
+                <summary className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
                   {rerunBusy ? "Requeueing..." : "Rerun"}
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 min-w-64 rounded-md border border-border bg-background p-1 shadow-lg">
@@ -1219,12 +1248,22 @@ export default function RunDetailPage() {
               </details>
             ) : null}
             {isActiveRun ? (
-              <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => void handleForceRerun()} disabled={forceRerunBusy}>
+              <Button variant="secondary" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0" onClick={() => void handleForceRerun()} disabled={forceRerunBusy}>
                 {forceRerunBusy ? "Force rerunning..." : "Force Rerun"}
               </Button>
             ) : null}
-            <Button asChild variant="outline" size="sm" className="h-7 text-xs">
-              <Link href={run ? `/tenants/${encodeURIComponent(run.tenant_id)}/runs` : "/tenants/select"}>
+            <Button asChild variant="outline" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0">
+              <Link
+                href={
+                  run
+                    ? (
+                        projectContextId
+                          ? `/tenants/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
+                          : `/tenants/${encodeURIComponent(run.tenant_id)}/runs`
+                      )
+                    : "/tenants/select"
+                }
+              >
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
                 Back
               </Link>
@@ -1253,41 +1292,45 @@ export default function RunDetailPage() {
         ) : null}
       </div>
 
-      {statusLine ? (
-        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {statusLine}
+      {statusLine || (run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage) ? (
+        <div className="mb-8 space-y-4">
+          {statusLine ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive">
+              {statusLine}
+            </div>
+          ) : null}
+          {run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage ? (
+            <Card className="border-destructive/40 bg-destructive/5 shadow-sm">
+              <CardHeader className="space-y-1 px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
+                <CardTitle className="text-base font-semibold text-destructive">Failure Reason</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 px-5 pb-5 text-xs sm:px-6 sm:pb-6">
+                <p className="break-words whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
+                {secondaryFailureDetail ? (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive sm:p-4">
+                    <p className="font-medium">Additional diagnostic context</p>
+                    <p className="mt-2 break-words whitespace-pre-wrap">{secondaryFailureDetail}</p>
+                  </div>
+                ) : null}
+                {terminalFailureHighlights.length > 0 ? (
+                  <ul className="list-disc space-y-2 pl-5 text-destructive">
+                    {terminalFailureHighlights.map((item, idx) => (
+                      <li key={`failure-highlight-${idx}`} className="break-words whitespace-pre-wrap">
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
-      ) : null}
-      {run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage ? (
-        <Card className="mb-4 border-destructive/30 bg-destructive/5">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-destructive">Failure Reason</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-xs">
-            <p className="whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
-            {secondaryFailureDetail ? (
-              <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-destructive">
-                <p className="font-medium">Additional diagnostic context</p>
-                <p className="mt-1 whitespace-pre-wrap">{secondaryFailureDetail}</p>
-              </div>
-            ) : null}
-            {terminalFailureHighlights.length > 0 ? (
-              <ul className="list-disc space-y-1 pl-4 text-destructive">
-                {terminalFailureHighlights.map((item, idx) => (
-                  <li key={`failure-highlight-${idx}`} className="whitespace-pre-wrap">
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </CardContent>
-        </Card>
       ) : null}
 
       {run ? (
         <>
           {/* Pipeline stage bar */}
-          <div className="mb-6 flex items-center gap-2 overflow-x-auto">
+          <div className="mb-6 mt-1 flex items-center gap-2 overflow-x-auto">
             {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
               const progress = stageProgress[stage];
               const isRunning = progress.status === "running";
@@ -1318,14 +1361,15 @@ export default function RunDetailPage() {
           </div>
 
           {/* Tab bar — underline style */}
-          <div className="border-b mb-6">
-            <nav className="-mb-px flex gap-0">
+          <div className="mb-6 border-b overflow-x-auto">
+            <nav className="-mb-px flex min-w-max gap-0" aria-label="Run detail panels">
               {PANEL_TABS.map((tab) => (
                 <button
                   key={tab.id}
+                  type="button"
                   onClick={() => setActivePanel(tab.id)}
                   className={[
-                    "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                    "inline-flex items-center whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
                     activePanel === tab.id
                       ? "border-primary text-foreground"
                       : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
@@ -1389,7 +1433,7 @@ export default function RunDetailPage() {
             <div className="space-y-4">
               {tokenTimelineBusy ? <p className="text-sm text-muted-foreground">Loading cost data...</p> : null}
               {!tokenTimelineBusy && tokenTimelineError ? (
-                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive">
                   {tokenTimelineError}
                 </div>
               ) : null}
@@ -1415,7 +1459,7 @@ export default function RunDetailPage() {
                         </Card>
                       ))}
                     </div>
-                    <div className="rounded-md border bg-muted/20 p-3">
+                    <div className="min-w-0 overflow-x-auto rounded-md border bg-muted/20 p-3">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token lane by turn</p>
                       <TokenStackedBarChart
                         data={tokenTimelineChartData}
@@ -1609,12 +1653,12 @@ export default function RunDetailPage() {
                           return (
                             <li
                               key={entry.key}
-                              className="rounded-lg border-l-2 border-destructive bg-destructive/5 p-2.5"
+                              className="rounded-lg border-l-2 border-destructive bg-destructive/5 p-3 sm:p-4"
                             >
-                              <p className="mb-1 text-[10px] text-muted-foreground">
+                              <p className="mb-2 text-[10px] text-muted-foreground">
                                 {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)} · {entry.speaker}
                               </p>
-                              <p className="whitespace-pre-wrap text-destructive">{entry.text}</p>
+                              <p className="break-words whitespace-pre-wrap text-destructive">{entry.text}</p>
                             </li>
                           );
                         }

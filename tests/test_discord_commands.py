@@ -1078,6 +1078,217 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !ask", response.json()["detail"])
 
+    def test_pm_command_requires_question(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!pm"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !pm", response.json()["detail"])
+
+    def test_pm_command_returns_product_first_answer_and_stores_minimal_history(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_pm_question_with_codex",
+                return_value={
+                    "message": "PM guidance",
+                    "brief": {
+                        "objective": "Improve checkout recovery",
+                        "recommendation": "Ship in one sprint",
+                        "scope_in": ["Retry flow"],
+                        "scope_out": ["Payments provider migration"],
+                        "risks": ["Missing telemetry"],
+                        "open_questions": ["Fallback copy approval"],
+                        "next_steps": ["Draft implementation tickets"],
+                    },
+                },
+            ) as answer_mock,
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!pm shape a rollout narrative for TP-20",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "pm")
+        self.assertEqual(command_response.message, "PM guidance")
+        self.assertTrue(command_response.data["pm_mode"])
+        self.assertEqual(command_response.data["approve_command"], "!pm approve <handoff request>")
+        self.assertEqual(answer_mock.call_args.kwargs["action"], "ask")
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            history = list((tenant.discord_config or {}).get("ask_history") or [])
+            self.assertTrue(history)
+            latest_entry = history[-1]
+            self.assertTrue(str(latest_entry.get("question") or "").startswith("pm "))
+            self.assertEqual(latest_entry.get("answer"), "PM guidance")
+
+    def test_pm_approve_returns_technical_handoff_and_seeds_jira_tasks(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_pm_question_with_codex",
+                return_value={
+                    "message": "Approved for implementation handoff.",
+                    "brief": {
+                        "objective": "Ship checkout recovery",
+                        "recommendation": "Approved",
+                        "scope_in": ["Retry telemetry", "Fallback UX"],
+                        "scope_out": ["Provider migration"],
+                        "risks": ["Analytics gap"],
+                        "open_questions": [],
+                        "next_steps": ["Create implementation tasks"],
+                    },
+                },
+            ) as answer_mock,
+            patch(
+                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                return_value=(
+                    "Seeded issues.",
+                    {"created_issue_keys": ["TP-501", "TP-502"]},
+                ),
+            ),
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!pm approve final handoff for TP-20 checkout reliability",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "pm")
+        self.assertTrue(command_response.data["approved"])
+        self.assertIn("## Approved Product Brief", str(command_response.data["technical_handoff_markdown"]))
+        self.assertEqual(command_response.data["jira_write_hook"]["status"], "completed")
+        self.assertEqual(command_response.data["jira_seed_result"]["created_issue_keys"], ["TP-501", "TP-502"])
+        self.assertEqual(answer_mock.call_args.kwargs["action"], "approve")
+
+    def test_pm_room_mode_routes_to_persona_room_runtime(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_voice_room_turn",
+                return_value=SimpleNamespace(
+                    message="We should keep the MVP to transcription and routing.",
+                    brief={},
+                    persona_id="architect",
+                    persona_role="Architect",
+                    persona_name="Soren",
+                    persona_voice_id="echo",
+                    router_confidence=0.92,
+                    router_reason="The user is asking about system shape and tradeoffs.",
+                    room_config={"persona_names": {"architect": "Soren"}, "persona_voices": {"architect": "echo"}},
+                ),
+            ) as room_mock,
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!pm how should this fit together",
+                    command_params={"room_mode": "true"},
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "pm")
+        self.assertTrue(command_response.data["room_mode"])
+        self.assertEqual(command_response.data["persona_id"], "architect")
+        self.assertEqual(command_response.data["persona_name"], "Soren")
+        self.assertEqual(command_response.data["router"]["confidence"], 0.92)
+        room_mock.assert_called_once()
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            history = list((tenant.discord_config or {}).get("ask_history") or [])
+            self.assertTrue(history)
+            latest_entry = history[-1]
+            self.assertTrue(str(latest_entry.get("question") or "").startswith("room "))
+            self.assertEqual(latest_entry.get("answer"), "architect: We should keep the MVP to transcription and routing.")
+
+    def test_pm_voice_mode_routes_to_persona_runtime_with_channel_local_history(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, [{"question": "voice earlier", "answer": "security: older reply"}]),
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_voice_room_turn",
+                return_value=SimpleNamespace(
+                    message="We should add session expiry and audit trails.",
+                    brief={},
+                    persona_id="security",
+                    persona_role="Security",
+                    persona_name="June",
+                    persona_voice_id="echo",
+                    router_confidence=0.95,
+                    router_reason="The note is about auth and controls.",
+                    room_config={"persona_names": {"security": "June"}, "persona_voices": {"security": "echo"}},
+                ),
+            ) as room_mock,
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!pm what should we do about session security",
+                    command_params={"voice_mode": "true"},
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "pm")
+        self.assertFalse(command_response.data["room_mode"])
+        self.assertTrue(command_response.data["voice_mode"])
+        self.assertEqual(command_response.data["persona_id"], "security")
+        self.assertEqual(command_response.data["persona_name"], "June")
+        self.assertEqual(command_response.data["router"]["confidence"], 0.95)
+        room_mock.assert_called_once()
+        self.assertEqual(room_mock.call_args.kwargs["history"], [{"question": "voice earlier", "answer": "security: older reply"}])
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            history = list((tenant.discord_config or {}).get("ask_history") or [])
+            self.assertTrue(history)
+            latest_entry = history[-1]
+            self.assertTrue(str(latest_entry.get("question") or "").startswith("voice "))
+            self.assertEqual(latest_entry.get("answer"), "security: We should add session expiry and audit trails.")
+
     def test_ask_command_returns_board_answer(self) -> None:
         with patch(
             "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",
@@ -2214,6 +2425,50 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["command"], "issues")
         self.assertIn("TP-1", response.json()["message"])
+
+    def test_issues_seed_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
+        with (
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=object()),
+            patch(
+                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
+                return_value={
+                    "project_key": "TP",
+                    "issues": [
+                        {
+                            "summary": "Build API and webhook tasks",
+                            "objective": "Improve reliability",
+                            "scope_in": ["API changes"],
+                            "scope_out": [],
+                            "acceptance_criteria": ["Validation passes"],
+                            "how_to_test": ["Run targeted API tests"],
+                            "nfr_intent": "MVP",
+                            "dependencies": [],
+                            "risks": [],
+                            "labels": [],
+                            "issue_type": "Task",
+                        }
+                    ],
+                },
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context",
+                return_value={"access_token": "tok-only"},
+            ),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!issues seed Build API and webhook tasks",
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Failed to seed Jira issues", response.json()["detail"])
+        self.assertIn("Jira OAuth context is incomplete", response.json()["detail"])
+        self.assertNotIn("tok-only", response.json()["detail"])
+        self.assertNotIn("Internal server error. Ref:", response.json()["detail"])
 
     def test_seed_issues_requests_clarifications_when_required_fields_missing(self) -> None:
         now = datetime.now(timezone.utc)

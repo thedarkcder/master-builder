@@ -7,10 +7,50 @@ from orchestrator.storage.models import Project, Tenant
 DISCORD_INTERNAL_CONFIG_KEYS = {
     "pending_ask_actions",
     "ask_history",
+    "persona_room_history",
     "ask_thread_channel_ids",
     "allowlist_requests",
     "allowed_user_ids",
 }
+PERSONA_DISCORD_CONFIG_KEYS = {
+    "persona_names",
+    "persona_voices",
+    "voice_room_persona_names",
+    "voice_room_persona_voices",
+    "room_persona_names",
+    "room_persona_voices",
+    "pm_room_persona_names",
+    "pm_room_persona_voices",
+}
+LIVE_VOICE_DISCORD_CONFIG_KEYS = {
+    "live_voice_room_links",
+}
+ROOM_LIST_KEYS = (
+    "voice_room_channel_ids",
+    "voice_room_thread_channel_ids",
+    "voice_thread_channel_ids",
+    "persona_room_channel_ids",
+    "persona_room_thread_channel_ids",
+    "persona_thread_channel_ids",
+    "room_channel_ids",
+    "room_thread_channel_ids",
+    "pm_room_channel_ids",
+    "pm_room_thread_channel_ids",
+    "pm_thread_channel_ids",
+)
+ROOM_SINGLE_KEYS = (
+    "voice_room_channel_id",
+    "voice_room_thread_channel_id",
+    "voice_thread_channel_id",
+    "persona_room_channel_id",
+    "persona_room_thread_channel_id",
+    "persona_thread_channel_id",
+    "room_channel_id",
+    "room_thread_channel_id",
+    "pm_room_channel_id",
+    "pm_room_thread_channel_id",
+    "pm_thread_channel_id",
+)
 
 
 def default_project_name_from_repo(*, repo_url: str, tenant_id: str) -> str:
@@ -42,6 +82,44 @@ def normalize_string_map(raw: dict[str, str] | None) -> dict[str, str]:
     return normalized
 
 
+def _normalize_channel_id_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _normalize_channel_id_map(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, raw_value in value.items():
+        normalized_key = str(key).strip()
+        normalized_value = str(raw_value).strip()
+        if not normalized_key or not normalized_value:
+            continue
+        normalized[normalized_key] = normalized_value
+    return normalized
+
+
+def _normalize_string_map(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, raw_value in value.items():
+        normalized_key = str(key).strip().lower()
+        normalized_value = str(raw_value).strip()
+        if not normalized_key or not normalized_value:
+            continue
+        normalized[normalized_key] = normalized_value
+    return normalized
+
+
+def _normalize_live_voice_room_links(raw: dict | None) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    return _normalize_channel_id_map(raw.get("live_voice_room_links"))
+
+
 def normalize_project_discord_config(raw: dict | None) -> dict:
     if not isinstance(raw, dict):
         return {}
@@ -57,19 +135,45 @@ def normalize_project_discord_config(raw: dict | None) -> dict:
         if normalized_events:
             normalized["notify_events"] = normalized_events
 
-    ask_thread_channel_ids = raw.get("ask_thread_channel_ids")
-    if isinstance(ask_thread_channel_ids, list):
-        normalized_ask_threads = [str(value).strip() for value in ask_thread_channel_ids if str(value).strip()]
-        if normalized_ask_threads:
-            normalized["ask_thread_channel_ids"] = normalized_ask_threads
+    if "live_voice_enabled" in raw:
+        live_voice_enabled = raw.get("live_voice_enabled")
+        if isinstance(live_voice_enabled, bool):
+            normalized["live_voice_enabled"] = live_voice_enabled
+        elif isinstance(live_voice_enabled, str):
+            normalized_value = live_voice_enabled.strip().lower()
+            if normalized_value in {"true", "1", "yes", "on"}:
+                normalized["live_voice_enabled"] = True
+            elif normalized_value in {"false", "0", "no", "off"}:
+                normalized["live_voice_enabled"] = False
 
-    seed_followup_thread_channel_ids = raw.get("seed_followup_thread_channel_ids")
-    if isinstance(seed_followup_thread_channel_ids, list):
-        normalized_seed_threads = [
-            str(value).strip() for value in seed_followup_thread_channel_ids if str(value).strip()
-        ]
-        if normalized_seed_threads:
-            normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
+    live_voice_room_links_provided = "live_voice_room_links" in raw
+    normalized_live_voice_links = _normalize_live_voice_room_links(raw)
+    if normalized_live_voice_links:
+        normalized["live_voice_room_links"] = normalized_live_voice_links
+    elif live_voice_room_links_provided:
+        normalized["live_voice_room_links"] = {}
+
+    normalized_ask_threads = _normalize_channel_id_list(raw.get("ask_thread_channel_ids"))
+    if normalized_ask_threads:
+        normalized["ask_thread_channel_ids"] = normalized_ask_threads
+
+    normalized_seed_threads = _normalize_channel_id_list(raw.get("seed_followup_thread_channel_ids"))
+    if normalized_seed_threads:
+        normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
+
+    for key in PERSONA_DISCORD_CONFIG_KEYS:
+        normalized_persona_map = _normalize_string_map(raw.get(key))
+        if normalized_persona_map:
+            normalized[key] = normalized_persona_map
+
+    for key in ROOM_LIST_KEYS:
+        normalized_pm_channels = _normalize_channel_id_list(raw.get(key))
+        if normalized_pm_channels:
+            normalized[key] = normalized_pm_channels
+    for key in ROOM_SINGLE_KEYS:
+        normalized_pm_channel = str(raw.get(key) or "").strip()
+        if normalized_pm_channel:
+            normalized[key] = normalized_pm_channel
 
     return normalized
 
@@ -78,7 +182,8 @@ def with_preserved_discord_system_fields(*, existing: dict, proposed: dict | Non
     if proposed is None:
         return None
     merged = dict(proposed)
-    for key in DISCORD_INTERNAL_CONFIG_KEYS:
+    preserved_keys = set(DISCORD_INTERNAL_CONFIG_KEYS)
+    for key in preserved_keys:
         if key in merged:
             continue
         value = existing.get(key)

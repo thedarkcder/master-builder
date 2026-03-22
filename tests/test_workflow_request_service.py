@@ -293,6 +293,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
     def test_build_workflow_request_prefers_remediation_trigger_branch_and_base(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            run.branch = "feature/TP-1-stale"
             run.plan = {
                 "trigger_context": {
                     "source": "github_pr_review_feedback",

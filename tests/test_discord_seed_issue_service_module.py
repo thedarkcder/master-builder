@@ -150,3 +150,46 @@ def test_seed_issues_allows_noncanonical_issue_type_passthrough() -> None:
     assert "Issue upsert complete." in message
     assert data["created_issue_keys"] == ["GP-2"]
     assert captured_issues[0].issue_type == "task"
+
+
+def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+    with __import__("pytest").raises(HTTPException) as exc_ctx:
+        seed_issues_with_codex(
+            session=MagicMock(),
+            tenant=tenant,
+            prompt_markdown="seed issues",
+            force_issue_keys=None,
+            allow_create=True,
+            scoped_project_keys=["GP"],
+            codex_working_dir="/tmp",
+            tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+            get_settings_fn=lambda: SimpleNamespace(),
+            build_codex_runtime_fn=lambda **_kwargs: object(),
+            plan_seed_issues_with_codex_fn=lambda **_kwargs: {
+                "project_key": "GP",
+                "issues": [
+                    {
+                        "summary": "Build iOS app shell",
+                        "objective": "Build iOS app shell and nav",
+                        "scope_in": [],
+                        "scope_out": [],
+                        "acceptance_criteria": [],
+                        "how_to_test": [],
+                        "nfr_intent": "MVP",
+                        "dependencies": [],
+                        "risks": [],
+                        "labels": [],
+                        "issue_type": "Task",
+                    }
+                ],
+            },
+            codex_runtime_error_type=RuntimeError,
+            build_seed_issue_description_fn=lambda **_kwargs: {},
+            issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+            tenant_jira_oauth_context_fn=lambda **_kwargs: {"access_token": "tok-only"},
+            select_seed_match_fn=lambda **_kwargs: None,
+        )
+    assert exc_ctx.value.status_code == 502
+    assert str(exc_ctx.value.detail) == "Failed to seed Jira issues: Jira OAuth context is incomplete"
+    assert "tok-only" not in str(exc_ctx.value.detail)

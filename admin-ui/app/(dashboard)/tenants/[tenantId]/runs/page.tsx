@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { ExternalLink, RefreshCw, SlidersHorizontal, X } from "lucide-react";
 
@@ -29,15 +29,15 @@ export default function TenantRunsPage() {
   const tenantId = decodeURIComponent(params.tenantId);
 
   const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [totalLoaded, setTotalLoaded] = useState<number | null>(null);
   const [issueFilter, setIssueFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<RunStatus | "all">("all");
   const [prFilter, setPrFilter] = useState<"any" | "none" | "has_value">("any");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
-  const [loading, setLoading] = useState(false);
-  const [totalLoaded, setTotalLoaded] = useState<number | null>(null);
+  const [pageSize, setPageSize] = useState<25 | 50 | 100>(25);
 
   const loadRuns = useCallback(async () => {
     if (!credentials) return;
@@ -89,22 +89,29 @@ export default function TenantRunsPage() {
       <Card>
         {/* Filter toolbar */}
         <CardHeader className="pb-3">
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="flex items-center gap-1.5 text-muted-foreground">
+          <div className="overflow-x-auto -mx-1 px-1">
+            <div className="flex min-w-max flex-nowrap items-end gap-2 md:min-w-0 md:flex-wrap">
+            <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
               <SlidersHorizontal className="h-4 w-4" />
               <span className="text-xs font-medium uppercase tracking-wide">Filters</span>
             </div>
 
-            <Input
-              className="h-8 w-36 text-sm"
-              value={issueFilter}
-              onChange={(e) => { setIssueFilter(e.target.value); setPage(1); }}
-              placeholder="Issue key"
-            />
+              <Input
+                className="h-8 w-36 text-sm"
+                value={issueFilter}
+                onChange={(e) => {
+                  setIssueFilter(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Issue key"
+              />
             <select
               className="h-8 w-32 rounded-md border border-input bg-background px-2 text-sm"
               value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value as RunStatus | "all"); setPage(1); }}
+              onChange={(e) => {
+                setStatusFilter(e.target.value as RunStatus | "all");
+                setPage(1);
+              }}
             >
               <option value="all">Status: Any</option>
               {RUN_STATUSES.map((status) => (
@@ -116,7 +123,10 @@ export default function TenantRunsPage() {
             <select
               className="h-8 rounded-md border border-input bg-background px-2 text-sm"
               value={prFilter}
-              onChange={(e) => { setPrFilter(e.target.value as "any" | "none" | "has_value"); setPage(1); }}
+              onChange={(e) => {
+                setPrFilter(e.target.value as "any" | "none" | "has_value");
+                setPage(1);
+              }}
             >
               <option value="any">PR: Any</option>
               <option value="none">PR: None</option>
@@ -126,18 +136,24 @@ export default function TenantRunsPage() {
               className="h-8 w-32 text-sm"
               type="date"
               value={fromDate}
-              onChange={(e) => { setFromDate(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setFromDate(e.target.value);
+                setPage(1);
+              }}
               placeholder="From"
             />
             <Input
               className="h-8 w-32 text-sm"
               type="date"
               value={toDate}
-              onChange={(e) => { setToDate(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setToDate(e.target.value);
+                setPage(1);
+              }}
               placeholder="To"
             />
 
-            <div className="ml-auto flex items-center gap-1.5">
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {hasFilters ? (
                 <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={clearFilters}>
                   <X className="mr-1 h-3 w-3" />
@@ -151,12 +167,16 @@ export default function TenantRunsPage() {
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-xs"
                 value={String(pageSize)}
-                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value) as 25 | 50 | 100);
+                  setPage(1);
+                }}
               >
                 <option value="25">25 / page</option>
                 <option value="50">50 / page</option>
                 <option value="100">100 / page</option>
               </select>
+            </div>
             </div>
           </div>
         </CardHeader>
@@ -251,7 +271,7 @@ export default function TenantRunsPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                onClick={() => setPage((prev) => Math.max(1, prev - 1))}
                 disabled={loading || page <= 1}
               >
                 ← Prev
@@ -261,7 +281,7 @@ export default function TenantRunsPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => setPage((p) => p + 1)}
+                onClick={() => setPage((prev) => prev + 1)}
                 disabled={loading || runs.length < pageSize}
               >
                 Next →

@@ -45,6 +45,10 @@ export type DiscordConfig = {
   notify_events: string[];
   allowed_user_ids?: string[];
   command_secret_ref?: string | null;
+  live_voice_enabled?: boolean;
+  live_voice_room_links?: Record<string, string>;
+  live_voice_channel_id?: string | null;
+  live_voice_linked_text_channel_id?: string | null;
 };
 
 export type TenantCreatePayload = {
@@ -132,6 +136,10 @@ export type ProjectDiscordConfig = {
   notify_events?: string[];
   ask_thread_channel_ids?: string[];
   seed_followup_thread_channel_ids?: string[];
+  live_voice_enabled?: boolean;
+  live_voice_room_links?: Record<string, string>;
+  live_voice_channel_id?: string | null;
+  live_voice_linked_text_channel_id?: string | null;
 };
 
 export type ProjectRecord = {

@@ -3,249 +3,49 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
-from fastapi import Request, status
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from orchestrator.api.webhooks.github_review_flow import process_pull_request_targets
-from orchestrator.api.webhooks.github_webhook_context import (
-    build_github_review_runtime,
-    resolve_github_webhook_context,
-)
-from orchestrator.api.webhooks.pr_review_comment_service import (
-    publish_inline_review_batch,
-    upsert_manual_fix_followup_comment,
-    upsert_sticky_remediation_comment,
-    upsert_sticky_review_comment,
-)
-from orchestrator.api.webhooks.pr_remediation_policy import parse_manual_pr_fix_request
-from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
-from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.pr_review_findings import evaluate_pr_review_findings
-from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.tools.github_app import GitHubApiError
+from orchestrator.api.transport_runtime import build_http_transport_action_executors, execute_http_ingress_result
+from orchestrator.api.webhooks.github_application import build_github_webhook_ingress_result
+from orchestrator.api.webhooks.github_webhook_context import prepare_github_webhook_runtime
+from orchestrator.core.communications import TransportEnvelope
 
 logger = logging.getLogger(__name__)
 
 
 async def ingest_github_webhook_event(
     *,
-    request: Request,
+    request,
     session: Session,
     settings,  # noqa: ANN001
     request_id: str | None = None,
-) -> JSONResponse:
-    request_id = request_id or request.headers.get("X-Request-Id") or str(uuid4())
-    context = await resolve_github_webhook_context(
+):
+    normalized_request_id = request_id or request.headers.get("X-Request-Id") or str(uuid4())
+    envelope = TransportEnvelope(
+        transport="github_webhook",
+        event_type=str(request.headers.get("X-GitHub-Event") or "").strip() or "unknown",
+        request_id=normalized_request_id,
+        delivery_id=str(request.headers.get("X-GitHub-Delivery") or "").strip() or None,
+    )
+    prepared_runtime = await prepare_github_webhook_runtime(
         request=request,
         session=session,
         settings=settings,
-        request_id=request_id,
+        request_id=envelope.request_id,
         logger=logger,
     )
-    if isinstance(context, JSONResponse):
-        return context
-    delivery_id = context.delivery_id
-    github_event = context.github_event
-    payload = context.payload
-    normalized_action = context.normalized_action
-    tenant = context.tenant
-    project = context.project
-    repo_full_name = context.repo_full_name
-    pr_targets = context.pr_targets
-
-    effective_policy = resolve_effective_policy(
-        tenant_policy=getattr(tenant, "policy_config", {}) or {},
-        project_overrides=getattr(project, "policy_overrides", {}) or {},
-    )
-    allow_code_reviews = bool(effective_policy.get("allow_code_reviews", True))
-    allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
-    allow_pr_remediation = allow_code_reviews and bool(effective_policy.get("allow_pr_remediation", True))
-    allow_manual_pr_fix_requests = allow_pr_remediation and bool(
-        effective_policy.get("allow_manual_pr_fix_requests", True)
-    )
-    max_pr_auto_remediation_loops = _coerce_positive_int(
-        effective_policy.get("max_pr_auto_remediation_loops"),
-        default=5,
-    )
-
-    if not allow_code_reviews:
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                "request_id": request_id,
-                "delivery_id": delivery_id,
-                "tenant_id": tenant.tenant_id,
-                "project_id": project.project_id,
-                "event": github_event,
-                "action": normalized_action,
-                "accepted": True,
-                "repository": repo_full_name,
-                "signals": [],
-                "review_comments": [],
-                "inline_reviews": [],
-                "auto_merge": {
-                    "enabled": False,
-                    "reason": "code_reviews_disabled",
-                    "results": [],
-                },
-                "pr_review": {
-                    "enabled": False,
-                    "reason": "code_reviews_disabled",
-                },
-                "pr_remediation": {
-                    "enabled": False,
-                    "manual_fix_requests_enabled": False,
-                    "reason": "code_reviews_disabled",
-                },
-                "remediation": [],
-                "remediation_comments": [],
-            },
-        )
-
-    try:
-        github_client, reviewer_gate = build_github_review_runtime(
-            session=session,
-            settings=settings,
-            tenant=tenant,
-            project=project,
-        )
-    except ValueError as exc:
-        logger.warning(
-            "github_webhook_review_misconfigured request_id=%s tenant_id=%s error=%s",
-            request_id,
-            tenant.tenant_id,
-            exc,
-        )
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                "request_id": request_id,
-                "delivery_id": delivery_id,
-                "tenant_id": tenant.tenant_id,
-                "event": github_event,
-                "action": normalized_action,
-                "accepted": False,
-                "reason": "review_misconfigured",
-                "project_id": project.project_id,
-            },
-        )
-
-    _add_manual_fix_eyes_reaction_if_requested(
-        github_event=github_event,
-        payload=payload,
-        github_client=github_client,
-        repo_full_name=repo_full_name,
-        logger=logger,
-        request_id=request_id,
-        tenant_id=tenant.tenant_id,
-    )
-
-    review_results = process_pull_request_targets(
-        request_id=request_id,
-        tenant=tenant,
-        project=project,
-        repo_full_name=repo_full_name,
-        pr_targets=pr_targets,
-        payload=payload,
-        github_event=github_event,
-        normalized_action=normalized_action,
-        github_client=github_client,
-        reviewer_gate=reviewer_gate,
-        allow_auto_merge=allow_auto_merge,
-        allow_pr_remediation=allow_pr_remediation,
-        allow_manual_pr_fix_requests=allow_manual_pr_fix_requests,
-        max_pr_auto_remediation_loops=max_pr_auto_remediation_loops,
+    result = await build_github_webhook_ingress_result(
+        prepared_runtime=prepared_runtime,
+        request_id=envelope.request_id,
         session=session,
         settings=settings,
-        logger=logger,
-        send_tenant_discord_message_fn=send_tenant_discord_message,
-        tenant_jira_issue_url_fn=tenant_jira_issue_url,
-        evaluate_pr_review_findings_fn=evaluate_pr_review_findings,
-        upsert_sticky_review_comment_fn=upsert_sticky_review_comment,
-        publish_inline_review_batch_fn=publish_inline_review_batch,
-        enqueue_pr_remediation_if_needed_fn=enqueue_pr_remediation_if_needed,
-        upsert_sticky_remediation_comment_fn=upsert_sticky_remediation_comment,
-        upsert_manual_fix_followup_comment_fn=upsert_manual_fix_followup_comment,
-        github_api_error_type=GitHubApiError,
     )
-
-    return JSONResponse(
-        status_code=status.HTTP_202_ACCEPTED,
-        content={
-            "request_id": request_id,
-            "delivery_id": delivery_id,
-            "tenant_id": tenant.tenant_id,
-            "project_id": project.project_id,
-            "event": github_event,
-            "action": normalized_action,
-            "accepted": True,
-            "repository": repo_full_name,
-            **review_results,
-        },
+    return execute_http_ingress_result(
+        result=result,
+        envelope=envelope,
+        transport_action_executors=build_http_transport_action_executors(
+            session=session,
+            settings=settings,
+            extra_transport_action_executors=getattr(prepared_runtime, "transport_action_executors", ()),
+        ),
     )
-
-
-def _coerce_positive_int(value: object | None, *, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(1, parsed)
-
-
-def _coerce_int_or_none(value: object | None) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _valid_pr_details(details: object) -> bool:
-    head_sha = getattr(details, "head_sha", None)
-    title = getattr(details, "title", None)
-    return isinstance(head_sha, str) and bool(head_sha.strip()) and isinstance(title, str) and bool(title.strip())
-
-
-def _add_manual_fix_eyes_reaction_if_requested(
-    *,
-    github_event: str,
-    payload: dict,
-    github_client,
-    repo_full_name: str,
-    logger,
-    request_id: str,
-    tenant_id: str,
-) -> None:  # noqa: ANN001
-    normalized_event = str(github_event or "").strip().lower()
-    if normalized_event not in {"issue_comment", "pull_request_review_comment"}:
-        return
-    if parse_manual_pr_fix_request(payload=payload) is None:
-        return
-    comment = payload.get("comment")
-    comment_id = comment.get("id") if isinstance(comment, dict) else None
-    if not isinstance(comment_id, int) or comment_id <= 0:
-        return
-    try:
-        if normalized_event == "issue_comment":
-            github_client.add_issue_comment_reaction(
-                repo_full_name=repo_full_name,
-                comment_id=comment_id,
-                content="eyes",
-            )
-        else:
-            github_client.add_pull_request_review_comment_reaction(
-                repo_full_name=repo_full_name,
-                comment_id=comment_id,
-                content="eyes",
-            )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "github_webhook_manual_fix_reaction_failed request_id=%s tenant_id=%s comment_id=%s error=%s",
-            request_id,
-            tenant_id,
-            comment_id,
-            exc,
-        )
