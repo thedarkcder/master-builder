@@ -78,6 +78,28 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         self.assertLessEqual(len(choices), 25)
         self.assertTrue(all(choice["value"].startswith("MAB-") for choice in choices))
 
+    def test_issue_autocomplete_prefers_exact_issue_key_lookup_before_recent_results(self) -> None:
+        tenant = SimpleNamespace()
+        exact_issue = SimpleNamespace(key="MAB-4242", summary="Older but exact")
+        recent_issue = SimpleNamespace(key="MAB-1", summary="Recent issue")
+        search_mock = MagicMock(side_effect=[[exact_issue], [recent_issue]])
+        with (
+            patch("orchestrator.api.discord.interactions.parser._project_filter_jql", return_value='project = "MAB"'),
+            patch("orchestrator.api.discord.interactions.parser._search_jira_issues_for_tenant", search_mock),
+        ):
+            choices = _discord_issue_autocomplete_choices(
+                session=MagicMock(),
+                tenant=tenant,
+                channel_id="c-1",
+                current_value="mab-4242",
+            )
+
+        self.assertEqual(choices[0]["value"], "MAB-4242")
+        self.assertEqual(search_mock.call_count, 2)
+        self.assertIn('AND key = "MAB-4242"', search_mock.call_args_list[0].kwargs["jql"])
+        self.assertEqual(search_mock.call_args_list[0].kwargs["max_results"], 1)
+        self.assertEqual(search_mock.call_args_list[1].kwargs["max_results"], 100)
+
     def test_parse_interaction_validates_required_fields(self) -> None:
         with self.assertRaises(HTTPException):
             _parse_discord_interaction_command({})

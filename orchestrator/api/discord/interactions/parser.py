@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -9,6 +11,9 @@ from orchestrator.api.discord.ask.context import (
 )
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
 from orchestrator.storage.models import Tenant
+
+
+_ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 
 
 def _find_tenant_for_discord_channel(
@@ -141,12 +146,23 @@ def _discord_issue_autocomplete_choices(
 ) -> list[dict]:
     project_jql = _project_filter_jql(session=session, tenant=tenant, channel_id=channel_id)
     normalized = current_value.strip().upper()
-    jql = f"{project_jql} ORDER BY updated DESC"
-    issues = _search_jira_issues_for_tenant(
-        session=session,
-        tenant=tenant,
-        jql=jql,
-        max_results=100,
+    issues = []
+    if _ISSUE_KEY_PATTERN.fullmatch(normalized):
+        issues.extend(
+            _search_jira_issues_for_tenant(
+                session=session,
+                tenant=tenant,
+                jql=f'{project_jql} AND key = "{normalized}" ORDER BY updated DESC',
+                max_results=1,
+            )
+        )
+    issues.extend(
+        _search_jira_issues_for_tenant(
+            session=session,
+            tenant=tenant,
+            jql=f"{project_jql} ORDER BY updated DESC",
+            max_results=100,
+        )
     )
 
     choices: list[dict] = []

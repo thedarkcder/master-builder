@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
+from sqlalchemy import create_engine
 
 from orchestrator.core.communications import (
     DiscordChannelMessageWithAttachmentAction,
@@ -23,6 +26,7 @@ from orchestrator.core.discord.gateway_listener import (
     _decision_gate_issue_for_thread,
     _project_seed_followup_thread_ids,
 )
+from orchestrator.storage.models import Base
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -45,15 +49,34 @@ class _SessionFactory:
         return _SessionCtx(self._session)
 
 
+class _SessionFactoryFromDb:
+    def __init__(self, database_url: str) -> None:
+        from orchestrator.storage.db import create_session_factory
+
+        self._factory = create_session_factory(database_url)
+
+    def __call__(self):  # noqa: ANN204
+        return self._factory()
+
+
 class DiscordCommandSyncRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
-        reset_discord_command_sync_status()
-
-    def _settings(self) -> SimpleNamespace:
-        return SimpleNamespace(
+        self._temp_dir = TemporaryDirectory()
+        self.addCleanup(self._temp_dir.cleanup)
+        database_url = f"sqlite:///{Path(self._temp_dir.name) / 'discord-sync.db'}"
+        self._engine = create_engine(database_url)
+        Base.metadata.create_all(self._engine)
+        self._session_factory = _SessionFactoryFromDb(database_url)
+        self._settings_obj = SimpleNamespace(
             discord_guild_id="guild-1",
             secrets_encryption_key="enc",
+            database_url=database_url,
+            discord_command_sync_lock_key=947102033130,
         )
+        reset_discord_command_sync_status(settings=self._settings_obj)
+
+    def _settings(self) -> SimpleNamespace:
+        return self._settings_obj
 
     def test_sync_discord_guild_commands_guard_paths(self) -> None:
         settings = self._settings()
@@ -61,11 +84,11 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertFalse(
             sync_discord_guild_commands(
                 settings=settings,
-                session_factory=_SessionFactory(MagicMock()),
+                session_factory=self._session_factory,
                 secret_resolver=resolver,
             )
         )
-        status = get_discord_command_sync_status()
+        status = get_discord_command_sync_status(settings=settings)
         self.assertEqual(status.last_failure_reason, "missing_bot_token")
         self.assertFalse(status.bot_token_configured)
 
@@ -75,17 +98,16 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertFalse(
             sync_discord_guild_commands(
                 settings=settings,
-                session_factory=_SessionFactory(MagicMock()),
+                session_factory=self._session_factory,
                 secret_resolver=resolver,
             )
         )
-        status = get_discord_command_sync_status()
+        status = get_discord_command_sync_status(settings=settings)
         self.assertEqual(status.last_failure_reason, "missing_guild_id")
         self.assertFalse(status.guild_id_configured)
 
     def test_sync_discord_guild_commands_success_and_failure(self) -> None:
         settings = self._settings()
-        session_factory = _SessionFactory(MagicMock())
 
         def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
             if secret_ref == "DISCORD_BOT_TOKEN":
@@ -99,13 +121,13 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertTrue(
             sync_discord_guild_commands(
                 settings=settings,
-                session_factory=session_factory,
+                session_factory=self._session_factory,
                 secret_resolver=_resolver,
                 client_factory=MagicMock(return_value=client),
             )
         )
         client.overwrite_guild_commands.assert_called_once()
-        status = get_discord_command_sync_status()
+        status = get_discord_command_sync_status(settings=settings)
         self.assertTrue(status.synced)
         self.assertTrue(status.healthy)
         self.assertEqual(status.application_id, "app-1")
@@ -115,14 +137,48 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertFalse(
             sync_discord_guild_commands(
                 settings=settings,
-                session_factory=session_factory,
+                session_factory=self._session_factory,
                 secret_resolver=_resolver,
                 client_factory=client_factory,
             )
         )
-        status = get_discord_command_sync_status()
+        status = get_discord_command_sync_status(settings=settings)
         self.assertEqual(status.last_failure_reason, "discord_api_error")
         self.assertIn("boom", status.last_error or "")
+
+    def test_sync_discord_guild_commands_does_not_clobber_persisted_status_when_lock_busy(self) -> None:
+        settings = self._settings()
+
+        def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
+            if secret_ref == "DISCORD_BOT_TOKEN":
+                return "bot-token"
+            return "guild-1"
+
+        client = MagicMock()
+        client.get_application_id.return_value = "app-1"
+        client.overwrite_guild_commands.return_value = [{"name": "help"}]
+        self.assertTrue(
+            sync_discord_guild_commands(
+                settings=settings,
+                session_factory=self._session_factory,
+                secret_resolver=_resolver,
+                client_factory=MagicMock(return_value=client),
+            )
+        )
+
+        with patch("orchestrator.core.discord.commands_sync._try_acquire_command_sync_lock", return_value=False):
+            self.assertTrue(
+                sync_discord_guild_commands(
+                    settings=settings,
+                    session_factory=self._session_factory,
+                    secret_resolver=_resolver,
+                    client_factory=MagicMock(side_effect=AssertionError("should not sync while lock busy")),
+                )
+            )
+
+        status = get_discord_command_sync_status(settings=settings)
+        self.assertTrue(status.healthy)
+        self.assertEqual(status.application_id, "app-1")
 
 
 class DiscordGatewayListenerRuntimeTests(unittest.TestCase):

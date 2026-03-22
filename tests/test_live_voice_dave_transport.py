@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from orchestrator.core.discord.live_voice_runtime import LiveVoiceTransport
 from orchestrator.core.discord.live_voice_session import LiveVoiceRoomBinding
 from orchestrator.core.discord.live_voice_transport_client import (
     GoJsonLinesLiveVoiceTransportClient,
+    LiveVoiceTransportClientError,
     LiveVoiceTransportRoom,
     build_live_voice_transport_client,
 )
@@ -134,6 +136,49 @@ class LiveVoiceTransportClientTests(unittest.TestCase):
 
         self.assertIsInstance(client, GoJsonLinesLiveVoiceTransportClient)
         self.assertEqual(client.command[:2], ("/usr/local/bin/live-voice-transport", "--flag"))
+
+    def test_start_waits_for_transport_ready(self) -> None:
+        client = GoJsonLinesLiveVoiceTransportClient(
+            command=[
+                sys.executable,
+                "-c",
+                (
+                    "import json,sys; "
+                    "print(json.dumps({'type':'transport_ready','session_id':'discord-live-voice'})); "
+                    "sys.stdout.flush(); "
+                    "sys.stdin.read()"
+                ),
+            ],
+            startup_timeout_seconds=2,
+        )
+
+        try:
+            client.start()
+            self.assertTrue(client._ready_event.is_set())
+        finally:
+            client.close()
+
+    def test_start_raises_when_transport_exits_before_ready(self) -> None:
+        client = GoJsonLinesLiveVoiceTransportClient(
+            command=[sys.executable, "-c", "raise SystemExit(2)"],
+            startup_timeout_seconds=2,
+        )
+
+        with self.assertRaises(LiveVoiceTransportClientError) as exc:
+            client.start()
+
+        self.assertIn("before readiness", str(exc.exception))
+
+    def test_start_raises_when_transport_ready_times_out(self) -> None:
+        client = GoJsonLinesLiveVoiceTransportClient(
+            command=[sys.executable, "-c", "import sys; sys.stdin.read()"],
+            startup_timeout_seconds=1,
+        )
+
+        with self.assertRaises(LiveVoiceTransportClientError) as exc:
+            client.start()
+
+        self.assertIn("did not become ready", str(exc.exception))
 
     def test_transport_protocol_is_preserved_for_structural_fakes(self) -> None:
         class _FakeTransport:
