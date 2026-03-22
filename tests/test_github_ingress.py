@@ -45,9 +45,14 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             "resolve_platform_secret_ref": MagicMock(return_value="platform-secret"),
             "validate_github_webhook_signature": MagicMock(),
         }
-        ingress_patches = {
-            "send_tenant_discord_message": MagicMock(),
+        application_patches = {
             "enqueue_pr_remediation_if_needed": MagicMock(return_value=None),
+            "evaluate_pr_review_findings": MagicMock(
+                return_value=SimpleNamespace(state="reviewed", summary="no findings", findings=())
+            ),
+            "tenant_jira_issue_url": MagicMock(return_value=None),
+        }
+        github_executor_patches = {
             "upsert_sticky_review_comment": MagicMock(return_value=SimpleNamespace(action="updated", comment_id=1)),
             "upsert_sticky_remediation_comment": MagicMock(
                 return_value=SimpleNamespace(action="updated", comment_id=2)
@@ -55,10 +60,14 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             "publish_inline_review_batch": MagicMock(
                 return_value=SimpleNamespace(submitted=False, review_id=None, inline_count=0)
             ),
-            "evaluate_pr_review_findings": MagicMock(
-                return_value=SimpleNamespace(state="reviewed", summary="no findings", findings=())
+            "upsert_manual_fix_followup_comment": MagicMock(
+                return_value=SimpleNamespace(action="updated", comment_id=3)
             ),
-            "tenant_jira_issue_url": MagicMock(return_value=None),
+        }
+        discord_executor_patches = {
+            "send_tenant_discord_message": MagicMock(),
+        }
+        classifier_patches = {
             "resolve_effective_policy": MagicMock(
                 return_value={
                     "allow_auto_merge": False,
@@ -71,14 +80,28 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         for name, value in overrides.items():
             if name in context_patches:
                 context_patches[name] = value
+            elif name in classifier_patches:
+                classifier_patches[name] = value
+            elif name in application_patches:
+                application_patches[name] = value
+            elif name in github_executor_patches:
+                github_executor_patches[name] = value
+            elif name in discord_executor_patches:
+                discord_executor_patches[name] = value
             else:
-                ingress_patches[name] = value
+                raise AssertionError(f"Unhandled github ingress test override: {name}")
 
         with ExitStack() as stack:
             for name, value in context_patches.items():
                 stack.enter_context(patch(f"orchestrator.api.webhooks.github_webhook_context.{name}", value))
-            for name, value in ingress_patches.items():
+            for name, value in classifier_patches.items():
+                stack.enter_context(patch(f"orchestrator.api.webhooks.github_event_classifier.{name}", value))
+            for name, value in application_patches.items():
                 stack.enter_context(patch(f"orchestrator.api.webhooks.github_application.{name}", value))
+            for name, value in github_executor_patches.items():
+                stack.enter_context(patch(f"orchestrator.core.github.transport_executor.{name}", value))
+            for name, value in discord_executor_patches.items():
+                stack.enter_context(patch(f"orchestrator.core.discord.transport_executor.{name}", value))
             return await ingest_github_webhook_event(request=request, session=session, settings=settings, request_id="req-1")
 
     async def test_ping_event(self) -> None:

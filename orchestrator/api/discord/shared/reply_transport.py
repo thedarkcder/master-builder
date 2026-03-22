@@ -3,10 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from orchestrator.core.communications import (
-    DiscordAskWithThreadAction,
     DiscordInteractionFollowupAction,
-    DiscordSeedWithThreadAction,
-    DiscordThreadReplyAction,
 )
 from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 
@@ -20,12 +17,10 @@ class DiscordReplyTransport:
         send_ask_with_thread: Callable[..., None],
         send_seed_with_thread: Callable[..., None],
     ) -> None:
-        self._executor = DiscordTransportExecutor(
-            interaction_followup_sender=send_interaction_followup,
-            thread_reply_sender=send_thread_reply,
-            ask_with_thread_sender=send_ask_with_thread,
-            seed_with_thread_sender=send_seed_with_thread,
-        )
+        self._executor = DiscordTransportExecutor(interaction_followup_sender=send_interaction_followup)
+        self._send_thread_reply = send_thread_reply
+        self._send_ask_with_thread = send_ask_with_thread
+        self._send_seed_with_thread = send_seed_with_thread
 
     def send_interaction_followup(
         self,
@@ -61,16 +56,14 @@ class DiscordReplyTransport:
         content: str,
         components: list[dict] | None = None,
     ) -> None:
-        self._executor.execute(
-            action=DiscordThreadReplyAction(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                channel_id=channel_id,
-                reply_to_message_id=reply_to_message_id,
-                content=content,
-                components=components,
-            )
+        self._send_thread_reply(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            channel_id=channel_id,
+            reply_to_message_id=reply_to_message_id,
+            content=content,
+            components=components,
         )
 
     def send_ask_with_thread(
@@ -85,17 +78,15 @@ class DiscordReplyTransport:
         components: list[dict] | None = None,
         issue_key: str | None = None,
     ) -> None:
-        self._executor.execute(
-            action=DiscordAskWithThreadAction(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                channel_id=channel_id,
-                user_id=user_id,
-                content=content,
-                components=components,
-                issue_key=issue_key,
-            )
+        self._send_ask_with_thread(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            channel_id=channel_id,
+            user_id=user_id,
+            content=content,
+            components=components,
+            issue_key=issue_key,
         )
 
     def send_seed_with_thread(
@@ -110,15 +101,13 @@ class DiscordReplyTransport:
         request_id: str,
         questions: list[str],
     ) -> None:
-        self._executor.execute(
-            action=DiscordSeedWithThreadAction(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                channel_id=channel_id,
-                user_id=user_id,
-                content=content,
-                request_id=request_id,
-                questions=questions,
-            )
+        self._send_seed_with_thread(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            channel_id=channel_id,
+            user_id=user_id,
+            content=content,
+            request_id=request_id,
+            questions=questions,
         )

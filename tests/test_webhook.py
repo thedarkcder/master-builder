@@ -295,7 +295,7 @@ class JiraWebhookTests(unittest.TestCase):
                 "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
                 return_value=self._pre_run_check(outcome="decision_gate_required"),
             ),
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock,
+            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -328,7 +328,7 @@ class JiraWebhookTests(unittest.TestCase):
         with (
             patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("backlog", None)),
             patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()),
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock,
+            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -376,7 +376,7 @@ class JiraWebhookTests(unittest.TestCase):
                 "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
                 return_value=self._pre_run_check(),
             ),
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock,
+            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -628,7 +628,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200)
         self.assertTrue(first.json()["enqueued"])
 
-        with patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock:
+        with patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock:
             second = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(second.status_code, 200)

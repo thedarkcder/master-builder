@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
+from contextlib import nullcontext
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.transport_runtime import decode_json_body
+from orchestrator.api.transport_runtime import execute_http_ingress_result
 from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
 from orchestrator.api.webhooks.contracts import (
     extract_delivery_id,
@@ -21,9 +23,10 @@ from orchestrator.api.webhooks.jira_webhook_types import (
     JiraWebhookContext,
     jira_webhook_response,
 )
-from orchestrator.core.communications import TransportEnvelope
-from orchestrator.storage.models import Tenant
 from orchestrator.api.webhooks.jira_application import build_jira_webhook_ingress_result
+from orchestrator.core.communications import TransportEnvelope
+from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
+from orchestrator.storage.models import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +115,16 @@ async def ingest_jira_webhook_event(
             request_id=normalized_request_id,
         ),
     )
-    return decode_json_body(
-        next(
-            action
-            for action in result.actions
-            if action.kind in {"http_json_response", "http_json_response_bytes"}
-        )
+    response = execute_http_ingress_result(
+        result=result,
+        transport_action_executors=(
+            DiscordTransportExecutor(
+                session_factory=lambda: nullcontext(session),
+                settings_factory=lambda: settings,
+            ),
+        ),
     )
+    return json.loads(response.body.decode("utf-8"))
 
 
 __all__ = [

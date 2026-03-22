@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import fields
 from pathlib import Path
 import unittest
+
+from orchestrator.core.communications.contracts import (
+    DiscordAskWithThreadAction,
+    DiscordSeedWithThreadAction,
+    DiscordThreadReplyAction,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +62,14 @@ def _imported_modules(module_path: Path) -> set[str]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
+    def test_discord_thread_actions_do_not_embed_runtime_objects(self) -> None:
+        runtime_field_names = {"session", "settings", "tenant"}
+        for action_type in (DiscordThreadReplyAction, DiscordAskWithThreadAction, DiscordSeedWithThreadAction):
+            self.assertTrue(
+                runtime_field_names.isdisjoint({field.name for field in fields(action_type)}),
+                msg=f"{action_type.__name__} still embeds runtime objects in transport action fields",
+            )
+
     def test_production_modules_do_not_construct_raw_transport_action(self) -> None:
         production_modules = sorted(ORCHESTRATOR_ROOT.rglob("*.py"))
         self.assertTrue(production_modules)
@@ -98,6 +113,48 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             violations,
             [],
             msg=f"Direct provider imports found in command handlers: {violations}",
+        )
+
+    def test_webhook_classifier_and_planner_modules_do_not_import_provider_clients(self) -> None:
+        planner_modules = sorted((ROOT / "orchestrator" / "api" / "webhooks").glob("*_planner.py"))
+        classifier_modules = sorted((ROOT / "orchestrator" / "api" / "webhooks").glob("*_classifier.py"))
+        modules = planner_modules + classifier_modules
+        self.assertTrue(modules)
+
+        violations: list[str] = []
+        for module_path in modules:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("orchestrator.tools"):
+                    violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith("orchestrator.tools"):
+                            violations.append(f"{module_path.name}:{node.lineno}:{alias.name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Webhook planner/classifier modules importing provider clients directly: {violations}",
+        )
+
+    def test_github_and_jira_application_roots_do_not_import_provider_helpers_directly(self) -> None:
+        banned_imports = {
+            "orchestrator.api.webhooks.pr_review_comment_service",
+            "orchestrator.core.discord.notifications",
+        }
+        modules = [
+            ROOT / "orchestrator" / "api" / "webhooks" / "github_application.py",
+            ROOT / "orchestrator" / "api" / "webhooks" / "jira_application.py",
+        ]
+        violations: list[str] = []
+        for module_path in modules:
+            for module_name in _imported_modules(module_path):
+                if module_name in banned_imports:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Application roots importing provider helpers directly: {violations}",
         )
 
     def test_core_modules_do_not_import_api_routes_outside_allowlist(self) -> None:
@@ -197,6 +254,19 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             observed_allowed,
             expected_allowed,
             msg="Non-route API allowlist drifted; update list only with explicit architectural decision.",
+        )
+
+    def test_production_modules_do_not_reference_interactive_reply_transport(self) -> None:
+        violations: list[str] = []
+        for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id == "InteractiveReplyTransport":
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"InteractiveReplyTransport should not have production references: {violations}",
         )
 
 
