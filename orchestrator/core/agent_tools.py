@@ -1016,9 +1016,6 @@ def _resolve_canonical_run_branch(*, session: Session, context: AgentToolContext
     run = getattr(context, "run", None)
     if run is None:
         return None
-    existing = _normalize_branch_name(getattr(run, "branch", None))
-    if existing:
-        return existing
     remediation_branch = _extract_remediation_head_ref_from_run(run)
     if remediation_branch:
         run.branch = remediation_branch
@@ -1026,6 +1023,9 @@ def _resolve_canonical_run_branch(*, session: Session, context: AgentToolContext
         if callable(flush_fn):
             flush_fn()
         return remediation_branch
+    existing = _normalize_branch_name(getattr(run, "branch", None))
+    if existing:
+        return existing
     issue_key = str(context.issue_key or "").strip()
     if not issue_key:
         return None

@@ -25,16 +25,19 @@ Agent tool command: {{ agent_tool_command }}
 
 Required actions:
 1. Run validation in two steps:
-   - Step A: execute targeted tests/checks for changed areas first.
-   - Step B: run broader/full-suite checks only when Step A indicates risk, uncertainty, or uncovered acceptance criteria.
+   - Step A: execute targeted tests/checks only for the code you changed first.
+   - Step A must stay narrowly scoped to the touched files, nearby test files, or the smallest command that proves the fix.
+   - Do not default to broad `xcodebuild test`, full repo suites, or repeated whole-project reruns.
+   - Step B: run broader/full-suite checks only when the targeted checks passed and you still lack acceptance evidence, or when the targeted failure proves likely cross-cutting regression risk.
 2. When attempt > 1, identify unchanged areas and skip redundant re-testing for those areas.
-3. Keep command output lean:
+3. If you cannot identify a targeted test, say that explicitly in `guidance` before escalating to anything broader.
+4. Keep command output lean:
    - Use concise flags/reporters where possible.
    - For verbose commands, capture full output in an artifact file and summarize key failures in guidance.
-4. Provide concrete guidance for missing verification or failures.
-5. Treat the PM evidence ledger as the current prerequisite summary; only challenge it if new authoritative tool evidence contradicts it.
-6. Fail closed when verification cannot be completed.
-7. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
+5. Provide concrete guidance for missing verification or failures.
+6. Treat the PM evidence ledger as the current prerequisite summary; only challenge it if new authoritative tool evidence contradicts it.
+7. Fail closed when verification cannot be completed.
+8. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
 
 Output contract:
 - passed: boolean readiness signal.
