@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.api.webhooks.pr_remediation_policy import (
-    is_remediation_trigger,
-    parse_manual_pr_fix_request,
-)
 from orchestrator.core.communications import (
     DiscordTenantNotificationAction,
     GitHubInlineReviewBatchAction,
@@ -15,10 +11,6 @@ from orchestrator.core.communications import (
     GitHubStickyReviewCommentAction,
     TransportAction,
 )
-
-_FULL_REVIEW_EVENTS = {"pull_request", "check_run", "check_suite"}
-_BOT_AUTHORED_REVIEW_EVENTS = {"pull_request_review", "pull_request_review_comment"}
-
 
 @dataclass(frozen=True)
 class GitHubReviewPlan:
@@ -36,6 +28,9 @@ def plan_pull_request_targets(
     payload: dict,
     github_event: str,
     normalized_action: str | None,
+    full_review_trigger: bool,
+    remediation_trigger: bool,
+    manual_fix_requested: bool,
     github_client,
     reviewer_gate,
     allow_auto_merge: bool,
@@ -56,62 +51,6 @@ def plan_pull_request_targets(
     inline_reviews: list[dict[str, object]] = []
     merge_results: list[dict[str, object]] = []
     planned_actions: list[TransportAction] = []
-    manual_fix_request = parse_manual_pr_fix_request(payload=payload)
-    manual_fix_requested = manual_fix_request is not None
-    full_review_trigger = github_event in _FULL_REVIEW_EVENTS
-    remediation_trigger = is_remediation_trigger(
-        event=github_event,
-        action=normalized_action or "",
-        payload=payload,
-    )
-    ignored_reason = _resolve_ignored_review_reason(
-        github_event=github_event,
-        payload=payload,
-    )
-
-    if ignored_reason is not None:
-        logger.info(
-            "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=%s sender=%s",
-            request_id,
-            tenant.tenant_id,
-            project.project_id,
-            repo_full_name,
-            github_event,
-            normalized_action or "none",
-            ignored_reason,
-            _resolve_primary_sender_login(payload=payload) or "unknown",
-        )
-        return GitHubReviewPlan(
-            summary=_empty_review_results(
-                allow_auto_merge=allow_auto_merge,
-                allow_pr_remediation=allow_pr_remediation,
-                allow_manual_pr_fix_requests=allow_manual_pr_fix_requests,
-                full_review_trigger=False,
-                ignored_reason=ignored_reason,
-            )
-        )
-
-    if not full_review_trigger and not remediation_trigger and not manual_fix_requested:
-        logger.info(
-            "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=unsupported_event sender=%s",
-            request_id,
-            tenant.tenant_id,
-            project.project_id,
-            repo_full_name,
-            github_event,
-            normalized_action or "none",
-            _resolve_primary_sender_login(payload=payload) or "unknown",
-        )
-        return GitHubReviewPlan(
-            summary=_empty_review_results(
-                allow_auto_merge=allow_auto_merge,
-                allow_pr_remediation=allow_pr_remediation,
-                allow_manual_pr_fix_requests=allow_manual_pr_fix_requests,
-                full_review_trigger=False,
-                ignored_reason="unsupported_event",
-            )
-        )
-
     for pr_number, _review_summary_present in pr_targets:
         signal = type("Signal", (), {"ready": False, "state": "not_triggered", "message": "review_not_triggered"})()
         if full_review_trigger:
@@ -483,83 +422,3 @@ def valid_pr_details(details: object) -> bool:
         and hasattr(details, "head_sha")
         and bool(str(getattr(details, "head_sha", "") or "").strip())
     )
-
-
-def _resolve_primary_sender_login(*, payload: dict) -> str | None:
-    sender = payload.get("sender")
-    if not isinstance(sender, dict):
-        return None
-    login = str(sender.get("login") or "").strip()
-    return login or None
-
-
-def _resolve_primary_sender_type(*, payload: dict) -> str | None:
-    sender = payload.get("sender")
-    if not isinstance(sender, dict):
-        return None
-    sender_type = str(sender.get("type") or "").strip()
-    return sender_type or None
-
-
-def _is_bot_sender(*, payload: dict) -> bool:
-    sender_type = (_resolve_primary_sender_type(payload=payload) or "").lower()
-    if sender_type == "bot":
-        return True
-    login = (_resolve_primary_sender_login(payload=payload) or "").lower()
-    return login.endswith("[bot]")
-
-
-def _is_bot_review_author(*, payload: dict) -> bool:
-    for key in ("review", "comment"):
-        value = payload.get(key)
-        if not isinstance(value, dict):
-            continue
-        user = value.get("user")
-        if not isinstance(user, dict):
-            continue
-        user_type = str(user.get("type") or "").strip().lower()
-        login = str(user.get("login") or "").strip().lower()
-        if user_type == "bot" or login.endswith("[bot]"):
-            return True
-    return False
-
-
-def _resolve_ignored_review_reason(
-    *,
-    github_event: str,
-    payload: dict,
-) -> str | None:
-    normalized_event = str(github_event or "").strip().lower()
-    if normalized_event in _BOT_AUTHORED_REVIEW_EVENTS and (_is_bot_sender(payload=payload) or _is_bot_review_author(payload=payload)):
-        return "bot_authored"
-    return None
-
-
-def _empty_review_results(
-    *,
-    allow_auto_merge: bool,
-    allow_pr_remediation: bool,
-    allow_manual_pr_fix_requests: bool,
-    full_review_trigger: bool,
-    ignored_reason: str,
-) -> dict[str, object]:
-    return {
-        "signals": [],
-        "review_comments": [],
-        "inline_reviews": [],
-        "pr_review": {
-            "enabled": True,
-            "triggered": full_review_trigger,
-            "ignored_reason": ignored_reason,
-        },
-        "auto_merge": {
-            "enabled": allow_auto_merge,
-            "results": [],
-        },
-        "pr_remediation": {
-            "enabled": allow_pr_remediation,
-            "manual_fix_requests_enabled": allow_manual_pr_fix_requests,
-        },
-        "remediation": [],
-        "remediation_comments": [],
-    }

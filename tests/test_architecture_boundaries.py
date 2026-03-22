@@ -28,6 +28,7 @@ NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST = {
     "orchestrator/api/main.py": {
         "orchestrator.api.routes.admin_auth",
         "orchestrator.api.routes.admin_codex",
+        "orchestrator.api.routes.admin_discord_commands",
         "orchestrator.api.routes.admin_discord_allowlist",
         "orchestrator.api.routes.admin_github",
         "orchestrator.api.routes.admin_jira",
@@ -141,6 +142,8 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         banned_imports = {
             "orchestrator.api.webhooks.pr_review_comment_service",
             "orchestrator.core.discord.notifications",
+            "orchestrator.api.webhooks.jira_webhook_board_gate",
+            "orchestrator.api.webhooks.jira_webhook_comment_flow",
         }
         modules = [
             ROOT / "orchestrator" / "api" / "webhooks" / "github_application.py",

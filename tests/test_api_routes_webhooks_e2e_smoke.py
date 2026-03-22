@@ -410,6 +410,14 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/alerts/evaluate?tenant_id=example",
                 auth=admin,
             ),
+            ("GET", "/api/admin/discord/commands/status"): RouteScenario(
+                path="/api/admin/discord/commands/status",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/discord/commands/sync"): RouteScenario(
+                path="/api/admin/discord/commands/sync",
+                auth=admin,
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/health"): RouteScenario(
                 path="/api/admin/tenants/example/health",
                 auth=admin,
