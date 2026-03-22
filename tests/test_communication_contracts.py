@@ -20,10 +20,11 @@ from orchestrator.core.communications.contracts import (
     DiscordThreadReplyAction,
     GitHubInlineReviewBatchAction,
     GitHubIssueCommentReactionAction,
-    GitHubManualFixFollowupCommentAction,
+    GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
     GitHubPullRequestReviewCommentReactionAction,
     GitHubStickyRemediationCommentAction,
+    GitHubStickyRemediationReviewThreadReplyAction,
     GitHubStickyReviewCommentAction,
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
@@ -321,7 +322,10 @@ class CommunicationContractsTests(unittest.TestCase):
             patch("orchestrator.core.github.transport_executor.upsert_sticky_review_comment") as sticky_review,
             patch("orchestrator.core.github.transport_executor.publish_inline_review_batch") as inline_review,
             patch("orchestrator.core.github.transport_executor.upsert_sticky_remediation_comment") as sticky_remediation,
-            patch("orchestrator.core.github.transport_executor.upsert_manual_fix_followup_comment") as manual_fix_followup,
+            patch(
+                "orchestrator.core.github.transport_executor.upsert_sticky_remediation_review_thread_reply"
+            ) as sticky_remediation_thread_reply,
+            patch("orchestrator.core.github.transport_executor.upsert_manual_fix_review_thread_reply") as manual_fix_reply,
         ):
             executor.execute(
                 action=GitHubStickyReviewCommentAction(
@@ -367,7 +371,25 @@ class CommunicationContractsTests(unittest.TestCase):
                 )
             )
             executor.execute(
-                action=GitHubManualFixFollowupCommentAction(
+                action=GitHubStickyRemediationReviewThreadReplyAction(
+                    repo_full_name="org/repo",
+                    pr_number=11,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    triggering_comment_id=99,
+                    issue_key="GP-1",
+                    issue_url="https://jira/GP-1",
+                    issue_created=True,
+                    enqueued=True,
+                    reason=None,
+                    run_id="run-1",
+                    head_sha="abc123",
+                    event="pull_request_review_comment",
+                    action_name="created",
+                )
+            )
+            executor.execute(
+                action=GitHubManualFixReviewThreadReplyAction(
                     repo_full_name="org/repo",
                     pr_number=11,
                     tenant_id="tenant-1",
@@ -375,7 +397,7 @@ class CommunicationContractsTests(unittest.TestCase):
                     triggering_comment_id=99,
                     requested_by="alice",
                     triggering_comment_url="https://github.com/comment",
-                    requested_comment_url="https://github.com/comment",
+                    instruction_text="fix the flaky test",
                     issue_key="GP-1",
                     issue_url="https://jira/GP-1",
                     enqueued=True,
@@ -394,7 +416,8 @@ class CommunicationContractsTests(unittest.TestCase):
         sticky_review.assert_called_once()
         inline_review.assert_called_once()
         sticky_remediation.assert_called_once()
-        manual_fix_followup.assert_called_once()
+        sticky_remediation_thread_reply.assert_called_once()
+        manual_fix_reply.assert_called_once()
 
         github_client.merge_pull_request.assert_called_once_with(
             repo_full_name="org/repo",

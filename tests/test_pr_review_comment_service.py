@@ -16,8 +16,9 @@ from orchestrator.api.webhooks.pr_review_publication_state import (
 from orchestrator.api.webhooks.pr_review_comment_service import (
     format_sticky_review_comment,
     publish_inline_review_batch,
-    upsert_manual_fix_followup_comment,
+    upsert_manual_fix_review_thread_reply,
     upsert_sticky_remediation_comment,
+    upsert_sticky_remediation_review_thread_reply,
     upsert_sticky_review_comment,
 )
 from orchestrator.core.pr_review_findings import PrReviewFindingsResult, ReviewFinding
@@ -150,8 +151,7 @@ def test_format_sticky_review_comment_includes_manual_fix_quick_action() -> None
         action="submitted",
         marker="<!-- marker -->",
     )
-    assert "@mb fix" in body
-    assert "<comment-url>" in body
+    assert "@mb <what to change>" in body
     assert "https://github.com/org/repo/pull/10#issuecomment-new" in body
 
 
@@ -417,13 +417,66 @@ def test_upsert_sticky_remediation_comment_creates_and_updates() -> None:
     assert updated.comment_id == 202
 
 
-def test_upsert_manual_fix_followup_comment_creates_and_updates() -> None:
+def test_upsert_sticky_remediation_review_thread_reply_creates_and_updates() -> None:
     github_client = SimpleNamespace(
-        list_pull_request_issue_comments=lambda **_kwargs: [],
-        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
-        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+        list_pull_request_review_comments=lambda **_kwargs: [],
+        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(comment_id=212),
+        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=212),
     )
-    created = upsert_manual_fix_followup_comment(
+    created = upsert_sticky_remediation_review_thread_reply(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=9001,
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        issue_created=True,
+        enqueued=True,
+        reason=None,
+        run_id="run-10",
+        head_sha="abc123",
+        event="pull_request_review_comment",
+        action="created",
+    )
+    assert created.action == "created"
+    assert created.comment_id == 212
+
+    marker_body = "<!-- codex:pr-remediation-thread:t1:p1:org/repo:10:9001 -->"
+    github_client = SimpleNamespace(
+        list_pull_request_review_comments=lambda **_kwargs: [SimpleNamespace(comment_id=212, body=marker_body)],
+        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(comment_id=999),
+        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=212),
+    )
+    updated = upsert_sticky_remediation_review_thread_reply(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=9001,
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        issue_created=False,
+        enqueued=False,
+        reason="run_already_active",
+        run_id="run-10",
+        head_sha="abc123",
+        event="pull_request_review_comment",
+        action="created",
+    )
+    assert updated.action == "updated"
+    assert updated.comment_id == 212
+
+
+def test_upsert_manual_fix_review_thread_reply_creates_and_updates() -> None:
+    github_client = SimpleNamespace(
+        list_pull_request_review_comments=lambda **_kwargs: [],
+        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(comment_id=303),
+        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+    )
+    created = upsert_manual_fix_review_thread_reply(
         github_client=github_client,
         repo_full_name="org/repo",
         pr_number=10,
@@ -431,8 +484,8 @@ def test_upsert_manual_fix_followup_comment_creates_and_updates() -> None:
         project_id="p1",
         triggering_comment_id=9001,
         requested_by="alice",
-        triggering_comment_url="https://github.com/org/repo/pull/10#issuecomment-9001",
-        requested_comment_url="https://github.com/org/repo/pull/10#discussion_r222",
+        triggering_comment_url="https://github.com/org/repo/pull/10#discussion_r9001",
+        instruction_text="rename the method and add tests",
         issue_key="GP-10",
         issue_url="https://jira.example.com/browse/GP-10",
         enqueued=True,
@@ -444,11 +497,11 @@ def test_upsert_manual_fix_followup_comment_creates_and_updates() -> None:
 
     marker_body = "<!-- codex:pr-manual-fix:t1:p1:org/repo:10:9001 -->"
     github_client = SimpleNamespace(
-        list_pull_request_issue_comments=lambda **_kwargs: [SimpleNamespace(comment_id=303, body=marker_body)],
-        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
-        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+        list_pull_request_review_comments=lambda **_kwargs: [SimpleNamespace(comment_id=303, body=marker_body)],
+        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(comment_id=999),
+        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
     )
-    updated = upsert_manual_fix_followup_comment(
+    updated = upsert_manual_fix_review_thread_reply(
         github_client=github_client,
         repo_full_name="org/repo",
         pr_number=10,
@@ -456,8 +509,8 @@ def test_upsert_manual_fix_followup_comment_creates_and_updates() -> None:
         project_id="p1",
         triggering_comment_id=9001,
         requested_by="alice",
-        triggering_comment_url="https://github.com/org/repo/pull/10#issuecomment-9001",
-        requested_comment_url="https://github.com/org/repo/pull/10#discussion_r222",
+        triggering_comment_url="https://github.com/org/repo/pull/10#discussion_r9001",
+        instruction_text="rename the method and add tests",
         issue_key="GP-10",
         issue_url="https://jira.example.com/browse/GP-10",
         enqueued=False,

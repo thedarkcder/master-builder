@@ -603,26 +603,30 @@ class GitHubAppClient:
 
         parsed: list[PullRequestReviewComment] = []
         for item in response:
-            if not isinstance(item, dict):
-                continue
-            comment_id = item.get("id")
-            body = item.get("body")
-            if not isinstance(comment_id, int) or not isinstance(body, str) or not body.strip():
-                continue
-            user = item.get("user")
-            user_login = user.get("login") if isinstance(user, dict) else None
-            line = item.get("line")
-            parsed.append(
-                PullRequestReviewComment(
-                    comment_id=comment_id,
-                    body=body.strip(),
-                    path=item.get("path") if isinstance(item.get("path"), str) else None,
-                    line=line if isinstance(line, int) else None,
-                    state=item.get("state") if isinstance(item.get("state"), str) else None,
-                    user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
-                )
-            )
+            comment = self._parse_pull_request_review_comment(item)
+            if comment is not None:
+                parsed.append(comment)
         return parsed
+
+    def create_pull_request_review_comment_reply(
+        self,
+        *,
+        repo_full_name: str,
+        pr_number: int,
+        in_reply_to: int,
+        body: str,
+    ) -> PullRequestReviewComment:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/pulls/{pr_number}/comments",
+            bearer_token=installation_token,
+            payload={"body": body, "in_reply_to": in_reply_to},
+        )
+        comment = self._parse_pull_request_review_comment(response)
+        if comment is None:
+            raise GitHubApiError("GitHub create pull request review comment reply response was not valid")
+        return comment
 
     def list_pull_request_issue_comments(
         self,
@@ -684,6 +688,25 @@ class GitHubAppClient:
         comment = self._parse_issue_comment(response)
         if comment is None:
             raise GitHubApiError("GitHub update issue comment response was not valid")
+        return comment
+
+    def update_pull_request_review_comment(
+        self,
+        *,
+        repo_full_name: str,
+        comment_id: int,
+        body: str,
+    ) -> PullRequestReviewComment:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="PATCH",
+            path=f"/repos/{repo_full_name}/pulls/comments/{comment_id}",
+            bearer_token=installation_token,
+            payload={"body": body},
+        )
+        comment = self._parse_pull_request_review_comment(response)
+        if comment is None:
+            raise GitHubApiError("GitHub update pull request review comment response was not valid")
         return comment
 
     def add_issue_comment_reaction(
@@ -803,5 +826,24 @@ class GitHubAppClient:
             comment_id=comment_id,
             body=body.strip(),
             created_at=created_at.strip() if isinstance(created_at, str) and created_at.strip() else None,
+            user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
+        )
+
+    def _parse_pull_request_review_comment(self, item: object) -> PullRequestReviewComment | None:
+        if not isinstance(item, dict):
+            return None
+        comment_id = item.get("id")
+        body = item.get("body")
+        if not isinstance(comment_id, int) or not isinstance(body, str) or not body.strip():
+            return None
+        user = item.get("user")
+        user_login = user.get("login") if isinstance(user, dict) else None
+        line = item.get("line")
+        return PullRequestReviewComment(
+            comment_id=comment_id,
+            body=body.strip(),
+            path=item.get("path") if isinstance(item.get("path"), str) else None,
+            line=line if isinstance(line, int) else None,
+            state=item.get("state") if isinstance(item.get("state"), str) else None,
             user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
         )

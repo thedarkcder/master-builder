@@ -229,12 +229,12 @@ class PrRemediationServiceTests(unittest.TestCase):
         session.commit.assert_not_called()
         session.refresh.assert_not_called()
 
-    def test_manual_fix_command_without_url_infers_trigger_comment_url(self) -> None:
+    def test_manual_fix_command_uses_triggering_comment_as_context(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()
         github_client.list_pull_request_issue_comments.return_value = [
             SimpleNamespace(
                 comment_id=501,
-                body="@mb fix",
+                body="@mb fix the flaky test",
                 created_at="2026-03-15T12:00:00Z",
                 user_login="owner-a",
             )
@@ -242,7 +242,12 @@ class PrRemediationServiceTests(unittest.TestCase):
         payload = {
             **payload,
             "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
-            "comment": {"id": 501, "body": "@mb fix", "html_url": "https://github.com/org/repo/pull/11#issuecomment-501"},
+            "comment": {
+                "id": 501,
+                "body": "@mb fix the flaky test",
+                "html_url": "https://github.com/org/repo/pull/11#issuecomment-501",
+                "user": {"login": "owner-a"},
+            },
         }
         enqueue_result = EnqueueRunResult(
             enqueued=True,
@@ -276,24 +281,22 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
         self.assertIsNone(result.reason)
+        manual_fix = enqueue_result.run.plan.get("trigger_context", {}).get("manual_fix_request")
+        self.assertIsInstance(manual_fix, dict)
+        self.assertEqual(manual_fix.get("instruction_text"), "fix the flaky test")
+        requested_comment = manual_fix.get("requested_comment")
+        self.assertIsInstance(requested_comment, dict)
+        self.assertEqual(requested_comment.get("id"), 501)
+        self.assertEqual(requested_comment.get("type"), "issue_comment")
 
-    def test_manual_fix_command_enqueues_with_requested_comment(self) -> None:
+    def test_manual_fix_command_enqueues_with_triggering_comment(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()
-        github_client.list_pull_request_review_comments.return_value = [
-            SimpleNamespace(
-                comment_id=222,
-                body="Please update variable naming",
-                path="app/main.py",
-                line=42,
-                user_login="reviewer-a",
-            )
-        ]
         payload = {
             **payload,
             "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
             "comment": {
                 "id": 550,
-                "body": "@mb fix https://github.com/org/repo/pull/11#discussion_r222",
+                "body": "@mb rename this variable",
                 "html_url": "https://github.com/org/repo/pull/11#issuecomment-550",
                 "user": {"login": "owner-a"},
             },
@@ -333,11 +336,37 @@ class PrRemediationServiceTests(unittest.TestCase):
         manual_fix = enqueue_result.run.plan.get("trigger_context", {}).get("manual_fix_request")
         self.assertIsInstance(manual_fix, dict)
         self.assertEqual(manual_fix.get("requested_by"), "owner-a")
+        self.assertEqual(manual_fix.get("instruction_text"), "rename this variable")
         requested_comment = manual_fix.get("requested_comment")
         self.assertIsInstance(requested_comment, dict)
-        self.assertEqual(requested_comment.get("id"), 222)
-        self.assertEqual(requested_comment.get("type"), "review_comment")
+        self.assertEqual(requested_comment.get("id"), 550)
+        self.assertEqual(requested_comment.get("type"), "issue_comment")
         enqueue_run_mock.assert_called_once()
+
+    def test_manual_fix_command_requires_instruction_text(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        payload = {
+            **payload,
+            "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            "comment": {"id": 501, "body": "@mb", "html_url": "https://github.com/org/repo/pull/11#issuecomment-501"},
+        }
+
+        result = enqueue_pr_remediation_if_needed(
+            session=session,
+            tenant=tenant,
+            project=project,
+            github_client=github_client,
+            event="issue_comment",
+            action="created",
+            payload=payload,
+            pr_number=11,
+            repo_full_name="org/repo",
+            settings=settings,
+        )
+
+        self.assertTrue(result.triggered)
+        self.assertFalse(result.enqueued)
+        self.assertEqual(result.reason, "manual_fix_missing_instruction")
 
 
 if __name__ == "__main__":

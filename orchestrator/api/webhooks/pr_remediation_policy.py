@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
-from urllib.parse import urlparse
 
 from orchestrator.api.webhooks.pr_remediation_issue_service import (
     create_pr_remediation_bug_issue_key,
@@ -12,27 +10,10 @@ from orchestrator.api.webhooks.pr_remediation_issue_service import (
 from orchestrator.tools.github_app import GitHubAppClient
 from orchestrator.tools.jira_oauth import JiraOAuthError
 
-_MANUAL_FIX_COMMAND_PATTERN = re.compile(
-    r"^\s*(?:@mb|/mb)\s+fix(?:\s+(?P<comment_url>\S+))?\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
-_PULL_COMMENT_URL_PATTERN = re.compile(r"^/([^/]+/[^/]+)/pull/(\d+)(?:/(?:files|commits|checks))?$")
-_DISCUSSION_ANCHOR_PATTERN = re.compile(r"^discussion_r(?P<comment_id>\d+)$")
-_ISSUE_COMMENT_ANCHOR_PATTERN = re.compile(r"^issuecomment-(?P<comment_id>\d+)$")
-
-
 @dataclass(frozen=True)
 class ManualPrFixRequest:
-    command: str
-    comment_url: str | None
+    instruction_text: str
     parse_error: str | None
-
-
-@dataclass(frozen=True)
-class RequestedCommentRef:
-    comment_type: str
-    comment_id: int
-    comment_url: str
 
 
 def parse_manual_pr_fix_request(*, payload: dict) -> ManualPrFixRequest | None:
@@ -40,52 +21,22 @@ def parse_manual_pr_fix_request(*, payload: dict) -> ManualPrFixRequest | None:
     body = str(comment.get("body") or "") if isinstance(comment, dict) else ""
     if not body.strip():
         return None
-    match = _MANUAL_FIX_COMMAND_PATTERN.search(body)
-    if match is None:
+    first_non_empty_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    if not first_non_empty_line:
         return None
-    comment_url = str(match.group("comment_url") or "").strip() or None
-    return ManualPrFixRequest(command="fix", comment_url=comment_url, parse_error=None)
-
-
-def resolve_requested_comment_ref(
-    *,
-    comment_url: str,
-    repo_full_name: str,
-    pr_number: int,
-) -> tuple[RequestedCommentRef | None, str | None]:
-    parsed_url = urlparse(comment_url)
-    normalized_path = parsed_url.path.strip()
-    match = _PULL_COMMENT_URL_PATTERN.match(normalized_path)
-    if match is None:
-        return None, "manual_fix_invalid_comment_url"
-    url_repo = str(match.group(1) or "").strip()
-    url_pr_raw = str(match.group(2) or "").strip()
-    if url_repo.lower() != repo_full_name.lower():
-        return None, "manual_fix_comment_url_repo_mismatch"
-    try:
-        url_pr_number = int(url_pr_raw)
-    except ValueError:
-        return None, "manual_fix_invalid_comment_url"
-    if url_pr_number != pr_number:
-        return None, "manual_fix_comment_url_pr_mismatch"
-    anchor = str(parsed_url.fragment or "").strip()
-    if not anchor:
-        return None, "manual_fix_comment_url_missing_anchor"
-    discussion_match = _DISCUSSION_ANCHOR_PATTERN.match(anchor)
-    if discussion_match is not None:
-        return RequestedCommentRef(
-            comment_type="review_comment",
-            comment_id=int(discussion_match.group("comment_id")),
-            comment_url=comment_url,
-        ), None
-    issue_comment_match = _ISSUE_COMMENT_ANCHOR_PATTERN.match(anchor)
-    if issue_comment_match is not None:
-        return RequestedCommentRef(
-            comment_type="issue_comment",
-            comment_id=int(issue_comment_match.group("comment_id")),
-            comment_url=comment_url,
-        ), None
-    return None, "manual_fix_unsupported_comment_anchor"
+    normalized_line = first_non_empty_line.lower()
+    prefix = next(
+        (candidate for candidate in ("@mb", "/mb") if normalized_line.startswith(candidate)),
+        None,
+    )
+    if prefix is None:
+        return None
+    instruction_lines = [first_non_empty_line[len(prefix):].strip()]
+    instruction_lines.extend(line.strip() for line in body.splitlines()[1:] if line.strip())
+    instruction_text = "\n".join(line for line in instruction_lines if line).strip()
+    if not instruction_text:
+        return ManualPrFixRequest(instruction_text="", parse_error="manual_fix_missing_instruction")
+    return ManualPrFixRequest(instruction_text=instruction_text, parse_error=None)
 
 
 def is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
