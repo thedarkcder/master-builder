@@ -177,6 +177,64 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         confirmation_builder.assert_called_once_with("req-1")
         self.assertEqual(_ask_reply_components()[0]["components"][0]["custom_id"], "ask.reply.open")
 
+    def test_resolve_thread_channel_for_reply_uses_message_mapping(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _resolve_thread_channel_for_reply
+
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="t1")
+        project = SimpleNamespace(
+            discord_config={
+                "ask_thread_by_message_id": {
+                    "message-1": "thread-1",
+                }
+            }
+        )
+
+        with (
+            patch(
+                "orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel",
+                return_value=tenant,
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel",
+                return_value=project,
+            ),
+        ):
+            self.assertEqual(
+                _resolve_thread_channel_for_reply(
+                    session=session,
+                    channel_id="parent-1",
+                    reply_to_message_id="message-1",
+                ),
+                "thread-1",
+            )
+
+    def test_resolve_thread_channel_for_reply_falls_back_to_current_channel_without_mapping(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _resolve_thread_channel_for_reply
+
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="t1")
+        project = SimpleNamespace(discord_config={})
+
+        with (
+            patch(
+                "orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel",
+                return_value=tenant,
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel",
+                return_value=project,
+            ),
+        ):
+            self.assertEqual(
+                _resolve_thread_channel_for_reply(
+                    session=session,
+                    channel_id="parent-1",
+                    reply_to_message_id="message-1",
+                ),
+                "parent-1",
+            )
+
     def test_send_discord_thread_followup_paths(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_thread_followup
 

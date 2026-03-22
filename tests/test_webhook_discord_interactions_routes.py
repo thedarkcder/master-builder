@@ -37,6 +37,7 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             "_run_discord_ask_confirmation_followup": AsyncMock(),
             "_run_discord_command_followup": AsyncMock(),
             "_run_discord_decision_gate_reply_followup": AsyncMock(),
+            "_resolve_thread_channel_for_reply": MagicMock(side_effect=lambda **kwargs: kwargs["channel_id"]),
             "_decision_gate_issue_for_thread": MagicMock(return_value=None),
             "_run_discord_application_command_followup": AsyncMock(),
             "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_capture_and_close)),
@@ -211,6 +212,60 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         run_decision_gate_followup.assert_called_once()
         run_ask_followup.assert_not_called()
+
+    async def test_modal_submit_resolves_reply_context_to_thread_and_routes_issue_bound_replies(self) -> None:
+        run_decision_gate_followup = AsyncMock()
+        run_ask_followup = AsyncMock()
+        await self._call(
+            {
+                "type": 5,
+                "channel_id": "parent-1",
+                "application_id": "app",
+                "token": "tok",
+                "data": {"custom_id": "ask.reply.msg-1"},
+                "user": {"id": "u-direct"},
+            },
+            _resolve_thread_channel_for_reply=MagicMock(return_value="thread-1"),
+            _decision_gate_issue_for_thread=MagicMock(return_value=("tenant-1", "MAB-158")),
+            _run_discord_decision_gate_reply_followup=run_decision_gate_followup,
+            _run_discord_command_followup=run_ask_followup,
+        )
+        run_decision_gate_followup.assert_called_once_with(
+            tenant_id="tenant-1",
+            user_id="u-direct",
+            channel_id="thread-1",
+            issue_key="MAB-158",
+            reply_text="next step",
+            application_id="app",
+            interaction_token="tok",
+            reply_to_message_id="m1",
+        )
+        run_ask_followup.assert_not_called()
+
+    async def test_modal_submit_resolves_reply_context_to_thread_for_generic_ask_followups(self) -> None:
+        run_ask_followup = AsyncMock()
+        await self._call(
+            {
+                "type": 5,
+                "channel_id": "parent-1",
+                "application_id": "app",
+                "token": "tok",
+                "data": {"custom_id": "ask.reply.msg-1"},
+                "user": {"id": "u-direct"},
+            },
+            _resolve_thread_channel_for_reply=MagicMock(return_value="thread-1"),
+            _decision_gate_issue_for_thread=MagicMock(return_value=None),
+            _run_discord_command_followup=run_ask_followup,
+        )
+        run_ask_followup.assert_called_once_with(
+            tenant_id=None,
+            user_id="u-direct",
+            channel_id="thread-1",
+            command_text="!ask next step",
+            application_id="app",
+            interaction_token="tok",
+            reply_to_message_id="m1",
+        )
 
     async def test_application_command_reply_and_command_paths(self) -> None:
         wrong_type = await self._call({"type": 2, "data": {"name": "reply", "type": 1}})

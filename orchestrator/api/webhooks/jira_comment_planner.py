@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from orchestrator.api.webhooks import jira_webhook_comment_flow
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext
+from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,20 @@ def plan_jira_comment_flow(
         context=context,
         session=session,
     )
+    if context.project is None and context.webhook_event in jira_webhook_comment_flow.JIRA_COMMENT_EVENTS:
+        return JiraCommentPlan(
+            content=jira_webhook_comment_flow.jira_webhook_response(
+                context,
+                enqueued=False,
+                reason="project_not_mapped",
+                guidance=enqueue_reason_guidance("project_not_mapped"),
+                command=context.comment_command,
+                webhook_event=context.webhook_event,
+                removed_history_entries=removed_history_entries,
+            ),
+            removed_history_entries=removed_history_entries,
+        )
+
     comment_ask_response = jira_webhook_comment_flow.stage_handle_comment_ask_command(
         context=context,
         session=session,

@@ -14,7 +14,6 @@ from orchestrator.core.codex_runtime import (
     _extract_usage_from_json_stdout,
     build_codex_runtime,
 )
-from orchestrator.storage.run_queue_events import postgres_dsn_from_database_url
 
 
 class ExtractJsonPayloadTests(unittest.TestCase):
@@ -243,7 +242,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             self.assertEqual(popen_mock.call_args.kwargs["cwd"], "/tmp/repo")
             self.assertEqual(
                 popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
-                postgres_dsn_from_database_url(settings.database_url),
+                settings.database_url,
             )
 
     def test_cli_request_uses_explicit_tool_database_url_override_when_configured(self) -> None:
@@ -290,7 +289,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
-            postgres_dsn_from_database_url(settings.codex_tool_database_url),
+            settings.codex_tool_database_url,
         )
 
     def test_cli_request_preserves_non_postgres_tool_database_url(self) -> None:

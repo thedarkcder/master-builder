@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
-from orchestrator.core.agent_tools import allowed_tools_for_stage
+from orchestrator.core.agent_tools import allowed_tools_for_stage, build_agent_tool_command
 from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
@@ -35,7 +35,7 @@ def plan_decision_questions(
     session,
     settings,  # noqa: ANN001
     tenant: Tenant,
-    project: Project | None,
+    project: Project,
     issue_key: str,
     source: str,
     classification: str,
@@ -53,7 +53,7 @@ def plan_decision_questions(
             context=CodexInvocationContext(
                 channel="system",
                 tenant_id=tenant.tenant_id,
-                project_id=project.project_id if project is not None else None,
+                project_id=project.project_id,
                 command="policy",
                 stage="decision_planner",
                 working_dir=".",
@@ -64,7 +64,7 @@ def plan_decision_questions(
             user_prompt=render_prompt(
                 "policy/decision_planner_user.j2",
                 tenant_id=tenant.tenant_id,
-                project_id=project.project_id if project is not None else "",
+                project_id=project.project_id,
                 issue_key=issue_key,
                 source=source,
                 classification=classification,
@@ -74,12 +74,12 @@ def plan_decision_questions(
                 current_questions_json=json.dumps(cycle.question_set_json if cycle is not None else []),
                 current_cycle_metadata_json=json.dumps(cycle.metadata_json if cycle is not None else {}),
                 allowed_tools_json=json.dumps(allowed_tools),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {tenant.tenant_id} "
-                    f"--project {project.project_id if project is not None else ''} "
-                    f"--issue {issue_key} "
-                    "--stage decision_planner --tool <tool_name> --args '<json-object>'"
+                agent_tool_command=build_agent_tool_command(
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    run_id=None,
+                    issue_key=issue_key,
+                    stage="decision_planner",
                 ),
             ),
         )

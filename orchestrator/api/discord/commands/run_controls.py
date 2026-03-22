@@ -36,7 +36,7 @@ from orchestrator.core.precheck_question_lock import (
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck, resolve_run_gate_block
 from orchestrator.core.runs import cancel_run
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _evaluate_precheck_decision_with_labels(
     *,
     session: Session,
     tenant: Tenant,
-    project: Any,  # noqa: ANN401
+    project: Project,
     source: DecisionSource,
     issue_key: str,
     issue_summary: str | None,

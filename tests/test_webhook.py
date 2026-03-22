@@ -1280,7 +1280,9 @@ class JiraWebhookTests(unittest.TestCase):
         }
         with patch(
             "orchestrator.api.webhooks.jira_webhook_comment_flow.stage_handle_comment_decision_reply",
-        ) as reply_stage_mock:
+        ) as reply_stage_mock, patch(
+            "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_precheck_decision_with_labels",
+        ) as evaluate_mock:
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 200)
@@ -1288,6 +1290,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(body["enqueued"])
         self.assertEqual(body["reason"], "project_not_mapped")
         reply_stage_mock.assert_not_called()
+        evaluate_mock.assert_not_called()
 
     def test_webhook_respects_tenant_concurrency_limit(self) -> None:
         self._create_tenant("tenant-single", max_concurrent_runs=1)

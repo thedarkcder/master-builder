@@ -8,7 +8,7 @@ from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_co
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.agent_tools import allowed_tools_for_stage
+from orchestrator.core.agent_tools import allowed_tools_for_stage, build_agent_tool_command
 from orchestrator.core.worker_capabilities import normalize_worker_capability
 from orchestrator.core.workflow.runner import (
     DevResult,
@@ -134,13 +134,12 @@ class CodexWorkflowAgents:
                 available_worker_capabilities_json=json.dumps(request.available_worker_capabilities),
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("pm"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage pm --tool <tool_name> --args '<json-object>'"
+                agent_tool_command=build_agent_tool_command(
+                    tenant_id=request.tenant_id,
+                    project_id=request.project_id,
+                    run_id=request.run_id,
+                    issue_key=request.issue_key,
+                    stage="pm",
                 ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=attempt),
@@ -241,13 +240,12 @@ class CodexWorkflowAgents:
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("dev"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage dev --tool <tool_name> --args '<json-object>'"
+                agent_tool_command=build_agent_tool_command(
+                    tenant_id=request.tenant_id,
+                    project_id=request.project_id,
+                    run_id=request.run_id,
+                    issue_key=request.issue_key,
+                    stage="dev",
                 ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="dev", attempt=attempt),
@@ -334,13 +332,12 @@ class CodexWorkflowAgents:
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("test"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage test --tool <tool_name> --args '<json-object>'"
+                agent_tool_command=build_agent_tool_command(
+                    tenant_id=request.tenant_id,
+                    project_id=request.project_id,
+                    run_id=request.run_id,
+                    issue_key=request.issue_key,
+                    stage="test",
                 ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="test", attempt=attempt),
@@ -441,13 +438,12 @@ class CodexWorkflowAgents:
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage review --tool <tool_name> --args '<json-object>'"
+                agent_tool_command=build_agent_tool_command(
+                    tenant_id=request.tenant_id,
+                    project_id=request.project_id,
+                    run_id=request.run_id,
+                    issue_key=request.issue_key,
+                    stage="review",
                 ),
             ),
             extra_on_log_line=self._stage_log_sink(request=request, stage="review", attempt=attempt),

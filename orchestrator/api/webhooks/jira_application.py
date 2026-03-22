@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.jira_comment_planner import plan_jira_comment_flow
 from orchestrator.api.webhooks.jira_enqueue_planner import (
+    build_jira_enqueue_skipped_notification_action,
     plan_jira_run_flow,
 )
 from orchestrator.api.webhooks.jira_event_classifier import evaluate_jira_trigger_state
@@ -15,6 +16,7 @@ from orchestrator.api.webhooks.jira_webhook_types import (
     JiraWebhookContext,
     jira_webhook_response,
 )
+from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.communications import HttpJsonResponseAction, IngressResult, TransportAction, TransportEnvelope
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.storage.models import Tenant
@@ -92,6 +94,30 @@ def _process_jira_webhook_context(
     )
     if comment_plan.content is not None:
         return JiraWebhookPlan(content=comment_plan.content)
+
+    if context.project is None:
+        logger.info(
+            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=project_not_mapped",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+        )
+        return JiraWebhookPlan(
+            content=jira_webhook_response(
+                context,
+                enqueued=False,
+                reason="project_not_mapped",
+                guidance=enqueue_reason_guidance("project_not_mapped"),
+                command=context.comment_command,
+                webhook_event=context.webhook_event,
+            ),
+            actions=(
+                build_jira_enqueue_skipped_notification_action(
+                    context=context,
+                    reason="project_not_mapped",
+                ),
+            ),
+        )
 
     run_plan = plan_jira_run_flow(
         context=context,
