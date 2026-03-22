@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from contextlib import nullcontext
-
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.transport_runtime import execute_http_ingress_result
+from orchestrator.api.transport_runtime import build_http_transport_action_executors, execute_http_ingress_result
 from orchestrator.api.webhooks.github_application import build_github_webhook_ingress_result
 from orchestrator.core.communications import TransportEnvelope
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 
 router = APIRouter(tags=["github-webhook"])
 
@@ -22,26 +19,26 @@ async def ingest_github_webhook(
 ) -> object:
     request_id = request.headers.get("X-Request-Id") or request.headers.get("X-GitHub-Delivery") or "github-webhook"
     settings = get_settings()
+    envelope = TransportEnvelope(
+        transport="github_webhook",
+        event_type=str(request.headers.get("X-GitHub-Event") or "").strip() or "unknown",
+        request_id=request_id,
+        delivery_id=str(request.headers.get("X-GitHub-Delivery") or "").strip() or None,
+    )
     transport_action_executors = []
     result = await build_github_webhook_ingress_result(
         request=request,
         session=session,
         settings=settings,
-        envelope=TransportEnvelope(
-            transport="github_webhook",
-            event_type=str(request.headers.get("X-GitHub-Event") or "").strip() or "unknown",
-            request_id=request_id,
-            delivery_id=str(request.headers.get("X-GitHub-Delivery") or "").strip() or None,
-        ),
+        envelope=envelope,
         register_transport_executor=transport_action_executors.append,
-    )
-    transport_action_executors.append(
-        DiscordTransportExecutor(
-            session_factory=lambda: nullcontext(session),
-            settings_factory=lambda: settings,
-        )
     )
     return execute_http_ingress_result(
         result=result,
-        transport_action_executors=tuple(transport_action_executors),
+        envelope=envelope,
+        transport_action_executors=build_http_transport_action_executors(
+            session=session,
+            settings=settings,
+            extra_transport_action_executors=transport_action_executors,
+        ),
     )

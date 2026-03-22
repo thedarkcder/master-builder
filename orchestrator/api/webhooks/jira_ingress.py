@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-from contextlib import nullcontext
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.transport_runtime import execute_http_ingress_result
+from orchestrator.api.transport_runtime import build_http_transport_action_executors, execute_http_ingress_result
 from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
 from orchestrator.api.webhooks.contracts import (
     extract_delivery_id,
@@ -25,7 +24,6 @@ from orchestrator.api.webhooks.jira_webhook_types import (
 )
 from orchestrator.api.webhooks.jira_application import build_jira_webhook_ingress_result
 from orchestrator.core.communications import TransportEnvelope
-from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 from orchestrator.storage.models import Tenant
 
 logger = logging.getLogger(__name__)
@@ -104,24 +102,25 @@ async def ingest_jira_webhook_event(
     request_id: str | None = None,
 ) -> dict:
     normalized_request_id = request_id or request.headers.get("X-Request-Id") or str(uuid4())
+    envelope = TransportEnvelope(
+        transport="jira_webhook",
+        event_type=str(request.headers.get("X-Atlassian-Webhook-Identifier") or "").strip() or "jira_webhook",
+        request_id=normalized_request_id,
+        tenant_id_hint=tenant_id,
+    )
     result = await build_jira_webhook_ingress_result(
         tenant_id=tenant_id,
         request=request,
         session=session,
         settings=settings,
-        envelope=TransportEnvelope(
-            transport="jira_webhook",
-            event_type=str(request.headers.get("X-Atlassian-Webhook-Identifier") or "").strip() or "jira_webhook",
-            request_id=normalized_request_id,
-        ),
+        envelope=envelope,
     )
     response = execute_http_ingress_result(
         result=result,
-        transport_action_executors=(
-            DiscordTransportExecutor(
-                session_factory=lambda: nullcontext(session),
-                settings_factory=lambda: settings,
-            ),
+        envelope=envelope,
+        transport_action_executors=build_http_transport_action_executors(
+            session=session,
+            settings=settings,
         ),
     )
     return json.loads(response.body.decode("utf-8"))

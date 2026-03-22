@@ -116,7 +116,14 @@ async def ingest_discord_interaction(
         ),
         dispatch_deps=_dispatch_deps(task_scheduler=asyncio.create_task),
     )
+    http_envelope = TransportEnvelope(
+        transport="discord_http",
+        event_type="interaction_create",
+        request_id=request_id,
+        payload=payload,
+    )
     return execute_http_ingress_result(
         result=_http_result_from_interaction_result(result),
+        envelope=http_envelope,
         task_scheduler=asyncio.create_task,
     )
