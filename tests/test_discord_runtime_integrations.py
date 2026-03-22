@@ -710,8 +710,9 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         tenant = SimpleNamespace(tenant_id="example", discord_config={})
         project = SimpleNamespace(
             discord_config={
-                "live_voice_linked_text_channel_id": "text-room-1",
-                "live_voice_channel_id": "voice-room-1",
+                "live_voice_room_links": {
+                    "voice-room-1": "text-room-1",
+                },
             }
         )
         session.execute.return_value.scalars.return_value.all.return_value = [project]

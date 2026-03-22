@@ -15,6 +15,7 @@ from orchestrator.api.webhooks.pr_review_publication_state import (
 )
 from orchestrator.api.webhooks.pr_review_comment_service import (
     format_sticky_review_comment,
+    upsert_manual_fix_issue_comment_reply,
     publish_inline_review_batch,
     upsert_manual_fix_review_thread_reply,
     upsert_sticky_remediation_comment,
@@ -519,3 +520,91 @@ def test_upsert_manual_fix_review_thread_reply_creates_and_updates() -> None:
     )
     assert updated.action == "updated"
     assert updated.comment_id == 303
+
+
+def test_upsert_manual_fix_review_thread_reply_renders_terminal_success_summary() -> None:
+    captured: dict[str, object] = {}
+    github_client = SimpleNamespace(
+        list_pull_request_review_comments=lambda **_kwargs: [],
+        create_pull_request_review_comment_reply=lambda **kwargs: captured.update(kwargs) or SimpleNamespace(comment_id=404),
+        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=404),
+    )
+    created = upsert_manual_fix_review_thread_reply(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=9001,
+        requested_by="alice",
+        triggering_comment_url="https://github.com/org/repo/pull/10#discussion_r9001",
+        instruction_text="rename the method and add tests",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        enqueued=True,
+        run_id="run-10",
+        reason=None,
+        status_label="SUCCEEDED",
+        pr_url="https://github.com/org/repo/pull/10",
+        change_summary=("Moved profile sync off the auth path.", "Added targeted auth tests."),
+    )
+    assert created.action == "created"
+    body = str(captured["body"])
+    assert "Status: SUCCEEDED" in body
+    assert "PR: https://github.com/org/repo/pull/10" in body
+    assert "### What Changed" in body
+    assert "- Moved profile sync off the auth path." in body
+
+
+def test_upsert_manual_fix_issue_comment_reply_creates_and_updates() -> None:
+    github_client = SimpleNamespace(
+        list_pull_request_issue_comments=lambda **_kwargs: [],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=505),
+        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=505),
+    )
+    created = upsert_manual_fix_issue_comment_reply(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=777,
+        requested_by="alice",
+        triggering_comment_url="https://github.com/org/repo/pull/10#issuecomment-777",
+        instruction_text="fix the issue",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        enqueued=True,
+        run_id="run-10",
+        reason=None,
+        status_label="SUCCEEDED",
+        pr_url="https://github.com/org/repo/pull/10",
+        change_summary=("Applied the requested fix.",),
+    )
+    assert created.action == "created"
+    assert created.comment_id == 505
+
+    marker_body = "<!-- codex:pr-manual-fix-issue-comment:t1:p1:org/repo:10:777 -->"
+    github_client = SimpleNamespace(
+        list_pull_request_issue_comments=lambda **_kwargs: [SimpleNamespace(comment_id=505, body=marker_body)],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=505),
+    )
+    updated = upsert_manual_fix_issue_comment_reply(
+        github_client=github_client,
+        repo_full_name="org/repo",
+        pr_number=10,
+        tenant_id="t1",
+        project_id="p1",
+        triggering_comment_id=777,
+        requested_by="alice",
+        triggering_comment_url="https://github.com/org/repo/pull/10#issuecomment-777",
+        instruction_text="fix the issue",
+        issue_key="GP-10",
+        issue_url="https://jira.example.com/browse/GP-10",
+        enqueued=True,
+        run_id="run-10",
+        reason=None,
+    )
+    assert updated.action == "updated"
+    assert updated.comment_id == 505

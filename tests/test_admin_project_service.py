@@ -373,9 +373,10 @@ def test_normalize_project_discord_config_preserves_persona_maps() -> None:
         {
             "channel_id": "  channel-1  ",
             "live_voice_enabled": "true",
-            "live_voice_channel_id": " voice-room-1 ",
-            "live_voice_linked_text_channel_id": " text-room-1 ",
-            "live_voice_room_links": {" voice-room-2 ": " thread-room-2 "},
+            "live_voice_room_links": {
+                " voice-room-1 ": " text-room-1 ",
+                " voice-room-2 ": " thread-room-2 ",
+            },
             "persona_names": {"pm": " Ava ", "security": " June "},
             "persona_voices": {"pm": " alloy ", "security": " sonic "},
             "voice_room_channel_ids": [" voice-room-1 ", ""],
@@ -385,9 +386,10 @@ def test_normalize_project_discord_config_preserves_persona_maps() -> None:
 
     assert normalized["channel_id"] == "channel-1"
     assert normalized["live_voice_enabled"] is True
-    assert normalized["live_voice_channel_id"] == "voice-room-1"
-    assert normalized["live_voice_linked_text_channel_id"] == "text-room-1"
-    assert normalized["live_voice_room_links"] == {"voice-room-1": "text-room-1"}
+    assert normalized["live_voice_room_links"] == {
+        "voice-room-1": "text-room-1",
+        "voice-room-2": "thread-room-2",
+    }
     assert normalized["persona_names"] == {"pm": "Ava", "security": "June"}
     assert normalized["persona_voices"] == {"pm": "alloy", "security": "sonic"}
     assert normalized["voice_room_channel_ids"] == ["voice-room-1"]
@@ -402,8 +404,6 @@ def test_with_preserved_discord_system_fields_keeps_only_system_fields_when_user
             "persona_names": {"pm": "Ava"},
             "persona_voices": {"pm": "alloy"},
             "live_voice_enabled": True,
-            "live_voice_channel_id": "voice-room-1",
-            "live_voice_linked_text_channel_id": "text-room-1",
             "live_voice_room_links": {"voice-room-1": "text-room-1"},
             "voice_room_channel_ids": ["voice-room-1"],
         },
@@ -416,7 +416,5 @@ def test_with_preserved_discord_system_fields_keeps_only_system_fields_when_user
     assert "persona_voices" not in merged
     assert merged["persona_room_history"] == [{"room_id": "room-1", "text": "hello"}]
     assert "live_voice_enabled" not in merged
-    assert "live_voice_channel_id" not in merged
-    assert "live_voice_linked_text_channel_id" not in merged
     assert "live_voice_room_links" not in merged
     assert "voice_room_channel_ids" not in merged

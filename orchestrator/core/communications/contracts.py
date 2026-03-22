@@ -252,6 +252,7 @@ class GitHubStickyRemediationCommentAction(TransportAction):
     head_sha: str | None
     event: str
     action_name: str | None
+    status_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -271,6 +272,7 @@ class GitHubStickyRemediationReviewThreadReplyAction(TransportAction):
     head_sha: str | None
     event: str
     action_name: str | None
+    status_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -289,6 +291,30 @@ class GitHubManualFixReviewThreadReplyAction(TransportAction):
     enqueued: bool
     run_id: str | None
     reason: str | None
+    status_label: str | None = None
+    pr_url: str | None = None
+    change_summary: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GitHubManualFixIssueCommentReplyAction(TransportAction):
+    kind: ClassVar[str] = "github_manual_fix_issue_comment_reply"
+    repo_full_name: str
+    pr_number: int
+    tenant_id: str
+    project_id: str
+    triggering_comment_id: int
+    requested_by: str | None
+    triggering_comment_url: str | None
+    instruction_text: str | None
+    issue_key: str | None
+    issue_url: str | None
+    enqueued: bool
+    run_id: str | None
+    reason: str | None
+    status_label: str | None = None
+    pr_url: str | None = None
+    change_summary: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
