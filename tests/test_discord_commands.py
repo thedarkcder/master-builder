@@ -2426,6 +2426,50 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["command"], "issues")
         self.assertIn("TP-1", response.json()["message"])
 
+    def test_issues_seed_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
+        with (
+            patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=object()),
+            patch(
+                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
+                return_value={
+                    "project_key": "TP",
+                    "issues": [
+                        {
+                            "summary": "Build API and webhook tasks",
+                            "objective": "Improve reliability",
+                            "scope_in": ["API changes"],
+                            "scope_out": [],
+                            "acceptance_criteria": ["Validation passes"],
+                            "how_to_test": ["Run targeted API tests"],
+                            "nfr_intent": "MVP",
+                            "dependencies": [],
+                            "risks": [],
+                            "labels": [],
+                            "issue_type": "Task",
+                        }
+                    ],
+                },
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context",
+                return_value={"access_token": "tok-only"},
+            ),
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!issues seed Build API and webhook tasks",
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Failed to seed Jira issues", response.json()["detail"])
+        self.assertIn("Jira OAuth context is incomplete", response.json()["detail"])
+        self.assertNotIn("tok-only", response.json()["detail"])
+        self.assertNotIn("Internal server error. Ref:", response.json()["detail"])
+
     def test_seed_issues_requests_clarifications_when_required_fields_missing(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
