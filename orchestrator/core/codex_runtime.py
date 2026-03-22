@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from orchestrator.core.config import Settings
+from orchestrator.storage.run_queue_events import (
+    is_postgres_database_url,
+    postgres_dsn_from_database_url,
+)
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -442,14 +446,24 @@ def _resolve_codex_tool_database_url(
     return normalized_database_url or None
 
 
+def _normalize_codex_subprocess_database_url(database_url: str | None) -> str | None:
+    normalized_database_url = str(database_url or "").strip()
+    if not normalized_database_url:
+        return None
+    if is_postgres_database_url(normalized_database_url):
+        return postgres_dsn_from_database_url(normalized_database_url)
+    return normalized_database_url
+
+
 def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
     env = os.environ.copy()
     tool_database_url = _resolve_codex_tool_database_url(
         database_url=str(getattr(settings, "database_url", "") or "").strip(),
         tool_database_url=str(getattr(settings, "codex_tool_database_url", "") or "").strip(),
     )
-    if tool_database_url:
-        env["ORCHESTRATOR_DATABASE_URL"] = tool_database_url
+    normalized_tool_database_url = _normalize_codex_subprocess_database_url(tool_database_url)
+    if normalized_tool_database_url:
+        env["ORCHESTRATOR_DATABASE_URL"] = normalized_tool_database_url
     return env
 
 

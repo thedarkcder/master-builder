@@ -104,6 +104,24 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Do not fall back to intake or scope-triage language", user_prompt_text)
         self.assertNotIn("If the brief is incomplete", user_prompt_text)
 
+    def test_decision_planner_prompts_forbid_direct_db_inspection(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "policy"
+        system_prompt_text = (prompts_dir / "decision_planner_system.j2").read_text(encoding="utf-8")
+        user_prompt_text = (prompts_dir / "decision_planner_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("Never improvise direct database inspection", system_prompt_text)
+        self.assertIn("Persisted decision state must be read via `decision.read_state`", user_prompt_text)
+        self.assertIn("If `decision.read_state` or another allowed tool fails", user_prompt_text)
+
+    def test_workflow_stage_prompts_forbid_direct_db_inspection(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        expected_text = (
+            "Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients;"
+        )
+        for prompt_name in ("pm_system.j2", "dev_system.j2", "test_system.j2", "review_system.j2"):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn(expected_text, prompt_text)
+
 
 if __name__ == "__main__":
     unittest.main()

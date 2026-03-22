@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import asdict
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from orchestrator.api.discord.interactions import followup as followup_module
 from orchestrator.core.communications.contracts import (
     ActorIdentity,
     CommandRequest,
@@ -283,6 +286,57 @@ class CommunicationContractsTests(unittest.TestCase):
         )
 
         notification_handler.execute_tenant_notification.assert_called_once()
+
+    def test_discord_transport_executor_executes_concrete_thread_senders_with_injected_dependencies(self) -> None:
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="tenant-1", is_enabled=True)
+        session.get.return_value = tenant
+        settings = SimpleNamespace()
+        executor = DiscordTransportExecutor(
+            session_factory=lambda: nullcontext(session),
+            settings_factory=lambda: settings,
+            thread_followup_sender=followup_module._send_discord_thread_followup,
+            ask_with_thread_sender=followup_module._send_discord_ask_response_with_thread,
+            seed_with_thread_sender=followup_module._send_discord_seed_followup_with_thread,
+        )
+
+        with (
+            patch.object(followup_module, "_send_discord_thread_followup_impl") as thread_impl,
+            patch.object(followup_module, "_send_discord_ask_response_with_thread_impl") as ask_impl,
+            patch.object(followup_module, "_send_discord_seed_followup_with_thread_impl") as seed_impl,
+        ):
+            executor.execute(
+                action=DiscordThreadReplyAction(
+                    tenant_id="tenant-1",
+                    channel_id="c1",
+                    reply_to_message_id="m1",
+                    content="thread",
+                )
+            )
+            executor.execute(
+                action=DiscordAskWithThreadAction(
+                    tenant_id="tenant-1",
+                    channel_id="c1",
+                    user_id="u1",
+                    content="ask",
+                    issue_key="MAB-174",
+                )
+            )
+            executor.execute(
+                action=DiscordSeedWithThreadAction(
+                    tenant_id="tenant-1",
+                    channel_id="c1",
+                    user_id="u1",
+                    content="seed",
+                    request_id="r1",
+                    questions=["q1"],
+                )
+            )
+
+        self.assertIsNotNone(thread_impl.call_args.kwargs["discord_api_client_fn"])
+        self.assertIsNotNone(ask_impl.call_args.kwargs["discord_api_client_fn"])
+        self.assertEqual(ask_impl.call_args.kwargs["issue_key"], "MAB-174")
+        self.assertIsNotNone(seed_impl.call_args.kwargs["discord_api_client_fn"])
 
     def test_github_transport_executor_supports_reaction_actions(self) -> None:
         github_client = MagicMock()

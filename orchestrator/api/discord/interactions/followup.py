@@ -195,6 +195,12 @@ def _send_discord_thread_followup(
     reply_to_message_id: str,
     content: str,
     components: list[dict] | None = None,
+    discord_api_client_fn=None,
+    project_ask_thread_channel_ids_for_tenant_fn=None,
+    project_seed_followup_thread_channel_ids_for_tenant_fn=None,
+    resolve_project_for_channel_fn=None,
+    ask_thread_message_map_from_config_fn=None,
+    resolve_thread_id_by_message_suffix_fn=None,
 ) -> None:  # noqa: ANN001
     return _send_discord_thread_followup_impl(
         session=session,
@@ -204,12 +210,20 @@ def _send_discord_thread_followup(
         reply_to_message_id=reply_to_message_id,
         content=content,
         components=components,
-        discord_api_client_fn=_discord_api_client,
-        project_ask_thread_channel_ids_for_tenant_fn=_project_ask_thread_channel_ids_for_tenant,
-        project_seed_followup_thread_channel_ids_for_tenant_fn=_project_seed_followup_thread_channel_ids_for_tenant,
-        resolve_project_for_channel_fn=_resolve_project_for_channel,
-        ask_thread_message_map_from_config_fn=_ask_thread_message_map_from_config,
-        resolve_thread_id_by_message_suffix_fn=_resolve_thread_id_by_message_suffix,
+        discord_api_client_fn=discord_api_client_fn or _discord_api_client,
+        project_ask_thread_channel_ids_for_tenant_fn=(
+            project_ask_thread_channel_ids_for_tenant_fn or _project_ask_thread_channel_ids_for_tenant
+        ),
+        project_seed_followup_thread_channel_ids_for_tenant_fn=(
+            project_seed_followup_thread_channel_ids_for_tenant_fn or _project_seed_followup_thread_channel_ids_for_tenant
+        ),
+        resolve_project_for_channel_fn=resolve_project_for_channel_fn or _resolve_project_for_channel,
+        ask_thread_message_map_from_config_fn=(
+            ask_thread_message_map_from_config_fn or _ask_thread_message_map_from_config
+        ),
+        resolve_thread_id_by_message_suffix_fn=(
+            resolve_thread_id_by_message_suffix_fn or _resolve_thread_id_by_message_suffix
+        ),
     )
 
 
@@ -223,6 +237,12 @@ def _send_discord_ask_response_with_thread(
     content: str,
     components: list[dict] | None = None,
     issue_key: str | None = None,
+    discord_api_client_fn=None,
+    project_ask_thread_channel_ids_for_tenant_fn=None,
+    resolve_project_for_channel_fn=None,
+    ask_thread_message_map_from_config_fn=None,
+    ask_reply_components_fn=None,
+    put_thread_issue_key_fn=None,
 ) -> None:  # noqa: ANN001
     return _send_discord_ask_response_with_thread_impl(
         session=session,
@@ -233,12 +253,16 @@ def _send_discord_ask_response_with_thread(
         content=content,
         components=components,
         issue_key=issue_key,
-        discord_api_client_fn=_discord_api_client,
-        project_ask_thread_channel_ids_for_tenant_fn=_project_ask_thread_channel_ids_for_tenant,
-        resolve_project_for_channel_fn=_resolve_project_for_channel,
-        ask_thread_message_map_from_config_fn=_ask_thread_message_map_from_config,
-        ask_reply_components_fn=_ask_reply_components,
-        put_thread_issue_key_fn=put_thread_issue_key,
+        discord_api_client_fn=discord_api_client_fn or _discord_api_client,
+        project_ask_thread_channel_ids_for_tenant_fn=(
+            project_ask_thread_channel_ids_for_tenant_fn or _project_ask_thread_channel_ids_for_tenant
+        ),
+        resolve_project_for_channel_fn=resolve_project_for_channel_fn or _resolve_project_for_channel,
+        ask_thread_message_map_from_config_fn=(
+            ask_thread_message_map_from_config_fn or _ask_thread_message_map_from_config
+        ),
+        ask_reply_components_fn=ask_reply_components_fn or _ask_reply_components,
+        put_thread_issue_key_fn=put_thread_issue_key_fn or put_thread_issue_key,
     )
 
 
@@ -252,6 +276,9 @@ def _send_discord_seed_followup_with_thread(
     content: str,
     request_id: str,
     questions: list[str],
+    discord_api_client_fn=None,
+    project_seed_followup_thread_channel_ids_for_tenant_fn=None,
+    resolve_project_for_channel_fn=None,
 ) -> None:  # noqa: ANN001
     return _send_discord_seed_followup_with_thread_impl(
         session=session,
@@ -262,9 +289,12 @@ def _send_discord_seed_followup_with_thread(
         content=content,
         request_id=request_id,
         questions=questions,
-        discord_api_client_fn=_discord_api_client,
-        project_seed_followup_thread_channel_ids_for_tenant_fn=_project_seed_followup_thread_channel_ids_for_tenant,
-        resolve_project_for_channel_fn=_resolve_project_for_channel,
+        discord_api_client_fn=discord_api_client_fn or _discord_api_client,
+        project_seed_followup_thread_channel_ids_for_tenant_fn=(
+            project_seed_followup_thread_channel_ids_for_tenant_fn
+            or _project_seed_followup_thread_channel_ids_for_tenant
+        ),
+        resolve_project_for_channel_fn=resolve_project_for_channel_fn or _resolve_project_for_channel,
     )
 
 
