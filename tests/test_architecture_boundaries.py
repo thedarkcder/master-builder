@@ -278,6 +278,31 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"HTTP transport adapters should not import provider executors directly: {violations}",
         )
 
+    def test_gateway_and_followup_runtime_modules_do_not_construct_provider_executors_directly(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "core" / "discord" / "gateway_listener.py",
+            ROOT / "orchestrator" / "api" / "discord" / "interactions" / "followup_runtime.py",
+        ]
+        violations: list[str] = []
+        for module_path in modules:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if isinstance(func, ast.Name) and func.id in {"DiscordTransportExecutor", "GitHubTransportExecutor"}:
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}")
+        self.assertEqual(
+            violations,
+            [],
+            msg=f"Gateway/followup runtime should not construct provider executors directly: {violations}",
+        )
+
+    def test_github_application_does_not_use_callback_executor_registration(self) -> None:
+        module_path = ROOT / "orchestrator" / "api" / "webhooks" / "github_application.py"
+        source = module_path.read_text(encoding="utf-8")
+        self.assertNotIn("register_transport_executor", source)
+
     def test_production_modules_do_not_reference_reply_transport_compatibility_shims(self) -> None:
         banned_names = {"InteractiveReplyTransport", "DiscordReplyTransport"}
         violations: list[str] = []

@@ -186,6 +186,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         )
         self.patch_stack.enter_context(
             patch(
+                "orchestrator.api.routes.webhook_github.prepare_github_webhook_runtime",
+                new=AsyncMock(return_value=SimpleNamespace(transport_action_executors=())),
+            )
+        )
+        self.patch_stack.enter_context(
+            patch(
                 "orchestrator.api.routes.webhook_discord_interactions._read_json_payload",
                 new=AsyncMock(return_value=({"type": 1}, b"{}")),
             )

@@ -12,6 +12,11 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
+from orchestrator.api.transport_runtime import (
+    build_discord_transport_executor,
+    build_transport_action_executors,
+    execute_side_effect_ingress_result,
+)
 from orchestrator.api.discord.interactions.application import (
     build_discord_interaction_ingress_result,
 )
@@ -62,7 +67,6 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.config import Settings
-from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 from orchestrator.core.observability import scoped_log_context
 from orchestrator.core.discord.personas import (
     build_voice_room_spoken_reply_text,
@@ -469,40 +473,64 @@ class DiscordGatewayListener:
             settings=self._settings,
         )
 
-    def _execute_ingress_result(self, *, result: IngressResult, bot_token: str | None = None) -> None:
-        executor = DiscordTransportExecutor(
-            bot_token=bot_token,
-            interaction_callback_sender=send_discord_interaction_callback,
-            client_factory=DiscordApiClient,
+    def _execute_ingress_result(
+        self,
+        *,
+        result: IngressResult,
+        envelope: TransportEnvelope,
+        bot_token: str | None = None,
+    ) -> None:
+        execute_side_effect_ingress_result(
+            result=result,
+            envelope=envelope,
+            transport_action_executors=self._transport_action_executors(bot_token=bot_token),
+            action_error_handler=lambda action, exc: self._handle_ingress_action_error(
+                action=action,
+                exc=exc,
+                bot_token=bot_token,
+            ),
         )
-        for deferred in result.deferred_work:
-            task = asyncio.create_task(deferred.runner())
-            if deferred.on_scheduled is not None:
-                deferred.on_scheduled(task)
-        for action in result.actions:
-            try:
-                executor.execute(action=action)
-            except DiscordApiError as exc:
-                channel_id = getattr(action, "channel_id", None)
-                logger.exception("discord_gateway_post_failed channel_id=%s error=%s", channel_id, exc)
-                if isinstance(action, DiscordChannelMessageWithAttachmentAction) and action.failure_user_id and bot_token:
-                    try:
-                        DiscordApiClient(bot_token=bot_token).post_message(
-                            channel_id=action.channel_id,
-                            content=f"<@{action.failure_user_id}> Voice reply post failed: {exc}",
-                        )
-                    except DiscordApiError as fallback_exc:
-                        logger.exception(
-                            "discord_gateway_post_failed channel_id=%s error=%s",
-                            action.channel_id,
-                            fallback_exc,
-                        )
-            except RuntimeError as exc:
-                logger.warning(
-                    "discord_gateway_unsupported_transport_action kind=%s error=%s",
-                    getattr(action, "kind", type(action).__name__),
-                    exc,
-                )
+
+    def _transport_action_executors(self, *, bot_token: str | None = None):
+        return build_transport_action_executors(
+            discord_transport_executor=build_discord_transport_executor(
+                bot_token=bot_token,
+                interaction_callback_sender=send_discord_interaction_callback,
+                client_factory=DiscordApiClient,
+            ),
+        )
+
+    def _handle_ingress_action_error(
+        self,
+        *,
+        action: TransportAction,
+        exc: Exception,
+        bot_token: str | None,
+    ) -> bool:
+        if isinstance(exc, RuntimeError):
+            logger.warning(
+                "discord_gateway_unsupported_transport_action kind=%s error=%s",
+                getattr(action, "kind", type(action).__name__),
+                exc,
+            )
+            return True
+        if isinstance(exc, DiscordApiError):
+            channel_id = getattr(action, "channel_id", None)
+            logger.exception("discord_gateway_post_failed channel_id=%s error=%s", channel_id, exc)
+            if isinstance(action, DiscordChannelMessageWithAttachmentAction) and action.failure_user_id and bot_token:
+                try:
+                    DiscordApiClient(bot_token=bot_token).post_message(
+                        channel_id=action.channel_id,
+                        content=f"<@{action.failure_user_id}> Voice reply post failed: {exc}",
+                    )
+                except DiscordApiError as fallback_exc:
+                    logger.exception(
+                        "discord_gateway_post_failed channel_id=%s error=%s",
+                        action.channel_id,
+                        fallback_exc,
+                    )
+            return True
+        return False
 
     async def _handle_interaction_create(self, payload: dict) -> None:
         interaction_id = str(payload.get("id") or "").strip()
@@ -528,7 +556,15 @@ class DiscordGatewayListener:
                     ),
                     dispatch_deps=self._interaction_dispatch_deps(),
                 )
-            self._execute_ingress_result(result=result)
+            self._execute_ingress_result(
+                result=result,
+                envelope=TransportEnvelope(
+                    transport="discord_gateway",
+                    event_type="interaction_create",
+                    request_id=request_id,
+                    payload=payload,
+                ),
+            )
         except Exception as exc:
             logger.exception(
                 "discord_gateway_interaction_failed request_id=%s interaction_id=%s error=%s",
@@ -544,13 +580,23 @@ class DiscordGatewayListener:
             )
 
     def _handle_message_create(self, payload: dict, bot_token: str) -> None:
+        request_id = str(payload.get("id") or "").strip() or str(uuid4())
         with self._session_factory() as session:
             result = build_discord_message_ingress_result(
                 payload=payload,
                 session=session,
                 deps=self._message_dispatch_deps(bot_token=bot_token),
             )
-        self._execute_ingress_result(result=result, bot_token=bot_token)
+        self._execute_ingress_result(
+            result=result,
+            envelope=TransportEnvelope(
+                transport="discord_gateway",
+                event_type="message_create",
+                request_id=request_id,
+                payload=payload,
+            ),
+            bot_token=bot_token,
+        )
 
     def _transcribe_room_audio_attachment(
         self,
@@ -709,11 +755,21 @@ class DiscordGatewayListener:
         if action is None:
             return error
         try:
-            DiscordTransportExecutor(
-                bot_token=bot_token,
-                interaction_callback_sender=send_discord_interaction_callback,
-                client_factory=DiscordApiClient,
-            ).execute(action=action)
+            execute_side_effect_ingress_result(
+                result=IngressResult(actions=(action,)),
+                envelope=TransportEnvelope(
+                    transport="discord_gateway",
+                    event_type="voice_reply",
+                    request_id=correlation_id or str(uuid4()),
+                    tenant_id_hint=tenant_id,
+                ),
+                transport_action_executors=self._transport_action_executors(bot_token=bot_token),
+                action_error_handler=lambda failed_action, exc: self._handle_ingress_action_error(
+                    action=failed_action,
+                    exc=exc,
+                    bot_token=bot_token,
+                ),
+            )
         except (DiscordApiError, ValueError) as exc:
             logger.exception(
                 "discord_gateway_room_voice_reply_post_failed user_id=%s channel_id=%s error=%s",

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from orchestrator.api.transport_runtime import build_http_transport_action_executors, execute_http_ingress_result
 from orchestrator.api.webhooks.github_application import build_github_webhook_ingress_result
+from orchestrator.api.webhooks.github_webhook_context import prepare_github_webhook_runtime
 from orchestrator.core.communications import TransportEnvelope
+
+logger = logging.getLogger(__name__)
 
 
 async def ingest_github_webhook_event(
@@ -23,13 +27,18 @@ async def ingest_github_webhook_event(
         request_id=normalized_request_id,
         delivery_id=str(request.headers.get("X-GitHub-Delivery") or "").strip() or None,
     )
-    transport_action_executors = []
-    result = await build_github_webhook_ingress_result(
+    prepared_runtime = await prepare_github_webhook_runtime(
         request=request,
         session=session,
         settings=settings,
-        envelope=envelope,
-        register_transport_executor=transport_action_executors.append,
+        request_id=envelope.request_id,
+        logger=logger,
+    )
+    result = await build_github_webhook_ingress_result(
+        prepared_runtime=prepared_runtime,
+        request_id=envelope.request_id,
+        session=session,
+        settings=settings,
     )
     return execute_http_ingress_result(
         result=result,
@@ -37,6 +46,6 @@ async def ingest_github_webhook_event(
         transport_action_executors=build_http_transport_action_executors(
             session=session,
             settings=settings,
-            extra_transport_action_executors=transport_action_executors,
+            extra_transport_action_executors=getattr(prepared_runtime, "transport_action_executors", ()),
         ),
     )

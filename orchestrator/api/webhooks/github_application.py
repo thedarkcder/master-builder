@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 
 from fastapi import status
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.github_event_classifier import (
     classify_github_trigger_state,
@@ -15,18 +13,14 @@ from orchestrator.api.webhooks.github_event_classifier import (
 from orchestrator.api.webhooks.github_manual_fix_planner import plan_manual_fix_reaction_actions
 from orchestrator.api.webhooks.github_review_planner import plan_pull_request_targets
 from orchestrator.api.webhooks.github_webhook_context import (
-    build_github_review_runtime,
-    resolve_github_webhook_context,
+    GitHubWebhookPreparedRuntime,
 )
 from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
 from orchestrator.core.communications import (
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
     IngressResult,
-    TransportEnvelope,
 )
-from orchestrator.core.communications.integration_contracts import TransportActionExecutor
-from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.jira_links import tenant_jira_issue_url
 from orchestrator.core.pr_review_findings import evaluate_pr_review_findings
 
@@ -35,22 +29,15 @@ logger = logging.getLogger(__name__)
 
 async def build_github_webhook_ingress_result(
     *,
-    request,
-    session: Session,
+    prepared_runtime: GitHubWebhookPreparedRuntime | JSONResponse,
+    request_id: str,
+    session,
     settings,  # noqa: ANN001
-    envelope: TransportEnvelope,
-    register_transport_executor: Callable[[TransportActionExecutor], None] | None = None,
 ) -> IngressResult:
-    context = await resolve_github_webhook_context(
-        request=request,
-        session=session,
-        settings=settings,
-        request_id=envelope.request_id,
-        logger=logger,
-    )
-    if isinstance(context, JSONResponse):
-        return _json_response_result(context)
+    if isinstance(prepared_runtime, JSONResponse):
+        return _json_response_result(prepared_runtime)
 
+    context = prepared_runtime.context
     delivery_id = context.delivery_id
     github_event = context.github_event
     payload = context.payload
@@ -76,7 +63,7 @@ async def build_github_webhook_ingress_result(
         return _http_json_result(
             status_code=status.HTTP_202_ACCEPTED,
             content={
-                "request_id": envelope.request_id,
+                "request_id": request_id,
                 "delivery_id": delivery_id,
                 "tenant_id": tenant.tenant_id,
                 "project_id": project.project_id,
@@ -106,43 +93,6 @@ async def build_github_webhook_ingress_result(
             },
         )
 
-    try:
-        github_client, reviewer_gate = build_github_review_runtime(
-            session=session,
-            settings=settings,
-            tenant=tenant,
-            project=project,
-        )
-    except ValueError as exc:
-        logger.warning(
-            "github_webhook_review_misconfigured request_id=%s tenant_id=%s error=%s",
-            envelope.request_id,
-            tenant.tenant_id,
-            exc,
-        )
-        return _http_json_result(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                "request_id": envelope.request_id,
-                "delivery_id": delivery_id,
-                "tenant_id": tenant.tenant_id,
-                "event": github_event,
-                "action": normalized_action,
-                "accepted": False,
-                "reason": "review_misconfigured",
-                "project_id": project.project_id,
-            },
-    )
-
-    if register_transport_executor is not None:
-        register_transport_executor(
-            GitHubTransportExecutor(
-                github_client=github_client,
-                session=session,
-                logger_override=logger,
-            )
-        )
-
     planned_actions = plan_manual_fix_reaction_actions(
         github_event=github_event,
         payload=payload,
@@ -151,7 +101,7 @@ async def build_github_webhook_ingress_result(
     if trigger_state.ignored_reason is not None:
         logger.info(
             "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=%s sender=%s",
-            envelope.request_id,
+            request_id,
             tenant.tenant_id,
             project.project_id,
             repo_full_name,
@@ -163,7 +113,7 @@ async def build_github_webhook_ingress_result(
         return _http_json_result(
             status_code=status.HTTP_202_ACCEPTED,
             content={
-                "request_id": envelope.request_id,
+                "request_id": request_id,
                 "delivery_id": delivery_id,
                 "tenant_id": tenant.tenant_id,
                 "project_id": project.project_id,
@@ -188,7 +138,7 @@ async def build_github_webhook_ingress_result(
     ):
         logger.info(
             "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=unsupported_event sender=%s",
-            envelope.request_id,
+            request_id,
             tenant.tenant_id,
             project.project_id,
             repo_full_name,
@@ -199,7 +149,7 @@ async def build_github_webhook_ingress_result(
         return _http_json_result(
             status_code=status.HTTP_202_ACCEPTED,
             content={
-                "request_id": envelope.request_id,
+                "request_id": request_id,
                 "delivery_id": delivery_id,
                 "tenant_id": tenant.tenant_id,
                 "project_id": project.project_id,
@@ -218,8 +168,31 @@ async def build_github_webhook_ingress_result(
             extra_actions=planned_actions,
         )
 
+    if prepared_runtime.review_runtime_error is not None:
+        logger.warning(
+            "github_webhook_review_misconfigured request_id=%s tenant_id=%s error=%s",
+            request_id,
+            tenant.tenant_id,
+            prepared_runtime.review_runtime_error,
+        )
+        return _http_json_result(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "request_id": request_id,
+                "delivery_id": delivery_id,
+                "tenant_id": tenant.tenant_id,
+                "event": github_event,
+                "action": normalized_action,
+                "accepted": False,
+                "reason": "review_misconfigured",
+                "project_id": project.project_id,
+            },
+        )
+
+    github_client = prepared_runtime.github_client
+    reviewer_gate = prepared_runtime.reviewer_gate
     review_plan = plan_pull_request_targets(
-        request_id=envelope.request_id,
+        request_id=request_id,
         tenant=tenant,
         project=project,
         repo_full_name=repo_full_name,
@@ -247,7 +220,7 @@ async def build_github_webhook_ingress_result(
     return _http_json_result(
         status_code=status.HTTP_202_ACCEPTED,
         content={
-            "request_id": envelope.request_id,
+            "request_id": request_id,
             "delivery_id": delivery_id,
             "tenant_id": tenant.tenant_id,
             "project_id": project.project_id,

@@ -32,7 +32,11 @@ from orchestrator.core.communications.contracts import (
     ProjectScope,
     TransportEnvelope,
 )
-from orchestrator.api.transport_runtime import HttpTransportExecutor, execute_http_ingress_result
+from orchestrator.api.transport_runtime import (
+    HttpTransportExecutor,
+    execute_http_ingress_result,
+    execute_side_effect_ingress_result,
+)
 from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 
@@ -170,6 +174,31 @@ class CommunicationContractsTests(unittest.TestCase):
         self.assertIn("transport_ingress_result_built", joined)
         self.assertIn("transport_action_executed", joined)
         self.assertIn("transport_http_response_selected", joined)
+
+    def test_side_effect_ingress_logs_contract_lifecycle_events(self) -> None:
+        side_effect_executor = MagicMock()
+        with self.assertLogs("orchestrator.api.transport_runtime", level="INFO") as captured:
+            execute_side_effect_ingress_result(
+                result=IngressResult(
+                    actions=(
+                        GitHubIssueCommentReactionAction(
+                            repo_full_name="org/repo",
+                            comment_id=101,
+                            content="eyes",
+                        ),
+                    )
+                ),
+                envelope=TransportEnvelope(
+                    transport="discord_gateway",
+                    event_type="message_create",
+                    request_id="req-2",
+                    tenant_id_hint="example",
+                ),
+                transport_action_executors=(side_effect_executor,),
+            )
+        joined = "\n".join(captured.output)
+        self.assertIn("transport_ingress_result_built", joined)
+        self.assertIn("transport_action_executed", joined)
 
     def test_discord_transport_executor_supports_typed_actions(self) -> None:
         callback_sender = MagicMock()

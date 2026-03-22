@@ -6,8 +6,8 @@ from contextlib import AbstractContextManager
 
 from sqlalchemy.orm import Session
 
+from orchestrator.api.transport_runtime import build_discord_transport_executor
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
-from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.storage.models import Tenant
 
@@ -50,7 +50,7 @@ def build_followup_service(
         build_command_followup_message=build_command_followup_message,
         ask_confirmation_components=ask_confirmation_components,
         ask_reply_components=ask_reply_components,
-        transport_executor=DiscordTransportExecutor(
+        transport_executor=build_discord_transport_executor(
             interaction_followup_sender=send_interaction_followup,
             session_factory=session_factory,
             settings_factory=settings_factory,
