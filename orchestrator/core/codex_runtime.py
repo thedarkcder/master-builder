@@ -682,7 +682,7 @@ def build_codex_runtime(
                     message = (
                         "Codex CLI is not authenticated."
                         f"{auth_link} "
-                        "Run `docker compose run --rm worker codex login --device-auth`."
+                        "Run `docker compose run --rm worker-runtime codex login --device-auth`."
                     )
                     raise CodexRuntimeError(message)
                 raise CodexRuntimeError(

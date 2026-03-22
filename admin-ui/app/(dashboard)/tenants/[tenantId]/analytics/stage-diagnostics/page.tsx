@@ -133,6 +133,16 @@ export default function TenantStageDiagnosticsPage() {
   const params = useParams<{ tenantId: string }>();
   const tenantId = decodeURIComponent(params.tenantId);
   const { credentials, ready } = useAuth();
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [runsForFilters, setRunsForFilters] = useState<RunRecord[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [statusLine, setStatusLine] = useState("Load diagnostics to inspect stage inefficiencies.");
+  const [results, setResults] = useState<TokenStageDiagnosticsRecord | null>(null);
+  const [compareBusy, setCompareBusy] = useState(false);
+  const [compareStatusLine, setCompareStatusLine] = useState("Select at least two projects to compare stage profiles.");
+  const [compareResults, setCompareResults] = useState<TokenStageDiagnosticsCompareRecord | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
   const [filters, setFilters] = useState<FilterState>({
     project_id: "",
     issue_keys: [],
@@ -145,20 +155,10 @@ export default function TenantStageDiagnosticsPage() {
     only_retried: false,
     only_with_test_stage: false,
   });
-  const [projects, setProjects] = useState<ProjectRecord[]>([]);
-  const [runsForFilters, setRunsForFilters] = useState<RunRecord[]>([]);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [busy, setBusy] = useState(false);
-  const [statusLine, setStatusLine] = useState("Load diagnostics to inspect stage inefficiencies.");
-  const [results, setResults] = useState<TokenStageDiagnosticsRecord | null>(null);
   const [compareProjectIds, setCompareProjectIds] = useState<string[]>([]);
   const [compareMetric, setCompareMetric] = useState<"avg_delta" | "avg_uncached_delta" | "retry_impact_index" | "run_count">("avg_delta");
   const [normalizeCompare, setNormalizeCompare] = useState(true);
   const [compareViewMode, setCompareViewMode] = useState<"overlay" | "small_multiples">("overlay");
-  const [compareBusy, setCompareBusy] = useState(false);
-  const [compareStatusLine, setCompareStatusLine] = useState("Select at least two projects to compare stage profiles.");
-  const [compareResults, setCompareResults] = useState<TokenStageDiagnosticsCompareRecord | null>(null);
 
   const issueOptions = useMemo(() => issueOptionsFromRuns(runsForFilters), [runsForFilters]);
   const runStatusOptions = useMemo(() => statusOptionsFromRuns(runsForFilters), [runsForFilters]);
@@ -166,7 +166,6 @@ export default function TenantStageDiagnosticsPage() {
     () => Object.fromEntries(projects.map((project) => [project.project_id, project.name])),
     [projects]
   );
-
   const load = useCallback(async () => {
     if (!credentials) {
       return;
@@ -225,21 +224,16 @@ export default function TenantStageDiagnosticsPage() {
     try {
       const projectPayload = await listProjects(credentials, tenantId);
       setProjects(projectPayload);
-      setFilters((current) => {
-        if (!projectPayload.length) {
-          return current.project_id || current.issue_keys.length || current.run_status
-            ? { ...current, project_id: "", issue_keys: [], run_status: "" }
-            : current;
-        }
-        if (current.project_id && projectPayload.some((project) => project.project_id === current.project_id)) {
-          return current;
-        }
-        return { ...current, project_id: projectPayload[0]?.project_id ?? "", issue_keys: [], run_status: "" };
-      });
+      const hasCurrentProject = filters.project_id && projectPayload.some((project) => project.project_id === filters.project_id);
+      const nextProjectId = hasCurrentProject ? filters.project_id : (projectPayload[0]?.project_id ?? "");
+      if (nextProjectId !== filters.project_id) {
+        setFilters((prev) => ({ ...prev, project_id: nextProjectId, issue_keys: [], run_status: "" }));
+        setPage(1);
+      }
     } catch (error) {
       setStatusLine(`Failed to load projects: ${(error as Error).message}`);
     }
-  }, [credentials, tenantId]);
+  }, [credentials, filters.project_id, tenantId]);
 
   const loadRunsForFilters = useCallback(
     async (projectId: string) => {
@@ -248,9 +242,10 @@ export default function TenantStageDiagnosticsPage() {
       }
       if (!projectId) {
         setRunsForFilters([]);
-        setFilters((current) =>
-          current.issue_keys.length || current.run_status ? { ...current, issue_keys: [], run_status: "" } : current
-        );
+        if (filters.issue_keys.length || filters.run_status) {
+          setFilters((prev) => ({ ...prev, issue_keys: [], run_status: "" }));
+          setPage(1);
+        }
         return;
       }
       try {
@@ -263,20 +258,17 @@ export default function TenantStageDiagnosticsPage() {
         setRunsForFilters(orderedRuns);
         const issueOptions = issueOptionsFromRuns(orderedRuns);
         const statusOptions = statusOptionsFromRuns(orderedRuns);
-        setFilters((current) => {
-          const nextIssues = current.issue_keys.filter((issue) => issueOptions.includes(issue));
-          return {
-            ...current,
-            issue_keys: nextIssues,
-            run_status: statusOptions.includes(current.run_status) ? current.run_status : "",
-          };
-        });
+        const nextIssues = filters.issue_keys.filter((issue) => issueOptions.includes(issue));
+        const nextStatus = statusOptions.includes(filters.run_status) ? filters.run_status : "";
+        if (nextIssues.length !== filters.issue_keys.length || nextStatus !== filters.run_status) {
+          setFilters((prev) => ({ ...prev, issue_keys: nextIssues, run_status: nextStatus }));
+        }
       } catch (error) {
         setRunsForFilters([]);
         setStatusLine(`Failed to load runs for filters: ${(error as Error).message}`);
       }
     },
-    [credentials, tenantId]
+    [credentials, filters.issue_keys, filters.run_status, tenantId]
   );
 
   useEffect(() => {
@@ -448,14 +440,10 @@ export default function TenantStageDiagnosticsPage() {
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={filters.project_id}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                project_id: event.target.value,
-                issue_keys: [],
-                run_status: "",
-              }))
-            }
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, project_id: event.target.value, issue_keys: [], run_status: "" }));
+              setPage(1);
+            }}
           >
             <option value="">Select project</option>
             {projects.map((project) => (
@@ -468,18 +456,19 @@ export default function TenantStageDiagnosticsPage() {
             issueOptions={issueOptions}
             selectedIssues={filters.issue_keys}
             disabled={!filters.project_id || issueOptions.length === 0}
-            onChange={(next) =>
-              setFilters((current) => ({
-                ...current,
-                issue_keys: next,
-              }))
-            }
+            onChange={(next) => {
+              setFilters((prev) => ({ ...prev, issue_keys: next }));
+              setPage(1);
+            }}
           />
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={filters.run_status}
             disabled={!filters.project_id}
-            onChange={(event) => setFilters((current) => ({ ...current, run_status: event.target.value }))}
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, run_status: event.target.value }));
+              setPage(1);
+            }}
           >
             <option value="">Any status</option>
             {runStatusOptions.map((status) => (
@@ -491,7 +480,10 @@ export default function TenantStageDiagnosticsPage() {
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={filters.stage}
-            onChange={(event) => setFilters((current) => ({ ...current, stage: event.target.value }))}
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, stage: event.target.value }));
+              setPage(1);
+            }}
           >
             <option value="">Any stage</option>
             <option value="pm">pm</option>
@@ -503,7 +495,10 @@ export default function TenantStageDiagnosticsPage() {
           <select
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={filters.attempt}
-            onChange={(event) => setFilters((current) => ({ ...current, attempt: event.target.value }))}
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, attempt: event.target.value }));
+              setPage(1);
+            }}
           >
             <option value="">Any attempt</option>
             {attemptOptions().map((attempt) => (
@@ -515,25 +510,48 @@ export default function TenantStageDiagnosticsPage() {
           <Input
             value={filters.model}
             placeholder="Model (optional)"
-            onChange={(event) => setFilters((current) => ({ ...current, model: event.target.value }))}
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, model: event.target.value }));
+              setPage(1);
+            }}
           />
           <Input
             type="date"
             value={filters.from}
-            onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))}
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, from: event.target.value }));
+              setPage(1);
+            }}
           />
           <Input
             type="date"
             value={filters.to}
-            onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))}
+            onChange={(event) => {
+              setFilters((prev) => ({ ...prev, to: event.target.value }));
+              setPage(1);
+            }}
           />
           <div className="flex items-center gap-4 text-sm">
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={filters.only_retried} onChange={(e) => setFilters((c) => ({ ...c, only_retried: e.target.checked }))} />
+              <input
+                type="checkbox"
+                checked={filters.only_retried}
+                onChange={(e) => {
+                  setFilters((prev) => ({ ...prev, only_retried: e.target.checked }));
+                  setPage(1);
+                }}
+              />
               Only retried runs
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={filters.only_with_test_stage} onChange={(e) => setFilters((c) => ({ ...c, only_with_test_stage: e.target.checked }))} />
+              <input
+                type="checkbox"
+                checked={filters.only_with_test_stage}
+                onChange={(e) => {
+                  setFilters((prev) => ({ ...prev, only_with_test_stage: e.target.checked }));
+                  setPage(1);
+                }}
+              />
               Only with test stage
             </label>
           </div>
@@ -657,7 +675,6 @@ export default function TenantStageDiagnosticsPage() {
           <Button
             variant="outline"
             onClick={() => {
-              setPage(1);
               setFilters({
                 project_id: "",
                 issue_keys: [],
@@ -670,6 +687,7 @@ export default function TenantStageDiagnosticsPage() {
                 only_retried: false,
                 only_with_test_stage: false,
               });
+              setPage(1);
             }}
             disabled={busy}
           >
@@ -681,7 +699,7 @@ export default function TenantStageDiagnosticsPage() {
               className="h-9 rounded-md border border-input bg-background px-2"
               value={String(pageSize)}
               onChange={(event) => {
-                setPageSize(Number(event.target.value));
+                setPageSize(Number(event.target.value) as 10 | 20 | 50);
                 setPage(1);
               }}
             >
@@ -871,7 +889,7 @@ export default function TenantStageDiagnosticsPage() {
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  onClick={() => setPage((prev) => Math.max(1, prev - 1))}
                   disabled={busy || page <= 1}
                 >
                   Previous
@@ -879,7 +897,7 @@ export default function TenantStageDiagnosticsPage() {
                 <span className="text-sm">Page {page}</span>
                 <Button
                   variant="outline"
-                  onClick={() => setPage((current) => current + 1)}
+                  onClick={() => setPage((prev) => prev + 1)}
                   disabled={busy || (results?.heavy_commands ?? []).length < pageSize}
                 >
                   Next

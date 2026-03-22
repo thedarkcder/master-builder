@@ -28,6 +28,9 @@ export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
 export ORCHESTRATOR_CODEX_STDERR_LOG_MODE=errors_only # all|errors_only|off
 export ORCHESTRATOR_CODEX_PERSIST_TURN_COMPLETED_USAGE=true
 export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
+export ORCHESTRATOR_VOICE_REPLY_PROVIDER=pocket_tts
+# Optional fallback voice if room/persona config does not supply one.
+export ORCHESTRATOR_POCKET_TTS_VOICE=alba
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode())
@@ -43,7 +46,7 @@ PY
 Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
 For containers, run one-time login and keep the shared Codex auth volume:
 ```bash
-docker compose run --rm worker codex login --device-auth
+docker compose run --rm worker-runtime codex login --device-auth
 ```
 
 ## Jira release-train automation (repo-level)
@@ -189,8 +192,8 @@ The worker image now includes:
 
 Quick checks:
 ```bash
-docker compose run --rm worker java -version
-docker compose run --rm worker sdkmanager --version
+docker compose run --rm worker-runtime java -version
+docker compose run --rm worker-runtime sdkmanager --version
 ```
 
 Swift/iOS note:

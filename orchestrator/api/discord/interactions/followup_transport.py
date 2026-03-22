@@ -73,3 +73,32 @@ def send_discord_interaction_followup(
                 f"Discord interaction follow-up webhook expired ({exc.code}): {error_body}"
             ) from exc
         raise RuntimeError(f"Discord follow-up request failed ({exc.code}): {error_body}") from exc
+
+
+def send_discord_interaction_callback(
+    *,
+    interaction_id: str,
+    interaction_token: str,
+    response_body: bytes,
+) -> None:
+    normalized_interaction_id = interaction_id.strip()
+    normalized_token = interaction_token.strip()
+    normalized_body = response_body.strip()
+    if not normalized_interaction_id or not normalized_token or not normalized_body:
+        raise ValueError("Discord interaction callback payload is incomplete")
+    request = UrlRequest(
+        url=f"https://discord.com/api/v10/interactions/{normalized_interaction_id}/{normalized_token}/callback",
+        data=normalized_body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "MasterBuilderDiscordClient/1.0 (+https://github.com/thedarkcder/master-builder)",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=10):
+            return
+    except HTTPError as exc:
+        error_body = exc.read().decode("utf-8")
+        raise RuntimeError(f"Discord interaction callback failed ({exc.code}): {error_body}") from exc

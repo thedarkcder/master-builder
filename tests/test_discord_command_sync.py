@@ -4,10 +4,11 @@ from orchestrator.core.discord.commands_sync import build_discord_guild_commands
 
 
 class DiscordCommandSyncTests(unittest.TestCase):
-    def test_build_commands_includes_ask_gap_bug_and_issues_seed(self) -> None:
+    def test_build_commands_includes_pm_ask_gap_bug_and_issues_seed(self) -> None:
         commands = build_discord_guild_commands()
         command_names = {command.get("name") for command in commands}
         self.assertIn("ask", command_names)
+        self.assertIn("pm", command_names)
         self.assertIn("gap", command_names)
         self.assertIn("bug", command_names)
         self.assertIn("issues", command_names)
@@ -30,6 +31,18 @@ class DiscordCommandSyncTests(unittest.TestCase):
         self.assertEqual(ask_options[1].get("required"), False)
         issue_key_option = next(option for option in ask_options if option.get("name") == "issue_key")
         self.assertEqual(issue_key_option.get("autocomplete"), True)
+
+        pm_command = next(command for command in commands if command.get("name") == "pm")
+        pm_options = pm_command.get("options")
+        self.assertIsInstance(pm_options, list)
+        self.assertGreaterEqual(len(pm_options), 2)
+        self.assertEqual(pm_options[0].get("name"), "question")
+        self.assertEqual(pm_options[0].get("required"), True)
+        action_option = next(option for option in pm_options if option.get("name") == "action")
+        self.assertEqual(action_option.get("required"), False)
+        self.assertIsInstance(action_option.get("choices"), list)
+        action_values = {choice.get("value") for choice in action_option["choices"]}
+        self.assertEqual(action_values, {"ask", "approve"})
 
         gap_command = next(command for command in commands if command.get("name") == "gap")
         gap_options = gap_command.get("options")

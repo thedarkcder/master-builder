@@ -1,5 +1,17 @@
-import { TenantProjectDiscordPage } from "@/components/tenant-project-discord-page";
+import { redirect } from "next/navigation";
 
-export default function TenantProjectDiscordRoute() {
-  return <TenantProjectDiscordPage />;
+type TenantProjectDiscordRouteParams = {
+  tenantId: string;
+  projectId: string;
+};
+
+export default async function TenantProjectDiscordRoute({
+  params,
+}: {
+  params: Promise<TenantProjectDiscordRouteParams>;
+}) {
+  const resolved = await params;
+  redirect(
+    `/tenants/${encodeURIComponent(resolved.tenantId)}/projects/${encodeURIComponent(resolved.projectId)}/notifications`,
+  );
 }

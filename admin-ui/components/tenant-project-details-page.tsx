@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import {
   Archive,
   ArrowLeft,
@@ -41,6 +41,7 @@ import {
   type RunRecord,
   type RunStatus,
 } from "@/lib/api";
+import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
 type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
@@ -194,10 +195,8 @@ function formatBoolean(value: boolean): string {
 
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
+  const pathname = usePathname();
   const { credentials, ready } = useAuth();
-
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
-  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
 
   // Project state
   const [project, setProject] = useState<ProjectRecord | null>(null);
@@ -214,13 +213,14 @@ export function TenantProjectDetailsPage() {
   // Runs state
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsBusy, setRunsBusy] = useState(false);
+  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [runIssueFilter, setRunIssueFilter] = useState("");
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
   const [runPrFilter, setRunPrFilter] = useState<"any" | "none" | "has_value">("any");
   const [runFromDate, setRunFromDate] = useState("");
   const [runToDate, setRunToDate] = useState("");
   const [runPage, setRunPage] = useState(1);
-  const [runPageSize, setRunPageSize] = useState(25);
+  const [runPageSize, setRunPageSize] = useState<25 | 50 | 100>(25);
 
   // Secrets state
   const [secretRefs, setSecretRefs] = useState<Record<string, string>>({});
@@ -233,6 +233,7 @@ export function TenantProjectDetailsPage() {
     () => `project/${params.tenantId}/${params.projectId}/`,
     [params.tenantId, params.projectId]
   );
+  const activeTab = useMemo<Tab>(() => resolveProjectSection(pathname) ?? "overview", [pathname]);
 
   async function loadOptions() {
     if (!credentials) return;
@@ -307,8 +308,14 @@ export function TenantProjectDetailsPage() {
   }, [ready, credentials, params.tenantId, params.projectId]);
 
   useEffect(() => {
-    if (ready && credentials && project) void loadRuns();
-  }, [ready, credentials, project, runPage, runPageSize]);
+    if (ready && credentials && project && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
+  }, [activeTab, ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
+
+  useEffect(() => {
+    if (activeTab !== "settings") {
+      setActiveSettingsSection("general");
+    }
+  }, [activeTab]);
 
   async function toggleArchive() {
     if (!credentials || !project) return;
@@ -577,12 +584,12 @@ export function TenantProjectDetailsPage() {
       </div>
 
       {/* Underline tab bar */}
-      <div className="border-b">
-        <nav className="flex gap-1 -mb-px">
+      <div className="border-b overflow-x-auto">
+        <nav className="-mb-px flex min-w-max gap-1" aria-label="Project sections">
           {TABS.map((tab) => (
-            <button
+            <Link
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              href={buildProjectSectionPath(params.tenantId, params.projectId, tab.id)}
               className={`px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap border-b-2 ${
                 activeTab === tab.id
                   ? "border-primary text-foreground"
@@ -590,7 +597,7 @@ export function TenantProjectDetailsPage() {
               }`}
             >
               {tab.label}
-            </button>
+            </Link>
           ))}
         </nav>
       </div>
@@ -614,8 +621,8 @@ export function TenantProjectDetailsPage() {
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Button size="sm" onClick={() => setActiveTab("settings")}>
-                          Open settings
+                        <Button asChild size="sm">
+                          <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Open settings</Link>
                         </Button>
                         <Button asChild size="sm" variant="outline">
                           <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
@@ -666,8 +673,8 @@ export function TenantProjectDetailsPage() {
                     <CardTitle className="text-base">Quick navigation</CardTitle>
                   </CardHeader>
                   <CardContent className="grid gap-2 sm:grid-cols-2">
-                    <Button variant="outline" size="sm" onClick={() => setActiveTab("settings")}>
-                      Settings
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Settings</Link>
                     </Button>
                     <Button asChild variant="outline" size="sm">
                       <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
@@ -679,11 +686,11 @@ export function TenantProjectDetailsPage() {
                         Add knowledge
                       </Link>
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setActiveTab("notifications")}>
-                      Notifications
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setActiveTab("secrets")}>
-                      Secrets
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "secrets")}>Secrets</Link>
                     </Button>
                   </CardContent>
                 </Card>
@@ -774,8 +781,8 @@ export function TenantProjectDetailsPage() {
                     <div className="space-y-1">
                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Allowed commands</p>
                       <p className="text-sm text-foreground">
-                        {project.effective_policy.allowed_commands.length > 0
-                          ? project.effective_policy.allowed_commands.join(", ")
+                        {(project.effective_policy.allowed_commands ?? []).length > 0
+                          ? (project.effective_policy.allowed_commands ?? []).join(", ")
                           : "None"}
                       </p>
                     </div>
@@ -1155,7 +1162,7 @@ export function TenantProjectDetailsPage() {
                         />
                       ) : null}
                       <p className="text-xs text-muted-foreground">
-                        Effective commands: {project.effective_policy.allowed_commands.length > 0 ? project.effective_policy.allowed_commands.join(", ") : "none"}
+                        Effective commands: {(project.effective_policy.allowed_commands ?? []).length > 0 ? (project.effective_policy.allowed_commands ?? []).join(", ") : "none"}
                       </p>
                     </div>
                   </CardContent>
@@ -1258,7 +1265,7 @@ export function TenantProjectDetailsPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => { setRunPage(1); void loadRuns(); }}
+                onClick={() => void loadRuns()}
                 disabled={runsBusy}
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${runsBusy ? "animate-spin" : ""}`} />
@@ -1267,19 +1274,26 @@ export function TenantProjectDetailsPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Filter toolbar */}
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2.5">
+            <div className="overflow-x-auto rounded-lg border bg-muted/30">
+              <div className="flex min-w-max flex-nowrap items-center gap-2 px-3 py-2.5 md:min-w-0 md:flex-wrap">
               <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <Input
                 className="h-8 w-40 text-sm"
                 value={runIssueFilter}
-                onChange={(e) => setRunIssueFilter(e.target.value)}
+                onChange={(e) => {
+                  setRunIssueFilter(e.target.value);
+                  setRunPage(1);
+                }}
                 placeholder="Issue / summary"
                 disabled={runsBusy}
               />
               <select
                 className="h-8 w-36 rounded-md border border-input bg-background px-2 text-sm"
                 value={runStatusFilter}
-                onChange={(e) => setRunStatusFilter(e.target.value as RunStatus | "all")}
+                onChange={(e) => {
+                  setRunStatusFilter(e.target.value as RunStatus | "all");
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               >
                 <option value="all">Status: Any</option>
@@ -1292,7 +1306,10 @@ export function TenantProjectDetailsPage() {
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                 value={runPrFilter}
-                onChange={(e) => setRunPrFilter(e.target.value as "any" | "none" | "has_value")}
+                onChange={(e) => {
+                  setRunPrFilter(e.target.value as "any" | "none" | "has_value");
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               >
                 <option value="any">PR: Any</option>
@@ -1303,20 +1320,29 @@ export function TenantProjectDetailsPage() {
                 type="date"
                 className="h-8 w-36 text-sm"
                 value={runFromDate}
-                onChange={(e) => setRunFromDate(e.target.value)}
+                onChange={(e) => {
+                  setRunFromDate(e.target.value);
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               />
               <Input
                 type="date"
                 className="h-8 w-36 text-sm"
                 value={runToDate}
-                onChange={(e) => setRunToDate(e.target.value)}
+                onChange={(e) => {
+                  setRunToDate(e.target.value);
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               />
               <select
                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                 value={String(runPageSize)}
-                onChange={(e) => { setRunPageSize(Number(e.target.value)); setRunPage(1); }}
+                onChange={(e) => {
+                  setRunPageSize(Number(e.target.value) as 25 | 50 | 100);
+                  setRunPage(1);
+                }}
                 disabled={runsBusy}
               >
                 <option value="25">25 / page</option>
@@ -1327,7 +1353,7 @@ export function TenantProjectDetailsPage() {
                 size="sm"
                 variant="secondary"
                 className="h-8"
-                onClick={() => { setRunPage(1); void loadRuns(); }}
+                onClick={() => void loadRuns()}
                 disabled={runsBusy}
               >
                 Apply
@@ -1348,6 +1374,7 @@ export function TenantProjectDetailsPage() {
               >
                 Clear
               </Button>
+              </div>
             </div>
 
             {runs.length === 0 ? (
@@ -1375,7 +1402,11 @@ export function TenantProjectDetailsPage() {
                         <TableCell className="pl-4 font-medium">
                           <Link
                             className="text-primary hover:underline"
-                            href={`/tenants/${encodeURIComponent(params.tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
+                            href={buildRunDetailPath({
+                              tenantId: params.tenantId,
+                              projectId: params.projectId,
+                              runId: run.run_id,
+                            })}
                           >
                             {run.issue_summary?.trim() || run.issue_key || run.run_id}
                           </Link>
@@ -1426,7 +1457,7 @@ export function TenantProjectDetailsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setRunPage((p) => Math.max(1, p - 1))}
+                onClick={() => setRunPage((prev) => Math.max(1, prev - 1))}
                 disabled={runsBusy || runPage <= 1}
               >
                 ← Prev
@@ -1435,7 +1466,7 @@ export function TenantProjectDetailsPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setRunPage((p) => p + 1)}
+                onClick={() => setRunPage((prev) => prev + 1)}
                 disabled={runsBusy || runs.length < runPageSize}
               >
                 Next →

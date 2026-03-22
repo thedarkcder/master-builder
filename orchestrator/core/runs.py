@@ -11,6 +11,9 @@ from sqlalchemy.orm import Session
 from orchestrator.storage.models import Run, RunLock, WebhookDelivery
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
+RUN_DEDUPE_SCOPE_ISSUE_EXECUTION = "issue_execution"
+RUN_DEDUPE_SCOPE_PR_REMEDIATION = "pr_remediation"
+
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCEEDED = "succeeded"
@@ -36,6 +39,13 @@ class EnqueueRunResult:
     enqueued: bool
     reason: str | None
     run: Run
+
+
+def normalize_run_dedupe_scope(raw_scope: object | None) -> str:
+    normalized = str(raw_scope or "").strip().lower()
+    if normalized == RUN_DEDUPE_SCOPE_PR_REMEDIATION:
+        return RUN_DEDUPE_SCOPE_PR_REMEDIATION
+    return RUN_DEDUPE_SCOPE_ISSUE_EXECUTION
 
 
 def _normalize_precheck_outcome(raw_outcome: object | None) -> str | None:
@@ -77,11 +87,21 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _active_run_for_issue(session: Session, tenant_id: str, issue_key: str) -> Run | None:
-    active_lock = session.get(RunLock, {"tenant_id": tenant_id, "issue_key": issue_key})
+def _active_run_for_issue(session: Session, tenant_id: str, issue_key: str, *, dedupe_scope: str) -> Run | None:
+    active_lock = session.execute(
+        select(RunLock).where(
+            RunLock.tenant_id == tenant_id,
+            RunLock.issue_key == issue_key,
+            RunLock.dedupe_scope == dedupe_scope,
+        )
+    ).scalar_one_or_none()
     if active_lock is not None:
         locked_run = session.get(Run, active_lock.run_id)
-        if locked_run is not None and locked_run.status in ACTIVE_RUN_STATUSES:
+        if (
+            locked_run is not None
+            and locked_run.status in ACTIVE_RUN_STATUSES
+            and normalize_run_dedupe_scope(getattr(locked_run, "dedupe_scope", None)) == dedupe_scope
+        ):
             return locked_run
         session.delete(active_lock)
         session.flush()
@@ -91,6 +111,7 @@ def _active_run_for_issue(session: Session, tenant_id: str, issue_key: str) -> R
             Run.tenant_id == tenant_id,
             Run.issue_key == issue_key,
             Run.status.in_(ACTIVE_RUN_STATUSES),
+            Run.dedupe_scope == dedupe_scope,
         )
     ).scalar_one_or_none()
 
@@ -145,7 +166,9 @@ def enqueue_run(
     precheck_outcome: str | None = None,
     precheck_source_plan: object | None = None,
     max_concurrent_runs: int | None = None,
+    dedupe_scope: str | None = None,
 ) -> EnqueueRunResult:
+    normalized_dedupe_scope = normalize_run_dedupe_scope(dedupe_scope)
     if delivery_id:
         existing_delivery = session.get(
             WebhookDelivery,
@@ -159,7 +182,12 @@ def enqueue_run(
                 )
             return EnqueueRunResult(enqueued=False, reason="duplicate_delivery", run=run)
 
-    active_run = _active_run_for_issue(session, tenant_id=tenant_id, issue_key=issue_key)
+    active_run = _active_run_for_issue(
+        session,
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        dedupe_scope=normalized_dedupe_scope,
+    )
     if active_run is not None:
         return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
 
@@ -193,6 +221,7 @@ def enqueue_run(
         repo_url=repo_url,
         branch=None,
         pr_url=None,
+        dedupe_scope=normalized_dedupe_scope,
         plan=None
         if normalized_precheck_outcome is None
         else {"pre_check": {"outcome": normalized_precheck_outcome}},
@@ -202,7 +231,13 @@ def enqueue_run(
         started_at=None,
         finished_at=None,
     )
-    lock = RunLock(tenant_id=tenant_id, issue_key=issue_key, run_id=run.run_id, locked_at=now)
+    lock = RunLock(
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        dedupe_scope=normalized_dedupe_scope,
+        run_id=run.run_id,
+        locked_at=now,
+    )
     session.add(run)
     session.add(lock)
     if delivery_id:
@@ -244,7 +279,12 @@ def enqueue_run(
                     run=deduped_run,
                 )
 
-        active_run = _active_run_for_issue(session, tenant_id=tenant_id, issue_key=issue_key)
+        active_run = _active_run_for_issue(
+            session,
+            tenant_id=tenant_id,
+            issue_key=issue_key,
+            dedupe_scope=normalized_dedupe_scope,
+        )
         if active_run is not None:
             return EnqueueRunResult(enqueued=False, reason="run_already_active", run=active_run)
 

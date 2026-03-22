@@ -537,6 +537,99 @@ def test_github_open_pr_falls_back_when_remediation_pr_is_closed() -> None:
     assert fake_client.create_called is True
 
 
+def test_github_open_pr_uses_remediation_head_ref_over_stale_run_branch() -> None:
+    class _FakeTenant:
+        tenant_id = "route25"
+        github_config = {"installation_id": "12345"}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "route25-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {"default_branch": "main"}
+
+    class _FakeRun:
+        branch = "feature/GP-122-stale"
+        plan = {
+            "trigger_context": {
+                "source": "github_pr_review_feedback",
+                "pr_number": 14,
+                "head_ref": "run/gp-122/remediation-head",
+                "base_ref": "main",
+            }
+        }
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        run = _FakeRun()
+        stage = "dev"
+        issue_key = "GP-122"
+        run_id = "run-remediate-3"
+        repo_dir = Path("/tmp/repo")
+
+    class _FakeGitHubClient:
+        def __init__(self) -> None:
+            self.find_args: tuple[str, str, str, int] | None = None
+
+        def get_pull_request_details(self, *, repo_full_name: str, pr_number: int):  # noqa: ANN201
+            assert repo_full_name == "acme/repo"
+            assert pr_number == 14
+            return SimpleNamespace(
+                number=14,
+                html_url="https://github.com/acme/repo/pull/14",
+                state="closed",
+                head_ref="run/gp-122/remediation-head",
+                base_ref="main",
+                title="",
+                body="",
+                head_sha="abc123",
+            )
+
+        def find_open_pull_request(
+            self,
+            *,
+            repo_full_name: str,
+            head_branch: str,
+            base_branch: str | None = None,
+            limit: int = 100,
+        ) -> PullRequestSummary | None:
+            self.find_args = (repo_full_name, head_branch, str(base_branch), limit)
+            return None
+
+        def create_pull_request(self, **_kwargs):  # noqa: ANN003, ANN202
+            return SimpleNamespace(number=55, html_url="https://github.com/acme/repo/pull/55")
+
+    fake_client = _FakeGitHubClient()
+    fake_session = SimpleNamespace(flush=lambda: None)
+    with (
+        patch("orchestrator.core.agent_tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.agent_tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.agent_tools.github_client_from_tenant_config", return_value=fake_client),
+    ):
+        payload = execute_agent_tool(
+            session=fake_session,  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key=""),
+            tenant_id="route25",
+            project_id="route25-default",
+            run_id="run-remediate-3",
+            issue_key="GP-122",
+            stage="dev",
+            tool_name="github.open_pr",
+            tool_args={"title": "GP-122: remediation"},
+        )
+
+    assert payload == {"pr_number": 55, "pr_url": "https://github.com/acme/repo/pull/55"}
+    assert fake_client.find_args == (
+        "acme/repo",
+        "run/gp-122/remediation-head",
+        "main",
+        100,
+    )
+    assert _FakeContext.run.branch == "run/gp-122/remediation-head"
+
+
 def test_repo_read_allows_read_only_git_status() -> None:
     class _FakeTenant:
         tenant_id = "route25"

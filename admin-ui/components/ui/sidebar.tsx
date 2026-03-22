@@ -14,7 +14,7 @@ export function Sidebar({ className, ...props }: ComponentProps<"aside">) {
   return (
     <aside
       className={cn(
-        "w-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border md:w-[240px] md:min-w-[240px] md:max-w-[240px] flex flex-col",
+        "hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex md:w-[240px] md:min-w-[240px] md:max-w-[240px]",
         className
       )}
       {...props}

@@ -48,7 +48,7 @@ def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
         "!retry <ISSUE_KEY|RUN_ID>, !issues seed <markdown>, !issues followup <answers>, "
-        "!bug <summary> [-- details], !gap <ISSUE_KEY>, !policy, !link <ISSUE_KEY>, "
+        "!bug <summary> [-- details], !gap <ISSUE_KEY>, !pm <product request>, !policy, !link <ISSUE_KEY>, "
         "!request <run_controls|seed_issues|all_sensitive> [reason]"
     )
 

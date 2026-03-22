@@ -243,6 +243,25 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         self.assertEqual(called["count"], 1)
 
+    def test_run_single_connection_dispatches_interaction_create(self) -> None:
+        listener, _session = self._listener()
+        ws = _FakeWebSocket(
+            [
+                {"d": {"heartbeat_interval": 100}},
+                {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "i1", "token": "tok"}, "s": 1},
+                {"op": 7, "t": "", "d": {}, "s": 2},
+            ]
+        )
+
+        with (
+            patch("orchestrator.core.discord.gateway_listener.websockets", SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws))),
+            patch("orchestrator.core.discord.gateway_listener.asyncio.create_task", side_effect=self._fake_create_task),
+            patch.object(listener, "_handle_interaction_create", new=AsyncMock()) as handle_mock,
+        ):
+            asyncio.run(listener._run_single_connection(bot_token="bot-token"))
+
+        handle_mock.assert_awaited_once_with({"id": "i1", "token": "tok"})
+
 
 if __name__ == "__main__":
     unittest.main()

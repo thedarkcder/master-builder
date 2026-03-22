@@ -68,7 +68,7 @@ export function TokenLineChart<T extends Record<string, unknown>>(props: BaseCha
     );
   }
   return (
-    <div className={`w-full ${className}`}>
+    <div className={`w-full min-w-0 ${className}`}>
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={data}>
           <CartesianGrid strokeDasharray="3 3" />
@@ -109,7 +109,7 @@ export function TokenStackedBarChart<T extends Record<string, unknown>>(props: B
     );
   }
   return (
-    <div className={`w-full ${className}`}>
+    <div className={`w-full min-w-0 ${className}`}>
       <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data}>
           <CartesianGrid strokeDasharray="3 3" />
@@ -182,7 +182,7 @@ export function TokenScatterChart<T extends Record<string, unknown>>(props: Scat
     label: String(item[xAxisKey]),
   })) as ScatterPoint[];
   return (
-    <div className="w-full">
+    <div className="w-full min-w-0">
       <ResponsiveContainer width="100%" height={height}>
         <ScatterChart>
           <CartesianGrid strokeDasharray="3 3" />
@@ -206,7 +206,7 @@ export function TokenRadarChart<T extends Record<string, unknown>>(props: RadarC
     );
   }
   return (
-    <div className="w-full">
+    <div className="w-full min-w-0">
       <ResponsiveContainer width="100%" height={height}>
         <RadarChart data={data}>
           <PolarGrid />

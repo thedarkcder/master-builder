@@ -35,7 +35,7 @@ def create_tenant(
         policy_config=payload.policy.model_dump(),
         discord_config=with_preserved_discord_system_fields_fn(
             existing={},
-            proposed=payload.discord.model_dump() if payload.discord else None,
+            proposed=payload.discord.model_dump(exclude_unset=True) if payload.discord else None,
         ),
         created_at=now,
         updated_at=now,
@@ -80,7 +80,7 @@ def update_tenant(
     tenant.policy_config = payload.policy.model_dump()
     tenant.discord_config = with_preserved_discord_system_fields_fn(
         existing=dict(tenant.discord_config or {}),
-        proposed=payload.discord.model_dump() if payload.discord else None,
+        proposed=payload.discord.model_dump(exclude_unset=True) if payload.discord else None,
     )
     tenant.updated_at = datetime.now(timezone.utc)
     ensure_default_project_for_tenant_fn(session, tenant=tenant)

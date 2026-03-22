@@ -116,11 +116,14 @@ class Run(Base):
     dev_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     pm_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     orchestrated_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    dedupe_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="issue_execution", index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    worker_service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -181,6 +184,7 @@ class RunLock(Base):
         primary_key=True,
     )
     issue_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dedupe_scope: Mapped[str] = mapped_column(String(32), primary_key=True, default="issue_execution")
     run_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("runs.run_id", ondelete="CASCADE"),
@@ -207,6 +211,49 @@ class WebhookDelivery(Base):
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PrReviewPublication(Base):
+    __tablename__ = "pr_review_publications"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "repo_full_name",
+            "pr_number",
+            "head_sha",
+            "review_kind",
+            "signature",
+            name="uq_pr_review_publications_scope",
+        ),
+    )
+
+    publication_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    repo_full_name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    head_sha: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    review_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    signature: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    owner_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    review_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class RepoBootstrapState(Base):
@@ -473,6 +520,26 @@ class KnowledgeJiraSyncRuntimeState(Base):
     last_pass_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     leader_acquired: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class DiscordCommandSyncRuntimeState(Base):
+    __tablename__ = "discord_command_sync_runtime_states"
+
+    runtime_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    healthy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    interaction_ingress_ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    bot_token_configured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    guild_id_configured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_failure_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    guild_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    application_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    command_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 

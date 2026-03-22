@@ -3,9 +3,11 @@ from __future__ import annotations
 from base64 import b64decode
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import math
 import mimetypes
+import os
 import re
 from typing import Any
 from uuid import uuid4
@@ -13,6 +15,7 @@ from uuid import uuid4
 from sqlalchemy import case, delete, desc, func, select, text
 from sqlalchemy.orm import Session
 
+from orchestrator.core.config import get_settings
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeChunk, KnowledgeFact
 from orchestrator.storage.vector_type import vector_literal
 
@@ -54,6 +57,7 @@ _INLINE_CONFIGURATION_ALIASES: dict[str, tuple[str, ...]] = {
     "url_scheme": ("url scheme",),
     "project_id": ("project id",),
 }
+_KNOWLEDGE_EMBEDDING_MODEL_DEFAULT = "BAAI/bge-small-en-v1.5"
 
 
 @dataclass(frozen=True)
@@ -426,11 +430,10 @@ def _embed_texts(texts: list[str]) -> list[list[float] | None]:
     if not texts:
         return []
     try:
-        from fastembed import TextEmbedding  # type: ignore[import-not-found]
+        model = _knowledge_text_embedding_model()
     except Exception:  # noqa: BLE001
         return [None for _ in texts]
     try:
-        model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
         vectors = list(model.embed(texts))
     except Exception:  # noqa: BLE001
         return [None for _ in texts]
@@ -443,6 +446,56 @@ def _embed_texts(texts: list[str]) -> list[list[float] | None]:
     while len(normalized) < len(texts):
         normalized.append(None)
     return normalized[: len(texts)]
+
+
+def ensure_knowledge_embedding_model_ready(*, local_files_only: bool | None = None) -> str:
+    model_name = _knowledge_embedding_model_name()
+    model = _knowledge_text_embedding_model(local_files_only)
+    list(model.embed(["knowledge prewarm"]))
+    return model_name
+
+
+@lru_cache(maxsize=3)
+def _knowledge_text_embedding_model(local_files_only: bool | None = None):  # noqa: ANN202
+    return _build_knowledge_text_embedding_model(local_files_only=local_files_only)
+
+
+def _build_knowledge_text_embedding_model(*, local_files_only: bool | None = None):  # noqa: ANN202
+    from fastembed import TextEmbedding  # type: ignore[import-not-found]
+
+    kwargs: dict[str, Any] = {}
+    if (cache_dir := _knowledge_embedding_cache_dir()) is not None:
+        kwargs["cache_dir"] = cache_dir
+    if _resolve_knowledge_embedding_local_files_only(local_files_only):
+        kwargs["local_files_only"] = True
+    return TextEmbedding(
+        model_name=_knowledge_embedding_model_name(),
+        **kwargs,
+    )
+
+
+def _knowledge_embedding_model_name() -> str:
+    try:
+        configured = str(get_settings().knowledge_embedding_model or "").strip()
+    except Exception:  # noqa: BLE001
+        configured = ""
+    return configured or _KNOWLEDGE_EMBEDDING_MODEL_DEFAULT
+
+
+def _knowledge_embedding_cache_dir() -> str | None:
+    normalized = str(os.environ.get("HF_HOME") or "").strip()
+    return normalized or None
+
+
+def _knowledge_embedding_offline_enabled() -> bool:
+    normalized = str(os.environ.get("HF_HUB_OFFLINE") or "").strip().lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+def _resolve_knowledge_embedding_local_files_only(local_files_only: bool | None) -> bool:
+    if local_files_only is not None:
+        return local_files_only
+    return _knowledge_embedding_offline_enabled()
 
 
 def _asset_checksum(*, text_content: str, binary_content: bytes | None) -> str | None:

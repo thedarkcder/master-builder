@@ -2,22 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.shared.state import command_matches
+from orchestrator.api.transport_runtime import execute_http_ingress_result, http_json_response_action
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.error_observability import emit_hard_error
 from orchestrator.api.webhooks.payload_utils import (
     extract_webhook_token as _extract_webhook_token,
     read_json_payload as _read_json_payload,
 )
+from orchestrator.core.communications import DeferredTransportWork, IngressResult, TransportEnvelope
 from orchestrator.core.config import get_settings
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.db import create_session_factory
@@ -87,28 +89,33 @@ async def _run_discord_webhook_command(
         session.close()
 
 
-@router.post("/discord/webhook/{tenant_id}")
-async def ingest_discord_webhook(
+async def build_discord_webhook_ingress_result(
+    *,
     tenant_id: str,
     request: Request,
-    session: Session = Depends(get_session),
-) -> JSONResponse:
+    session: Session,
+    request_id: str,
+    envelope: TransportEnvelope,
+) -> IngressResult:
     settings = get_settings()
-    request_id = request.headers.get("X-Request-Id") or str(uuid4())
     logger.info("discord_webhook_received request_id=%s tenant_id=%s", request_id, tenant_id)
 
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown tenant")
     if not tenant.is_enabled:
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "request_id": request_id,
-                "tenant_id": tenant_id,
-                "accepted": False,
-                "reason": "tenant_disabled",
-            },
+        return IngressResult(
+            actions=(
+                http_json_response_action(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "request_id": request_id,
+                        "tenant_id": tenant_id,
+                        "accepted": False,
+                        "reason": "tenant_disabled",
+                    },
+                ),
+            )
         )
 
     discord_config = tenant.discord_config or {}
@@ -126,14 +133,7 @@ async def ingest_discord_webhook(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Discord command authentication is misconfigured",
             )
-        if not presented_token:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Discord webhook token",
-            )
-        import secrets
-
-        if not secrets.compare_digest(presented_token, expected_token):
+        if not presented_token or not secrets.compare_digest(presented_token, expected_token):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid Discord webhook token",
@@ -156,26 +156,61 @@ async def ingest_discord_webhook(
         command=normalized_command,
         channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
     )
-    task = asyncio.create_task(
-        _run_discord_webhook_command(
+    deferred = DeferredTransportWork(
+        kind="discord_webhook_command",
+        runner=lambda: _run_discord_webhook_command(
             tenant_id=tenant_id,
             payload=command_payload,
             defer_seed_issues=command_matches(normalized_command, command_name="issues", subcommand="seed"),
-        )
-    )
-    task.add_done_callback(
-        _discord_webhook_task_callback(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            command=normalized_command,
-        )
-    )
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={
+        ),
+        metadata={
             "request_id": request_id,
             "tenant_id": tenant_id,
-            "accepted": True,
-            "deferred": True,
+            "transport": envelope.transport,
+            "event_type": envelope.event_type,
         },
+        on_scheduled=lambda task: task.add_done_callback(
+            _discord_webhook_task_callback(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                command=normalized_command,
+            )
+        ),
     )
+    return IngressResult(
+        actions=(
+            http_json_response_action(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "request_id": request_id,
+                    "tenant_id": tenant_id,
+                    "accepted": True,
+                    "deferred": True,
+                },
+            ),
+        ),
+        deferred_work=(deferred,),
+    )
+
+
+@router.post("/discord/webhook/{tenant_id}")
+async def ingest_discord_webhook(
+    tenant_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> object:
+    request_id = request.headers.get("X-Request-Id") or str(uuid4())
+    envelope = TransportEnvelope(
+        transport="discord_webhook",
+        event_type="command_webhook",
+        request_id=request_id,
+        tenant_id_hint=tenant_id,
+    )
+    result = await build_discord_webhook_ingress_result(
+        tenant_id=tenant_id,
+        request=request,
+        session=session,
+        request_id=request_id,
+        envelope=envelope,
+    )
+    return execute_http_ingress_result(result=result, envelope=envelope, task_scheduler=asyncio.create_task)
