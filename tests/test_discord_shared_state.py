@@ -150,19 +150,109 @@ class DiscordSharedStateTests(unittest.TestCase):
 
     def test_assert_channel_scope(self) -> None:
         session = MagicMock()
-        tenant = SimpleNamespace()
+        tenant = SimpleNamespace(tenant_id="t1", discord_config={})
         with (
             patch("orchestrator.api.discord.shared.state.tenant_allowed_channel_ids", return_value={"c1"}),
+            patch("orchestrator.api.discord.shared.state.project_room_channel_ids", return_value={"room-1"}),
             patch("orchestrator.api.discord.shared.state.is_channel_allowed", return_value=True),
         ):
             state_module.assert_channel_scope(session=session, tenant=tenant, channel_id="c1")
 
         with (
             patch("orchestrator.api.discord.shared.state.tenant_allowed_channel_ids", return_value={"c1"}),
+            patch("orchestrator.api.discord.shared.state.project_room_channel_ids", return_value={"room-1"}),
             patch("orchestrator.api.discord.shared.state.is_channel_allowed", return_value=False),
         ):
             with self.assertRaises(HTTPException):
                 state_module.assert_channel_scope(session=session, tenant=tenant, channel_id="c2")
+
+        with (
+            patch("orchestrator.api.discord.shared.state.tenant_allowed_channel_ids", return_value=set()),
+            patch("orchestrator.api.discord.shared.state.project_room_channel_ids", return_value={"room-1"}),
+            patch("orchestrator.api.discord.shared.state.is_channel_allowed", return_value=True),
+        ):
+            state_module.assert_channel_scope(session=session, tenant=tenant, channel_id="room-1")
+
+    def test_room_channel_helpers_support_general_and_legacy_keys(self) -> None:
+        config = {
+            "voice_room_channel_ids": ["voice-room-1", " "],
+            "persona_room_thread_channel_id": "persona-thread-1",
+            "pm_room_channel_ids": ["pm-room-1", ""],
+        }
+        self.assertEqual(
+            state_module.room_channel_ids_from_discord_config(config),
+            {"voice-room-1", "persona-thread-1", "pm-room-1"},
+        )
+
+        session = MagicMock()
+        project = SimpleNamespace(discord_config=config)
+        session.execute.return_value.scalars.return_value.all.return_value = [project]
+        self.assertEqual(
+            state_module.project_room_channel_ids(session=session, tenant_id="tenant-1"),
+            {"voice-room-1", "persona-thread-1", "pm-room-1"},
+        )
+        self.assertEqual(
+            state_module.project_pm_room_channel_ids(session=session, tenant_id="tenant-1"),
+            {"voice-room-1", "persona-thread-1", "pm-room-1"},
+        )
+
+    def test_live_voice_room_helpers_support_links_and_enabled(self) -> None:
+        config = {
+            "live_voice_enabled": "yes",
+            "live_voice_room_links": {
+                "voice-room-1": "text-room-1",
+                " voice-room-2 ": " thread-room-2 ",
+                " ": "skip",
+            },
+        }
+        self.assertTrue(state_module.live_voice_enabled_from_discord_config(config))
+        self.assertEqual(
+            state_module.live_voice_room_links_from_discord_config(config),
+            {
+                "voice-room-1": "text-room-1",
+                "voice-room-2": "thread-room-2",
+            },
+        )
+        self.assertEqual(
+            state_module.live_voice_room_channel_ids_from_discord_config(config),
+            {"voice-room-1", "voice-room-2"},
+        )
+        self.assertEqual(
+            state_module.live_voice_linked_channel_ids_from_discord_config(config),
+            {"text-room-1", "thread-room-2"},
+        )
+
+        session = MagicMock()
+        project = SimpleNamespace(discord_config=config)
+        session.execute.return_value.scalars.return_value.all.return_value = [project]
+        self.assertEqual(
+            state_module.project_live_voice_room_channel_ids(session=session, tenant_id="tenant-1"),
+            {"voice-room-1", "voice-room-2"},
+        )
+        self.assertEqual(
+            state_module.project_live_voice_room_links(session=session, tenant_id="tenant-1"),
+            {
+                "voice-room-1": "text-room-1",
+                "voice-room-2": "thread-room-2",
+            },
+        )
+        self.assertEqual(
+            state_module.project_live_voice_linked_channel_ids(session=session, tenant_id="tenant-1"),
+            {"text-room-1", "thread-room-2"},
+        )
+
+    def test_live_voice_room_helpers_ignore_missing_map_entries(self) -> None:
+        config = {
+            "live_voice_enabled": True,
+            "live_voice_room_links": {
+                "voice-room-1": "",
+                " ": "text-room-2",
+            },
+        }
+        self.assertTrue(state_module.live_voice_enabled_from_discord_config(config))
+        self.assertEqual(state_module.live_voice_room_links_from_discord_config(config), {})
+        self.assertEqual(state_module.live_voice_room_channel_ids_from_discord_config(config), set())
+        self.assertEqual(state_module.live_voice_linked_channel_ids_from_discord_config(config), set())
 
     def test_seed_followup_lifecycle(self) -> None:
         session = MagicMock()

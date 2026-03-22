@@ -39,6 +39,31 @@ class _FakePsycopg:
         return self._conn
 
 
+class _FlakyPsycopg:
+    def __init__(self, *results: object) -> None:
+        self._results = list(results)
+        self.connect_calls = 0
+
+    def connect(self, _dsn: str, autocommit: bool = True):  # noqa: ANN202, ARG002
+        self.connect_calls += 1
+        if not self._results:
+            raise RuntimeError("no connection result configured")
+        result = self._results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+class _StopAfterFirstNotifyConn(_FakeConn):
+    def __init__(self, *, stop_event: threading.Event) -> None:
+        super().__init__()
+        self._stop_event = stop_event
+
+    def notifies(self):  # noqa: ANN204
+        yield object()
+        self._stop_event.set()
+
+
 class QueueListenerTests(unittest.TestCase):
     def test_bridge_run_with_missing_psycopg_sets_wake_event(self) -> None:
         from orchestrator.core.worker.queue_listener import RunQueueNotificationBridge
@@ -65,15 +90,16 @@ class QueueListenerTests(unittest.TestCase):
 
         loop = asyncio.new_event_loop()
         wake_event = asyncio.Event()
-        conn = _FakeConn(notifications=[object(), object()])
         bridge = RunQueueNotificationBridge(
             postgres_dsn="postgres://x",
             wake_event=wake_event,
             loop=loop,
             logger=logging.getLogger("test"),
             notify_channel="run_queue",
-            psycopg_module=_FakePsycopg(conn),
+            psycopg_module=None,
         )
+        conn = _StopAfterFirstNotifyConn(stop_event=bridge._stop_event)
+        bridge._psycopg = _FakePsycopg(conn)
         bridge._run()
         loop.run_until_complete(asyncio.sleep(0))
         self.assertIn('LISTEN "run_queue"', conn.executed[0])
@@ -98,6 +124,32 @@ class QueueListenerTests(unittest.TestCase):
         bridge._thread = threading.Thread(target=lambda: None)
         bridge.stop()
         self.assertTrue(conn.closed)
+        loop.close()
+
+    def test_bridge_reconnects_after_listener_failure(self) -> None:
+        from orchestrator.core.worker import queue_listener as queue_listener_module
+
+        loop = asyncio.new_event_loop()
+        wake_event = asyncio.Event()
+        logger = MagicMock()
+        bridge = queue_listener_module.RunQueueNotificationBridge(
+            postgres_dsn="postgres://x",
+            wake_event=wake_event,
+            loop=loop,
+            logger=logger,
+            notify_channel="run_queue",
+            psycopg_module=None,
+        )
+        conn = _StopAfterFirstNotifyConn(stop_event=bridge._stop_event)
+        bridge._psycopg = _FlakyPsycopg(RuntimeError("db restarted"), conn)
+
+        with patch.object(queue_listener_module, "RECONNECT_DELAY_SECONDS", 0):
+            bridge._run()
+
+        loop.run_until_complete(asyncio.sleep(0))
+        self.assertTrue(wake_event.is_set())
+        self.assertEqual(bridge._psycopg.connect_calls, 2)
+        logger.exception.assert_called_once()
         loop.close()
 
     def test_wait_for_wake_or_stop(self) -> None:
@@ -143,6 +195,68 @@ class RuntimeFactoryTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_run_worker_slot_retries_transient_database_errors(self) -> None:
+        import orchestrator.worker as worker_module
+        from sqlalchemy.exc import OperationalError
+
+        transient_error = OperationalError(
+            "SELECT 1",
+            {},
+            Exception("server closed the connection unexpectedly"),
+        )
+        process_mock = MagicMock(side_effect=[transient_error, None])
+
+        async def _retry_now(*, stop_event, timeout_seconds):  # noqa: ANN202, ARG001
+            return False
+
+        with (
+            patch.object(worker_module, "_process_next_queued_run_once", new=process_mock),
+            patch.object(worker_module, "_wait_for_worker_retry_delay", new=_retry_now),
+        ):
+            asyncio.run(
+                worker_module._run_worker_slot(
+                    session_factory=MagicMock(),
+                    stop_event=asyncio.Event(),
+                )
+            )
+
+        self.assertEqual(process_mock.call_count, 2)
+
+    def test_run_worker_slot_reraises_non_retryable_operational_errors(self) -> None:
+        import orchestrator.worker as worker_module
+        from sqlalchemy.exc import OperationalError
+
+        process_mock = MagicMock(
+            side_effect=OperationalError(
+                "SELECT 1",
+                {},
+                Exception("password authentication failed for user \"orchestrator\""),
+            )
+        )
+
+        with patch.object(worker_module, "_process_next_queued_run_once", new=process_mock):
+            with self.assertRaisesRegex(OperationalError, "password authentication failed"):
+                asyncio.run(
+                    worker_module._run_worker_slot(
+                        session_factory=MagicMock(),
+                        stop_event=asyncio.Event(),
+                    )
+                )
+
+    def test_run_worker_slot_reraises_non_retryable_errors(self) -> None:
+        import orchestrator.worker as worker_module
+
+        process_mock = MagicMock(side_effect=RuntimeError("boom"))
+
+        with patch.object(worker_module, "_process_next_queued_run_once", new=process_mock):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                asyncio.run(
+                    worker_module._run_worker_slot(
+                        session_factory=MagicMock(),
+                        stop_event=asyncio.Event(),
+                    )
+                )
+
     def test_process_next_queued_run_passes_send_discord_fn(self) -> None:
         import orchestrator.worker as worker_module
 
@@ -158,6 +272,9 @@ class WorkerTests(unittest.TestCase):
         fake_settings = MagicMock()
         fake_settings.database_url = "sqlite:///test.db"
         fake_settings.log_level = "INFO"
+        fake_settings.sentry_environment = "test"
+        fake_settings.sentry_release = None
+        fake_settings.agent_id = "worker-test"
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
@@ -182,7 +299,13 @@ class WorkerTests(unittest.TestCase):
     def test_run_worker_processes_and_stops_cleanly(self) -> None:
         import orchestrator.worker as worker_module
 
-        fake_settings = SimpleNamespace(database_url="postgresql://localhost/db", log_level="INFO")
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
         session = MagicMock()
 
         class _SessionCtx:
@@ -197,6 +320,7 @@ class WorkerTests(unittest.TestCase):
 
         listener = MagicMock()
         process_mock = MagicMock(side_effect=[object(), None])
+        recovery_mock = MagicMock()
         wait_calls = {"count": 0}
 
         async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
@@ -205,6 +329,9 @@ class WorkerTests(unittest.TestCase):
                 wake_event.set()
                 return
             stop_event.set()
+
+        async def _stale_recovery_loop(*, stop_event, **_kwargs):  # noqa: ANN001
+            await stop_event.wait()
 
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
@@ -216,9 +343,72 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()),
             patch.object(worker_module, "process_next_queued_run", new=process_mock),
+            patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
         ):
             asyncio.run(worker_module.run_worker())
 
+        self.assertEqual(process_mock.call_count, 2)
+        recovery_mock.assert_called_once()
+        listener.start.assert_called_once()
+        listener.stop.assert_called_once()
+
+    def test_run_worker_uses_policy_parallel_slots(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
+        session = MagicMock()
+
+        class _SessionCtx:
+            def __enter__(self):  # noqa: ANN204
+                return session
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        def _session_factory():  # noqa: ANN202
+            return _SessionCtx()
+
+        listener = MagicMock()
+        process_mock = MagicMock(return_value=None)
+        recovery_mock = MagicMock()
+        wait_calls = {"count": 0}
+
+        async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
+            wait_calls["count"] += 1
+            if wait_calls["count"] == 1:
+                wake_event.set()
+                return
+            stop_event.set()
+
+        async def _stale_recovery_loop(*, stop_event, **_kwargs):  # noqa: ANN001
+            await stop_event.wait()
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=_session_factory),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=2) as slots_mock,
+            patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()),
+            patch.object(worker_module, "process_next_queued_run", new=process_mock),
+            patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+        ):
+            asyncio.run(worker_module.run_worker())
+
+        self.assertTrue(slots_mock.called)
         self.assertEqual(process_mock.call_count, 2)
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
@@ -226,7 +416,13 @@ class WorkerTests(unittest.TestCase):
     def test_run_worker_raises_runtime_unavailable_when_runner_build_fails(self) -> None:
         import orchestrator.worker as worker_module
 
-        fake_settings = SimpleNamespace(database_url="postgresql://localhost/db", log_level="INFO")
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
         session = MagicMock()
 
         class _SessionCtx:
@@ -247,9 +443,13 @@ class WorkerTests(unittest.TestCase):
         is_postgres_mock = MagicMock(return_value=True)
         postgres_dsn_mock = MagicMock(return_value="postgres://dsn")
         queue_bridge_mock = MagicMock(return_value=listener)
+        recovery_mock = MagicMock()
 
         async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
             wake_event.set()
+
+        async def _stale_recovery_loop(*, stop_event, **_kwargs):  # noqa: ANN001
+            await stop_event.wait()
 
         with (
             patch.object(worker_module, "get_settings", new=get_settings_mock),
@@ -260,6 +460,9 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "RunQueueNotificationBridge", new=queue_bridge_mock),
             patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
             patch.object(worker_module, "build_workflow_runner_for_session", new=build_runner_mock),
+            patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
         ):
             with self.assertRaisesRegex(RuntimeError, "Worker runtime unavailable"):
                 asyncio.run(worker_module.run_worker())

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.state_repository import (
@@ -21,19 +22,160 @@ from orchestrator.core.discord.policy import (
 from orchestrator.storage.models import Project, Tenant
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "reply", "promote", "issues"}
-PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "gap", "request", "bug"}
+PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "pm", "gap", "request", "bug"}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 REQUEST_PERMISSION_LABELS = {
     "run_controls": "run controls (!run, !cancel, !retry)",
     "seed_issues": "issue seeding (!issues seed)",
     "all_sensitive": "all sensitive commands",
 }
+ROOM_LIST_KEYS = (
+    "voice_room_channel_ids",
+    "voice_room_thread_channel_ids",
+    "voice_thread_channel_ids",
+    "persona_room_channel_ids",
+    "persona_room_thread_channel_ids",
+    "persona_thread_channel_ids",
+    "room_channel_ids",
+    "room_thread_channel_ids",
+    "pm_room_channel_ids",
+    "pm_room_thread_channel_ids",
+    "pm_thread_channel_ids",
+)
+ROOM_SINGLE_KEYS = (
+    "voice_room_channel_id",
+    "voice_room_thread_channel_id",
+    "voice_thread_channel_id",
+    "persona_room_channel_id",
+    "persona_room_thread_channel_id",
+    "persona_thread_channel_id",
+    "room_channel_id",
+    "room_thread_channel_id",
+    "pm_room_channel_id",
+    "pm_room_thread_channel_id",
+    "pm_thread_channel_id",
+)
+LIVE_VOICE_LINK_KEYS = ("live_voice_room_links",)
 MAX_PENDING_SEED_FOLLOWUPS = 30
 MAX_PENDING_SEED_FOLLOWUP_AGE = timedelta(hours=24)
 
 
 def normalize_status_name(value: str) -> str:
     return value.strip().lower()
+
+
+def _room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    config = dict(discord_config or {})
+    channel_ids: set[str] = set()
+    for key in ROOM_LIST_KEYS:
+        raw_values = config.get(key)
+        if not isinstance(raw_values, list):
+            continue
+        for value in raw_values:
+            normalized = str(value or "").strip()
+            if normalized:
+                channel_ids.add(normalized)
+    for key in ROOM_SINGLE_KEYS:
+        normalized = str(config.get(key) or "").strip()
+        if normalized:
+            channel_ids.add(normalized)
+    return channel_ids
+
+
+def room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return _room_channel_ids_from_discord_config(discord_config)
+
+
+def live_voice_enabled_from_discord_config(discord_config: dict | None) -> bool:
+    value = (discord_config or {}).get("live_voice_enabled")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return False
+
+
+def _live_voice_room_links_from_discord_config(discord_config: dict | None) -> dict[str, str]:
+    config = dict(discord_config or {})
+    room_links: dict[str, str] = {}
+    for key in LIVE_VOICE_LINK_KEYS:
+        raw_value = config.get(key)
+        if not isinstance(raw_value, dict):
+            continue
+        for voice_channel_id, linked_channel_id in raw_value.items():
+            normalized_voice_channel_id = str(voice_channel_id or "").strip()
+            normalized_linked_channel_id = str(linked_channel_id or "").strip()
+            if not normalized_voice_channel_id or not normalized_linked_channel_id:
+                continue
+            room_links[normalized_voice_channel_id] = normalized_linked_channel_id
+    return room_links
+
+
+def live_voice_room_links_from_discord_config(discord_config: dict | None) -> dict[str, str]:
+    return _live_voice_room_links_from_discord_config(discord_config)
+
+
+def live_voice_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return set(_live_voice_room_links_from_discord_config(discord_config))
+
+
+def live_voice_linked_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return set(_live_voice_room_links_from_discord_config(discord_config).values())
+
+
+def project_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        channel_ids.update(_room_channel_ids_from_discord_config(project.discord_config or {}))
+    return channel_ids
+
+
+def project_pm_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    return project_room_channel_ids(session=session, tenant_id=tenant_id)
+
+
+def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
+    return _room_channel_ids_from_discord_config(discord_config)
+
+
+def project_live_voice_room_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    channel_ids: set[str] = set()
+    for project in projects:
+        channel_ids.update(live_voice_room_channel_ids_from_discord_config(project.discord_config or {}))
+    return channel_ids
+
+
+def project_live_voice_room_links(*, session: Session, tenant_id: str) -> dict[str, str]:
+    projects = session.execute(
+        select(Project).where(
+            Project.tenant_id == tenant_id,
+            Project.is_archived.is_(False),
+        )
+    ).scalars().all()
+    room_links: dict[str, str] = {}
+    for project in projects:
+        room_links.update(live_voice_room_links_from_discord_config(project.discord_config or {}))
+    return room_links
+
+
+def project_live_voice_linked_channel_ids(*, session: Session, tenant_id: str) -> set[str]:
+    return set(project_live_voice_room_links(session=session, tenant_id=tenant_id).values())
 
 
 def parse_command_text(command_text: str) -> tuple[str, list[str]]:
@@ -181,6 +323,8 @@ def assert_sensitive_command_permission(
 
 def assert_channel_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> None:
     allowed_channel_ids = tenant_allowed_channel_ids(session=session, tenant=tenant)
+    allowed_channel_ids.update(project_room_channel_ids(session=session, tenant_id=tenant.tenant_id))
+    allowed_channel_ids.update(_room_channel_ids_from_discord_config(tenant.discord_config or {}))
     if not is_channel_allowed(channel_id=channel_id, allowed_channel_ids=allowed_channel_ids):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

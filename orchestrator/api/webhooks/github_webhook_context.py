@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.payload_utils import read_json_payload
 from orchestrator.api.webhooks.contracts import (
@@ -18,6 +19,8 @@ from orchestrator.api.webhooks.contracts import (
     resolve_tenant_github_webhook_secret,
     validate_github_webhook_signature,
 )
+from orchestrator.core.communications.integration_contracts import TransportActionExecutor
+from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.reviewer import ReviewAgentGate
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
@@ -36,6 +39,15 @@ class GitHubWebhookContext:
     project: object
     repo_full_name: str
     pr_targets: list[tuple[int, bool]]
+
+
+@dataclass(frozen=True)
+class GitHubWebhookPreparedRuntime:
+    context: GitHubWebhookContext
+    github_client: object | None
+    reviewer_gate: ReviewAgentGate | None
+    review_runtime_error: str | None = None
+    transport_action_executors: tuple[TransportActionExecutor, ...] = ()
 
 
 
@@ -155,6 +167,7 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
         "pull_request",
         "pull_request_review",
         "pull_request_review_comment",
+        "issue_comment",
         "check_suite",
         "check_run",
     }
@@ -239,3 +252,48 @@ def build_github_review_runtime(*, session, settings, tenant, project):
         project_id=project.project_id,
     )
     return github_client, reviewer_gate
+
+
+async def prepare_github_webhook_runtime(
+    *,
+    request: Request,
+    session: Session,
+    settings,  # noqa: ANN001
+    request_id: str,
+    logger,
+) -> GitHubWebhookPreparedRuntime | JSONResponse:
+    context = await resolve_github_webhook_context(
+        request=request,
+        session=session,
+        settings=settings,
+        request_id=request_id,
+        logger=logger,
+    )
+    if isinstance(context, JSONResponse):
+        return context
+    try:
+        github_client, reviewer_gate = build_github_review_runtime(
+            session=session,
+            settings=settings,
+            tenant=context.tenant,
+            project=context.project,
+        )
+    except ValueError as exc:
+        return GitHubWebhookPreparedRuntime(
+            context=context,
+            github_client=None,
+            reviewer_gate=None,
+            review_runtime_error=str(exc),
+        )
+    return GitHubWebhookPreparedRuntime(
+        context=context,
+        github_client=github_client,
+        reviewer_gate=reviewer_gate,
+        transport_action_executors=(
+            GitHubTransportExecutor(
+                github_client=github_client,
+                session=session,
+                logger_override=logger,
+            ),
+        ),
+    )

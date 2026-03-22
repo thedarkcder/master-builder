@@ -73,7 +73,7 @@ export default function TenantWebhooksPage() {
   const jiraExpectedEvents =
     "issue_created, issue_updated, issue_deleted, comment_created, comment_updated";
   const githubExpectedEvents =
-    "pull_request, pull_request_review, pull_request_review_comment, check_suite, check_run";
+    "pull_request, pull_request_review, pull_request_review_comment, issue_comment, check_suite, check_run";
 
   const refreshDiagnostics = useCallback(async () => {
     if (!credentials) return;
@@ -276,7 +276,7 @@ export default function TenantWebhooksPage() {
             </p>
             <p><span className="font-medium text-foreground">Last delivery ID</span> {diagnostics?.last_delivery_id || "none"}</p>
             {diagnostics?.last_error ? (
-              <p className="rounded border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-destructive">
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-destructive break-words">
                 <span className="font-medium">Last error</span> {diagnostics.last_error}
               </p>
             ) : null}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer
 
 from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
 from orchestrator.core.guardrails import enforce_safe_command
@@ -43,7 +43,9 @@ class ReposConfig(BaseModel):
 class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
+    allow_code_reviews: bool = True
     allow_pr_remediation: bool = True
+    allow_manual_pr_fix_requests: bool = True
     allow_label_mutations: bool = True
     allow_auto_merge: bool = False
     max_dev_test_review_loops: int = 2
@@ -84,6 +86,52 @@ class DiscordConfig(BaseModel):
     notify_events: list[str] = Field(default_factory=list)
     allowed_user_ids: list[str] = Field(default_factory=list)
     allowlist_requests: list[dict] = Field(default_factory=list)
+    live_voice_enabled: bool = False
+    live_voice_room_links: dict[str, str] = Field(default_factory=dict)
+    voice_room_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_thread_channel_ids: list[str] = Field(default_factory=list)
+    persona_room_channel_ids: list[str] = Field(default_factory=list)
+    persona_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    persona_thread_channel_ids: list[str] = Field(default_factory=list)
+    room_channel_ids: list[str] = Field(default_factory=list)
+    room_thread_channel_ids: list[str] = Field(default_factory=list)
+    pm_room_channel_ids: list[str] = Field(default_factory=list)
+    pm_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    pm_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_channel_id: str | None = None
+    voice_room_thread_channel_id: str | None = None
+    voice_thread_channel_id: str | None = None
+    persona_room_channel_id: str | None = None
+    persona_room_thread_channel_id: str | None = None
+    persona_thread_channel_id: str | None = None
+    room_channel_id: str | None = None
+    room_thread_channel_id: str | None = None
+    pm_room_channel_id: str | None = None
+    pm_room_thread_channel_id: str | None = None
+    pm_thread_channel_id: str | None = None
+    persona_names: dict[str, str] = Field(default_factory=dict)
+    persona_voices: dict[str, str] = Field(default_factory=dict)
+    voice_room_persona_names: dict[str, str] = Field(default_factory=dict)
+    voice_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    room_persona_names: dict[str, str] = Field(default_factory=dict)
+    room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    pm_room_persona_names: dict[str, str] = Field(default_factory=dict)
+    pm_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+
+    @model_serializer(mode="plain")
+    def serialize_sparse(self) -> dict[str, object]:
+        serialized: dict[str, object] = {}
+        for field_name, field_info in type(self).model_fields.items():
+            value = getattr(self, field_name)
+            explicitly_set = field_name in self.model_fields_set
+            if explicitly_set:
+                serialized[field_name] = value
+                continue
+            default = field_info.default_factory() if field_info.default_factory is not None else field_info.default
+            if value != default:
+                serialized[field_name] = value
+        return serialized
 
 
 class ProjectDiscordConfig(BaseModel):
@@ -91,6 +139,52 @@ class ProjectDiscordConfig(BaseModel):
     notify_events: list[str] = Field(default_factory=list)
     ask_thread_channel_ids: list[str] = Field(default_factory=list)
     seed_followup_thread_channel_ids: list[str] = Field(default_factory=list)
+    live_voice_enabled: bool = False
+    live_voice_room_links: dict[str, str] = Field(default_factory=dict)
+    voice_room_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_thread_channel_ids: list[str] = Field(default_factory=list)
+    persona_room_channel_ids: list[str] = Field(default_factory=list)
+    persona_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    persona_thread_channel_ids: list[str] = Field(default_factory=list)
+    room_channel_ids: list[str] = Field(default_factory=list)
+    room_thread_channel_ids: list[str] = Field(default_factory=list)
+    pm_room_channel_ids: list[str] = Field(default_factory=list)
+    pm_room_thread_channel_ids: list[str] = Field(default_factory=list)
+    pm_thread_channel_ids: list[str] = Field(default_factory=list)
+    voice_room_channel_id: str | None = None
+    voice_room_thread_channel_id: str | None = None
+    voice_thread_channel_id: str | None = None
+    persona_room_channel_id: str | None = None
+    persona_room_thread_channel_id: str | None = None
+    persona_thread_channel_id: str | None = None
+    room_channel_id: str | None = None
+    room_thread_channel_id: str | None = None
+    pm_room_channel_id: str | None = None
+    pm_room_thread_channel_id: str | None = None
+    pm_thread_channel_id: str | None = None
+    persona_names: dict[str, str] = Field(default_factory=dict)
+    persona_voices: dict[str, str] = Field(default_factory=dict)
+    voice_room_persona_names: dict[str, str] = Field(default_factory=dict)
+    voice_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    room_persona_names: dict[str, str] = Field(default_factory=dict)
+    room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    pm_room_persona_names: dict[str, str] = Field(default_factory=dict)
+    pm_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+
+    @model_serializer(mode="plain")
+    def serialize_sparse(self) -> dict[str, object]:
+        serialized: dict[str, object] = {}
+        for field_name, field_info in type(self).model_fields.items():
+            value = getattr(self, field_name)
+            explicitly_set = field_name in self.model_fields_set
+            if explicitly_set:
+                serialized[field_name] = value
+                continue
+            default = field_info.default_factory() if field_info.default_factory is not None else field_info.default
+            if value != default:
+                serialized[field_name] = value
+        return serialized
 
 
 class TenantCreate(BaseModel):
@@ -675,6 +769,21 @@ class DiscordAllowlistApprovalResult(BaseModel):
     project_id: str | None = None
     user_id: str
     notified: bool
+
+
+class DiscordCommandSyncStatusRead(BaseModel):
+    synced: bool
+    healthy: bool
+    interaction_ingress_ready: bool
+    bot_token_configured: bool
+    guild_id_configured: bool
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_failure_reason: str | None = None
+    last_error: str | None = None
+    guild_id: str | None = None
+    application_id: str | None = None
+    command_count: int
 
 
 class AdminLoginRequest(BaseModel):

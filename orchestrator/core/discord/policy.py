@@ -1,5 +1,32 @@
 from __future__ import annotations
 
+ROOM_LIST_KEYS = (
+    "voice_room_channel_ids",
+    "voice_room_thread_channel_ids",
+    "voice_thread_channel_ids",
+    "persona_room_channel_ids",
+    "persona_room_thread_channel_ids",
+    "persona_thread_channel_ids",
+    "room_channel_ids",
+    "room_thread_channel_ids",
+    "pm_room_channel_ids",
+    "pm_room_thread_channel_ids",
+    "pm_thread_channel_ids",
+)
+ROOM_SINGLE_KEYS = (
+    "voice_room_channel_id",
+    "voice_room_thread_channel_id",
+    "voice_thread_channel_id",
+    "persona_room_channel_id",
+    "persona_room_thread_channel_id",
+    "persona_thread_channel_id",
+    "room_channel_id",
+    "room_thread_channel_id",
+    "pm_room_channel_id",
+    "pm_room_thread_channel_id",
+    "pm_thread_channel_id",
+)
+
 
 def normalize_allowlisted_user_ids(discord_config: dict | None) -> set[str]:
     discord_config = discord_config or {}
@@ -52,6 +79,29 @@ def channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
             normalized = str(value or "").strip()
             if normalized:
                 allowed.add(normalized)
+
+    for key in ROOM_LIST_KEYS:
+        raw_values = discord_config.get(key)
+        if not isinstance(raw_values, list):
+            continue
+        for value in raw_values:
+            normalized = str(value or "").strip()
+            if normalized:
+                allowed.add(normalized)
+    for key in ROOM_SINGLE_KEYS:
+        normalized = str(discord_config.get(key) or "").strip()
+        if normalized:
+            allowed.add(normalized)
+
+    raw_live_voice_room_links = discord_config.get("live_voice_room_links")
+    if isinstance(raw_live_voice_room_links, dict):
+        for voice_channel_id, linked_text_channel_id in raw_live_voice_room_links.items():
+            normalized_voice_channel_id = str(voice_channel_id or "").strip()
+            normalized_linked_text_channel_id = str(linked_text_channel_id or "").strip()
+            if normalized_voice_channel_id:
+                allowed.add(normalized_voice_channel_id)
+            if normalized_linked_text_channel_id:
+                allowed.add(normalized_linked_text_channel_id)
     return allowed
 
 

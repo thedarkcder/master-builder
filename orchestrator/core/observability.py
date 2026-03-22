@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -81,11 +82,32 @@ def validate_log_payload(payload: dict[str, Any]) -> list[str]:
     return [field for field in REQUIRED_LOG_FIELDS if field not in payload]
 
 
+@contextmanager
+def scoped_log_context(
+    *,
+    correlation_id: str | None = None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
+    agent_id: str | None = None,
+):
+    tokens = set_log_context(
+        correlation_id=correlation_id,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        agent_id=agent_id,
+    )
+    try:
+        yield
+    finally:
+        reset_log_context(tokens)
+
+
 class ObservabilityJsonFormatter(logging.Formatter):
-    def __init__(self, *, environment: str, platform_version: str) -> None:
+    def __init__(self, *, environment: str, platform_version: str, default_agent_id: str = "") -> None:
         super().__init__()
         self._environment = environment
         self._platform_version = platform_version
+        self._default_agent_id = _normalize_log_field(default_agent_id)
 
     def format(self, record: logging.LogRecord) -> str:
         context = current_log_context()
@@ -101,11 +123,14 @@ class ObservabilityJsonFormatter(logging.Formatter):
             "level": record.levelname,
             "environment": self._environment,
             "platform_version": self._platform_version,
-            "tenant_id": getattr(record, "tenant_id", context["tenant_id"]),
-            "project_id": getattr(record, "project_id", context["project_id"]),
-            "agent_id": getattr(record, "agent_id", context["agent_id"]),
-            "correlation_id": getattr(record, "correlation_id", context["correlation_id"]),
-            "event_type": getattr(record, "event_type", record.name),
+            "tenant_id": _normalize_log_field(getattr(record, "tenant_id", context["tenant_id"])),
+            "project_id": _normalize_log_field(getattr(record, "project_id", context["project_id"])),
+            "agent_id": _normalize_log_field(
+                getattr(record, "agent_id", context["agent_id"]),
+                default=self._default_agent_id,
+            ),
+            "correlation_id": _normalize_log_field(getattr(record, "correlation_id", context["correlation_id"])),
+            "event_type": _normalize_log_field(getattr(record, "event_type", record.name), default=record.name),
             "message": record.getMessage(),
             "metadata": metadata,
         }
@@ -113,3 +138,10 @@ class ObservabilityJsonFormatter(logging.Formatter):
         if missing:
             payload["metadata"]["missing_fields"] = missing
         return json.dumps(payload, sort_keys=True, ensure_ascii=True)
+
+
+def _normalize_log_field(value: object, *, default: str = "") -> str:
+    normalized = str(value or "").strip()
+    if normalized:
+        return normalized
+    return str(default or "").strip()

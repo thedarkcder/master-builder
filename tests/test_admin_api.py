@@ -17,6 +17,7 @@ from orchestrator.core.agent_observability import (
     record_agent_lifecycle_event,
     reset_agent_observability_for_tests,
 )
+from orchestrator.core.runs import RUN_DEDUPE_SCOPE_PR_REMEDIATION
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -125,7 +126,9 @@ class AdminApiTests(unittest.TestCase):
             "policy": {
                 "allow_jira_transitions": False,
                 "allow_pr_creation": True,
+                "allow_code_reviews": True,
                 "allow_pr_remediation": True,
+                "allow_manual_pr_fix_requests": True,
                 "allow_label_mutations": True,
                 "max_runtime_minutes": 30,
                 "max_dev_test_review_loops": 2,
@@ -485,6 +488,39 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_response.status_code, 200)
         self.assertEqual(update_response.json()["jira"]["ready_trigger_mode"], "transition_only")
 
+    def test_update_tenant_drops_live_voice_discord_fields_when_omitted(self) -> None:
+        payload = self._tenant_payload()
+        payload["discord"]["live_voice_enabled"] = True
+        payload["discord"]["live_voice_room_links"] = {"voice-room-1": "text-room-1"}
+        self._insert_jira_connection(connection_id="conn-1")
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self.assertTrue(create_response.json()["discord"]["live_voice_enabled"])
+        self.assertEqual(
+            create_response.json()["discord"]["live_voice_room_links"],
+            {"voice-room-1": "text-room-1"},
+        )
+
+        update_payload = self._tenant_payload()
+        update_payload["name"] = "Tenant A Updated"
+        update_payload["is_enabled"] = False
+        update_payload["discord"].pop("live_voice_enabled", None)
+        update_payload["discord"].pop("live_voice_room_links", None)
+
+        update_response = self.client.put(
+            "/api/admin/tenants/tenant-a",
+            json=update_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertNotIn("live_voice_enabled", update_response.json()["discord"])
+        self.assertNotIn("live_voice_room_links", update_response.json()["discord"])
+
     def test_ready_preview_returns_eligible_issues(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -655,7 +691,9 @@ class AdminApiTests(unittest.TestCase):
                 "github_repository": "https://github.com/example/mobile-app-renamed",
                 "jira_project_key": "MBAPP",
                 "policy_overrides": {
+                    "allow_code_reviews": False,
                     "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": False,
                     "allow_auto_merge": False,
                     "max_pr_auto_remediation_loops": 3,
                     "knowledge_base_enabled": False,
@@ -676,7 +714,9 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.json()["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN_NEXT"})
         self.assertIsNone(update_project.json()["discord"])
         self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.3-codex-spark")
+        self.assertFalse(update_project.json()["policy_overrides"]["allow_code_reviews"])
         self.assertFalse(update_project.json()["policy_overrides"]["allow_pr_remediation"])
+        self.assertFalse(update_project.json()["policy_overrides"]["allow_manual_pr_fix_requests"])
         self.assertEqual(update_project.json()["policy_overrides"]["max_pr_auto_remediation_loops"], 3)
         self.assertFalse(update_project.json()["policy_overrides"]["knowledge_base_enabled"])
         self.assertEqual(update_project.json()["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
@@ -684,7 +724,9 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(update_project.json()["policy_overrides"]["codex_reasoning_effort"], "high")
         self.assertEqual(update_project.json()["effective_policy"]["codex_model"], "gpt-5.3-codex-spark")
         self.assertEqual(update_project.json()["effective_policy"]["codex_reasoning_effort"], "high")
+        self.assertFalse(update_project.json()["effective_policy"]["allow_code_reviews"])
         self.assertFalse(update_project.json()["effective_policy"]["allow_pr_remediation"])
+        self.assertFalse(update_project.json()["effective_policy"]["allow_manual_pr_fix_requests"])
         self.assertFalse(update_project.json()["effective_policy"]["allow_auto_merge"])
         self.assertEqual(update_project.json()["effective_policy"]["max_pr_auto_remediation_loops"], 3)
         self.assertFalse(update_project.json()["effective_policy"]["knowledge_base_enabled"])
@@ -806,6 +848,8 @@ class AdminApiTests(unittest.TestCase):
                         "requested_at": "2026-02-09T12:00:00Z",
                     }
                 ],
+                "live_voice_enabled": True,
+                "live_voice_room_links": {"voice-room-1": "text-room-1"},
             }
             session.add(project)
             session.commit()
@@ -827,6 +871,8 @@ class AdminApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["discord"]["notify_events"], ["run_failed"])
+        self.assertNotIn("live_voice_enabled", response.json()["discord"])
+        self.assertNotIn("live_voice_room_links", response.json()["discord"])
 
         with session_factory() as session:
             project = session.get(Project, project_id)
@@ -834,6 +880,95 @@ class AdminApiTests(unittest.TestCase):
             discord_config = dict(project.discord_config or {})
             self.assertEqual(discord_config.get("allowed_user_ids"), ["discord-user-1"])
             self.assertEqual(len(discord_config.get("allowlist_requests", [])), 1)
+            self.assertNotIn("live_voice_enabled", discord_config)
+            self.assertNotIn("live_voice_room_links", discord_config)
+
+    def test_update_project_persists_live_voice_room_links(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        default_project = projects_response.json()[0]
+        project_id = default_project["project_id"]
+
+        with patch(
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
+            side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
+        ):
+            response = self.client.put(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+                json={
+                    "name": default_project["name"],
+                    "github_repository": default_project["github_repository"],
+                    "jira_project_key": default_project["jira_project_key"],
+                    "discord": {
+                        "notify_events": ["run_failed"],
+                        "live_voice_enabled": True,
+                        "live_voice_room_links": {
+                            "voice-room-9": "text-room-9",
+                            "voice-room-10": "text-room-10",
+                        },
+                    },
+                    "is_archived": False,
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["discord"]["live_voice_enabled"])
+        self.assertEqual(
+            response.json()["discord"]["live_voice_room_links"],
+            {
+                "voice-room-9": "text-room-9",
+                "voice-room-10": "text-room-10",
+            },
+        )
+
+    def test_update_project_can_clear_live_voice_room_links(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        default_project = projects_response.json()[0]
+        project_id = default_project["project_id"]
+
+        with patch(
+            "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
+            side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
+        ):
+            response = self.client.put(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+                json={
+                    "name": default_project["name"],
+                    "github_repository": default_project["github_repository"],
+                    "jira_project_key": default_project["jira_project_key"],
+                    "discord": {
+                        "notify_events": ["run_failed"],
+                        "live_voice_enabled": False,
+                        "live_voice_room_links": {},
+                    },
+                    "is_archived": False,
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["discord"]["live_voice_enabled"])
+        self.assertEqual(response.json()["discord"]["live_voice_room_links"], {})
 
     def test_project_discord_channel_name_template_appends_project_when_template_not_project_scoped(self) -> None:
         now = datetime.now(timezone.utc)
@@ -998,6 +1133,74 @@ class AdminApiTests(unittest.TestCase):
         self.assertIsNone(body["orchestrated_session_id"])
         self.assertEqual(body["plan"]["trigger_context"]["rerun_mode"], "fresh")
 
+    def test_rerun_failed_run_is_not_blocked_by_active_pr_remediation_run(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add_all(
+                [
+                    Run(
+                        run_id="run-failed-rerun-remediation-source",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-1001",
+                        issue_summary="failed run",
+                        issue_description="Objective: rerun from admin.",
+                        repo_url="https://github.com/example/repo",
+                        branch=None,
+                        pr_url=None,
+                        status="failed",
+                        last_error="boom",
+                        plan={"plan": {"plan_steps": ["restore auth flow"]}},
+                        created_at=now,
+                        started_at=now,
+                        finished_at=now,
+                    ),
+                    Run(
+                        run_id="run-active-pr-remediation",
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-1001",
+                        issue_summary="TP-1001: PR remediation for #42",
+                        issue_description="Automated remediation run triggered from GitHub PR #42.",
+                        repo_url="https://github.com/example/repo",
+                        branch="feature/tp-1001",
+                        pr_url="https://github.com/example/repo/pull/42",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+                        status="queued",
+                        last_error=None,
+                        plan={"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 42}},
+                        created_at=now + timedelta(seconds=1),
+                        started_at=None,
+                        finished_at=None,
+                    ),
+                    RunLock(
+                        tenant_id="tenant-a",
+                        issue_key="TP-1001",
+                        dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+                        run_id="run-active-pr-remediation",
+                        locked_at=now + timedelta(seconds=1),
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/runs/run-failed-rerun-remediation-source/rerun",
+            json={"mode": "fresh"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertNotIn(response.json()["run_id"], {"run-failed-rerun-remediation-source", "run-active-pr-remediation"})
+
     def test_resume_rerun_from_dev_stage_copies_session_and_plan(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -1094,6 +1297,7 @@ class AdminApiTests(unittest.TestCase):
                 RunLock(
                     tenant_id="tenant-a",
                     issue_key="TP-998",
+                    dedupe_scope="issue_execution",
                     run_id="run-active-cancel",
                     locked_at=now,
                 )

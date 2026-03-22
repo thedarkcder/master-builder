@@ -20,6 +20,7 @@ import {
   type TokenOverviewRecord,
   type TokenOverviewSeriesPoint
 } from "@/lib/api";
+import { buildRunDetailPath } from "@/lib/dashboard-paths";
 
 type TokenOverviewStatus = {
   project_id: string;
@@ -112,6 +113,13 @@ export default function TenantTokenOverviewPage() {
   const params = useParams<{ tenantId: string }>();
   const { credentials, ready } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [runsForFilters, setRunsForFilters] = useState<RunRecord[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [statusLine, setStatusLine] = useState("Load token overview to inspect efficiency trends.");
+  const [overview, setOverview] = useState<TokenOverviewRecord | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
   const [filters, setFilters] = useState<TokenOverviewStatus>({
     project_id: "",
     issue_keys: [],
@@ -124,13 +132,6 @@ export default function TenantTokenOverviewPage() {
     only_retried: false,
     only_with_test_stage: false,
   });
-  const [projects, setProjects] = useState<ProjectRecord[]>([]);
-  const [runsForFilters, setRunsForFilters] = useState<RunRecord[]>([]);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [busy, setBusy] = useState(false);
-  const [statusLine, setStatusLine] = useState("Load token overview to inspect efficiency trends.");
-  const [overview, setOverview] = useState<TokenOverviewRecord | null>(null);
 
   const issueOptions = useMemo(() => issueOptionsFromRuns(runsForFilters), [runsForFilters]);
   const runStatusOptions = useMemo(() => statusOptionsFromRuns(runsForFilters), [runsForFilters]);
@@ -186,19 +187,16 @@ export default function TenantTokenOverviewPage() {
     try {
       const projectPayload = await listProjects(credentials, tenantId);
       setProjects(projectPayload);
-      setFilters((current) => {
-        if (!projectPayload.length) {
-          return current.project_id ? { ...current, project_id: "", issue_keys: [], run_status: "" } : current;
-        }
-        if (current.project_id && projectPayload.some((project) => project.project_id === current.project_id)) {
-          return current;
-        }
-        return { ...current, project_id: projectPayload[0]?.project_id ?? "", issue_keys: [], run_status: "" };
-      });
+      const hasCurrentProject = filters.project_id && projectPayload.some((project) => project.project_id === filters.project_id);
+      const nextProjectId = hasCurrentProject ? filters.project_id : (projectPayload[0]?.project_id ?? "");
+      if (nextProjectId !== filters.project_id) {
+        setFilters((prev) => ({ ...prev, project_id: nextProjectId, issue_keys: [], run_status: "" }));
+        setPage(1);
+      }
     } catch (error) {
       setStatusLine(`Failed to load projects: ${(error as Error).message}`);
     }
-  }, [credentials, tenantId]);
+  }, [credentials, filters.project_id, tenantId]);
 
   const loadRunsForFilters = useCallback(
     async (projectId: string) => {
@@ -207,7 +205,10 @@ export default function TenantTokenOverviewPage() {
       }
       if (!projectId) {
         setRunsForFilters([]);
-        setFilters((current) => (current.issue_keys.length || current.run_status ? { ...current, issue_keys: [], run_status: "" } : current));
+        if (filters.issue_keys.length || filters.run_status) {
+          setFilters((prev) => ({ ...prev, issue_keys: [], run_status: "" }));
+          setPage(1);
+        }
         return;
       }
       try {
@@ -218,23 +219,19 @@ export default function TenantTokenOverviewPage() {
         });
         const orderedRuns = [...runPayload].sort((a, b) => b.created_at.localeCompare(a.created_at));
         setRunsForFilters(orderedRuns);
-        setFilters((current) => {
-          const issueOptions = issueOptionsFromRuns(orderedRuns);
-          const nextIssues = current.issue_keys.filter((issue) => issueOptions.includes(issue));
-          const runStatuses = statusOptionsFromRuns(orderedRuns);
-          const nextStatus = current.run_status && runStatuses.includes(current.run_status) ? current.run_status : "";
-          return {
-            ...current,
-            issue_keys: nextIssues,
-            run_status: nextStatus,
-          };
-        });
+        const nextIssueOptions = issueOptionsFromRuns(orderedRuns);
+        const nextIssues = filters.issue_keys.filter((issue) => nextIssueOptions.includes(issue));
+        const nextStatuses = statusOptionsFromRuns(orderedRuns);
+        const nextStatus = filters.run_status && nextStatuses.includes(filters.run_status) ? filters.run_status : "";
+        if (nextIssues.length !== filters.issue_keys.length || nextStatus !== filters.run_status) {
+          setFilters((prev) => ({ ...prev, issue_keys: nextIssues, run_status: nextStatus }));
+        }
       } catch (error) {
         setRunsForFilters([]);
         setStatusLine(`Failed to load runs for filters: ${(error as Error).message}`);
       }
     },
-    [credentials, tenantId]
+    [credentials, filters.issue_keys, filters.run_status, tenantId]
   );
 
   useEffect(() => {
@@ -359,12 +356,38 @@ export default function TenantTokenOverviewPage() {
             <Button size="sm" onClick={() => void loadOverview()} disabled={busy}>
               {busy ? "Loading..." : "Apply"}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => { setPage(1); setFilters({ project_id: "", issue_keys: [], run_status: "", from: "", to: "", stage: "", attempt: "", model: "", only_retried: false, only_with_test_stage: false }); }} disabled={busy}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setFilters({
+                  project_id: "",
+                  issue_keys: [],
+                  run_status: "",
+                  from: "",
+                  to: "",
+                  stage: "",
+                  attempt: "",
+                  model: "",
+                  only_retried: false,
+                  only_with_test_stage: false,
+                });
+                setPage(1);
+              }}
+              disabled={busy}
+            >
               Clear
             </Button>
             <div className="ml-auto flex items-center gap-2 text-sm">
               Page size
-              <select className="h-8 rounded-md border border-input bg-background px-2 text-xs" value={String(pageSize)} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+              <select
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                value={String(pageSize)}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value) as 10 | 20 | 50);
+                  setPage(1);
+                }}
+              >
                 <option value="10">10</option>
                 <option value="20">20</option>
                 <option value="50">50</option>
@@ -491,7 +514,11 @@ export default function TenantTokenOverviewPage() {
                         <TableCell>
                           <Link
                             className="text-primary hover:underline"
-                            href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
+                            href={buildRunDetailPath({
+                              tenantId,
+                              projectId: filters.project_id || null,
+                              runId: run.run_id,
+                            })}
                           >
                             {run.run_id}
                           </Link>
@@ -548,9 +575,23 @@ export default function TenantTokenOverviewPage() {
         <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
           <p>{statusLine}</p>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setPage((c) => Math.max(1, c - 1))} disabled={busy || page <= 1}>← Prev</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+              disabled={busy || page <= 1}
+            >
+              ← Prev
+            </Button>
             <span>Page {page}</span>
-            <Button variant="outline" size="sm" onClick={() => setPage((c) => c + 1)} disabled={busy || !overview || overview.top_costly_runs.length < pageSize}>Next →</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((prev) => prev + 1)}
+              disabled={busy || !overview || overview.top_costly_runs.length < pageSize}
+            >
+              Next →
+            </Button>
           </div>
         </div>
       </div>

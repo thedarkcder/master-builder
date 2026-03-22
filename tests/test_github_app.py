@@ -723,6 +723,44 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(files[0].filename, "src/file-0.ts")
         self.assertEqual(files[-1].filename, "README.md")
 
+    def test_get_file_text_at_ref_decodes_base64_content(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={"encoding": "base64", "content": "aGVsbG8gd29ybGQ=\n"},
+        ):
+            content = client.get_file_text_at_ref(
+                repo_full_name="example/repo",
+                path="src/app.ts",
+                ref="abc123",
+            )
+        self.assertEqual(content, "hello world")
+
+    def test_get_file_text_at_ref_validates_base64_payload(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={"encoding": "utf-8", "content": "hello"},
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "base64 content"):
+                client.get_file_text_at_ref(
+                    repo_full_name="example/repo",
+                    path="src/app.ts",
+                    ref="abc123",
+                )
+
     def test_list_open_pull_requests_parses_pr_summary(self) -> None:
         config = GitHubAppConfig(
             app_id="12345",
@@ -799,6 +837,46 @@ class GitHubAppClientTests(unittest.TestCase):
             with self.assertRaisesRegex(GitHubApiError, "response was not a list"):
                 client.list_open_pull_requests(repo_full_name="example/repo")
 
+    def test_find_open_pull_request_matches_head_and_base(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        with patch.object(
+            client,
+            "list_open_pull_requests",
+            return_value=[
+                PullRequestSummary(
+                    number=123,
+                    title="MAB-123: branch",
+                    state="open",
+                    html_url="https://github.com/example/repo/pull/123",
+                    head_ref="feature/MAB-123",
+                    base_ref="main",
+                    updated_at="2026-03-15T11:00:00Z",
+                ),
+                PullRequestSummary(
+                    number=124,
+                    title="MAB-123: staging",
+                    state="open",
+                    html_url="https://github.com/example/repo/pull/124",
+                    head_ref="feature/MAB-123",
+                    base_ref="staging",
+                    updated_at="2026-03-15T10:00:00Z",
+                ),
+            ],
+        ):
+            pull_request = client.find_open_pull_request(
+                repo_full_name="example/repo",
+                head_branch="feature/MAB-123",
+                base_branch="staging",
+            )
+
+        self.assertIsNotNone(pull_request)
+        self.assertEqual(pull_request.number, 124)
+
     def test_create_and_update_issue_comment(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
         client = GitHubAppClient(config)
@@ -824,6 +902,60 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(created.comment_id, 1001)
         self.assertEqual(created.body, "first")
         self.assertEqual(updated.body, "second")
+        self.assertEqual(request_json.call_count, 2)
+
+    def test_create_and_update_pull_request_review_comment_reply(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            side_effect=[
+                {"id": 2001, "body": "reply", "path": "src/a.py", "line": 10, "user": {"login": "bot"}},
+                {"id": 2001, "body": "updated reply", "path": "src/a.py", "line": 10, "user": {"login": "bot"}},
+            ],
+        ) as request_json:
+            created = client.create_pull_request_review_comment_reply(
+                repo_full_name="example/repo",
+                pr_number=10,
+                in_reply_to=1001,
+                body="reply",
+            )
+            updated = client.update_pull_request_review_comment(
+                repo_full_name="example/repo",
+                comment_id=2001,
+                body="updated reply",
+            )
+
+        self.assertEqual(created.comment_id, 2001)
+        self.assertEqual(created.body, "reply")
+        self.assertEqual(updated.body, "updated reply")
+        self.assertEqual(request_json.call_count, 2)
+
+    def test_add_issue_and_review_comment_reactions(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            side_effect=[
+                {"id": 901, "content": "eyes"},
+                {"id": 902, "content": "eyes"},
+            ],
+        ) as request_json:
+            issue_reaction = client.add_issue_comment_reaction(
+                repo_full_name="example/repo",
+                comment_id=1001,
+            )
+            review_reaction = client.add_pull_request_review_comment_reaction(
+                repo_full_name="example/repo",
+                comment_id=2002,
+            )
+
+        self.assertEqual(issue_reaction.reaction_id, 901)
+        self.assertEqual(issue_reaction.content, "eyes")
+        self.assertEqual(review_reaction.reaction_id, 902)
+        self.assertEqual(review_reaction.content, "eyes")
         self.assertEqual(request_json.call_count, 2)
 
     def test_submit_pull_request_review_and_merge(self) -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from orchestrator.api.webhooks.pr_remediation_issue_service import (
     create_pr_remediation_bug_issue_key,
     extract_issue_key,
@@ -7,6 +9,34 @@ from orchestrator.api.webhooks.pr_remediation_issue_service import (
 )
 from orchestrator.tools.github_app import GitHubAppClient
 from orchestrator.tools.jira_oauth import JiraOAuthError
+
+@dataclass(frozen=True)
+class ManualPrFixRequest:
+    instruction_text: str
+    parse_error: str | None
+
+
+def parse_manual_pr_fix_request(*, payload: dict) -> ManualPrFixRequest | None:
+    comment = payload.get("comment")
+    body = str(comment.get("body") or "") if isinstance(comment, dict) else ""
+    if not body.strip():
+        return None
+    first_non_empty_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    if not first_non_empty_line:
+        return None
+    normalized_line = first_non_empty_line.lower()
+    prefix = next(
+        (candidate for candidate in ("@mb", "/mb") if normalized_line.startswith(candidate)),
+        None,
+    )
+    if prefix is None:
+        return None
+    instruction_lines = [first_non_empty_line[len(prefix):].strip()]
+    instruction_lines.extend(line.strip() for line in body.splitlines()[1:] if line.strip())
+    instruction_text = "\n".join(line for line in instruction_lines if line).strip()
+    if not instruction_text:
+        return ManualPrFixRequest(instruction_text="", parse_error="manual_fix_missing_instruction")
+    return ManualPrFixRequest(instruction_text=instruction_text, parse_error=None)
 
 
 def is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
@@ -16,6 +46,8 @@ def is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
         return state == "changes_requested"
     if event == "pull_request_review_comment" and action in {"created", "edited"}:
         return True
+    if event == "issue_comment" and action in {"created", "edited"}:
+        return parse_manual_pr_fix_request(payload=payload) is not None
     if event == "check_run" and action in {"created", "completed", "rerequested"}:
         check_run = payload.get("check_run")
         conclusion = str(check_run.get("conclusion") or "").strip().lower() if isinstance(check_run, dict) else ""
@@ -57,6 +89,7 @@ def resolve_pr_remediation_issue_key(
     reviews,
     review_comments,
     issue_comments,
+    manual_fix_request: dict[str, object] | None = None,
 ) -> tuple[str | None, bool, str | None]:
     issue_key = extract_issue_key(texts=[title, body, str(head_ref or "")])
     issue_created = False
@@ -87,6 +120,7 @@ def resolve_pr_remediation_issue_key(
             reviews=reviews,
             review_comments=review_comments,
             issue_comments=issue_comments,
+            manual_fix_request=manual_fix_request,
         )
         issue_created = True
     except (JiraOAuthError, ValueError) as exc:

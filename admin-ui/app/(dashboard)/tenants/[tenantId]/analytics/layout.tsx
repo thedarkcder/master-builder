@@ -20,8 +20,8 @@ export default function AnalyticsLayout({ children }: { children: React.ReactNod
         <h1 className="text-xl font-semibold">Analytics</h1>
         <p className="text-sm text-muted-foreground">Token usage, trends, and stage diagnostics.</p>
       </div>
-      <div className="border-b">
-        <nav className="-mb-px flex gap-0" aria-label="Analytics tabs">
+      <div className="border-b overflow-x-auto">
+        <nav className="-mb-px flex min-w-max gap-0" aria-label="Analytics tabs">
           {tabs.map((tab) => {
             const href = tab.href(tenantId);
             const active = pathname.startsWith(href);
@@ -30,7 +30,7 @@ export default function AnalyticsLayout({ children }: { children: React.ReactNod
                 key={tab.label}
                 href={href}
                 className={[
-                  "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                  "inline-flex items-center whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
                   active
                     ? "border-primary text-foreground"
                     : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"

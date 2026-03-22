@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
 from orchestrator.api.webhooks.github_ingress import ingest_github_webhook_event
+from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
 
 
 class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
@@ -45,35 +46,66 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             "resolve_platform_secret_ref": MagicMock(return_value="platform-secret"),
             "validate_github_webhook_signature": MagicMock(),
         }
-        ingress_patches = {
-            "send_tenant_discord_message": MagicMock(),
+        application_patches = {
             "enqueue_pr_remediation_if_needed": MagicMock(return_value=None),
-            "upsert_sticky_review_comment": MagicMock(return_value=SimpleNamespace(action="updated", comment_id=1)),
-            "upsert_sticky_remediation_comment": MagicMock(
-                return_value=SimpleNamespace(action="updated", comment_id=2)
-            ),
-            "publish_inline_review_batch": MagicMock(
-                return_value=SimpleNamespace(submitted=False, review_id=None, inline_count=0)
-            ),
             "evaluate_pr_review_findings": MagicMock(
                 return_value=SimpleNamespace(state="reviewed", summary="no findings", findings=())
             ),
             "tenant_jira_issue_url": MagicMock(return_value=None),
+        }
+        github_executor_patches = {
+            "upsert_sticky_review_comment": MagicMock(return_value=SimpleNamespace(action="updated", comment_id=1)),
+            "upsert_sticky_remediation_comment": MagicMock(
+                return_value=SimpleNamespace(action="updated", comment_id=2)
+            ),
+            "upsert_sticky_remediation_review_thread_reply": MagicMock(
+                return_value=SimpleNamespace(action="updated", comment_id=22)
+            ),
+            "publish_inline_review_batch": MagicMock(
+                return_value=SimpleNamespace(submitted=False, review_id=None, inline_count=0)
+            ),
+            "upsert_manual_fix_review_thread_reply": MagicMock(
+                return_value=SimpleNamespace(action="updated", comment_id=3)
+            ),
+        }
+        discord_executor_patches = {
+            "send_tenant_discord_message": MagicMock(),
+        }
+        classifier_patches = {
             "resolve_effective_policy": MagicMock(
-                return_value={"allow_auto_merge": False, "allow_pr_remediation": True, "max_pr_auto_remediation_loops": 5}
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
             ),
         }
         for name, value in overrides.items():
             if name in context_patches:
                 context_patches[name] = value
+            elif name in classifier_patches:
+                classifier_patches[name] = value
+            elif name in application_patches:
+                application_patches[name] = value
+            elif name in github_executor_patches:
+                github_executor_patches[name] = value
+            elif name in discord_executor_patches:
+                discord_executor_patches[name] = value
             else:
-                ingress_patches[name] = value
+                raise AssertionError(f"Unhandled github ingress test override: {name}")
 
         with ExitStack() as stack:
             for name, value in context_patches.items():
                 stack.enter_context(patch(f"orchestrator.api.webhooks.github_webhook_context.{name}", value))
-            for name, value in ingress_patches.items():
-                stack.enter_context(patch(f"orchestrator.api.webhooks.github_ingress.{name}", value))
+            for name, value in classifier_patches.items():
+                stack.enter_context(patch(f"orchestrator.api.webhooks.github_event_classifier.{name}", value))
+            for name, value in application_patches.items():
+                stack.enter_context(patch(f"orchestrator.api.webhooks.github_application.{name}", value))
+            for name, value in github_executor_patches.items():
+                stack.enter_context(patch(f"orchestrator.core.github.transport_executor.{name}", value))
+            for name, value in discord_executor_patches.items():
+                stack.enter_context(patch(f"orchestrator.core.discord.transport_executor.{name}", value))
             return await ingest_github_webhook_event(request=request, session=session, settings=settings, request_id="req-1")
 
     async def test_ping_event(self) -> None:
@@ -140,6 +172,28 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 202)
         self.assertIn("review_misconfigured", response.body.decode())
+
+    async def test_code_review_can_be_disabled(self) -> None:
+        response = await self._call(
+            payload={"action": "synchronize"},
+            headers={"X-GitHub-Event": "pull_request"},
+            github_client_from_tenant_config=MagicMock(side_effect=ValueError("should_not_be_called")),
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": True,
+                    "allow_code_reviews": False,
+                    "allow_pr_remediation": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"accepted":true', body)
+        self.assertIn('"reason":"code_reviews_disabled"', body)
+        self.assertIn('"pr_review":{"enabled":false', body)
+        self.assertIn('"pr_remediation":{"enabled":false', body)
+        self.assertIn('"manual_fix_requests_enabled":true', body)
 
     async def test_review_uses_platform_for_unscoped_github_refs(self) -> None:
         def _scoped_secret_lookup(
@@ -292,8 +346,67 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 202)
         body = response.body.decode()
         self.assertIn('"issue_key":"GP-900"', body)
-        self.assertIn('"remediation_comments"', body)
-        upsert_remediation_comment.assert_called_once()
+
+    async def test_review_comment_event_routes_to_remediation_without_full_review_publication(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="example",
+            body="desc",
+            head_ref="feature/branch",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        enqueue = MagicMock(return_value=None)
+        upsert_review_comment = MagicMock()
+        publish_inline = MagicMock()
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "comment": {"id": 123, "body": "nit: can you rename this?", "user": {"login": "alice", "type": "User"}},
+                "sender": {"login": "alice", "type": "User"},
+                "issue": {"pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            },
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            enqueue_pr_remediation_if_needed=enqueue,
+            upsert_sticky_review_comment=upsert_review_comment,
+            publish_inline_review_batch=publish_inline,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        enqueue.assert_called_once()
+        upsert_review_comment.assert_not_called()
+        publish_inline.assert_not_called()
+
+    async def test_bot_authored_review_comment_is_ignored(self) -> None:
+        enqueue = MagicMock()
+        upsert_review_comment = MagicMock()
+        publish_inline = MagicMock()
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "comment": {
+                    "id": 456,
+                    "body": "Codex inline review findings.",
+                    "user": {"login": "route25-master-builder[bot]", "type": "Bot"},
+                },
+                "sender": {"login": "route25-master-builder[bot]", "type": "Bot"},
+                "issue": {"pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            },
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            enqueue_pr_remediation_if_needed=enqueue,
+            upsert_sticky_review_comment=upsert_review_comment,
+            publish_inline_review_batch=publish_inline,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIn('"ignored_reason":"bot_authored"', response.body.decode())
+        enqueue.assert_not_called()
+        upsert_review_comment.assert_not_called()
+        publish_inline.assert_not_called()
 
     async def test_remediation_trigger_with_missing_run_is_null_safe(self) -> None:
         github_client = MagicMock()
@@ -357,7 +470,12 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             enqueue_pr_remediation_if_needed=enqueue_remediation,
             upsert_sticky_remediation_comment=upsert_remediation_comment,
             resolve_effective_policy=MagicMock(
-                return_value={"allow_auto_merge": False, "allow_pr_remediation": False, "max_pr_auto_remediation_loops": 5}
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": False,
+                    "max_pr_auto_remediation_loops": 5,
+                }
             ),
         )
 
@@ -374,6 +492,9 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             head_sha="abc123",
             title="MAB-1: example",
             body="desc",
+            head_ref="feature/test",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
         )
         gate = MagicMock()
         gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="Need review")
@@ -385,7 +506,12 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
             ReviewAgentGate=MagicMock(return_value=gate),
             evaluate_pr_review_findings=MagicMock(side_effect=RuntimeError("codex failed")),
             resolve_effective_policy=MagicMock(
-                return_value={"allow_auto_merge": True, "allow_pr_remediation": True, "max_pr_auto_remediation_loops": 5}
+                return_value={
+                    "allow_auto_merge": True,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
             ),
         )
 
@@ -394,6 +520,463 @@ class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"findings_evaluated":false', body)
         self.assertIn('"green":false', body)
         github_client.merge_pull_request.assert_not_called()
+
+    async def test_issue_comment_manual_fix_enqueues_even_when_pr_is_green(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+        enqueue_remediation = MagicMock(
+            return_value=SimpleNamespace(
+                triggered=True,
+                issue_key="GP-222",
+                issue_created=False,
+                enqueued=True,
+                reason=None,
+                run=SimpleNamespace(run_id="run-222"),
+                head_sha="abc123",
+            )
+        )
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+                "comment": {"body": "@mb fix the flaky path handling"},
+            },
+            headers={"X-GitHub-Event": "issue_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_remediation,
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": True,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"run_id":"run-222"', body)
+        enqueue_remediation.assert_called_once()
+
+    async def test_issue_comment_manual_fix_enqueues_when_code_reviews_and_auto_remediation_are_disabled(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+        enqueue_remediation = MagicMock(
+            return_value=SimpleNamespace(
+                triggered=True,
+                issue_key="GP-333",
+                issue_created=False,
+                enqueued=True,
+                reason=None,
+                run=SimpleNamespace(run_id="run-333"),
+                head_sha="abc123",
+            )
+        )
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+                "comment": {
+                    "id": 502,
+                    "body": "@mb update this query and add coverage",
+                    "html_url": "https://github.com/org/repo/pull/11#issuecomment-502",
+                },
+            },
+            headers={"X-GitHub-Event": "issue_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_remediation,
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": False,
+                    "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"run_id":"run-333"', body)
+        self.assertNotIn('"reason":"code_reviews_disabled"', body)
+        enqueue_remediation.assert_called_once()
+        github_client.add_issue_comment_reaction.assert_called_once_with(
+            repo_full_name="org/repo",
+            comment_id=502,
+            content="eyes",
+        )
+
+    async def test_issue_comment_manual_fix_adds_eyes_reaction(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+                "comment": {
+                    "id": 501,
+                    "body": "@mb fix the flaky test",
+                    "html_url": "https://github.com/org/repo/pull/11#issuecomment-501",
+                },
+            },
+            headers={"X-GitHub-Event": "issue_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_pr_remediation_if_needed,
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        github_client.add_issue_comment_reaction.assert_called_once_with(
+            repo_full_name="org/repo",
+            comment_id=501,
+            content="eyes",
+        )
+
+    async def test_issue_comment_manual_fix_does_not_publish_followup_comments(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+            head_ref="feature/test",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+        sticky_remediation = MagicMock()
+        sticky_thread_reply = MagicMock()
+        manual_thread_reply = MagicMock()
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+                "comment": {
+                    "id": 501,
+                    "body": "@mb fix the flaky test",
+                    "html_url": "https://github.com/org/repo/pull/11#issuecomment-501",
+                },
+            },
+            headers={"X-GitHub-Event": "issue_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_pr_remediation_if_needed,
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+            upsert_sticky_remediation_comment=sticky_remediation,
+            upsert_sticky_remediation_review_thread_reply=sticky_thread_reply,
+            upsert_manual_fix_review_thread_reply=manual_thread_reply,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        sticky_remediation.assert_not_called()
+        sticky_thread_reply.assert_not_called()
+        manual_thread_reply.assert_not_called()
+
+    async def test_issue_comment_without_manual_fix_skips_eyes_reaction(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+                "comment": {
+                    "id": 501,
+                    "body": "Please have @mb handle this",
+                    "html_url": "https://github.com/org/repo/pull/11#issuecomment-501",
+                },
+            },
+            headers={"X-GitHub-Event": "issue_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_pr_remediation_if_needed,
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        github_client.add_issue_comment_reaction.assert_not_called()
+
+    async def test_review_comment_manual_fix_adds_eyes_reaction(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "pull_request": {"number": 11},
+                "comment": {
+                    "id": 901,
+                    "body": "@mb rename this method and add coverage",
+                    "html_url": "https://github.com/org/repo/pull/11#discussion_r901",
+                },
+            },
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        github_client.add_pull_request_review_comment_reaction.assert_called_once_with(
+            repo_full_name="org/repo",
+            comment_id=901,
+            content="eyes",
+        )
+
+    async def test_review_comment_manual_fix_publishes_threaded_replies_only(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+            head_ref="feature/test",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+        sticky_remediation = MagicMock()
+        sticky_thread_reply = MagicMock(return_value=SimpleNamespace(action="updated", comment_id=22))
+        manual_thread_reply = MagicMock(return_value=SimpleNamespace(action="updated", comment_id=23))
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "pull_request": {"number": 11},
+                "comment": {
+                    "id": 901,
+                    "body": "@mb rename this method and add coverage",
+                    "html_url": "https://github.com/org/repo/pull/11#discussion_r901",
+                },
+            },
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_pr_remediation_if_needed,
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+            upsert_sticky_remediation_comment=sticky_remediation,
+            upsert_sticky_remediation_review_thread_reply=sticky_thread_reply,
+            upsert_manual_fix_review_thread_reply=manual_thread_reply,
+        )
+
+        self.assertEqual(response.status_code, 202)
+        sticky_remediation.assert_not_called()
+        sticky_thread_reply.assert_called_once()
+        manual_thread_reply.assert_called_once()
+
+    async def test_review_comment_without_manual_fix_skips_eyes_reaction(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "pull_request": {"number": 11},
+                "comment": {
+                    "id": 901,
+                    "body": "Could @mb handle this eventually?",
+                    "html_url": "https://github.com/org/repo/pull/11#discussion_r901",
+                },
+            },
+            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        github_client.add_pull_request_review_comment_reaction.assert_not_called()
+
+    async def test_issue_comment_manual_fix_disabled_by_policy(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+        enqueue_remediation = MagicMock()
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+                "comment": {"body": "@mb update the docs and tests"},
+            },
+            headers={"X-GitHub-Event": "issue_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_remediation,
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": True,
+                    "allow_manual_pr_fix_requests": False,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+        self.assertEqual(response.status_code, 202)
+        body = response.body.decode()
+        self.assertIn('"reason":"manual_pr_fix_requests_disabled"', body)
+        enqueue_remediation.assert_not_called()
+
+    async def test_issue_comment_manual_fix_requires_instruction(self) -> None:
+        github_client = MagicMock()
+        github_client.get_pull_request_details.return_value = SimpleNamespace(
+            head_sha="abc123",
+            title="MAB-1: example",
+            body="desc",
+            head_ref="feature/test",
+            base_ref="main",
+            html_url="https://github.com/org/repo/pull/11",
+        )
+        github_client.list_check_suites.return_value = []
+        github_client.list_pull_request_files.return_value = []
+        gate = MagicMock()
+        gate.evaluate_pr.return_value = SimpleNamespace(ready=True, state="ready", message="green")
+
+        response = await self._call(
+            payload={
+                "action": "created",
+                "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+                "comment": {
+                    "id": 503,
+                    "body": "@mb",
+                    "html_url": "https://github.com/org/repo/pull/11#issuecomment-503",
+                },
+            },
+            headers={"X-GitHub-Event": "issue_comment"},
+            github_client_from_tenant_config=MagicMock(return_value=github_client),
+            ReviewAgentGate=MagicMock(return_value=gate),
+            enqueue_pr_remediation_if_needed=enqueue_pr_remediation_if_needed,
+            resolve_effective_policy=MagicMock(
+                return_value={
+                    "allow_auto_merge": False,
+                    "allow_code_reviews": True,
+                    "allow_pr_remediation": False,
+                    "allow_manual_pr_fix_requests": True,
+                    "max_pr_auto_remediation_loops": 5,
+                }
+            ),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIn('"reason":"manual_fix_missing_instruction"', response.body.decode())
 
         validate = MagicMock()
         response = await self._call(

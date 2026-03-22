@@ -7,7 +7,12 @@ from fastapi import HTTPException, status
 
 from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import RunStateTransitionError, cancel_run, enqueue_run
+from orchestrator.core.runs import (
+    RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+    RunStateTransitionError,
+    cancel_run,
+    enqueue_run,
+)
 from orchestrator.core.communications.enqueue_reason_contract import format_enqueue_conflict_detail
 from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent
 
@@ -133,9 +138,12 @@ def rerun_run(
         precheck_outcome=resolve_enqueue_precheck_outcome(
             source="admin_rerun",
             precheck_source_plan=source_run.plan,
+            issue_summary=source_run.issue_summary,
+            issue_description=source_run.issue_description,
         ),
         precheck_source_plan=source_run.plan,
         max_concurrent_runs=effective_policy.get("max_concurrent_runs"),
+        dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
     )
     if not enqueue_result.enqueued:
         raise HTTPException(

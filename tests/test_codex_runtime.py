@@ -714,7 +714,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
                 runtime.run_text(system_prompt="s", user_prompt="u")
-            self.assertIn("docker compose run --rm worker codex login --device-auth", str(exc_info.exception))
+            self.assertIn("docker compose run --rm worker-runtime codex login --device-auth", str(exc_info.exception))
 
         def fake_popen_auth_with_link(args, **kwargs):  # noqa: ANN001
             output_idx = args.index("--output-last-message") + 1

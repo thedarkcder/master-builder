@@ -75,6 +75,10 @@ def _tenant_discord_channel_ids(*, tenant: Tenant, project_channel_ids: set[str]
 
 
 
+def _project_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
+    return _project_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
+
+
 def _resolve_project_for_channel(
     *,
     session: Session,
@@ -88,25 +92,16 @@ def _resolve_project_for_channel(
     )
 
 
-
-def _project_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
-    return _project_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
-
-
-
 def _project_ask_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
     return _project_ask_thread_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
-
 
 
 def _project_seed_followup_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
     return _project_seed_followup_thread_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
 
 
-
 def _ask_thread_message_map_from_config(discord_config: dict) -> dict[str, str]:
     return _ask_thread_message_map_from_config_impl(discord_config)
-
 
 
 def _resolve_thread_id_by_message_suffix(
@@ -191,7 +186,6 @@ def _send_discord_interaction_followup(
     )
 
 
-
 def _send_discord_thread_followup(
     *,
     session: Session,
@@ -217,7 +211,6 @@ def _send_discord_thread_followup(
         ask_thread_message_map_from_config_fn=_ask_thread_message_map_from_config,
         resolve_thread_id_by_message_suffix_fn=_resolve_thread_id_by_message_suffix,
     )
-
 
 
 def _send_discord_ask_response_with_thread(
@@ -247,7 +240,6 @@ def _send_discord_ask_response_with_thread(
         ask_reply_components_fn=_ask_reply_components,
         put_thread_issue_key_fn=put_thread_issue_key,
     )
-
 
 
 def _send_discord_seed_followup_with_thread(

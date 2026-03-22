@@ -13,7 +13,7 @@ from orchestrator.core.agent_observability import (
     agent_observability_tracker,
     reset_agent_observability_for_tests,
 )
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.workflow.runner import (
@@ -325,6 +325,16 @@ class WorkerWorkflowTests(unittest.TestCase):
             / "workspaces"
         )
 
+    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
+        return session.get(
+            RunLock,
+            {
+                "tenant_id": "tenant-worker",
+                "issue_key": issue_key,
+                "dedupe_scope": dedupe_scope,
+            },
+        )
+
     def _ensure_run_worktree_stub(
         self,
         *,
@@ -434,7 +444,7 @@ class WorkerWorkflowTests(unittest.TestCase):
                 ["lock_acquired", "plan_posted", "run_requeued_stale_snapshot"],
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
-            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3001"})
+            lock = self._get_lock(session, issue_key="TP-3001")
             self.assertIsNone(lock)
 
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
@@ -489,7 +499,7 @@ class WorkerWorkflowTests(unittest.TestCase):
                 ["lock_acquired", "plan_posted", "run_requeued_capability_mismatch"],
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
-            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3020"})
+            lock = self._get_lock(session, issue_key="TP-3020")
             self.assertIsNone(lock)
 
         events, _ = agent_observability_tracker.snapshot()
@@ -570,7 +580,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertEqual(processed.run_id, run_id)
             self.assertEqual(processed.status, "failed")
             self.assertIn("Decision Gate evaluation failed: decision gate parse failed", processed.last_error or "")
-            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "TP-3021"})
+            lock = self._get_lock(session, issue_key="TP-3021")
             self.assertIsNone(lock)
 
     def test_decision_gate_notification_includes_reply_components(self) -> None:
@@ -624,7 +634,7 @@ class WorkerWorkflowTests(unittest.TestCase):
                 processed.last_error,
                 "No active project mapping found for issue ZZ-101",
             )
-            lock = session.get(RunLock, {"tenant_id": "tenant-worker", "issue_key": "ZZ-101"})
+            lock = self._get_lock(session, issue_key="ZZ-101")
             self.assertIsNone(lock)
 
     def test_process_next_queued_run_uses_tenant_jira_site_url_for_stage_links(self) -> None:

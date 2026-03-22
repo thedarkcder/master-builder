@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from cryptography.fernet import Fernet
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -101,6 +102,11 @@ class JiraWebhookTests(unittest.TestCase):
             return_value=self._pre_run_check(),
         )
         self._default_pre_run_check_patch.start()
+        self._default_precheck_decision_patch = patch(
+            "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_precheck_decision_with_labels",
+            side_effect=self._evaluate_precheck_decision_with_labels,
+        )
+        self._default_precheck_decision_patch.start()
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -114,6 +120,66 @@ class JiraWebhookTests(unittest.TestCase):
         invalidate_discord_channel_tenant_index()
         reset_webhook_health_tracker_for_tests()
         self._default_pre_run_check_patch.stop()
+        self._default_precheck_decision_patch.stop()
+
+    def _evaluate_precheck_decision_with_labels(
+        self,
+        *,
+        context,
+        session,
+        settings,
+        issue_description: str | None = None,
+        idempotency_key: str | None = None,
+    ):
+        from orchestrator.api.webhooks import jira_webhook_precheck
+
+        _ = idempotency_key
+        effective_issue_description = context.issue_description if issue_description is None else issue_description
+        pre_check = jira_webhook_precheck.evaluate_pre_run_check(
+            tenant_id=context.tenant_id,
+            project_id=context.project.project_id if context.project is not None else None,
+            issue_key=context.issue_key,
+            issue_summary=context.issue_summary,
+            issue_description=effective_issue_description,
+            issue_labels=context.issue_labels,
+            ready_label=jira_webhook_precheck.resolve_ready_label_for_tenant(context.tenant),
+        )
+        labels_to_add = []
+        if pre_check.ready_label and not pre_check.ready_label_present:
+            labels_to_add.append(pre_check.ready_label)
+        if pre_check.required_worker_label and not pre_check.required_worker_label_present:
+            labels_to_add.append(pre_check.required_worker_label)
+        if labels_to_add:
+            try:
+                oauth = jira_webhook_precheck.tenant_jira_oauth_context(
+                    session=session,
+                    tenant=context.tenant,
+                    settings=settings,
+                )
+            except HTTPException:
+                oauth = None
+            if oauth is not None:
+                oauth.client.add_issue_labels(
+                    access_token=oauth.access_token,
+                    cloud_id=oauth.connection.cloud_id,
+                    issue_id_or_key=context.issue_key,
+                    labels=labels_to_add,
+                )
+        issue_labels = [
+            *list(context.issue_labels or []),
+            *[label for label in labels_to_add if label not in set(context.issue_labels or [])],
+        ]
+        block_reason = pre_check.outcome if pre_check.outcome in {"decision_gate_required", "gtd_required", "missing_ready_label"} else None
+        return SimpleNamespace(
+            decision=SimpleNamespace(
+                pre_check=pre_check,
+                block_reason=block_reason,
+                policy_error=None,
+            ),
+            issue_labels=issue_labels,
+            auto_resolved_slots=[],
+            cycle_id=None,
+        )
 
     def _create_tenant(
         self,
@@ -229,7 +295,7 @@ class JiraWebhookTests(unittest.TestCase):
                 "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
                 return_value=self._pre_run_check(outcome="decision_gate_required"),
             ),
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock,
+            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -262,7 +328,7 @@ class JiraWebhookTests(unittest.TestCase):
         with (
             patch("orchestrator.api.webhooks.jira_webhook_board_gate._fetch_issue_board_location", return_value=("backlog", None)),
             patch("orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check", return_value=self._pre_run_check()),
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock,
+            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -310,7 +376,7 @@ class JiraWebhookTests(unittest.TestCase):
                 "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_pre_run_check",
                 return_value=self._pre_run_check(),
             ),
-            patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock,
+            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -562,7 +628,7 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200)
         self.assertTrue(first.json()["enqueued"])
 
-        with patch("orchestrator.api.webhooks.jira_webhook_precheck.send_tenant_discord_message") as notify_mock:
+        with patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock:
             second = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(second.status_code, 200)

@@ -117,8 +117,50 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         gateway_mock.assert_called_once_with()
 
+    def test_discord_live_voice_command_invokes_runtime(self) -> None:
+        with patch("orchestrator.cli.run_discord_live_voice") as voice_mock:
+            exit_code = cli_main(["discord-live-voice"])
+        self.assertEqual(exit_code, 0)
+        voice_mock.assert_called_once_with()
+
     def test_knowledge_jira_sync_command_invokes_runtime(self) -> None:
         with patch("orchestrator.cli.run_knowledge_jira_sync") as sync_mock:
             exit_code = cli_main(["knowledge-jira-sync"])
         self.assertEqual(exit_code, 0)
         sync_mock.assert_called_once_with()
+
+    def test_knowledge_prewarm_command_invokes_prewarm(self) -> None:
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("orchestrator.cli.prewarm_knowledge_dependencies") as prewarm_mock,
+        ):
+            prewarm_mock.return_value.embedding_model = "BAAI/bge-small-en-v1.5"
+            exit_code = cli_main(["knowledge-prewarm"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["embedding_model"], "BAAI/bge-small-en-v1.5")
+        prewarm_mock.assert_called_once()
+
+    def test_voice_prewarm_command_invokes_prewarm(self) -> None:
+        output = io.StringIO()
+        with (
+            redirect_stdout(output),
+            patch("orchestrator.cli.prewarm_voice_dependencies") as prewarm_mock,
+        ):
+            prewarm_mock.return_value.transcription_provider = "whisper"
+            prewarm_mock.return_value.transcription_ready = True
+            prewarm_mock.return_value.voice_reply_provider = "pocket_tts"
+            prewarm_mock.return_value.prewarmed_voice_ids = ("alba", "jean")
+            exit_code = cli_main(["voice-prewarm"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["transcription_provider"], "whisper")
+        self.assertTrue(payload["transcription_ready"])
+        self.assertEqual(payload["voice_reply_provider"], "pocket_tts")
+        self.assertEqual(payload["prewarmed_voice_ids"], ["alba", "jean"])
+        prewarm_mock.assert_called_once()

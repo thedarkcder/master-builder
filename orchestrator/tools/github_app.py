@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import jwt
@@ -92,6 +94,12 @@ class PullRequestIssueComment:
     body: str
     created_at: str | None
     user_login: str | None
+
+
+@dataclass(frozen=True)
+class CommentReactionResult:
+    reaction_id: int | None
+    content: str | None
 
 
 @dataclass(frozen=True)
@@ -436,6 +444,34 @@ class GitHubAppClient:
 
         return parsed
 
+    def get_file_text_at_ref(self, *, repo_full_name: str, path: str, ref: str) -> str:
+        installation_token = self.get_installation_token()
+        normalized_path = str(path or "").strip()
+        normalized_ref = str(ref or "").strip()
+        if not normalized_path:
+            raise GitHubApiError("GitHub file lookup requires a path")
+        if not normalized_ref:
+            raise GitHubApiError("GitHub file lookup requires a ref")
+        response = self._request_json(
+            method="GET",
+            path=(
+                f"/repos/{repo_full_name}/contents/{quote(normalized_path, safe='/')}"
+                f"?ref={quote(normalized_ref, safe='')}"
+            ),
+            bearer_token=installation_token,
+        )
+        if not isinstance(response, dict):
+            raise GitHubApiError("GitHub file content response was not an object")
+        encoding = str(response.get("encoding") or "").strip().lower()
+        content = response.get("content")
+        if encoding != "base64" or not isinstance(content, str):
+            raise GitHubApiError("GitHub file content response did not include base64 content")
+        try:
+            decoded = base64.b64decode(content.encode("ascii"), validate=False)
+        except Exception as exc:  # noqa: BLE001
+            raise GitHubApiError(f"GitHub file content could not be decoded: {exc}") from exc
+        return decoded.decode("utf-8")
+
     def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
         installation_token = self.get_installation_token()
         safe_limit = min(max(1, int(limit)), 100)
@@ -484,6 +520,27 @@ class GitHubAppClient:
                 )
             )
         return parsed
+
+    def find_open_pull_request(
+        self,
+        *,
+        repo_full_name: str,
+        head_branch: str,
+        base_branch: str | None = None,
+        limit: int = 100,
+    ) -> PullRequestSummary | None:
+        normalized_head = str(head_branch or "").strip()
+        normalized_base = str(base_branch or "").strip()
+        if not normalized_head:
+            return None
+        pull_requests = self.list_open_pull_requests(repo_full_name=repo_full_name, limit=limit)
+        for pull_request in pull_requests:
+            if pull_request.head_ref != normalized_head:
+                continue
+            if normalized_base and pull_request.base_ref != normalized_base:
+                continue
+            return pull_request
+        return None
 
     def list_installation_repositories(self) -> list[InstallationRepository]:
         installation_token = self.get_installation_token()
@@ -576,26 +633,30 @@ class GitHubAppClient:
 
         parsed: list[PullRequestReviewComment] = []
         for item in response:
-            if not isinstance(item, dict):
-                continue
-            comment_id = item.get("id")
-            body = item.get("body")
-            if not isinstance(comment_id, int) or not isinstance(body, str) or not body.strip():
-                continue
-            user = item.get("user")
-            user_login = user.get("login") if isinstance(user, dict) else None
-            line = item.get("line")
-            parsed.append(
-                PullRequestReviewComment(
-                    comment_id=comment_id,
-                    body=body.strip(),
-                    path=item.get("path") if isinstance(item.get("path"), str) else None,
-                    line=line if isinstance(line, int) else None,
-                    state=item.get("state") if isinstance(item.get("state"), str) else None,
-                    user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
-                )
-            )
+            comment = self._parse_pull_request_review_comment(item)
+            if comment is not None:
+                parsed.append(comment)
         return parsed
+
+    def create_pull_request_review_comment_reply(
+        self,
+        *,
+        repo_full_name: str,
+        pr_number: int,
+        in_reply_to: int,
+        body: str,
+    ) -> PullRequestReviewComment:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/pulls/{pr_number}/comments",
+            bearer_token=installation_token,
+            payload={"body": body, "in_reply_to": in_reply_to},
+        )
+        comment = self._parse_pull_request_review_comment(response)
+        if comment is None:
+            raise GitHubApiError("GitHub create pull request review comment reply response was not valid")
+        return comment
 
     def list_pull_request_issue_comments(
         self,
@@ -658,6 +719,67 @@ class GitHubAppClient:
         if comment is None:
             raise GitHubApiError("GitHub update issue comment response was not valid")
         return comment
+
+    def update_pull_request_review_comment(
+        self,
+        *,
+        repo_full_name: str,
+        comment_id: int,
+        body: str,
+    ) -> PullRequestReviewComment:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="PATCH",
+            path=f"/repos/{repo_full_name}/pulls/comments/{comment_id}",
+            bearer_token=installation_token,
+            payload={"body": body},
+        )
+        comment = self._parse_pull_request_review_comment(response)
+        if comment is None:
+            raise GitHubApiError("GitHub update pull request review comment response was not valid")
+        return comment
+
+    def add_issue_comment_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        comment_id: int,
+        content: str = "eyes",
+    ) -> CommentReactionResult:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/issues/comments/{comment_id}/reactions",
+            bearer_token=installation_token,
+            payload={"content": content},
+        )
+        reaction_id = response.get("id")
+        reaction_content = response.get("content")
+        return CommentReactionResult(
+            reaction_id=reaction_id if isinstance(reaction_id, int) else None,
+            content=reaction_content if isinstance(reaction_content, str) else None,
+        )
+
+    def add_pull_request_review_comment_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        comment_id: int,
+        content: str = "eyes",
+    ) -> CommentReactionResult:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/pulls/comments/{comment_id}/reactions",
+            bearer_token=installation_token,
+            payload={"content": content},
+        )
+        reaction_id = response.get("id")
+        reaction_content = response.get("content")
+        return CommentReactionResult(
+            reaction_id=reaction_id if isinstance(reaction_id, int) else None,
+            content=reaction_content if isinstance(reaction_content, str) else None,
+        )
 
     def submit_pull_request_review(
         self,
@@ -734,5 +856,24 @@ class GitHubAppClient:
             comment_id=comment_id,
             body=body.strip(),
             created_at=created_at.strip() if isinstance(created_at, str) and created_at.strip() else None,
+            user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
+        )
+
+    def _parse_pull_request_review_comment(self, item: object) -> PullRequestReviewComment | None:
+        if not isinstance(item, dict):
+            return None
+        comment_id = item.get("id")
+        body = item.get("body")
+        if not isinstance(comment_id, int) or not isinstance(body, str) or not body.strip():
+            return None
+        user = item.get("user")
+        user_login = user.get("login") if isinstance(user, dict) else None
+        line = item.get("line")
+        return PullRequestReviewComment(
+            comment_id=comment_id,
+            body=body.strip(),
+            path=item.get("path") if isinstance(item.get("path"), str) else None,
+            line=line if isinstance(line, int) else None,
+            state=item.get("state") if isinstance(item.get("state"), str) else None,
             user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
         )
