@@ -56,6 +56,8 @@ ENV LD_LIBRARY_PATH=/root/.local/lib
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
 ENV ANDROID_HOME=/opt/android-sdk
 ENV JAVA_HOME=/usr/lib/jvm/default-java
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools"
 
 ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708
@@ -101,9 +103,11 @@ COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
+RUN python -m venv "${VIRTUAL_ENV}"
+
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --upgrade pip && \
-    pip install .
+    "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip && \
+    "${VIRTUAL_ENV}/bin/pip" install .
 
 RUN mkdir -p /app/data
 

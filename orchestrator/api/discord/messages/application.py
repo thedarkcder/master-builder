@@ -79,6 +79,15 @@ def build_discord_message_ingress_result(
 
     tenant = deps.find_tenant_for_channel(session=session, channel_id=channel_id)
     if tenant is None:
+        if content.startswith("!"):
+            return IngressResult(
+                actions=(
+                    discord_channel_message_action(
+                        channel_id=channel_id,
+                        content=f"<@{user_id}> No enabled tenant is configured for this Discord channel.",
+                    ),
+                )
+            )
         return IngressResult()
     project = deps.resolve_project_for_discord_channel(
         session=session,

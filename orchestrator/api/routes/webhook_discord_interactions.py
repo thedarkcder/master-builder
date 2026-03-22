@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 def _dispatch_deps(*, task_scheduler) -> DiscordInteractionDispatchDeps:  # noqa: ANN001
     return DiscordInteractionDispatchDeps(
+        transport_source="discord_http",
         ask_reply_open_custom_id=ASK_REPLY_OPEN_CUSTOM_ID,
         autocomplete_response=_discord_autocomplete_response,
         interaction_response=_discord_interaction_response,

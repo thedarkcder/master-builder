@@ -4,6 +4,10 @@ import logging
 from typing import Callable
 
 from orchestrator.core.config import Settings, get_settings
+from orchestrator.core.discord.command_sync_status import (
+    mark_discord_command_sync_failure,
+    mark_discord_command_sync_success,
+)
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
@@ -265,6 +269,11 @@ def sync_discord_guild_commands(
 
     bot_token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not bot_token_ref:
+        mark_discord_command_sync_failure(
+            reason="missing_bot_token",
+            bot_token_configured=False,
+            guild_id_configured=bool(str(resolved_settings.discord_guild_id or "").strip()),
+        )
         logger.info("discord_command_sync_skipped reason=missing_bot_token_ref")
         return False
 
@@ -278,6 +287,11 @@ def sync_discord_guild_commands(
             or ""
         ).strip()
         if not bot_token:
+            mark_discord_command_sync_failure(
+                reason="missing_bot_token",
+                bot_token_configured=False,
+                guild_id_configured=bool(str(resolved_settings.discord_guild_id or "").strip()),
+            )
             logger.info("discord_command_sync_skipped reason=missing_bot_token secret_ref=%s", bot_token_ref)
             return False
 
@@ -292,6 +306,11 @@ def sync_discord_guild_commands(
                 or ""
             ).strip()
         if not guild_id:
+            mark_discord_command_sync_failure(
+                reason="missing_guild_id",
+                bot_token_configured=True,
+                guild_id_configured=False,
+            )
             logger.info("discord_command_sync_skipped reason=missing_guild_id")
             return False
 
@@ -305,9 +324,23 @@ def sync_discord_guild_commands(
                 commands=commands,
             )
         except (DiscordApiError, ValueError) as exc:
+            mark_discord_command_sync_failure(
+                reason="discord_api_error",
+                error=str(exc),
+                bot_token_configured=True,
+                guild_id_configured=True,
+                guild_id=guild_id,
+            )
             logger.warning("discord_command_sync_failed error=%s", exc)
             return False
 
+    mark_discord_command_sync_success(
+        bot_token_configured=True,
+        guild_id_configured=True,
+        guild_id=guild_id,
+        application_id=application_id,
+        command_count=len(synced),
+    )
     logger.info(
         "discord_command_sync_complete guild_id=%s application_id=%s command_count=%s",
         guild_id,

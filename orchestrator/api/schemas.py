@@ -775,6 +775,21 @@ class DiscordAllowlistApprovalResult(BaseModel):
     notified: bool
 
 
+class DiscordCommandSyncStatusRead(BaseModel):
+    synced: bool
+    healthy: bool
+    interaction_ingress_ready: bool
+    bot_token_configured: bool
+    guild_id_configured: bool
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_failure_reason: str | None = None
+    last_error: str | None = None
+    guild_id: str | None = None
+    application_id: str | None = None
+    command_count: int
+
+
 class AdminLoginRequest(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)

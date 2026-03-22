@@ -13,6 +13,10 @@ from orchestrator.core.communications import (
     IngressResult,
 )
 from orchestrator.core.observability import current_log_context
+from orchestrator.core.discord.command_sync_status import (
+    get_discord_command_sync_status,
+    reset_discord_command_sync_status,
+)
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.discord.gateway_listener import (
     DiscordGatewayListener,
@@ -42,6 +46,9 @@ class _SessionFactory:
 
 
 class DiscordCommandSyncRuntimeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        reset_discord_command_sync_status()
+
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(
             discord_guild_id="guild-1",
@@ -58,6 +65,9 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
                 secret_resolver=resolver,
             )
         )
+        status = get_discord_command_sync_status()
+        self.assertEqual(status.last_failure_reason, "missing_bot_token")
+        self.assertFalse(status.bot_token_configured)
 
         settings = self._settings()
         settings.discord_guild_id = ""
@@ -69,6 +79,9 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
                 secret_resolver=resolver,
             )
         )
+        status = get_discord_command_sync_status()
+        self.assertEqual(status.last_failure_reason, "missing_guild_id")
+        self.assertFalse(status.guild_id_configured)
 
     def test_sync_discord_guild_commands_success_and_failure(self) -> None:
         settings = self._settings()
@@ -92,6 +105,11 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
             )
         )
         client.overwrite_guild_commands.assert_called_once()
+        status = get_discord_command_sync_status()
+        self.assertTrue(status.synced)
+        self.assertTrue(status.healthy)
+        self.assertEqual(status.application_id, "app-1")
+        self.assertEqual(status.command_count, 1)
 
         client_factory = MagicMock(side_effect=DiscordApiError("boom"))
         self.assertFalse(
@@ -102,6 +120,9 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
                 client_factory=client_factory,
             )
         )
+        status = get_discord_command_sync_status()
+        self.assertEqual(status.last_failure_reason, "discord_api_error")
+        self.assertIn("boom", status.last_error or "")
 
 
 class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
@@ -140,6 +161,22 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         client_cls.assert_not_called()
+
+    def test_handle_message_create_unmapped_command_posts_explicit_error(self) -> None:
+        listener, _session = self._listener()
+        listener._find_tenant_for_channel = MagicMock(return_value=None)
+
+        with patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls:
+            listener._handle_message_create(
+                {"author": {"id": "u1"}, "channel_id": "c1", "content": "!run MAB-1", "attachments": []},
+                bot_token="token",
+            )
+
+        client_cls.return_value.post_message.assert_called_once()
+        self.assertIn(
+            "No enabled tenant is configured for this Discord channel.",
+            client_cls.return_value.post_message.call_args.kwargs["content"],
+        )
 
     def test_handle_interaction_create_dispatches_and_sends_callback(self) -> None:
         listener, _session = self._listener()

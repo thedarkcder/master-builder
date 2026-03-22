@@ -79,6 +79,19 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    async def test_bug_issue_key_autocomplete_is_supported(self) -> None:
+        autocomplete_choices = MagicMock(return_value=[{"name": "MAB-1", "value": "MAB-1"}])
+        response = await self._call(
+            {
+                "type": 4,
+                "channel_id": "c1",
+                "data": {"name": "bug", "options": [{"name": "issue_key", "value": "MAB", "focused": True}]},
+            },
+            _discord_issue_autocomplete_choices=autocomplete_choices,
+        )
+        self.assertEqual(response.status_code, 200)
+        autocomplete_choices.assert_called_once()
+
     async def test_message_component_paths(self) -> None:
         missing_channel = await self._call({"type": 3, "channel_id": ""})
         self.assertIn(b"Missing interaction channel_id", missing_channel.body)
