@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 
 from fastapi.responses import JSONResponse, Response
@@ -61,22 +61,13 @@ def execute_http_ingress_result(
     transport_action_executors: Iterable[TransportActionExecutor] = (),
 ) -> Response:
     executor_tuple = tuple(transport_action_executors)
-    _log_transport_runtime_event(
-        "transport_ingress_result_built",
+    _log_ingress_result_built(result=result, envelope=envelope)
+    _schedule_deferred_work(
+        deferred_work=result.deferred_work,
         envelope=envelope,
-        action_count=len(result.actions),
-        deferred_count=len(result.deferred_work),
+        task_scheduler=task_scheduler,
     )
     response_action: TransportAction | None = None
-    for deferred in result.deferred_work:
-        task = task_scheduler(deferred.runner())
-        _log_transport_runtime_event(
-            "transport_deferred_scheduled",
-            envelope=envelope,
-            deferred_kind=deferred.kind,
-        )
-        if deferred.on_scheduled is not None:
-            deferred.on_scheduled(task)
     for action in result.actions:
         if isinstance(action, (HttpJsonResponseAction, HttpJsonResponseBytesAction)):
             if response_action is None:
@@ -96,6 +87,34 @@ def execute_http_ingress_result(
         status_code=getattr(response_action, "status_code", None),
     )
     return HttpTransportExecutor().execute(action=response_action)
+
+
+def execute_side_effect_ingress_result(
+    *,
+    result: IngressResult,
+    task_scheduler=asyncio.create_task,
+    envelope: TransportEnvelope | None = None,
+    transport_action_executors: Iterable[TransportActionExecutor] = (),
+    action_error_handler: Callable[[TransportAction, Exception], bool] | None = None,
+) -> None:
+    executor_tuple = tuple(transport_action_executors)
+    _log_ingress_result_built(result=result, envelope=envelope)
+    _schedule_deferred_work(
+        deferred_work=result.deferred_work,
+        envelope=envelope,
+        task_scheduler=task_scheduler,
+    )
+    for action in result.actions:
+        try:
+            _execute_side_effect_action(
+                action=action,
+                envelope=envelope,
+                transport_action_executors=executor_tuple,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if action_error_handler is not None and action_error_handler(action, exc):
+                continue
+            raise
 
 
 def _execute_side_effect_action(
@@ -130,9 +149,68 @@ def _execute_side_effect_action(
                 level="exception",
             )
             raise
+        except Exception as exc:  # noqa: BLE001
+            _log_transport_runtime_event(
+                "transport_action_failed",
+                envelope=envelope,
+                action_type=type(action).__name__,
+                executor_type=type(executor).__name__,
+                outcome="error",
+                error=str(exc),
+                level="exception",
+            )
+            raise
     if last_unsupported_error is not None:
         raise RuntimeError(f"No HTTP transport executor handled action {type(action).__name__}") from last_unsupported_error
     raise RuntimeError(f"HTTP ingress result included unsupported non-HTTP action: {type(action).__name__}")
+
+
+def build_discord_transport_executor(
+    *,
+    bot_token: str | None = None,
+    interaction_callback_sender=None,
+    interaction_followup_sender=None,
+    client_factory=None,
+    session_factory: Callable | None = None,  # noqa: ANN401
+    settings_factory: Callable | None = None,  # noqa: ANN401
+    resolve_platform_secret_ref_fn=None,  # noqa: ANN401
+    thread_followup_sender=None,
+    ask_with_thread_sender=None,
+    seed_with_thread_sender=None,
+) -> DiscordTransportExecutor:
+    kwargs = {}
+    if bot_token is not None:
+        kwargs["bot_token"] = bot_token
+    if interaction_callback_sender is not None:
+        kwargs["interaction_callback_sender"] = interaction_callback_sender
+    if interaction_followup_sender is not None:
+        kwargs["interaction_followup_sender"] = interaction_followup_sender
+    if client_factory is not None:
+        kwargs["client_factory"] = client_factory
+    if session_factory is not None:
+        kwargs["session_factory"] = session_factory
+    if settings_factory is not None:
+        kwargs["settings_factory"] = settings_factory
+    if resolve_platform_secret_ref_fn is not None:
+        kwargs["resolve_platform_secret_ref_fn"] = resolve_platform_secret_ref_fn
+    if thread_followup_sender is not None:
+        kwargs["thread_followup_sender"] = thread_followup_sender
+    if ask_with_thread_sender is not None:
+        kwargs["ask_with_thread_sender"] = ask_with_thread_sender
+    if seed_with_thread_sender is not None:
+        kwargs["seed_with_thread_sender"] = seed_with_thread_sender
+    return DiscordTransportExecutor(**kwargs)
+
+
+def build_transport_action_executors(
+    *,
+    extra_transport_action_executors: Iterable[TransportActionExecutor] = (),
+    discord_transport_executor: TransportActionExecutor | None = None,
+) -> tuple[TransportActionExecutor, ...]:
+    executors = tuple(extra_transport_action_executors)
+    if discord_transport_executor is None:
+        return executors
+    return (*executors, discord_transport_executor)
 
 
 def build_http_transport_action_executors(
@@ -141,9 +219,9 @@ def build_http_transport_action_executors(
     settings,  # noqa: ANN001
     extra_transport_action_executors: Iterable[TransportActionExecutor] = (),
 ) -> tuple[TransportActionExecutor, ...]:
-    return (
-        *tuple(extra_transport_action_executors),
-        DiscordTransportExecutor(
+    return build_transport_action_executors(
+        extra_transport_action_executors=extra_transport_action_executors,
+        discord_transport_executor=build_discord_transport_executor(
             session_factory=lambda: nullcontext(session),
             settings_factory=lambda: settings,
         ),
@@ -174,6 +252,32 @@ def _log_transport_runtime_event(
         context.get("project_id") or "",
         metadata,
     )
+
+
+def _log_ingress_result_built(*, result: IngressResult, envelope: TransportEnvelope | None) -> None:
+    _log_transport_runtime_event(
+        "transport_ingress_result_built",
+        envelope=envelope,
+        action_count=len(result.actions),
+        deferred_count=len(result.deferred_work),
+    )
+
+
+def _schedule_deferred_work(
+    *,
+    deferred_work,
+    envelope: TransportEnvelope | None,
+    task_scheduler,
+) -> None:
+    for deferred in deferred_work:
+        task = task_scheduler(deferred.runner())
+        _log_transport_runtime_event(
+            "transport_deferred_scheduled",
+            envelope=envelope,
+            deferred_kind=deferred.kind,
+        )
+        if deferred.on_scheduled is not None:
+            deferred.on_scheduled(task)
 
 
 def decode_json_body(action: TransportAction) -> dict:
