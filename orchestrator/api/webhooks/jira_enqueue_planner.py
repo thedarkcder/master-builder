@@ -92,30 +92,6 @@ def plan_jira_run_flow(
             )
         )
 
-    if context.project is None:
-        logger.info(
-            "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=project_not_mapped",
-            context.request_id,
-            context.tenant_id,
-            context.issue_key,
-        )
-        return JiraRunPlan(
-            content=jira_webhook_response_fn(
-                context,
-                enqueued=False,
-                reason="project_not_mapped",
-                guidance=enqueue_reason_guidance("project_not_mapped"),
-                command=context.comment_command,
-                webhook_event=context.webhook_event,
-            ),
-            actions=(
-                build_jira_enqueue_skipped_notification_action(
-                    context=context,
-                    reason="project_not_mapped",
-                ),
-            ),
-        )
-
     board_gate_response = jira_webhook_board_gate.stage_handle_run_board_gate(
         context=context,
         session=session,
@@ -381,6 +357,6 @@ def build_jira_enqueue_skipped_notification_action(
     )
     return DiscordTenantNotificationAction(
         tenant_id=context.tenant_id,
-        project_id=context.project.project_id if context.project is not None else None,
+        project_id=context.project.project_id,
         message=message,
     )

@@ -94,6 +94,31 @@ def ask_thread_message_map_from_config(discord_config: dict) -> dict[str, str]:
     return normalized
 
 
+def resolve_thread_channel_for_reply(
+    *,
+    session: Session,
+    channel_id: str,
+    reply_to_message_id: str,
+) -> str:
+    normalized_channel_id = str(channel_id or "").strip()
+    normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
+    if not normalized_channel_id or not normalized_reply_to_message_id:
+        return normalized_channel_id
+    tenant = resolve_tenant_for_discord_channel(session=session, channel_id=normalized_channel_id)
+    if tenant is None:
+        return normalized_channel_id
+    project = resolve_project_for_discord_channel(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        channel_id=normalized_channel_id,
+    )
+    if project is None:
+        return normalized_channel_id
+    ask_thread_message_map = ask_thread_message_map_from_config(project.discord_config or {})
+    mapped_thread_channel_id = str(ask_thread_message_map.get(normalized_reply_to_message_id) or "").strip()
+    return mapped_thread_channel_id or normalized_channel_id
+
+
 def resolve_thread_id_by_message_suffix(
     *,
     client: DiscordApiClient,

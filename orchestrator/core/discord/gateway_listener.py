@@ -37,6 +37,7 @@ from orchestrator.api.discord.interactions.auth import (
 from orchestrator.api.discord.interactions.dispatcher import DiscordInteractionDispatchDeps
 from orchestrator.api.discord.interactions.followup import (
     _decision_gate_issue_for_thread as _interaction_decision_gate_issue_for_thread,
+    _resolve_thread_channel_for_reply as _interaction_resolve_thread_channel_for_reply,
     _run_discord_application_command_followup,
     _run_discord_ask_confirmation_followup,
     _run_discord_command_followup,
@@ -434,6 +435,7 @@ class DiscordGatewayListener:
             find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
             find_focused_discord_option=_find_focused_discord_option,
             discord_issue_autocomplete_choices=_discord_issue_autocomplete_choices,
+            resolve_thread_channel_for_reply=_interaction_resolve_thread_channel_for_reply,
             decision_gate_issue_for_thread=_interaction_decision_gate_issue_for_thread,
             run_discord_ask_confirmation_followup=_run_discord_ask_confirmation_followup,
             run_discord_command_followup=_run_discord_command_followup,

@@ -27,6 +27,7 @@ from orchestrator.api.discord.interactions.followup_state import (
     project_ask_thread_channel_ids_for_tenant as _project_ask_thread_channel_ids_for_tenant_impl,
     project_channel_ids_for_tenant as _project_channel_ids_for_tenant_impl,
     project_seed_followup_thread_channel_ids_for_tenant as _project_seed_followup_thread_channel_ids_for_tenant_impl,
+    resolve_thread_channel_for_reply as _resolve_thread_channel_for_reply_impl,
     resolve_project_for_channel as _resolve_project_for_channel_impl,
     resolve_thread_id_by_message_suffix as _resolve_thread_id_by_message_suffix_impl,
     tenant_discord_channel_ids as _tenant_discord_channel_ids_impl,
@@ -145,6 +146,19 @@ def _decision_gate_issue_for_thread(*, session: Session, channel_id: str) -> tup
         session=session,
         channel_id=channel_id,
         issue_key_pattern=ISSUE_KEY_PATTERN,
+    )
+
+
+def _resolve_thread_channel_for_reply(
+    *,
+    session: Session,
+    channel_id: str,
+    reply_to_message_id: str,
+) -> str:
+    return _resolve_thread_channel_for_reply_impl(
+        session=session,
+        channel_id=channel_id,
+        reply_to_message_id=reply_to_message_id,
     )
 
 

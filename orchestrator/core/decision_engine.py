@@ -574,7 +574,7 @@ def evaluate_decision_event(
     *,
     session: Session,
     tenant: Tenant,
-    project: Project | None,
+    project: Project,
     event: DecisionEventInput,
     settings,  # noqa: ANN001
     tenant_jira_oauth_context_fn: Callable[..., Any],
@@ -582,10 +582,12 @@ def evaluate_decision_event(
     oauth_context: Any | None = None,
     evaluate_pre_run_check_fn: Callable[..., object] = evaluate_pre_run_check,
 ) -> DecisionEngineResult:
+    if project is None:
+        raise ValueError("Decision evaluation requires a resolved project")
     occurred_at = normalize_occurred_at_event(event.occurred_at)
     idempotency_key = resolve_idempotency_key_event(
         tenant_id=tenant.tenant_id,
-        project_id=project.project_id if project is not None else None,
+        project_id=project.project_id,
         event=event,
     )
     existing_event = session.execute(
@@ -885,11 +887,7 @@ def evaluate_decision_event(
         else set()
     )
 
-    if (
-        decision.pre_check is not None
-        and decision.block_reason in {"decision_gate_required", "gtd_required"}
-        and project is not None
-    ):
+    if decision.pre_check is not None and decision.block_reason in {"decision_gate_required", "gtd_required"}:
         slot_answers = resolve_slots_before_block_resolution(
             session=session,
             tenant=tenant,

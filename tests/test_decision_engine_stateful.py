@@ -991,3 +991,27 @@ class DecisionEngineStatefulTests(unittest.TestCase):
 
         self.assertEqual(result.decision.block_reason, None)
         self.assertIn("objective", result.auto_resolved_slots)
+
+    def test_requires_resolved_project_for_decision_evaluation(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            assert tenant is not None
+
+            with self.assertRaisesRegex(ValueError, "requires a resolved project"):
+                evaluate_decision_event(
+                    session=session,
+                    tenant=tenant,
+                    project=None,
+                    event=DecisionEventInput(
+                        source="jira_webhook",
+                        event_type="issue_updated",
+                        idempotency_key="missing-project-1",
+                        issue_key="MAB-999",
+                        issue_summary="Summary",
+                        issue_description="Description",
+                        issue_labels=[],
+                    ),
+                    settings=self.settings,
+                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    evaluate_pre_run_check_fn=lambda **__: _precheck_result(outcome="ready_for_agent"),
+                )

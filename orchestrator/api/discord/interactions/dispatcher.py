@@ -21,6 +21,7 @@ class DiscordInteractionDispatchDeps:
     find_tenant_for_discord_channel: Callable[..., object | None]
     find_focused_discord_option: Callable[[object], tuple[str, str] | None]
     discord_issue_autocomplete_choices: Callable[..., list[dict]]
+    resolve_thread_channel_for_reply: Callable[..., str]
     decision_gate_issue_for_thread: Callable[..., tuple[str, str] | None]
     run_discord_ask_confirmation_followup: Callable[..., object]
     run_discord_command_followup: Callable[..., object]
@@ -216,14 +217,36 @@ def _handle_modal_submit(*, payload: dict, session, deps: DiscordInteractionDisp
     if user_id is None:
         return deps.interaction_response(content="Missing interaction user_id", ephemeral=True)
 
-    decision_gate_context = deps.decision_gate_issue_for_thread(session=session, channel_id=channel_id.strip())
+    normalized_channel_id = channel_id.strip()
+    effective_channel_id = deps.resolve_thread_channel_for_reply(
+        session=session,
+        channel_id=normalized_channel_id,
+        reply_to_message_id=reply_to_message_id,
+    )
+    if effective_channel_id != normalized_channel_id:
+        deps.logger.info(
+            "discord_reply_context_resolved_to_thread source=%s channel_id=%s reply_to_message_id=%s resolved_thread_channel_id=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            reply_to_message_id,
+            effective_channel_id,
+        )
+    decision_gate_context = deps.decision_gate_issue_for_thread(session=session, channel_id=effective_channel_id)
     if decision_gate_context is not None:
-        _, issue_key = decision_gate_context
+        resolved_tenant_id, issue_key = decision_gate_context
+        deps.logger.info(
+            "discord_reply_context_issue_bound source=%s channel_id=%s effective_channel_id=%s reply_to_message_id=%s issue_key=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            effective_channel_id,
+            reply_to_message_id,
+            issue_key,
+        )
         deps.task_scheduler(
             deps.run_discord_decision_gate_reply_followup(
-                tenant_id=None,
+                tenant_id=resolved_tenant_id,
                 user_id=user_id,
-                channel_id=channel_id.strip(),
+                channel_id=effective_channel_id,
                 issue_key=issue_key,
                 reply_text=question,
                 application_id=application_id,
@@ -232,11 +255,18 @@ def _handle_modal_submit(*, payload: dict, session, deps: DiscordInteractionDisp
             )
         )
     else:
+        deps.logger.info(
+            "discord_reply_context_fallback_to_ask source=%s channel_id=%s effective_channel_id=%s reply_to_message_id=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            effective_channel_id,
+            reply_to_message_id,
+        )
         deps.task_scheduler(
             deps.run_discord_command_followup(
                 tenant_id=None,
                 user_id=user_id,
-                channel_id=channel_id.strip(),
+                channel_id=effective_channel_id,
                 command_text=f"!ask {question}",
                 application_id=application_id,
                 interaction_token=interaction_token,
