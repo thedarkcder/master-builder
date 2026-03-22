@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
+from orchestrator.api.webhooks.pr_remediation_issue_service import build_pr_remediation_bug_description
 from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
 from orchestrator.core.runs import EnqueueRunResult
 
@@ -367,6 +368,154 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.triggered)
         self.assertFalse(result.enqueued)
         self.assertEqual(result.reason, "manual_fix_missing_instruction")
+
+    def test_manual_fix_review_comment_enqueues_with_only_triggering_comment_and_code_context(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        payload = {
+            **payload,
+            "comment": {
+                "id": 777,
+                "body": "@mb use a background task here",
+                "html_url": "https://github.com/org/repo/pull/11#discussion_r777",
+                "user": {"login": "owner-a"},
+                "path": "GirlPower/App/AuthSystem.swift",
+                "line": 12,
+            },
+        }
+        github_client.get_file_text_at_ref.return_value = "\n".join(
+            f"line {number}" for number in range(1, 21)
+        )
+        enqueue_result = EnqueueRunResult(
+            enqueued=True,
+            reason=None,
+            run=SimpleNamespace(run_id="run-manual-review", plan={}),
+        )
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
+                return_value="GP-122",
+            ),
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
+                return_value=enqueue_result,
+            ),
+        ):
+            result = enqueue_pr_remediation_if_needed(
+                session=session,
+                tenant=tenant,
+                project=project,
+                github_client=github_client,
+                event="pull_request_review_comment",
+                action="created",
+                payload=payload,
+                pr_number=11,
+                repo_full_name="org/repo",
+                settings=settings,
+            )
+
+        self.assertTrue(result.triggered)
+        self.assertTrue(result.enqueued)
+        trigger_context = enqueue_result.run.plan.get("trigger_context", {})
+        self.assertNotIn("review_comments", trigger_context)
+        self.assertNotIn("issue_comments", trigger_context)
+        requested_comment = trigger_context.get("requested_comment")
+        self.assertIsInstance(requested_comment, dict)
+        self.assertEqual(requested_comment.get("id"), 777)
+        self.assertEqual(requested_comment.get("type"), "review_comment")
+        code_context = trigger_context.get("code_context")
+        self.assertIsInstance(code_context, dict)
+        self.assertEqual(code_context.get("path"), "GirlPower/App/AuthSystem.swift")
+        self.assertEqual(code_context.get("line"), 12)
+        self.assertIn("12: line 12", str(code_context.get("snippet")))
+        manual_fix = trigger_context.get("manual_fix_request")
+        self.assertIsInstance(manual_fix, dict)
+        self.assertIsInstance(manual_fix.get("code_context"), dict)
+
+    def test_manual_fix_issue_comment_trigger_context_is_comment_only(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        payload = {
+            **payload,
+            "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            "comment": {
+                "id": 550,
+                "body": "@mb rename this variable",
+                "html_url": "https://github.com/org/repo/pull/11#issuecomment-550",
+                "user": {"login": "owner-a"},
+            },
+        }
+        enqueue_result = EnqueueRunResult(
+            enqueued=True,
+            reason=None,
+            run=SimpleNamespace(run_id="run-manual-11", plan={}),
+        )
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
+                return_value="GP-122",
+            ),
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
+                return_value=enqueue_result,
+            ),
+        ):
+            result = enqueue_pr_remediation_if_needed(
+                session=session,
+                tenant=tenant,
+                project=project,
+                github_client=github_client,
+                event="issue_comment",
+                action="created",
+                payload=payload,
+                pr_number=11,
+                repo_full_name="org/repo",
+                settings=settings,
+            )
+
+        self.assertTrue(result.triggered)
+        self.assertTrue(result.enqueued)
+        trigger_context = enqueue_result.run.plan.get("trigger_context", {})
+        self.assertNotIn("review_comments", trigger_context)
+        self.assertNotIn("issue_comments", trigger_context)
+        self.assertIsNone(trigger_context.get("code_context"))
+        manual_fix = trigger_context.get("manual_fix_request")
+        self.assertIsInstance(manual_fix, dict)
+        self.assertIsNone(manual_fix.get("code_context"))
+
+    def test_manual_fix_bug_description_uses_comment_and_code_context_only(self) -> None:
+        description = build_pr_remediation_bug_description(
+            repo_full_name="org/repo",
+            pr_number=11,
+            pr_url="https://github.com/org/repo/pull/11",
+            head_sha="abc123",
+            event="pull_request_review_comment",
+            action="created",
+            checks=[SimpleNamespace(name="CI", status="completed", conclusion="failure")],
+            reviews=[SimpleNamespace(state="CHANGES_REQUESTED", body="please fix")],
+            review_comments=[SimpleNamespace(path="A.swift", line=5, body="old comment")],
+            issue_comments=[SimpleNamespace(body="old issue comment")],
+            manual_fix_request={
+                "requested_by": "owner-a",
+                "requested_comment": {
+                    "url": "https://github.com/org/repo/pull/11#discussion_r777",
+                    "body": "@mb use a background task here",
+                },
+                "instruction_text": "use a background task here",
+                "code_context": {
+                    "path": "GirlPower/App/AuthSystem.swift",
+                    "line": 12,
+                    "snippet": "10: a\n11: b\n12: c",
+                },
+            },
+        )
+
+        self.assertIn("Manual request: yes", description)
+        self.assertIn("Referenced code: GirlPower/App/AuthSystem.swift:12", description)
+        self.assertIn("12: c", description)
+        self.assertNotIn("Failing checks:", description)
+        self.assertNotIn("Review comments:", description)
+        self.assertNotIn("Issue comments:", description)
 
 
 if __name__ == "__main__":

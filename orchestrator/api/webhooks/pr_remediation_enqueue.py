@@ -4,6 +4,39 @@ from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
 from orchestrator.core.runs import RUN_DEDUPE_SCOPE_PR_REMEDIATION, enqueue_run
 
 
+def _build_manual_fix_trigger_context(
+    *,
+    issue_key: str,
+    issue_created: bool,
+    pr_number: int,
+    details,
+    normalized_event: str,
+    normalized_action: str,
+    manual_fix_request: dict[str, object],
+    requested_comment: dict[str, object] | None,
+) -> dict[str, object]:
+    code_context = (
+        dict(manual_fix_request.get("code_context"))
+        if isinstance(manual_fix_request.get("code_context"), dict)
+        else None
+    )
+    return {
+        "source": "github_pr_review_feedback",
+        "event": normalized_event,
+        "action": normalized_action,
+        "pr_number": pr_number,
+        "pr_url": details.html_url,
+        "head_sha": details.head_sha,
+        "head_ref": details.head_ref or "",
+        "base_ref": details.base_ref or "",
+        "issue_key": issue_key,
+        "issue_created": issue_created,
+        "manual_fix_request": dict(manual_fix_request),
+        "requested_comment": requested_comment,
+        "code_context": code_context,
+    }
+
+
 def enqueue_pr_remediation_run(
     *,
     session,
@@ -54,43 +87,55 @@ def enqueue_pr_remediation_run(
     if manual_context_lines:
         manual_context_suffix = "\n" + "\n".join(manual_context_lines)
 
-    trigger_context = {
-        "source": "github_pr_review_feedback",
-        "event": normalized_event,
-        "action": normalized_action,
-        "pr_number": pr_number,
-        "pr_url": details.html_url,
-        "head_sha": details.head_sha,
-        "head_ref": details.head_ref or "",
-        "base_ref": details.base_ref or "",
-        "issue_key": issue_key,
-        "issue_created": issue_created,
-        "failing_checks": [
-            {"name": check.name, "status": check.status, "conclusion": check.conclusion}
-            for check in checks
-            if check.conclusion not in {None, "success"}
-        ],
-        "changes_requested": [
-            {
-                "id": review.review_id,
-                "state": review.state,
-                "body": review.body,
-                "user_login": review.user_login,
-            }
-            for review in reviews
-            if review.state.strip().upper() == "CHANGES_REQUESTED"
-        ],
-        "review_comments": [
-            {"id": comment.comment_id, "body": comment.body, "path": comment.path, "line": comment.line}
-            for comment in review_comments
-        ],
-        "issue_comments": [
-            {"id": comment.comment_id, "body": comment.body}
-            for comment in issue_comments
-        ],
-        "manual_fix_request": dict(manual_fix_request) if isinstance(manual_fix_request, dict) else None,
-        "requested_comment": manual_requested_comment,
-    }
+    if isinstance(manual_fix_request, dict) and manual_requested_comment is not None:
+        trigger_context = _build_manual_fix_trigger_context(
+            issue_key=issue_key,
+            issue_created=issue_created,
+            pr_number=pr_number,
+            details=details,
+            normalized_event=normalized_event,
+            normalized_action=normalized_action,
+            manual_fix_request=manual_fix_request,
+            requested_comment=manual_requested_comment,
+        )
+    else:
+        trigger_context = {
+            "source": "github_pr_review_feedback",
+            "event": normalized_event,
+            "action": normalized_action,
+            "pr_number": pr_number,
+            "pr_url": details.html_url,
+            "head_sha": details.head_sha,
+            "head_ref": details.head_ref or "",
+            "base_ref": details.base_ref or "",
+            "issue_key": issue_key,
+            "issue_created": issue_created,
+            "failing_checks": [
+                {"name": check.name, "status": check.status, "conclusion": check.conclusion}
+                for check in checks
+                if check.conclusion not in {None, "success"}
+            ],
+            "changes_requested": [
+                {
+                    "id": review.review_id,
+                    "state": review.state,
+                    "body": review.body,
+                    "user_login": review.user_login,
+                }
+                for review in reviews
+                if review.state.strip().upper() == "CHANGES_REQUESTED"
+            ],
+            "review_comments": [
+                {"id": comment.comment_id, "body": comment.body, "path": comment.path, "line": comment.line}
+                for comment in review_comments
+            ],
+            "issue_comments": [
+                {"id": comment.comment_id, "body": comment.body}
+                for comment in issue_comments
+            ],
+            "manual_fix_request": dict(manual_fix_request) if isinstance(manual_fix_request, dict) else None,
+            "requested_comment": manual_requested_comment,
+        }
 
     enqueue_result = enqueue_run(
         session,

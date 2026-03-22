@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import jwt
@@ -441,6 +443,34 @@ class GitHubAppClient:
             page += 1
 
         return parsed
+
+    def get_file_text_at_ref(self, *, repo_full_name: str, path: str, ref: str) -> str:
+        installation_token = self.get_installation_token()
+        normalized_path = str(path or "").strip()
+        normalized_ref = str(ref or "").strip()
+        if not normalized_path:
+            raise GitHubApiError("GitHub file lookup requires a path")
+        if not normalized_ref:
+            raise GitHubApiError("GitHub file lookup requires a ref")
+        response = self._request_json(
+            method="GET",
+            path=(
+                f"/repos/{repo_full_name}/contents/{quote(normalized_path, safe='/')}"
+                f"?ref={quote(normalized_ref, safe='')}"
+            ),
+            bearer_token=installation_token,
+        )
+        if not isinstance(response, dict):
+            raise GitHubApiError("GitHub file content response was not an object")
+        encoding = str(response.get("encoding") or "").strip().lower()
+        content = response.get("content")
+        if encoding != "base64" or not isinstance(content, str):
+            raise GitHubApiError("GitHub file content response did not include base64 content")
+        try:
+            decoded = base64.b64decode(content.encode("ascii"), validate=False)
+        except Exception as exc:  # noqa: BLE001
+            raise GitHubApiError(f"GitHub file content could not be decoded: {exc}") from exc
+        return decoded.decode("utf-8")
 
     def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
         installation_token = self.get_installation_token()
