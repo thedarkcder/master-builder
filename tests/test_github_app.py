@@ -723,6 +723,44 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(files[0].filename, "src/file-0.ts")
         self.assertEqual(files[-1].filename, "README.md")
 
+    def test_get_file_text_at_ref_decodes_base64_content(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={"encoding": "base64", "content": "aGVsbG8gd29ybGQ=\n"},
+        ):
+            content = client.get_file_text_at_ref(
+                repo_full_name="example/repo",
+                path="src/app.ts",
+                ref="abc123",
+            )
+        self.assertEqual(content, "hello world")
+
+    def test_get_file_text_at_ref_validates_base64_payload(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={"encoding": "utf-8", "content": "hello"},
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "base64 content"):
+                client.get_file_text_at_ref(
+                    repo_full_name="example/repo",
+                    path="src/app.ts",
+                    ref="abc123",
+                )
+
     def test_list_open_pull_requests_parses_pr_summary(self) -> None:
         config = GitHubAppConfig(
             app_id="12345",

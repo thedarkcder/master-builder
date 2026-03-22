@@ -21,6 +21,7 @@ from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, GitHubAppClient
 
 _ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+_MANUAL_FIX_SNIPPET_RADIUS = 5
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,52 @@ def _resolve_triggering_comment_payload(*, event: str, payload: dict) -> dict[st
         resolved["path"] = path
         resolved["line"] = line
     return resolved
+
+
+def _resolve_manual_fix_code_context(
+    *,
+    github_client: GitHubAppClient,
+    repo_full_name: str,
+    head_sha: str | None,
+    requested_comment: dict[str, object],
+) -> tuple[dict[str, object] | None, str | None]:
+    comment_type = str(requested_comment.get("type") or "").strip()
+    if comment_type != "review_comment":
+        return None, None
+    path = str(requested_comment.get("path") or "").strip()
+    line = requested_comment.get("line")
+    normalized_head_sha = str(head_sha or "").strip()
+    if not path:
+        return None, "missing_file_path"
+    if not isinstance(line, int) or line <= 0:
+        return None, "missing_line"
+    if not normalized_head_sha:
+        return None, "missing_head_sha"
+    try:
+        content = github_client.get_file_text_at_ref(
+            repo_full_name=repo_full_name,
+            path=path,
+            ref=normalized_head_sha,
+        )
+    except (GitHubApiError, ValueError) as exc:
+        return None, f"content_lookup_failed:{exc}"
+    lines = content.splitlines()
+    if line > len(lines):
+        return None, "line_out_of_range"
+    start_line = max(1, line - _MANUAL_FIX_SNIPPET_RADIUS)
+    end_line = min(len(lines), line + _MANUAL_FIX_SNIPPET_RADIUS)
+    snippet = "\n".join(f"{number}: {lines[number - 1]}" for number in range(start_line, end_line + 1))
+    return (
+        {
+            "path": path,
+            "line": line,
+            "head_sha": normalized_head_sha,
+            "start_line": start_line,
+            "end_line": end_line,
+            "snippet": snippet,
+        },
+        None,
+    )
 
 
 def enqueue_pr_remediation_if_needed(
@@ -249,6 +296,15 @@ def enqueue_pr_remediation_if_needed(
                 run=None,
                 head_sha=head_sha,
             )
+        code_context, code_context_resolution = _resolve_manual_fix_code_context(
+            github_client=github_client,
+            repo_full_name=resolved_repo,
+            head_sha=head_sha,
+            requested_comment=requested_comment,
+        )
+    else:
+        code_context = None
+        code_context_resolution = None
 
     issue_key, issue_created, issue_error = resolve_pr_remediation_issue_key(
         session=session,
@@ -269,6 +325,20 @@ def enqueue_pr_remediation_if_needed(
         reviews=reviews,
         review_comments=review_comments,
         issue_comments=issue_comments,
+        manual_fix_request=(
+            {
+                "requested_by": requested_by,
+                "requested_comment": requested_comment,
+                "triggering_comment_id": triggering_comment_id,
+                "triggering_comment_url": triggering_comment_url,
+                "instruction_text": manual_fix_request.instruction_text,
+                "command": "mb",
+                "code_context": code_context,
+                "code_context_resolution": code_context_resolution,
+            }
+            if manual_fix_request is not None and requested_comment is not None
+            else None
+        ),
     )
     if issue_error is not None:
         return PrRemediationResult(
@@ -331,6 +401,8 @@ def enqueue_pr_remediation_if_needed(
                     "triggering_comment_url": triggering_comment_url,
                     "instruction_text": manual_fix_request.instruction_text,
                     "command": "mb",
+                    "code_context": code_context,
+                    "code_context_resolution": code_context_resolution,
                 }
                 if requested_comment is not None
                 else None

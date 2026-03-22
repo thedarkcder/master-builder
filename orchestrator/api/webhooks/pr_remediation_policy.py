@@ -89,6 +89,7 @@ def resolve_pr_remediation_issue_key(
     reviews,
     review_comments,
     issue_comments,
+    manual_fix_request: dict[str, object] | None = None,
 ) -> tuple[str | None, bool, str | None]:
     issue_key = extract_issue_key(texts=[title, body, str(head_ref or "")])
     issue_created = False
@@ -119,6 +120,7 @@ def resolve_pr_remediation_issue_key(
             reviews=reviews,
             review_comments=review_comments,
             issue_comments=issue_comments,
+            manual_fix_request=manual_fix_request,
         )
         issue_created = True
     except (JiraOAuthError, ValueError) as exc:
