@@ -10,7 +10,7 @@ from orchestrator.api.webhooks.followup_execution import (
     run_discord_ask_confirmation_followup as _run_discord_ask_confirmation_followup,
     run_discord_command_followup as _run_discord_command_followup,
 )
-from orchestrator.core.communications.integration_contracts import InteractiveReplyTransport
+from orchestrator.core.communications.integration_contracts import TransportActionExecutor
 
 
 class DiscordWebhookFollowupService:
@@ -24,7 +24,7 @@ class DiscordWebhookFollowupService:
         build_command_followup_message: Callable[..., str],
         ask_confirmation_components: Callable[[str], list[dict]],
         ask_reply_components: Callable[[], list[dict]],
-        reply_transport: InteractiveReplyTransport,
+        transport_executor: TransportActionExecutor,
         consume_pending_ask_action: Callable[..., dict | None],
     ) -> None:
         self._deps = DiscordFollowupExecutionDeps(
@@ -35,7 +35,7 @@ class DiscordWebhookFollowupService:
             build_command_followup_message=build_command_followup_message,
             ask_confirmation_components=ask_confirmation_components,
             ask_reply_components=ask_reply_components,
-            reply_transport=reply_transport,
+            transport_executor=transport_executor,
             consume_pending_ask_action=consume_pending_ask_action,
         )
 

@@ -150,9 +150,7 @@ class DiscordInteractionFollowupAction(TransportAction):
 @dataclass(frozen=True)
 class DiscordThreadReplyAction(TransportAction):
     kind: ClassVar[str] = "discord_thread_reply"
-    session: Any
-    settings: Any
-    tenant: Any
+    tenant_id: str
     channel_id: str
     reply_to_message_id: str
     content: str
@@ -162,9 +160,7 @@ class DiscordThreadReplyAction(TransportAction):
 @dataclass(frozen=True)
 class DiscordAskWithThreadAction(TransportAction):
     kind: ClassVar[str] = "discord_ask_with_thread"
-    session: Any
-    settings: Any
-    tenant: Any
+    tenant_id: str
     channel_id: str
     user_id: str
     content: str
@@ -175,14 +171,25 @@ class DiscordAskWithThreadAction(TransportAction):
 @dataclass(frozen=True)
 class DiscordSeedWithThreadAction(TransportAction):
     kind: ClassVar[str] = "discord_seed_with_thread"
-    session: Any
-    settings: Any
-    tenant: Any
+    tenant_id: str
     channel_id: str
     user_id: str
     content: str
     request_id: str
     questions: list[str]
+
+
+@dataclass(frozen=True)
+class DiscordTenantNotificationAction(TransportAction):
+    kind: ClassVar[str] = "discord_tenant_notification"
+    tenant_id: str
+    project_id: str | None
+    message: str
+    event: str | None = None
+    open_thread: bool = False
+    thread_name: str | None = None
+    thread_intro: str | None = None
+    thread_intro_components: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -199,6 +206,78 @@ class GitHubPullRequestReviewCommentReactionAction(TransportAction):
     repo_full_name: str
     comment_id: int
     content: str
+
+
+@dataclass(frozen=True)
+class GitHubStickyReviewCommentAction(TransportAction):
+    kind: ClassVar[str] = "github_sticky_review_comment"
+    request_id: str
+    repo_full_name: str
+    pr_number: int
+    tenant_id: str
+    project_id: str
+    head_sha: str
+    signal: Any
+    findings_result: Any
+    event: str
+    action_name: str | None
+
+
+@dataclass(frozen=True)
+class GitHubInlineReviewBatchAction(TransportAction):
+    kind: ClassVar[str] = "github_inline_review_batch"
+    request_id: str
+    repo_full_name: str
+    pr_number: int
+    head_sha: str
+    tenant_id: str
+    project_id: str
+    findings: tuple[Any, ...]
+    changed_paths: set[str]
+
+
+@dataclass(frozen=True)
+class GitHubStickyRemediationCommentAction(TransportAction):
+    kind: ClassVar[str] = "github_sticky_remediation_comment"
+    repo_full_name: str
+    pr_number: int
+    tenant_id: str
+    project_id: str
+    issue_key: str | None
+    issue_url: str | None
+    issue_created: bool
+    enqueued: bool
+    reason: str | None
+    run_id: str | None
+    head_sha: str | None
+    event: str
+    action_name: str | None
+
+
+@dataclass(frozen=True)
+class GitHubManualFixFollowupCommentAction(TransportAction):
+    kind: ClassVar[str] = "github_manual_fix_followup_comment"
+    repo_full_name: str
+    pr_number: int
+    tenant_id: str
+    project_id: str
+    triggering_comment_id: int
+    requested_by: str | None
+    triggering_comment_url: str | None
+    requested_comment_url: str | None
+    issue_key: str | None
+    issue_url: str | None
+    enqueued: bool
+    run_id: str | None
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class GitHubPullRequestMergeAction(TransportAction):
+    kind: ClassVar[str] = "github_pull_request_merge"
+    repo_full_name: str
+    pr_number: int
+    head_sha: str
 
 
 @dataclass

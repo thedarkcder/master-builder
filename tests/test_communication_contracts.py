@@ -4,27 +4,36 @@ import json
 from dataclasses import asdict
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from orchestrator.api.discord.shared.reply_transport import DiscordReplyTransport
-from orchestrator.api.webhooks.github_application import GitHubTransportExecutor
 from orchestrator.core.communications.contracts import (
     ActorIdentity,
     CommandRequest,
     CommunicationAction,
     CommunicationEvent,
     CommunicationLink,
+    DiscordAskWithThreadAction,
     DiscordChannelMessageAction,
     DiscordInteractionResponseAction,
+    DiscordSeedWithThreadAction,
+    DiscordTenantNotificationAction,
+    DiscordThreadReplyAction,
+    GitHubInlineReviewBatchAction,
     GitHubIssueCommentReactionAction,
+    GitHubManualFixFollowupCommentAction,
+    GitHubPullRequestMergeAction,
     GitHubPullRequestReviewCommentReactionAction,
+    GitHubStickyRemediationCommentAction,
+    GitHubStickyReviewCommentAction,
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
     InboundMessage,
+    IngressResult,
     ProjectScope,
 )
-from orchestrator.api.transport_runtime import HttpTransportExecutor
+from orchestrator.api.transport_runtime import HttpTransportExecutor, execute_http_ingress_result
 from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
+from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 
 
 class CommunicationContractsTests(unittest.TestCase):
@@ -115,6 +124,24 @@ class CommunicationContractsTests(unittest.TestCase):
         )
         self.assertEqual(raw_response.status_code, 202)
 
+    def test_http_ingress_executes_side_effect_actions_before_returning_response(self) -> None:
+        side_effect_executor = MagicMock()
+        response = execute_http_ingress_result(
+            result=IngressResult(
+                actions=(
+                    GitHubIssueCommentReactionAction(
+                        repo_full_name="org/repo",
+                        comment_id=101,
+                        content="eyes",
+                    ),
+                    HttpJsonResponseAction(status_code=202, content={"accepted": True}),
+                )
+            ),
+            transport_action_executors=(side_effect_executor,),
+        )
+        self.assertEqual(response.status_code, 202)
+        side_effect_executor.execute.assert_called_once()
+
     def test_discord_transport_executor_supports_typed_actions(self) -> None:
         callback_sender = MagicMock()
         client = MagicMock()
@@ -142,54 +169,64 @@ class CommunicationContractsTests(unittest.TestCase):
         callback_sender.assert_called_once()
         client.post_message.assert_called_once_with(channel_id="c-1", content="hello", components=None)
 
-    def test_discord_reply_transport_routes_methods_through_typed_actions(self) -> None:
-        send_interaction_followup = MagicMock()
-        send_thread_reply = MagicMock()
-        send_ask_with_thread = MagicMock()
-        send_seed_with_thread = MagicMock()
-        transport = DiscordReplyTransport(
-            send_interaction_followup=send_interaction_followup,
-            send_thread_reply=send_thread_reply,
-            send_ask_with_thread=send_ask_with_thread,
-            send_seed_with_thread=send_seed_with_thread,
+    def test_discord_transport_executor_delegates_thread_style_actions_to_handler(self) -> None:
+        handler = MagicMock()
+        executor = DiscordTransportExecutor(
+            interaction_followup_sender=MagicMock(),
+            thread_action_handler=handler,
         )
 
-        transport.send_interaction_followup(application_id="app", interaction_token="tok", content="hello")
-        transport.send_thread_reply(
-            session=object(),
-            settings=object(),
-            tenant=object(),
-            channel_id="c1",
-            reply_to_message_id="m1",
-            content="thread",
+        executor.execute(
+            action=DiscordThreadReplyAction(
+                tenant_id="tenant-1",
+                channel_id="c1",
+                reply_to_message_id="m1",
+                content="thread",
+            )
         )
-        transport.send_ask_with_thread(
-            session=object(),
-            settings=object(),
-            tenant=object(),
-            channel_id="c1",
-            user_id="u1",
-            content="ask",
+        executor.execute(
+            action=DiscordAskWithThreadAction(
+                tenant_id="tenant-1",
+                channel_id="c1",
+                user_id="u1",
+                content="ask",
+            )
         )
-        transport.send_seed_with_thread(
-            session=object(),
-            settings=object(),
-            tenant=object(),
-            channel_id="c1",
-            user_id="u1",
-            content="seed",
-            request_id="r1",
-            questions=["q1"],
+        executor.execute(
+            action=DiscordSeedWithThreadAction(
+                tenant_id="tenant-1",
+                channel_id="c1",
+                user_id="u1",
+                content="seed",
+                request_id="r1",
+                questions=["q1"],
+            )
         )
 
-        send_interaction_followup.assert_called_once()
-        send_thread_reply.assert_called_once()
-        send_ask_with_thread.assert_called_once()
-        send_seed_with_thread.assert_called_once()
+        handler.execute_thread_reply.assert_called_once()
+        handler.execute_ask_with_thread.assert_called_once()
+        handler.execute_seed_with_thread.assert_called_once()
+
+    def test_discord_transport_executor_delegates_tenant_notification_action_to_handler(self) -> None:
+        notification_handler = MagicMock()
+        executor = DiscordTransportExecutor(
+            notification_action_handler=notification_handler,
+        )
+
+        executor.execute(
+            action=DiscordTenantNotificationAction(
+                tenant_id="tenant-1",
+                project_id="project-1",
+                message="hello",
+                event="pr_review_gate",
+            )
+        )
+
+        notification_handler.execute_tenant_notification.assert_called_once()
 
     def test_github_transport_executor_supports_reaction_actions(self) -> None:
         github_client = MagicMock()
-        executor = GitHubTransportExecutor(github_client=github_client)
+        executor = GitHubTransportExecutor(github_client=github_client, session=MagicMock())
 
         executor.execute(
             action=GitHubIssueCommentReactionAction(
@@ -215,6 +252,96 @@ class CommunicationContractsTests(unittest.TestCase):
             repo_full_name="org/repo",
             comment_id=202,
             content="eyes",
+        )
+
+    def test_github_transport_executor_supports_publication_actions(self) -> None:
+        github_client = MagicMock()
+        session = MagicMock()
+        executor = GitHubTransportExecutor(github_client=github_client, session=session)
+
+        with (
+            patch("orchestrator.core.github.transport_executor.upsert_sticky_review_comment") as sticky_review,
+            patch("orchestrator.core.github.transport_executor.publish_inline_review_batch") as inline_review,
+            patch("orchestrator.core.github.transport_executor.upsert_sticky_remediation_comment") as sticky_remediation,
+            patch("orchestrator.core.github.transport_executor.upsert_manual_fix_followup_comment") as manual_fix_followup,
+        ):
+            executor.execute(
+                action=GitHubStickyReviewCommentAction(
+                    request_id="req-1",
+                    repo_full_name="org/repo",
+                    pr_number=11,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    head_sha="abc123",
+                    signal=MagicMock(),
+                    findings_result=MagicMock(),
+                    event="pull_request",
+                    action_name="synchronize",
+                )
+            )
+            executor.execute(
+                action=GitHubInlineReviewBatchAction(
+                    request_id="req-1",
+                    repo_full_name="org/repo",
+                    pr_number=11,
+                    head_sha="abc123",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    findings=(),
+                    changed_paths={"a.py"},
+                )
+            )
+            executor.execute(
+                action=GitHubStickyRemediationCommentAction(
+                    repo_full_name="org/repo",
+                    pr_number=11,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    issue_key="GP-1",
+                    issue_url="https://jira/GP-1",
+                    issue_created=True,
+                    enqueued=True,
+                    reason=None,
+                    run_id="run-1",
+                    head_sha="abc123",
+                    event="pull_request",
+                    action_name="synchronize",
+                )
+            )
+            executor.execute(
+                action=GitHubManualFixFollowupCommentAction(
+                    repo_full_name="org/repo",
+                    pr_number=11,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    triggering_comment_id=99,
+                    requested_by="alice",
+                    triggering_comment_url="https://github.com/comment",
+                    requested_comment_url="https://github.com/comment",
+                    issue_key="GP-1",
+                    issue_url="https://jira/GP-1",
+                    enqueued=True,
+                    run_id="run-1",
+                    reason=None,
+                )
+            )
+            executor.execute(
+                action=GitHubPullRequestMergeAction(
+                    repo_full_name="org/repo",
+                    pr_number=11,
+                    head_sha="abc123",
+                )
+            )
+
+        sticky_review.assert_called_once()
+        inline_review.assert_called_once()
+        sticky_remediation.assert_called_once()
+        manual_fix_followup.assert_called_once()
+
+        github_client.merge_pull_request.assert_called_once_with(
+            repo_full_name="org/repo",
+            pr_number=11,
+            head_sha="abc123",
         )
 
 

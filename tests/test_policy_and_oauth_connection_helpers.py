@@ -134,49 +134,7 @@ class IntegrationContractsTests(unittest.TestCase):
         self.assertIsNone(integration_contracts.InboundAdapter.verify(object(), headers={}, body=b""))
         self.assertIsNone(integration_contracts.InboundAdapter.parse(object(), headers={}, body=b""))
         self.assertIsNone(integration_contracts.OutboundAdapter.send(object(), event=object()))
-        self.assertIsNone(
-            integration_contracts.InteractiveReplyTransport.send_interaction_followup(
-                object(),
-                application_id="app",
-                interaction_token="tok",
-                content="hello",
-            )
-        )
-        self.assertIsNone(
-            integration_contracts.InteractiveReplyTransport.send_thread_reply(
-                object(),
-                session=object(),
-                settings=object(),
-                tenant=object(),
-                channel_id="c1",
-                reply_to_message_id="m1",
-                content="hello",
-            )
-        )
-        self.assertIsNone(
-            integration_contracts.InteractiveReplyTransport.send_ask_with_thread(
-                object(),
-                session=object(),
-                settings=object(),
-                tenant=object(),
-                channel_id="c1",
-                user_id="u1",
-                content="hello",
-            )
-        )
-        self.assertIsNone(
-            integration_contracts.InteractiveReplyTransport.send_seed_with_thread(
-                object(),
-                session=object(),
-                settings=object(),
-                tenant=object(),
-                channel_id="c1",
-                user_id="u1",
-                content="hello",
-                request_id="r1",
-                questions=["q1"],
-            )
-        )
+        self.assertIsNone(integration_contracts.TransportActionExecutor.execute(object(), action=object()))
 
 
 if __name__ == "__main__":
