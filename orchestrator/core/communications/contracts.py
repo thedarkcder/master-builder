@@ -255,8 +255,27 @@ class GitHubStickyRemediationCommentAction(TransportAction):
 
 
 @dataclass(frozen=True)
-class GitHubManualFixFollowupCommentAction(TransportAction):
-    kind: ClassVar[str] = "github_manual_fix_followup_comment"
+class GitHubStickyRemediationReviewThreadReplyAction(TransportAction):
+    kind: ClassVar[str] = "github_sticky_remediation_review_thread_reply"
+    repo_full_name: str
+    pr_number: int
+    tenant_id: str
+    project_id: str
+    triggering_comment_id: int
+    issue_key: str | None
+    issue_url: str | None
+    issue_created: bool
+    enqueued: bool
+    reason: str | None
+    run_id: str | None
+    head_sha: str | None
+    event: str
+    action_name: str | None
+
+
+@dataclass(frozen=True)
+class GitHubManualFixReviewThreadReplyAction(TransportAction):
+    kind: ClassVar[str] = "github_manual_fix_review_thread_reply"
     repo_full_name: str
     pr_number: int
     tenant_id: str
@@ -264,7 +283,7 @@ class GitHubManualFixFollowupCommentAction(TransportAction):
     triggering_comment_id: int
     requested_by: str | None
     triggering_comment_url: str | None
-    requested_comment_url: str | None
+    instruction_text: str | None
     issue_key: str | None
     issue_url: str | None
     enqueued: bool

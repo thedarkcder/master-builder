@@ -15,7 +15,6 @@ from orchestrator.api.webhooks.pr_remediation_policy import (
     coerce_positive_int as _coerce_positive_int,
     is_remediation_trigger as _is_remediation_trigger,
     parse_manual_pr_fix_request,
-    resolve_requested_comment_ref,
     resolve_pr_remediation_issue_key,
 )
 from orchestrator.storage.models import Project, Run, Tenant
@@ -58,39 +57,31 @@ def _extract_payload_comment_url(*, payload: dict) -> str | None:
     return comment_url or None
 
 
-def _resolve_requested_comment_payload(
-    *,
-    requested_comment_ref,
-    review_comments,
-    issue_comments,
-) -> dict[str, object] | None:
-    if requested_comment_ref.comment_type == "review_comment":
-        for comment in review_comments:
-            if int(getattr(comment, "comment_id", 0) or 0) != requested_comment_ref.comment_id:
-                continue
-            return {
-                "type": "review_comment",
-                "id": requested_comment_ref.comment_id,
-                "url": requested_comment_ref.comment_url,
-                "body": str(getattr(comment, "body", "") or "").strip(),
-                "path": str(getattr(comment, "path", "") or "").strip() or None,
-                "line": getattr(comment, "line", None),
-                "user_login": str(getattr(comment, "user_login", "") or "").strip() or None,
-            }
+def _resolve_triggering_comment_payload(*, event: str, payload: dict) -> dict[str, object] | None:
+    comment = _extract_payload_comment(payload)
+    comment_id = _extract_payload_comment_id(payload=payload)
+    if comment_id is None:
         return None
-    if requested_comment_ref.comment_type == "issue_comment":
-        for comment in issue_comments:
-            if int(getattr(comment, "comment_id", 0) or 0) != requested_comment_ref.comment_id:
-                continue
-            return {
-                "type": "issue_comment",
-                "id": requested_comment_ref.comment_id,
-                "url": requested_comment_ref.comment_url,
-                "body": str(getattr(comment, "body", "") or "").strip(),
-                "user_login": str(getattr(comment, "user_login", "") or "").strip() or None,
-            }
+    comment_url = _extract_payload_comment_url(payload=payload)
+    comment_body = str(comment.get("body") or "").strip()
+    if not comment_body:
         return None
-    return None
+    user_login = _extract_payload_comment_login(payload=payload)
+    normalized_event = str(event or "").strip().lower()
+    comment_type = "review_comment" if normalized_event == "pull_request_review_comment" else "issue_comment"
+    resolved = {
+        "type": comment_type,
+        "id": comment_id,
+        "url": comment_url,
+        "body": comment_body,
+        "user_login": user_login,
+    }
+    if comment_type == "review_comment":
+        path = str(comment.get("path") or "").strip() or None
+        line = comment.get("line")
+        resolved["path"] = path
+        resolved["line"] = line
+    return resolved
 
 
 def enqueue_pr_remediation_if_needed(
@@ -233,7 +224,6 @@ def enqueue_pr_remediation_if_needed(
     requested_by = _extract_payload_comment_login(payload=payload)
     triggering_comment_id = _extract_payload_comment_id(payload=payload)
     triggering_comment_url = _extract_payload_comment_url(payload=payload)
-    requested_comment_url = None
     if manual_fix_request is not None:
         if manual_fix_request.parse_error is not None:
             return PrRemediationResult(
@@ -245,36 +235,9 @@ def enqueue_pr_remediation_if_needed(
                 run=None,
                 head_sha=head_sha,
             )
-        requested_comment_url = str(manual_fix_request.comment_url or triggering_comment_url or "").strip()
-        if not requested_comment_url:
-            return PrRemediationResult(
-                triggered=True,
-                issue_key=None,
-                issue_created=False,
-                enqueued=False,
-                reason="manual_fix_missing_comment_url",
-                run=None,
-                head_sha=head_sha,
-            )
-        requested_ref, requested_ref_error = resolve_requested_comment_ref(
-            comment_url=requested_comment_url,
-            repo_full_name=resolved_repo,
-            pr_number=resolved_pr_number,
-        )
-        if requested_ref_error is not None or requested_ref is None:
-            return PrRemediationResult(
-                triggered=True,
-                issue_key=None,
-                issue_created=False,
-                enqueued=False,
-                reason=requested_ref_error or "manual_fix_invalid_comment_url",
-                run=None,
-                head_sha=head_sha,
-            )
-        requested_comment = _resolve_requested_comment_payload(
-            requested_comment_ref=requested_ref,
-            review_comments=review_comments,
-            issue_comments=issue_comments,
+        requested_comment = _resolve_triggering_comment_payload(
+            event=normalized_event,
+            payload=payload,
         )
         if requested_comment is None:
             return PrRemediationResult(
@@ -282,7 +245,7 @@ def enqueue_pr_remediation_if_needed(
                 issue_key=None,
                 issue_created=False,
                 enqueued=False,
-                reason="manual_fix_comment_not_found",
+                reason="manual_fix_missing_comment_payload",
                 run=None,
                 head_sha=head_sha,
             )
@@ -366,7 +329,8 @@ def enqueue_pr_remediation_if_needed(
                     "requested_comment": requested_comment,
                     "triggering_comment_id": triggering_comment_id,
                     "triggering_comment_url": triggering_comment_url,
-                    "command": "fix",
+                    "instruction_text": manual_fix_request.instruction_text,
+                    "command": "mb",
                 }
                 if requested_comment is not None
                 else None

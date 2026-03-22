@@ -6,17 +6,19 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.pr_review_comment_service import (
     publish_inline_review_batch,
-    upsert_manual_fix_followup_comment,
+    upsert_manual_fix_review_thread_reply,
     upsert_sticky_remediation_comment,
+    upsert_sticky_remediation_review_thread_reply,
     upsert_sticky_review_comment,
 )
 from orchestrator.core.communications import (
     GitHubInlineReviewBatchAction,
     GitHubIssueCommentReactionAction,
-    GitHubManualFixFollowupCommentAction,
+    GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
     GitHubPullRequestReviewCommentReactionAction,
     GitHubStickyRemediationCommentAction,
+    GitHubStickyRemediationReviewThreadReplyAction,
     GitHubStickyReviewCommentAction,
     TransportAction,
 )
@@ -54,8 +56,11 @@ class GitHubTransportExecutor:
         if isinstance(action, GitHubStickyRemediationCommentAction):
             self._execute_sticky_remediation_comment(action=action)
             return
-        if isinstance(action, GitHubManualFixFollowupCommentAction):
-            self._execute_manual_fix_followup_comment(action=action)
+        if isinstance(action, GitHubStickyRemediationReviewThreadReplyAction):
+            self._execute_sticky_remediation_review_thread_reply(action=action)
+            return
+        if isinstance(action, GitHubManualFixReviewThreadReplyAction):
+            self._execute_manual_fix_review_thread_reply(action=action)
             return
         if isinstance(action, GitHubPullRequestMergeAction):
             self._execute_pull_request_merge(action=action)
@@ -136,9 +141,40 @@ class GitHubTransportExecutor:
                 exc,
             )
 
-    def _execute_manual_fix_followup_comment(self, *, action: GitHubManualFixFollowupCommentAction) -> None:
+    def _execute_sticky_remediation_review_thread_reply(
+        self,
+        *,
+        action: GitHubStickyRemediationReviewThreadReplyAction,
+    ) -> None:
         try:
-            upsert_manual_fix_followup_comment(
+            upsert_sticky_remediation_review_thread_reply(
+                github_client=self._github_client,
+                repo_full_name=action.repo_full_name,
+                pr_number=action.pr_number,
+                tenant_id=action.tenant_id,
+                project_id=action.project_id,
+                triggering_comment_id=action.triggering_comment_id,
+                issue_key=action.issue_key,
+                issue_url=action.issue_url,
+                issue_created=action.issue_created,
+                enqueued=action.enqueued,
+                reason=action.reason,
+                run_id=action.run_id,
+                head_sha=action.head_sha,
+                event=action.event,
+                action=action.action_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "github_transport_action_failed kind=sticky_remediation_review_thread_reply repo=%s pr_number=%s error=%s",
+                action.repo_full_name,
+                action.pr_number,
+                exc,
+            )
+
+    def _execute_manual_fix_review_thread_reply(self, *, action: GitHubManualFixReviewThreadReplyAction) -> None:
+        try:
+            upsert_manual_fix_review_thread_reply(
                 github_client=self._github_client,
                 repo_full_name=action.repo_full_name,
                 pr_number=action.pr_number,
@@ -147,7 +183,7 @@ class GitHubTransportExecutor:
                 triggering_comment_id=action.triggering_comment_id,
                 requested_by=action.requested_by,
                 triggering_comment_url=action.triggering_comment_url,
-                requested_comment_url=action.requested_comment_url,
+                instruction_text=action.instruction_text,
                 issue_key=action.issue_key,
                 issue_url=action.issue_url,
                 enqueued=action.enqueued,

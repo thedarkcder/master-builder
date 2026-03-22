@@ -39,10 +39,17 @@ def enqueue_pr_remediation_run(
             manual_context_lines.append(f"Requested by: {manual_requested_by}")
         comment_url = str(manual_requested_comment.get("url") or "").strip()
         if comment_url:
-            manual_context_lines.append(f"Requested comment: {comment_url}")
+            manual_context_lines.append(f"Command comment: {comment_url}")
         comment_body = str(manual_requested_comment.get("body") or "").strip()
         if comment_body:
-            manual_context_lines.append(f"Requested comment body: {comment_body}")
+            manual_context_lines.append(f"Command comment body: {comment_body}")
+    instruction_text = (
+        str(manual_fix_request.get("instruction_text") or "").strip()
+        if isinstance(manual_fix_request, dict)
+        else ""
+    )
+    if instruction_text:
+        manual_context_lines.append(f"Instruction: {instruction_text}")
     manual_context_suffix = ""
     if manual_context_lines:
         manual_context_suffix = "\n" + "\n".join(manual_context_lines)
