@@ -6,6 +6,7 @@ import os
 import shlex
 import subprocess
 import threading
+from time import monotonic
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -50,11 +51,13 @@ class GoJsonLinesLiveVoiceTransportClient:
         self._stderr_thread: threading.Thread | None = None
         self._monitor_thread: threading.Thread | None = None
         self._ready_event = threading.Event()
+        self._startup_state_event = threading.Event()
         self._stop_event = threading.Event()
         self._write_lock = threading.Lock()
         self._process_lock = threading.Lock()
         self._active_session_id: str | None = None
         self._active_signature: tuple[tuple[str, str], ...] | None = None
+        self._startup_failure_message: str | None = None
 
     @property
     def command(self) -> tuple[str, ...]:
@@ -67,10 +70,17 @@ class GoJsonLinesLiveVoiceTransportClient:
         with self._process_lock:
             process = self._process
             if process is not None and process.poll() is None:
+                if self._ready_event.is_set() or (self._reader_thread is None and self._monitor_thread is None):
+                    return
+                self._wait_for_ready()
                 return
             if process is not None and process.poll() is not None:
                 self._clear_process_state()
 
+        self._stop_event.clear()
+        self._ready_event.clear()
+        self._startup_state_event.clear()
+        self._startup_failure_message = None
         env = dict(os.environ)
         if self._bot_token:
             env["ORCHESTRATOR_DISCORD_BOT_TOKEN"] = self._bot_token
@@ -112,7 +122,7 @@ class GoJsonLinesLiveVoiceTransportClient:
             daemon=True,
         )
         self._monitor_thread.start()
-        self._ready_event.set()
+        self._wait_for_ready()
 
     def close(self) -> None:
         self._stop_event.set()
@@ -239,7 +249,7 @@ class GoJsonLinesLiveVoiceTransportClient:
     def _reader_loop(self) -> None:
         stdout = self._stdout
         if stdout is None:
-            self._ready_event.set()
+            self._mark_startup_failed("Live voice transport stdout pipe is unavailable.")
             return
 
         for raw_line in stdout:
@@ -254,12 +264,11 @@ class GoJsonLinesLiveVoiceTransportClient:
             frame_type = str(frame.get("type") or "").strip()
             if frame_type == "transport_ready":
                 self._ready_event.set()
+                self._startup_state_event.set()
 
             handler = self._event_handler
             if handler is not None:
                 handler(dict(frame))
-
-        self._ready_event.set()
 
     def _stderr_loop(self) -> None:
         stderr = self._stderr
@@ -282,6 +291,8 @@ class GoJsonLinesLiveVoiceTransportClient:
                 should_emit_failure = True
         if self._stop_event.is_set():
             return
+        if not self._ready_event.is_set():
+            self._mark_startup_failed(f"Live voice transport process exited with code {return_code} before readiness.")
         if not should_emit_failure:
             return
         _TRANSPORT_LOGGER.warning("live_voice_transport_process_exited return_code=%s", return_code)
@@ -316,6 +327,29 @@ class GoJsonLinesLiveVoiceTransportClient:
         self._stderr = None
         self._active_session_id = None
         self._active_signature = None
+
+    def _wait_for_ready(self) -> None:
+        deadline = monotonic() + float(self._startup_timeout_seconds)
+        while True:
+            if self._ready_event.is_set():
+                return
+            if self._startup_failure_message:
+                raise LiveVoiceTransportClientError(self._startup_failure_message)
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                self.close()
+                raise LiveVoiceTransportClientError(
+                    f"Live voice transport did not become ready within {self._startup_timeout_seconds} seconds."
+                )
+            self._startup_state_event.wait(timeout=remaining)
+            self._startup_state_event.clear()
+
+    def _mark_startup_failed(self, message: str) -> None:
+        if self._ready_event.is_set():
+            return
+        if not self._startup_failure_message:
+            self._startup_failure_message = message
+        self._startup_state_event.set()
 
 
 def build_live_voice_transport_client(

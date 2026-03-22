@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     agent_id: str = "worker-linux-local"
     worker_capabilities: str = "linux"
     worker_workspace_key: str = ""
+    discord_command_sync_lock_key: int = 947102033130
 
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",

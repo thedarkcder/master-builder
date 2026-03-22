@@ -524,6 +524,26 @@ class KnowledgeJiraSyncRuntimeState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
+class DiscordCommandSyncRuntimeState(Base):
+    __tablename__ = "discord_command_sync_runtime_states"
+
+    runtime_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    synced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    healthy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    interaction_ingress_ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    bot_token_configured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    guild_id_configured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_failure_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    guild_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    application_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    command_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class KnowledgeJiraSyncProjectState(Base):
     __tablename__ = "knowledge_jira_sync_project_states"
     __table_args__ = (
