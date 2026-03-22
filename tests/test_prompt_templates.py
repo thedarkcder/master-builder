@@ -43,6 +43,19 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("XCUITest", prompt_text)
         self.assertIn('Never output "linux" when mandatory macos signals exist', prompt_text)
 
+    def test_test_user_prompt_requires_changed_scope_before_full_suite(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "test_user.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("execute targeted tests/checks only for the code you changed first", prompt_text)
+        self.assertIn("Do not default to broad `xcodebuild test`", prompt_text)
+        self.assertIn("If you cannot identify a targeted test", prompt_text)
+
     def test_voice_room_engineer_prompt_enforces_spoken_style(self) -> None:
         system_prompt_path = (
             Path(__file__).resolve().parents[1]
