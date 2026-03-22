@@ -181,6 +181,11 @@ def run_discord_command_followup_blocking(
         channel_id=channel_id,
     )
     if not resolved_tenant_id:
+        logger.warning(
+            "discord_interaction_channel_unmapped channel_id=%s command_text=%s",
+            channel_id,
+            command_text,
+        )
         send_interaction_followup_fn(
             application_id=application_id,
             interaction_token=interaction_token,
@@ -278,6 +283,11 @@ def run_discord_ask_confirmation_followup_blocking(
         channel_id=channel_id,
     )
     if not resolved_tenant_id:
+        logger.warning(
+            "discord_interaction_channel_unmapped channel_id=%s ask_request_id=%s",
+            channel_id,
+            request_id,
+        )
         send_interaction_followup_fn(
             application_id=application_id,
             interaction_token=interaction_token,

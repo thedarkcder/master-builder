@@ -418,6 +418,7 @@ class DiscordGatewayListener:
 
     def _interaction_dispatch_deps(self) -> DiscordInteractionDispatchDeps:
         return DiscordInteractionDispatchDeps(
+            transport_source="discord_gateway",
             ask_reply_open_custom_id=ASK_REPLY_OPEN_CUSTOM_ID,
             autocomplete_response=_discord_autocomplete_response,
             interaction_response=_discord_interaction_response,
