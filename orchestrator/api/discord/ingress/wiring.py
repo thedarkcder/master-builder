@@ -39,6 +39,7 @@ def build_discord_ingress_dependencies(
     tenant_jira_oauth_context_fn,
     ensure_issue_is_executable_fn,
     resolve_codex_working_dir_fn,
+    enrich_scope_fn,
 ):  # noqa: ANN001
     handlers = DiscordIngressHandlers(
         simple=lambda ctx: dispatch_simple_discord_command(
@@ -96,6 +97,7 @@ def build_discord_ingress_dependencies(
             payload=ctx.payload,
             command_name=ctx.command_name,
             arguments=list(ctx.arguments),
+            scoped_project_id=ctx.scope.project_id,
             scoped_project_keys=list(ctx.scope.project_keys),
             codex_working_dir=resolve_codex_working_dir_fn(
                 session=ctx.session,
@@ -155,6 +157,14 @@ def build_discord_ingress_dependencies(
             db,
             current_tenant,
             channel_id,
+        ),
+        enrich_scope=lambda db, current_tenant, command_name, arguments, payload, current_scope: enrich_scope_fn(
+            db,
+            current_tenant,
+            command_name,
+            arguments,
+            payload,
+            current_scope,
         ),
         handlers=handlers,
     )

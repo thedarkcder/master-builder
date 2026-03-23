@@ -792,6 +792,28 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             with self.assertRaises(CodexRuntimeError):
                 runtime.run_text(system_prompt="s", user_prompt="u")
 
+        def fake_popen_structured_limit(args, **kwargs):  # noqa: ANN001
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(
+                args[output_idx],
+                returncode=1,
+                stdout_lines=[
+                    '{"type":"error","message":"You\'ve hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."}\n',
+                    '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."}}\n',
+                ],
+                stderr_lines=["Warning: no last agent message; wrote empty content to /tmp/tmp.txt\n"],
+            )
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_structured_limit),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            with self.assertRaises(CodexRuntimeError) as exc_info:
+                runtime.run_text(system_prompt="s", user_prompt="u")
+            self.assertIn("usage limit", str(exc_info.exception).lower())
+            self.assertNotIn("no last agent message", str(exc_info.exception).lower())
+
         def fake_popen_empty(args, **kwargs):  # noqa: ANN001
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], output_text="")

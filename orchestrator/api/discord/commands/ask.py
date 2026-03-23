@@ -375,6 +375,7 @@ def dispatch_ask_command(
                         session=session,
                         tenant=tenant,
                         prompt_markdown=handoff_markdown,
+                        scoped_project_id=scoped_project_id,
                         scoped_project_keys=normalized_project_keys,
                         codex_working_dir=codex_working_dir,
                     )
@@ -452,7 +453,7 @@ def dispatch_ask_command(
         invocation_context = CodexInvocationContext(
             channel="discord",
             tenant_id=tenant.tenant_id,
-            project_id=None,
+            project_id=scoped_project_id,
             command="ask",
             stage="intent",
             working_dir=codex_working_dir,
@@ -515,7 +516,7 @@ def dispatch_ask_command(
             invocation_context=CodexInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
-                project_id=None,
+                project_id=scoped_project_id,
                 command="ask",
                 stage="answer",
                 working_dir=codex_working_dir,
@@ -554,6 +555,7 @@ def dispatch_ask_command(
         channel_id=normalized_channel_id,
         question=question,
         scoped_issue_key=scoped_issue_key,
+        scoped_project_id=scoped_project_id,
     )
     return DiscordCommandResponse(
         ok=True,

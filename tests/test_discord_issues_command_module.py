@@ -21,6 +21,7 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
             "payload": self.payload,
             "command_name": "issues",
             "arguments": [],
+            "scoped_project_id": None,
             "scoped_project_keys": [],
             "codex_working_dir": "/tmp",
             "normalized_user_id": "u-1",
@@ -56,6 +57,7 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
         )
         self.assertEqual(response.message, "ok")
         self.assertEqual(seed_mock.call_args.kwargs["scoped_project_keys"], ["GP"])
+        self.assertEqual(seed_mock.call_args.kwargs["scoped_project_id"], None)
 
     def test_followup_requires_channel_context(self) -> None:
         payload = DiscordCommandRequest(user_id="u-1", command="!issues")

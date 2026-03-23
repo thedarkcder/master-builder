@@ -264,6 +264,7 @@ class DiscordSharedStateTests(unittest.TestCase):
             request_id=None,
             user_id="u1",
             channel_ids=["c1", " ", "c2"],
+            project_id="route25-default",
             project_key="mab",
             issue_keys=["mab-1", "", "MAB-2"],
             questions=["q1", " ", "q2"],
@@ -272,6 +273,7 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertTrue(request_id)
         entries = (tenant.discord_config or {}).get("seed_followups", [])
         self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["project_id"], "route25-default")
         self.assertEqual(entries[0]["project_key"], "MAB")
         self.assertEqual(entries[0]["issue_keys"], ["MAB-1", "MAB-2"])
 
@@ -281,6 +283,7 @@ class DiscordSharedStateTests(unittest.TestCase):
             request_id=request_id,
             user_id="u1",
             channel_ids=["c3"],
+            project_id="route25-default",
             project_key="MAB",
             issue_keys=["MAB-3"],
             questions=["q3"],
@@ -311,6 +314,7 @@ class DiscordSharedStateTests(unittest.TestCase):
                         "channel_ids": [" c1 ", ""],
                         "questions": [" q1 ", ""],
                         "issue_keys": ["mab-1", ""],
+                        "project_id": "route25-default",
                         "project_key": "mab",
                         "prompt_markdown": "prompt",
                     },
@@ -324,6 +328,7 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertEqual(entries[0]["channel_ids"], ["c1"])
         self.assertEqual(entries[0]["questions"], ["q1"])
         self.assertEqual(entries[0]["issue_keys"], ["MAB-1"])
+        self.assertEqual(entries[0]["project_id"], "route25-default")
         self.assertEqual(entries[0]["project_key"], "MAB")
 
     def test_find_seed_followup_context_skips_stale_entries(self) -> None:

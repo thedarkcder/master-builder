@@ -103,6 +103,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         )
         self.assertEqual(create_response.status_code, 201)
         self.tenant_id = create_response.json()["tenant_id"]
+        self.default_project_id = f"{self.tenant_id}-default"
 
     def tearDown(self) -> None:
         self._project_checkout_patcher.stop()
@@ -2128,28 +2129,23 @@ class DiscordCommandApiTests(unittest.TestCase):
                 f"/discord/command/{self.tenant_id}",
                 json={"user_id": "u-viewer", "channel_id": None, "command": "!ask unscoped"},
             )
-            self.assertEqual(dm.status_code, 200)
-            dm_jql = str(search_mock.call_args.kwargs["jql"])
-            self.assertIn("project in", dm_jql)
-            self.assertIn('"TP"', dm_jql)
-            self.assertIn('"OTH"', dm_jql)
+            self.assertEqual(dm.status_code, 409)
+            self.assertIn("requires a single mapped project scope", dm.json()["detail"])
 
             with self.session_factory() as session:
-                jira_ingress = execute_discord_command(
-                    tenant_id=self.tenant_id,
-                    payload=DiscordCommandRequest(
-                        user_id="jira-user-1",
-                        channel_id=None,
-                        command="!ask via-jira",
-                    ),
-                    session=session,
-                    ingress_source="jira_comment",
-                )
-            self.assertTrue(jira_ingress.ok)
-            jira_jql = str(search_mock.call_args.kwargs["jql"])
-            self.assertIn("project in", jira_jql)
-            self.assertIn('"TP"', jira_jql)
-            self.assertIn('"OTH"', jira_jql)
+                with self.assertRaises(HTTPException) as jira_ctx:
+                    execute_discord_command(
+                        tenant_id=self.tenant_id,
+                        payload=DiscordCommandRequest(
+                            user_id="jira-user-1",
+                            channel_id=None,
+                            command="!ask via-jira",
+                        ),
+                        session=session,
+                        ingress_source="jira_comment",
+                    )
+            self.assertEqual(jira_ctx.exception.status_code, 409)
+            self.assertIn("requires a single mapped project scope", str(jira_ctx.exception.detail))
 
         unmapped = self.client.post(
             f"/discord/command/{self.tenant_id}",
@@ -2539,6 +2535,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 session=session,
                 tenant=tenant,
                 prompt_markdown="Seed issues from spec",
+                scoped_project_id=self.default_project_id,
             )
 
         self.assertIn("need more detail", message.lower())
@@ -2617,6 +2614,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 session=session,
                 tenant=tenant,
                 prompt_markdown="Seed issues from spec",
+                scoped_project_id=self.default_project_id,
             )
 
         self.assertIn("Updated 1", message)

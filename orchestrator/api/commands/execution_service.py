@@ -23,6 +23,7 @@ class CommandExecutionDependencies:
     assert_channel_scope: Callable[[Session, Any, str | None], None]
     assert_sensitive_command_permission: Callable[[Session, Any, str, str, str | None], None]
     resolve_scope: Callable[[Session, Any, str | None], CommandScope]
+    enrich_scope: Callable[[Session, Any, str, tuple[str, ...], Any, CommandScope], CommandScope]
     build_handler_registry: Callable[[CommandExecutionContext], dict[str, tuple[Callable, ...]]]
 
 
@@ -69,6 +70,14 @@ def execute_tenant_command(
     normalized_user_id = payload.user_id.strip()
     normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
     command_scope = deps.resolve_scope(session, tenant, payload.channel_id)
+    command_scope = deps.enrich_scope(
+        session,
+        tenant,
+        command_name,
+        tuple(arguments),
+        payload,
+        command_scope,
+    )
     context = CommandExecutionContext(
         command_name=command_name,
         arguments=tuple(arguments),

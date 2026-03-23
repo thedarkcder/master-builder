@@ -20,6 +20,7 @@ from orchestrator.api.discord.ingress.wiring import build_discord_ingress_depend
 from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.discord.shared.execution_policy import ensure_issue_is_executable as _ensure_issue_is_executable_impl
 from orchestrator.api.discord.shared.scope_service import (
+    enrich_command_scope as _enrich_command_scope_impl,
     normalize_scope_channel_id as _normalize_scope_channel_id_impl,
     resolve_command_scope as _resolve_command_scope_impl,
     resolve_project_for_issue as _resolve_project_for_issue_impl,
@@ -82,6 +83,26 @@ def _resolve_command_scope(*, session: Session, tenant: Tenant, channel_id: str 
 
 
 
+def _enrich_command_scope(
+    *,
+    session: Session,
+    tenant: Tenant,
+    command_name: str,
+    arguments: tuple[str, ...],
+    payload,
+    current_scope: CommandScope,
+) -> CommandScope:  # noqa: ANN001
+    return _enrich_command_scope_impl(
+        session=session,
+        tenant=tenant,
+        command_name=command_name,
+        arguments=arguments,
+        payload=payload,
+        current_scope=current_scope,
+        find_active_project_for_issue_key_fn=find_active_project_for_issue_key,
+    )
+
+
 def _resolve_project_for_issue(*, session: Session, tenant: Tenant, issue_key: str) -> Project:
     return _resolve_project_for_issue_impl(
         session=session,
@@ -131,6 +152,14 @@ def _build_ingress_dependencies():
             session=db,
             tenant=current_tenant,
             channel_id=channel_id,
+        ),
+        enrich_scope_fn=lambda db, current_tenant, command_name, arguments, payload, current_scope: _enrich_command_scope(
+            session=db,
+            tenant=current_tenant,
+            command_name=command_name,
+            arguments=arguments,
+            payload=payload,
+            current_scope=current_scope,
         ),
         collect_ask_context_with_history_context_fn=ask_runtime.collect_ask_context_with_history_context,
         collect_github_ask_context_fn=lambda **kwargs: ask_runtime.collect_github_ask_context(
