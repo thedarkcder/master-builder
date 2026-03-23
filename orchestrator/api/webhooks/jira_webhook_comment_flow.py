@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import logging
 
 from fastapi import HTTPException
@@ -19,10 +18,10 @@ from orchestrator.api.webhooks.contracts import (
 from orchestrator.api.webhooks import jira_webhook_precheck
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.decision_effect_service import publish_decision_effects
+from orchestrator.core.decision_clarification_service import capture_decision_reply_and_recheck
+from orchestrator.core.decision_engine import DecisionEventInput
 from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
-    capture_decision_reply,
     is_machine_generated_decision_comment,
     unresolved_question_feedback_for_cycle,
 )
@@ -155,7 +154,7 @@ def stage_handle_comment_decision_reply(
         return None
     author_account_id = extract_jira_comment_author_account_id(context.payload)
     try:
-        capture = capture_decision_reply(
+        reply_result = capture_decision_reply_and_recheck(
             session=session,
             settings=settings,
             tenant=context.tenant,
@@ -166,27 +165,26 @@ def stage_handle_comment_decision_reply(
             source_ref=context.delivery_id,
             actor_ref=author_account_id,
             metadata={"webhook_event": context.webhook_event},
-        )
-        capture_effect_ids = tuple(getattr(capture, "effect_ids", ()) or ())
-        if capture_effect_ids:
-            publish_decision_effects(
+            decision_event_factory=lambda capture: DecisionEventInput(
+                source="jira_webhook",
+                event_type=str(context.webhook_event or "jira_webhook"),
+                idempotency_key=f"decision-reply:{capture.evidence_id}",
+                issue_key=context.issue_key,
+                issue_summary=context.issue_summary,
+                issue_description=context.issue_description,
+                issue_labels=context.issue_labels,
+            ),
+            tenant_jira_oauth_context_fn=jira_webhook_precheck.tenant_jira_oauth_context,
+            evaluate_pre_run_check_fn=jira_webhook_precheck.evaluate_pre_run_check,
+            publish_jira_comment_fn=lambda comment: post_jira_comment(
                 session=session,
-                effect_ids=capture_effect_ids,
-                publish_jira_comment_fn=lambda comment: post_jira_comment(
-                    session=session,
-                    tenant=context.tenant,
-                    issue_key=context.issue_key,
-                    comment=comment,
-                    settings=settings,
-                ),
-                occurred_at=datetime.now(timezone.utc),
-            )
-        decision_result = jira_webhook_precheck.evaluate_precheck_decision_with_labels(
-            context=context,
-            session=session,
-            settings=settings,
-            idempotency_key=f"decision-reply:{capture.evidence_id}",
+                tenant=context.tenant,
+                issue_key=context.issue_key,
+                comment=comment,
+                settings=settings,
+            ),
         )
+        decision_result = reply_result.decision_result
     except (CodexRuntimeError, RuntimeError, ValueError, HTTPException) as exc:
         logger.exception(
             "jira_comment_decision_reply_failed request_id=%s tenant_id=%s issue_key=%s error=%s",

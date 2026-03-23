@@ -7,6 +7,7 @@ import json
 import os
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
@@ -18,6 +19,9 @@ from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
+
+
+_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 class DeferredTaskHarness:
@@ -276,3 +280,9 @@ def github_signature(*, payload_bytes: bytes, secret: str) -> str:
 
 def json_bytes(payload: dict) -> bytes:
     return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def load_json_fixture(*relative_parts: str) -> dict:
+    fixture_path = _FIXTURES_DIR.joinpath(*relative_parts)
+    with fixture_path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)

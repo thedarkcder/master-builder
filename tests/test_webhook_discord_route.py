@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -18,10 +19,12 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(headers=headers or {})
         session = MagicMock()
         session.get.return_value = tenant
+        tasks: list[asyncio.Task[object]] = []
 
-        def _capture_and_close(coro):  # noqa: ANN001
-            coro.close()
-            return MagicMock()
+        def _schedule_and_track(coro):  # noqa: ANN001
+            task = asyncio.create_task(coro)
+            tasks.append(task)
+            return task
 
         base = {
             "get_settings": MagicMock(return_value=SimpleNamespace(secrets_encryption_key="k")),
@@ -29,14 +32,17 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
             "_extract_webhook_token": MagicMock(return_value="token"),
             "resolve_scoped_secret_ref": MagicMock(return_value="token"),
             "execute_discord_ingress_command": MagicMock(return_value=SimpleNamespace(model_dump=lambda: {"ok": True})),
-            "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_capture_and_close)),
+            "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_schedule_and_track)),
         }
         base.update(overrides)
 
         with ExitStack() as stack:
             for name, value in base.items():
                 stack.enter_context(patch(f"orchestrator.api.routes.webhook_discord.{name}", value))
-            return await ingest_discord_webhook("route25", request=request, session=session)
+            response = await ingest_discord_webhook("route25", request=request, session=session)
+            if tasks:
+                await asyncio.gather(*tasks)
+            return response
 
     async def test_unknown_tenant(self) -> None:
         with self.assertRaises(HTTPException) as exc_ctx:
@@ -80,7 +86,7 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_success(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
-        create_task_mock = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
+        create_task_mock = MagicMock(side_effect=lambda coro: asyncio.create_task(coro))
         response = await self._call(
             payload={"user_id": "  user1 ", "command": " !ask status ", "channel_id": " c1 "},
             tenant=tenant,
@@ -93,7 +99,7 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_seed_command_defers_with_repeated_whitespace(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
-        create_task_mock = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
+        create_task_mock = MagicMock(side_effect=lambda coro: asyncio.create_task(coro))
         response = await self._call(
             payload={"user_id": "user1", "command": "!issues   seed   build stories", "channel_id": "c1"},
             tenant=tenant,
@@ -163,12 +169,16 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_ingest_webhook_routes_task_with_done_callback(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
         add_done_callback_mock = MagicMock()
-        captured_task = MagicMock(name="discord-webhook-task")
-
         def _capture_task(coro):
-            coro.close()
-            captured_task.add_done_callback = lambda callback: add_done_callback_mock(callback)
-            return captured_task
+            task = asyncio.create_task(coro)
+            original_add_done_callback = task.add_done_callback
+
+            def _wrapped(callback):  # noqa: ANN001
+                add_done_callback_mock(callback)
+                return original_add_done_callback(callback)
+
+            task.add_done_callback = _wrapped  # type: ignore[method-assign]
+            return task
 
         response = await self._call(
             payload={"user_id": "user-1", "command": "!help", "channel_id": "channel-1"},

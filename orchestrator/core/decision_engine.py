@@ -14,13 +14,11 @@ from orchestrator.core.decision_precheck_mapping import (
     decision_from_snapshot as decision_from_snapshot_state,
     decision_result_for_duplicate_event as decision_result_for_duplicate_event_state,
     derive_label_actions,
+    evaluate_with_labels as evaluate_with_labels_state,
+    issue_fingerprint as issue_fingerprint_state,
     normalize_occurred_at as normalize_occurred_at_event,
     resolve_idempotency_key as resolve_idempotency_key_event,
     worker_blocking_gate as worker_blocking_gate_state,
-)
-from orchestrator.core.decision_evaluation import (
-    evaluate_with_labels as evaluate_with_labels_state,
-    issue_fingerprint as issue_fingerprint_state,
 )
 from orchestrator.core.decision_resolution_service import (
     append_auto_resolved_block as append_auto_resolved_block_resolution,
@@ -41,6 +39,8 @@ from orchestrator.core.decision_reply_service import (
 from orchestrator.core.decision_planner import DecisionPlannerResult, plan_decision_questions
 from orchestrator.core.decision_state_repository import (
     active_cycle as active_cycle_state,
+    decision_gate_closed_cycle_id as decision_gate_closed_cycle_id_state,
+    decision_gate_closed_permanently as decision_gate_closed_permanently_state,
     existing_case_for_issue as existing_case_for_issue_state,
     persist_decision_state as persist_decision_state_repo,
 )
@@ -56,7 +56,11 @@ from orchestrator.core.decision_types import (
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution, resolve_missing_slots_from_knowledge
-from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
+from orchestrator.core.pre_run_check import (
+    PreRunCheckResult,
+    evaluate_execution_readiness_only,
+    evaluate_pre_run_check,
+)
 from orchestrator.core.precheck_decision import precheck_classification, precheck_missing_slots
 from orchestrator.core.codex_invocation import invoke_codex_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
@@ -323,6 +327,37 @@ def _coerce_clear_decision(*, decision: IngressDecision, case: DecisionCase) -> 
     )
 
 
+def _terminally_closed_gate_decision(
+    *,
+    source: DecisionSource,
+    tenant_id: str,
+    project_id: str,
+    issue_key: str,
+    issue_summary: str | None,
+    issue_description: str | None,
+    issue_labels: list[str] | None,
+    ready_label: str | None,
+) -> IngressDecision:
+    pre_check = evaluate_execution_readiness_only(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+        issue_labels=issue_labels,
+        ready_label=ready_label,
+    )
+    block_reason = blocking_reason_for_precheck(pre_check)
+    return IngressDecision(
+        source=source,
+        pre_check=pre_check,
+        block_reason=block_reason,
+        guidance=enqueue_reason_guidance(block_reason) if block_reason else None,
+        policy_error=None,
+        label_actions=derive_label_actions(pre_check),
+    )
+
+
 def evaluate_ingress_precheck(
     *,
     source: DecisionSource,
@@ -404,7 +439,10 @@ def evaluate_worker_decision(
     issue_description: str | None,
     session: Session | None = None,
     tenant: Tenant | None = None,
+    project: Project | None = None,
     issue_labels: list[str] | None = None,
+    settings=None,  # noqa: ANN001
+    tenant_jira_oauth_context_fn: Callable[..., Any] | None = None,
     evaluate_pre_run_check_fn: Callable[..., PreRunCheckResult] = evaluate_pre_run_check,
     evaluate_decision_gate_fn: Callable[..., DecisionGateResult] | None = None,
 ) -> WorkerDecision:
@@ -417,6 +455,68 @@ def evaluate_worker_decision(
         issue_description=issue_description,
     ):
         return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
+
+    if (
+        session is not None
+        and tenant is not None
+        and project is not None
+        and issue_key
+        and settings is not None
+        and tenant_jira_oauth_context_fn is not None
+    ):
+        from orchestrator.core.decision_clarification_service import evaluate_issue_clarification_state
+
+        result = evaluate_issue_clarification_state(
+            session=session,
+            tenant=tenant,
+            project=project,
+            event=DecisionEventInput(
+                source="worker_execution",
+                event_type="worker_gate_check",
+                idempotency_key=None,
+                issue_key=issue_key,
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+                issue_labels=list(issue_labels or []),
+            ),
+            settings=settings,
+            tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+            evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
+            publish_jira_comment_fn=None,
+        )
+        decision = result.decision
+        pre_check = decision.pre_check if isinstance(decision.pre_check, PreRunCheckResult) else None
+        if decision.policy_error:
+            return WorkerDecision(
+                allowed=False,
+                decision_gate=None,
+                configuration_error=str(decision.policy_error),
+                block_reason=decision.block_reason,
+                classification=result.classification,
+                pre_check=pre_check,
+            )
+        blocking_gate = worker_blocking_gate_state(
+            pre_check=pre_check,
+            classification=result.classification,
+            block_reason=decision.block_reason,
+        )
+        if blocking_gate is not None:
+            return WorkerDecision(
+                allowed=False,
+                decision_gate=blocking_gate,
+                configuration_error=None,
+                block_reason=decision.block_reason,
+                classification=result.classification,
+                pre_check=pre_check,
+            )
+        return WorkerDecision(
+            allowed=True,
+            decision_gate=None,
+            configuration_error=None,
+            block_reason=decision.block_reason,
+            classification=result.classification,
+            pre_check=pre_check,
+        )
 
     if session is not None and issue_key:
         existing_case = existing_case_for_issue_state(
@@ -745,21 +845,15 @@ def evaluate_decision_event(
         existing_cycle.updated_at = occurred_at
         existing_case.active_cycle_id = None
         existing_case.updated_at = occurred_at
-        snapshot = (
-            existing_case.metadata_json.get("result_snapshot")
-            if isinstance(existing_case.metadata_json, dict)
-            and isinstance(existing_case.metadata_json.get("result_snapshot"), dict)
-            else {}
-        )
-        resolved_decision = _coerce_clear_decision(
-            decision=decision_from_snapshot_state(
-                snapshot=snapshot,
-                source=event.source,
-                classification="clear",
-                cycle=None,
-                case=existing_case,
-            ),
-            case=existing_case,
+        resolved_decision = _terminally_closed_gate_decision(
+            source=event.source,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key=event.issue_key,
+            issue_summary=event.issue_summary,
+            issue_description=event.issue_description,
+            issue_labels=event.issue_labels,
+            ready_label=(tenant.jira_config or {}).get("ready_label"),
         )
         issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
         issue_description = event.issue_description
@@ -782,6 +876,7 @@ def evaluate_decision_event(
                 cycle_id=existing_cycle.cycle_id,
             ),
             issue_fingerprint_fn=issue_fingerprint_state,
+            terminal_gate_closed_cycle_id=existing_cycle.cycle_id,
         )
         if publish_jira_comment_fn is not None and outbox_effect_ids:
             publish_decision_effects_repo(
@@ -792,6 +887,61 @@ def evaluate_decision_event(
             )
         return DecisionEngineResult(
             decision=resolved_decision,
+            issue_labels=issue_labels,
+            classification="clear",
+            missing_slots=[],
+            auto_resolved_slots=[],
+            case_id=case.case_id,
+            case_state=case.state,
+            cycle_id=None,
+            outbox_effect_ids=outbox_effect_ids,
+            duplicate_event=False,
+        )
+
+    if (
+        existing_case is not None
+        and existing_cycle is None
+        and decision_gate_closed_permanently_state(case=existing_case)
+    ):
+        decision = _terminally_closed_gate_decision(
+            source=event.source,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key=event.issue_key,
+            issue_summary=event.issue_summary,
+            issue_description=event.issue_description,
+            issue_labels=event.issue_labels,
+            ready_label=(tenant.jira_config or {}).get("ready_label"),
+        )
+        issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
+        issue_description = event.issue_description
+        case, cycle, outbox_effect_ids = persist_decision_state_repo(
+            session=session,
+            tenant=tenant,
+            project=project,
+            event=event,
+            occurred_at=occurred_at,
+            idempotency_key=idempotency_key,
+            issue_labels=issue_labels,
+            issue_description=issue_description,
+            decision=decision,
+            classification="clear",
+            question_set_override=None,
+            question_reason_override=None,
+            auto_resolved_answers={},
+            accepted_question_ids=set(),
+            issue_fingerprint_fn=issue_fingerprint_state,
+            terminal_gate_closed_cycle_id=decision_gate_closed_cycle_id_state(case=existing_case),
+        )
+        if publish_jira_comment_fn is not None and outbox_effect_ids:
+            publish_decision_effects_repo(
+                session=session,
+                effect_ids=outbox_effect_ids,
+                publish_jira_comment_fn=publish_jira_comment_fn,
+                occurred_at=occurred_at,
+            )
+        return DecisionEngineResult(
+            decision=decision,
             issue_labels=issue_labels,
             classification="clear",
             missing_slots=[],

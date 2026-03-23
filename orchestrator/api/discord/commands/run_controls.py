@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -17,17 +16,14 @@ from orchestrator.core.communications.enqueue_reason_contract import (
     enqueue_reason_guidance,
     format_enqueue_conflict_detail,
 )
-from orchestrator.core.decision_engine import (
-    DecisionEngineResult,
-    DecisionEventInput,
-    DecisionSource,
-    evaluate_decision_event,
+from orchestrator.core.decision_clarification_service import (
+    capture_decision_reply_and_recheck,
+    evaluate_issue_clarification_state,
 )
+from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEventInput, DecisionSource
 from orchestrator.core.decision_reply_service import (
-    capture_decision_reply,
     unresolved_question_feedback_for_cycle,
 )
-from orchestrator.core.decision_effect_service import publish_decision_effects
 from orchestrator.core.discord.thread_context import remove_thread_issue_key
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
@@ -66,7 +62,7 @@ def _evaluate_precheck_decision_with_labels(
     idempotency_key: str | None = None,
 ) -> DecisionEngineResult:
     settings = settings_factory()
-    return evaluate_decision_event(
+    return evaluate_issue_clarification_state(
         session=session,
         tenant=tenant,
         project=project,
@@ -506,21 +502,6 @@ def dispatch_run_control_command(
             )
             issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or None
             issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
-            capture = capture_decision_reply(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                project=project,
-                issue_key=issue_key,
-                reply_text=reply_text,
-                source_transport="discord",
-                source_ref=source_ref,
-                actor_ref=payload.user_id,
-                metadata={
-                    "channel_id": payload.channel_id,
-                    "ingress": "discord",
-                },
-            )
             labels_raw = getattr(issue_detail, "labels", None)
             issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()] if isinstance(labels_raw, list) else None
         except ValueError as exc:
@@ -549,30 +530,44 @@ def dispatch_run_control_command(
             except Exception as exc:  # noqa: BLE001
                 return False, str(exc)
 
-        capture_effect_ids = tuple(getattr(capture, "effect_ids", ()) or ())
-        if capture_effect_ids:
-            publish_decision_effects(
+        try:
+            reply_result = capture_decision_reply_and_recheck(
                 session=session,
-                effect_ids=capture_effect_ids,
+                settings=settings,
+                tenant=tenant,
+                project=project,
+                issue_key=issue_key,
+                reply_text=reply_text,
+                source_transport="discord",
+                source_ref=source_ref,
+                actor_ref=payload.user_id,
+                metadata={
+                    "channel_id": payload.channel_id,
+                    "ingress": "discord",
+                },
+                decision_event_factory=lambda capture: DecisionEventInput(
+                    source="discord_reply",
+                    event_type="discord_discord_reply",
+                    idempotency_key=f"decision-reply:{capture.evidence_id}",
+                    issue_key=issue_key,
+                    issue_summary=issue_summary,
+                    issue_description=issue_description,
+                    issue_labels=issue_labels,
+                ),
+                tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+                evaluate_pre_run_check_fn=evaluate_pre_run_check,
+                oauth_context=oauth,
                 publish_jira_comment_fn=_publish_jira_comment,
-                occurred_at=datetime.now(timezone.utc),
             )
-
-        decision_result = _evaluate_precheck_decision_with_labels(
-            session=session,
-            tenant=tenant,
-            project=project,
-            source="discord_reply",
-            issue_key=issue_key,
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            issue_labels=issue_labels,
-            settings_factory=settings_factory,
-            tenant_jira_oauth_context=tenant_jira_oauth_context,
-            oauth_context=oauth,
-            publish_jira_comment_fn=_publish_jira_comment,
-            idempotency_key=f"decision-reply:{capture.evidence_id}",
-        )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"No active Decision Gate cycle exists for `{issue_key}`. "
+                    f"Run `!run {issue_key}` or `!retry {issue_key}` to reopen clarification first."
+                ),
+            ) from exc
+        decision_result = reply_result.decision_result
         precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
             return DiscordCommandResponse(

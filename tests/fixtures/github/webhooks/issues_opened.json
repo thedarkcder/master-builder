@@ -1,0 +1,17 @@
+{
+  "action": "opened",
+  "installation": {
+    "id": "12345"
+  },
+  "repository": {
+    "full_name": "org/repo"
+  },
+  "issue": {
+    "number": 11,
+    "title": "Example issue"
+  },
+  "sender": {
+    "login": "thedarkcder",
+    "type": "User"
+  }
+}

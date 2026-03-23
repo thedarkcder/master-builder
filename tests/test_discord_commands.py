@@ -520,37 +520,77 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
-                    cycle=SimpleNamespace(cycle_id="cycle-1"),
-                    effect_ids=(),
-                    evidence_id="evidence-1",
+                    capture=SimpleNamespace(
+                        cycle=SimpleNamespace(cycle_id="cycle-1"),
+                        effect_ids=(),
+                        evidence_id="evidence-1",
+                    ),
+                    decision_result=SimpleNamespace(
+                        decision=SimpleNamespace(
+                            pre_check=PreRunCheckResult(
+                                outcome="ready_for_agent",
+                                ready_label="agent:ready",
+                                ready_label_present=True,
+                                required_worker_capability="linux",
+                                required_worker_label="worker:linux",
+                                required_worker_label_present=True,
+                                decision_gate=DecisionGateResult(
+                                    triggered=False,
+                                    reason="Decision Gate not required",
+                                    missing_sections=(),
+                                    questions=(),
+                                    recommendation="Proceed",
+                                    tags=(),
+                                ),
+                                gtd=GoodToDoValidationResult(
+                                    valid=True,
+                                    missing_criteria=(),
+                                    clarification_questions=(),
+                                ),
+                            ),
+                        ),
+                        classification="clear",
+                        missing_slots=[],
+                        auto_resolved_slots=[],
+                        cycle_id=None,
+                    ),
                 ),
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
-                return_value=PreRunCheckResult(
-                    outcome="ready_for_agent",
-                    ready_label="agent:ready",
-                    ready_label_present=True,
-                    required_worker_capability="linux",
-                    required_worker_label="worker:linux",
-                    required_worker_label_present=True,
-                    decision_gate=DecisionGateResult(
-                        triggered=False,
-                        reason="Decision Gate not required",
-                        missing_sections=(),
-                        questions=(),
-                        recommendation="Proceed",
-                        tags=(),
+                "orchestrator.api.discord.commands.run_controls._evaluate_precheck_decision_with_labels",
+                return_value=SimpleNamespace(
+                    decision=SimpleNamespace(
+                        block_reason=None,
+                        pre_check=PreRunCheckResult(
+                            outcome="ready_for_agent",
+                            ready_label="agent:ready",
+                            ready_label_present=True,
+                            required_worker_capability="linux",
+                            required_worker_label="worker:linux",
+                            required_worker_label_present=True,
+                            decision_gate=DecisionGateResult(
+                                triggered=False,
+                                reason="Decision Gate not required",
+                                missing_sections=(),
+                                questions=(),
+                                recommendation="Proceed",
+                                tags=(),
+                            ),
+                            gtd=GoodToDoValidationResult(
+                                valid=True,
+                                missing_criteria=(),
+                                clarification_questions=(),
+                            ),
+                        ),
                     ),
-                    gtd=GoodToDoValidationResult(
-                        valid=True,
-                        missing_criteria=(),
-                        clarification_questions=(),
-                    ),
+                    classification="clear",
+                    missing_slots=[],
+                    auto_resolved_slots=[],
+                    cycle_id=None,
                 ),
-            ) as precheck_mock,
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -566,11 +606,6 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["command"], "retry")
         oauth_client.get_issue_detail.assert_called_once()
         oauth_client.update_issue_summary_and_description.assert_not_called()
-        self.assertGreaterEqual(precheck_mock.call_count, 2)
-        precheck_calls = [call.kwargs for call in precheck_mock.call_args_list]
-        self.assertEqual({call["issue_key"] for call in precheck_calls}, {"TP-88"})
-        self.assertIn("Old summary", [call["issue_summary"] for call in precheck_calls])
-        self.assertIn("Retry from reply", [call["issue_summary"] for call in precheck_calls])
 
     def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         self._queue_run(run_id="run-failed-reply-2", issue_key="TP-89", status="failed")
@@ -641,45 +676,52 @@ class DiscordCommandApiTests(unittest.TestCase):
             ) as preview_mock,
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
-                    cycle=SimpleNamespace(cycle_id="cycle-1"),
-                    effect_ids=(),
-                    evidence_id="evidence-2",
-                    unresolved_question_feedback=(
-                        {
-                            "question_id": "dg_1",
-                            "question_text": "Objective?",
-                            "note": "Config values were captured, but entitlement confirmation is still missing.",
-                        },
-                    ),
-                ),
-            ),
-            patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
-                return_value=PreRunCheckResult(
-                    outcome="decision_gate_required",
-                    ready_label="agent:ready",
-                    ready_label_present=True,
-                    required_worker_capability="linux",
-                    required_worker_label="worker:linux",
-                    required_worker_label_present=True,
-                    decision_gate=DecisionGateResult(
-                        triggered=True,
-                        reason="Missing GTD sections",
-                        missing_sections=(),
-                        questions=("Objective?", "How to test?"),
-                        recommendation="Clarification required",
-                        tags=(),
-                    ),
-                    gtd=GoodToDoValidationResult(
-                        valid=True,
-                        missing_criteria=(),
-                        clarification_questions=(),
+                    capture=SimpleNamespace(evidence_id="evidence-2"),
+                    decision_result=SimpleNamespace(
+                        decision=SimpleNamespace(
+                            pre_check=PreRunCheckResult(
+                                outcome="decision_gate_required",
+                                ready_label="agent:ready",
+                                ready_label_present=True,
+                                required_worker_capability="linux",
+                                required_worker_label="worker:linux",
+                                required_worker_label_present=True,
+                                decision_gate=DecisionGateResult(
+                                    triggered=True,
+                                    reason="Missing GTD sections",
+                                    missing_sections=(),
+                                    questions=("Objective?", "How to test?"),
+                                    recommendation="Clarification required",
+                                    tags=(),
+                                ),
+                                gtd=GoodToDoValidationResult(
+                                    valid=True,
+                                    missing_criteria=(),
+                                    clarification_questions=(),
+                                ),
+                            ),
+                        ),
+                        classification="decision_gate",
+                        missing_slots=[],
+                        auto_resolved_slots=[],
+                        cycle_id="cycle-1",
                     ),
                 ),
             ),
             patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.unresolved_question_feedback_for_cycle",
+                return_value=[
+                    {
+                        "question_id": "dg_1",
+                        "question_text": "What entitlement/capability values are required for production and staging?",
+                        "note": "Config values were captured, but entitlement confirmation is still missing.",
+                        "status": "open",
+                    }
+                ],
+            ),
             patch("orchestrator.api.discord.commands.run_controls.build_precheck_message") as build_message_mock,
         ):
             response = self.client.post(
@@ -734,41 +776,11 @@ class DiscordCommandApiTests(unittest.TestCase):
             "access_token": "tok-1",
             "client": oauth_client,
         }
-        decision_result = SimpleNamespace(
-            decision=SimpleNamespace(
-                pre_check=PreRunCheckResult(
-                    outcome="decision_gate_required",
-                    ready_label="agent:ready",
-                    ready_label_present=True,
-                    required_worker_capability="linux",
-                    required_worker_label="worker:linux",
-                    required_worker_label_present=True,
-                    decision_gate=DecisionGateResult(
-                        triggered=True,
-                        reason="Need config",
-                        missing_sections=(),
-                        questions=("Original question",),
-                        recommendation="Clarification required",
-                        tags=(),
-                    ),
-                    gtd=GoodToDoValidationResult(valid=True, missing_criteria=(), clarification_questions=()),
-                ),
-            ),
-            classification="decision_gate",
-            missing_slots=[],
-            auto_resolved_slots=[],
-            cycle_id="cycle-1",
-        )
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
-                return_value=SimpleNamespace(evidence_id="evidence-123"),
-            ),
-            patch(
-                "orchestrator.api.discord.commands.run_controls._evaluate_precheck_decision_with_labels",
-                return_value=decision_result,
-            ) as evaluate_mock,
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck"
+            ) as reply_recheck_mock,
             patch(
                 "orchestrator.api.discord.commands.run_controls.unresolved_question_feedback_for_cycle",
                 return_value=[
@@ -781,6 +793,39 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ],
             ),
         ):
+            reply_recheck_mock.return_value = SimpleNamespace(
+                capture=SimpleNamespace(evidence_id="evidence-123"),
+                decision_result=SimpleNamespace(
+                    decision=SimpleNamespace(
+                        pre_check=PreRunCheckResult(
+                            outcome="decision_gate_required",
+                            ready_label="agent:ready",
+                            ready_label_present=True,
+                            required_worker_capability="linux",
+                            required_worker_label="worker:linux",
+                            required_worker_label_present=True,
+                            decision_gate=DecisionGateResult(
+                                triggered=True,
+                                reason="Need config",
+                                missing_sections=(),
+                                questions=("Original question",),
+                                recommendation="Clarification required",
+                                tags=(),
+                            ),
+                            gtd=GoodToDoValidationResult(
+                                valid=True,
+                                missing_criteria=(),
+                                clarification_questions=(),
+                            ),
+                        ),
+                        block_reason="decision_gate_required",
+                    ),
+                    classification="decision_gate",
+                    missing_slots=[],
+                    auto_resolved_slots=[],
+                    cycle_id="cycle-1",
+                ),
+            )
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
                 json={
@@ -791,8 +836,11 @@ class DiscordCommandApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        decision_event = reply_recheck_mock.call_args.kwargs["decision_event_factory"](
+            SimpleNamespace(evidence_id="evidence-123")
+        )
         self.assertEqual(
-            evaluate_mock.call_args.kwargs["idempotency_key"],
+            decision_event.idempotency_key,
             "decision-reply:evidence-123",
         )
 
@@ -841,34 +889,37 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
-                    cycle=SimpleNamespace(cycle_id="cycle-1"),
-                    effect_ids=(),
-                    evidence_id="evidence-3",
-                ),
-            ),
-            patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
-                return_value=PreRunCheckResult(
-                    outcome="gtd_required",
-                    ready_label="agent:ready",
-                    ready_label_present=True,
-                    required_worker_capability="linux",
-                    required_worker_label="worker:linux",
-                    required_worker_label_present=True,
-                    decision_gate=DecisionGateResult(
-                        triggered=False,
-                        reason="Decision Gate not required",
-                        missing_sections=(),
-                        questions=(),
-                        recommendation="Proceed",
-                        tags=(),
-                    ),
-                    gtd=GoodToDoValidationResult(
-                        valid=False,
-                        missing_criteria=("Dependencies and risks identified",),
-                        clarification_questions=("Which dependencies or risks may impact delivery?",),
+                    capture=SimpleNamespace(evidence_id="evidence-3"),
+                    decision_result=SimpleNamespace(
+                        decision=SimpleNamespace(
+                            pre_check=PreRunCheckResult(
+                                outcome="gtd_required",
+                                ready_label="agent:ready",
+                                ready_label_present=True,
+                                required_worker_capability="linux",
+                                required_worker_label="worker:linux",
+                                required_worker_label_present=True,
+                                decision_gate=DecisionGateResult(
+                                    triggered=False,
+                                    reason="Decision Gate not required",
+                                    missing_sections=(),
+                                    questions=(),
+                                    recommendation="Proceed",
+                                    tags=(),
+                                ),
+                                gtd=GoodToDoValidationResult(
+                                    valid=False,
+                                    missing_criteria=("Dependencies and risks identified",),
+                                    clarification_questions=("Which dependencies or risks may impact delivery?",),
+                                ),
+                            ),
+                        ),
+                        classification="gtd",
+                        missing_slots=[],
+                        auto_resolved_slots=[],
+                        cycle_id="cycle-1",
                     ),
                 ),
             ),
@@ -935,17 +986,18 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
-                    cycle=SimpleNamespace(cycle_id="cycle-1"),
-                    effect_ids=(),
-                    evidence_id="evidence-4",
+                    capture=SimpleNamespace(evidence_id="evidence-4"),
+                    decision_result=SimpleNamespace(
+                        decision=SimpleNamespace(pre_check=ready_result),
+                        classification="clear",
+                        missing_slots=[],
+                        auto_resolved_slots=[],
+                        cycle_id=None,
+                    ),
                 ),
             ),
-            patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
-                return_value=ready_result,
-            ) as precheck_mock,
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
                 return_value=JiraIssuePreview(key="TP-91", summary="Run after reply", status="To Do"),
@@ -963,6 +1015,19 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.commands.run_controls.enqueue_issue_run_with_precheck",
                 return_value=enqueue_result,
             ) as enqueue_mock,
+            patch(
+                "orchestrator.api.discord.commands.run_controls._evaluate_precheck_decision_with_labels",
+                return_value=SimpleNamespace(
+                    decision=SimpleNamespace(
+                        block_reason=None,
+                        pre_check=ready_result,
+                    ),
+                    classification="clear",
+                    missing_slots=[],
+                    auto_resolved_slots=[],
+                    cycle_id=None,
+                ),
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -980,11 +1045,6 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["data"]["run_id"], "run-new-1")
         oauth_client.update_issue_summary_and_description.assert_not_called()
         enqueue_mock.assert_called_once()
-        self.assertGreaterEqual(precheck_mock.call_count, 2)
-        precheck_calls = [call.kwargs for call in precheck_mock.call_args_list]
-        self.assertEqual({call["issue_key"] for call in precheck_calls}, {"TP-91"})
-        self.assertIn("Old summary", [call["issue_summary"] for call in precheck_calls])
-        self.assertIn("Run after reply", [call["issue_summary"] for call in precheck_calls])
 
     def test_reply_without_active_decision_cycle_returns_explicit_conflict(self) -> None:
         oauth_client = SimpleNamespace(
@@ -1011,7 +1071,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply_and_recheck",
                 side_effect=ValueError("No active decision cycle exists for TP-92"),
             ),
         ):
@@ -1095,8 +1155,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
@@ -1145,8 +1205,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
@@ -1194,8 +1254,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
@@ -1295,9 +1355,19 @@ class DiscordCommandApiTests(unittest.TestCase):
             self.assertEqual(latest_entry.get("answer"), "security: We should add session expiry and audit trails.")
 
     def test_ask_command_returns_board_answer(self) -> None:
-        with patch(
-            "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",
-            return_value=("Board snapshot", {"status_counts": {"To Do": 2}}),
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [], {"To Do": 2}, []),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                return_value="Board snapshot",
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -1313,10 +1383,20 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["data"]["status_counts"]["To Do"], 2)
 
     def test_ask_command_supports_issue_scope(self) -> None:
-        with patch(
-            "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",
-            return_value=("Issue snapshot", {"issue_key": "TP-101"}),
-        ) as ask_mock:
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=("TP-101", None, [], {}, []),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                return_value="Issue snapshot",
+            ) as answer_mock,
+        ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
                 json={
@@ -1329,7 +1409,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["message"], "Issue snapshot")
         self.assertEqual(response.json()["data"]["issue_key"], "TP-101")
-        self.assertEqual(ask_mock.call_args.kwargs["scoped_issue_key"], "TP-101")
+        self.assertEqual(answer_mock.call_args.kwargs["invocation_context"].issue_key, "TP-101")
 
     def test_ask_command_rejects_invalid_issue_scope_token(self) -> None:
         response = self.client.post(
@@ -1575,8 +1655,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.build_codex_runtime",
@@ -1626,8 +1706,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
-                return_value=(None, None, [{"key": "OTH-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [{"key": "OTH-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
@@ -1668,8 +1748,8 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}),
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_github_ask_context", return_value=github_context),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
@@ -1706,13 +1786,18 @@ class DiscordCommandApiTests(unittest.TestCase):
                 None,
                 [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
                 {"To Do": 1},
+                [],
             )
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Board answer"),
         ):
             first = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1751,10 +1836,17 @@ class DiscordCommandApiTests(unittest.TestCase):
         }
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context", return_value=(None, None, [], {})),
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [], {}, []),
+            ),
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_github_ask_context", return_value=github_context),
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Board answer") as answer_mock,
         ):
             response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1960,13 +2052,18 @@ class DiscordCommandApiTests(unittest.TestCase):
                 None,
                 [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
                 {"To Do": 1},
+                [],
             )
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Board answer"),
         ):
             first = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -2085,8 +2182,12 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
                 return_value=[JiraIssuePreview(key="TP-50", summary="DM issue", status="To Do")],
             ),
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="DM scoped answer"),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="DM scoped answer"),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -2114,8 +2215,12 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
                 return_value=[JiraIssuePreview(key="OTH-50", summary="Scoped issue", status="To Do")],
             ) as search_mock,
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Scoped answer"),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Scoped answer"),
         ):
             mapped = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -2185,14 +2290,19 @@ class DiscordCommandApiTests(unittest.TestCase):
                 None,
                 [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
                 {"To Do": 1},
+                [],
             )
 
         with (
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.ask_history_runtime.existing_issue_keys_for_tenant", return_value=set()),
-            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context", side_effect=_collect_stub),
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer"),
+            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_codex", return_value="Board answer"),
         ):
             response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -2224,8 +2334,16 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.ask_runtime.ask_board_message",
-                return_value=("Implicit ask answer", {"status_counts": {"Blocked": 1}}),
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [], {"Blocked": 1}, []),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "answer"},
+            ),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                return_value="Implicit ask answer",
             ),
         ):
             response = execute_discord_command(

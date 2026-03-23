@@ -17,15 +17,11 @@ def execute_discord_command_route(
     session: Session = Depends(get_session),
     *,
     defer_seed_issues: bool = False,
-    require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
 ) -> DiscordCommandResponse:
     return discord_executor.execute_discord_command(
         tenant_id=tenant_id,
         payload=payload,
         session=session,
         defer_seed_issues=defer_seed_issues,
-        require_ask_confirmation=require_ask_confirmation,
-        allow_plain_ask=allow_plain_ask,
         ingress_source="discord",
     )

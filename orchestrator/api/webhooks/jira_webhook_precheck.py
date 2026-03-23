@@ -8,11 +8,8 @@ from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_con
 from orchestrator.api.webhooks.contracts import post_jira_comment
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, TODO_STATUS
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
-from orchestrator.core.decision_engine import (
-    DecisionEngineResult,
-    DecisionEventInput,
-    evaluate_decision_event,
-)
+from orchestrator.core.decision_clarification_service import evaluate_issue_clarification_state
+from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEventInput
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.api.discord.shared.state import normalize_status_name
@@ -192,7 +189,7 @@ def evaluate_precheck_decision_with_labels(
             settings=settings,
         )
 
-    result = evaluate_decision_event(
+    result = evaluate_issue_clarification_state(
         session=session,
         tenant=context.tenant,
         project=context.project,

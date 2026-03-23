@@ -29,6 +29,7 @@ def apply_decision_gate(
     blocked_status: str,
     failed_status: str,
 ) -> tuple[object | None, dict | None]:
+    project = resolve_project_for_run(session, run=run)
     worker_decision = evaluate_worker_decision(
         run_plan=run.plan,
         tenant_id=run.tenant_id,
@@ -39,7 +40,10 @@ def apply_decision_gate(
         issue_description=run.issue_description,
         session=session,
         tenant=tenant,
+        project=project,
         issue_labels=[],
+        settings=settings,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
         evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
     )
 
@@ -126,7 +130,6 @@ def apply_decision_gate(
         terminal_status=blocked_status,
         last_error=f"Decision Gate required: {reason}",
     )
-    project = resolve_project_for_run(session, run=run)
     send_result = SimpleNamespace(sent=False, reason="not_attempted")
     send_error: str | None = None
     try:

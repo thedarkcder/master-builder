@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from uuid import uuid4
 
@@ -100,7 +99,7 @@ async def ingest_jira_webhook_event(
     session: Session,
     settings,  # noqa: ANN001
     request_id: str | None = None,
-) -> dict:
+) -> object:
     normalized_request_id = request_id or request.headers.get("X-Request-Id") or str(uuid4())
     envelope = TransportEnvelope(
         transport="jira_webhook",
@@ -115,7 +114,7 @@ async def ingest_jira_webhook_event(
         settings=settings,
         envelope=envelope,
     )
-    response = execute_http_ingress_result(
+    return execute_http_ingress_result(
         result=result,
         envelope=envelope,
         transport_action_executors=build_http_transport_action_executors(
@@ -123,7 +122,6 @@ async def ingest_jira_webhook_event(
             settings=settings,
         ),
     )
-    return json.loads(response.body.decode("utf-8"))
 
 
 __all__ = [

@@ -196,6 +196,41 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertIsNotNone(worker_decision.decision_gate)
         self.assertIsNone(worker_decision.configuration_error)
 
+    def test_worker_decision_uses_canonical_clarification_service_when_context_available(self) -> None:
+        decision = SimpleNamespace(
+            pre_check=_precheck(outcome="decision_gate_required"),
+            block_reason="decision_gate_required",
+            policy_error=None,
+        )
+        with mock.patch(
+            "orchestrator.core.decision_clarification_service.evaluate_issue_clarification_state",
+            return_value=SimpleNamespace(
+                decision=decision,
+                classification="decision_gate",
+            ),
+        ) as evaluate_clarification:
+            worker_decision = evaluate_worker_decision(
+                run_plan=None,
+                tenant_id="t1",
+                project_id="p1",
+                issue_key="TP-1",
+                run_id="run-1",
+                issue_summary="summary",
+                issue_description="desc",
+                session=SimpleNamespace(),
+                tenant=SimpleNamespace(tenant_id="t1", jira_config={"ready_label": "agent:ready"}),
+                project=SimpleNamespace(project_id="p1"),
+                issue_labels=[],
+                settings=SimpleNamespace(),
+                tenant_jira_oauth_context_fn=lambda **_: None,
+                evaluate_pre_run_check_fn=lambda **_: _precheck(outcome="decision_gate_required"),
+            )
+
+        self.assertFalse(worker_decision.allowed)
+        self.assertEqual(worker_decision.classification, "decision_gate")
+        self.assertEqual(worker_decision.block_reason, "decision_gate_required")
+        evaluate_clarification.assert_called_once()
+
 
 class LabelActionServiceTests(unittest.TestCase):
     def test_apply_issue_label_actions_respects_policy_and_dedupes(self) -> None:
