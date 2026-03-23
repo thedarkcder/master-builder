@@ -21,6 +21,7 @@ class CommandExecutionServiceTests(unittest.TestCase):
             assert_channel_scope=lambda _session, _tenant, _channel_id: None,
             assert_sensitive_command_permission=lambda _session, _tenant, _command, _user, _channel_id: None,
             resolve_scope=lambda _session, _tenant, _channel_id: CommandScope(project_keys=("PRJ",)),
+            enrich_scope=lambda _session, _tenant, _command_name, _arguments, _payload, scope: scope,
             build_handler_registry=lambda _context: {"status": (lambda _ctx: DiscordCommandResponse(ok=True, command="status", message="ok"),)},
         )
 
@@ -77,6 +78,39 @@ class CommandExecutionServiceTests(unittest.TestCase):
             deps=deps,
         )
         scope_assert.assert_not_called()
+
+    def test_enriches_scope_before_handler_execution(self) -> None:
+        captured_scope: list[CommandScope] = []
+        deps = self._deps()
+        deps = CommandExecutionDependencies(
+            **{
+                **deps.__dict__,
+                "enrich_scope": lambda _session, _tenant, _command_name, _arguments, _payload, _scope: CommandScope(
+                    project_id="project-a",
+                    project_keys=("PRJ",),
+                    channel_id="c1",
+                ),
+                "build_handler_registry": lambda _context: {
+                    "status": (
+                        lambda ctx: captured_scope.append(ctx.scope)
+                        or DiscordCommandResponse(ok=True, command="status", message="ok"),
+                    )
+                },
+            }
+        )
+
+        execute_tenant_command(
+            tenant_id="tenant-a",
+            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
+            session=MagicMock(),
+            defer_seed_issues=False,
+            require_ask_confirmation=False,
+            allow_plain_ask=False,
+            ingress_source="discord",
+            deps=deps,
+        )
+
+        self.assertEqual(captured_scope[0].project_id, "project-a")
 
 
 if __name__ == "__main__":
