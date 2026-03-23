@@ -25,6 +25,10 @@ from orchestrator.core.decision_reply_service import (
     is_machine_generated_decision_comment,
     unresolved_question_feedback_for_cycle,
 )
+from orchestrator.core.followup_context_service import (
+    FOLLOWUP_CONTEXT_DECISION_GATE,
+    close_followup_contexts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +202,13 @@ def stage_handle_comment_decision_reply(
             enqueued=False,
             reason="decision_reply_failed",
             webhook_event=context.webhook_event,
+        )
+    if str(getattr(decision_result, "classification", "") or "").strip().lower() == "clear":
+        close_followup_contexts(
+            session=session,
+            tenant_id=context.tenant_id,
+            context_type=FOLLOWUP_CONTEXT_DECISION_GATE,
+            issue_key=context.issue_key,
         )
     session.commit()
     return jira_webhook_response(
