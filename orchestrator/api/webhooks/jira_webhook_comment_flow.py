@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 
 from fastapi import HTTPException
@@ -18,6 +19,7 @@ from orchestrator.api.webhooks.contracts import (
 from orchestrator.api.webhooks import jira_webhook_precheck
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.codex_runtime import CodexRuntimeError
+from orchestrator.core.decision_effect_service import publish_decision_effects
 from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
     capture_decision_reply,
@@ -155,6 +157,7 @@ def stage_handle_comment_decision_reply(
     try:
         capture = capture_decision_reply(
             session=session,
+            settings=settings,
             tenant=context.tenant,
             project=context.project,
             issue_key=context.issue_key,
@@ -164,6 +167,20 @@ def stage_handle_comment_decision_reply(
             actor_ref=author_account_id,
             metadata={"webhook_event": context.webhook_event},
         )
+        capture_effect_ids = tuple(getattr(capture, "effect_ids", ()) or ())
+        if capture_effect_ids:
+            publish_decision_effects(
+                session=session,
+                effect_ids=capture_effect_ids,
+                publish_jira_comment_fn=lambda comment: post_jira_comment(
+                    session=session,
+                    tenant=context.tenant,
+                    issue_key=context.issue_key,
+                    comment=comment,
+                    settings=settings,
+                ),
+                occurred_at=datetime.now(timezone.utc),
+            )
         decision_result = jira_webhook_precheck.evaluate_precheck_decision_with_labels(
             context=context,
             session=session,
@@ -184,6 +201,7 @@ def stage_handle_comment_decision_reply(
             reason="decision_reply_failed",
             webhook_event=context.webhook_event,
         )
+    session.commit()
     return jira_webhook_response(
         context,
         enqueued=False,
