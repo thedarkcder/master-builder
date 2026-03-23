@@ -10,8 +10,12 @@ from sqlalchemy.orm import Session
 from orchestrator.api.discord.shared.state_repository import (
     resolve_project_for_discord_channel,
     save_project_allowlist_requests,
-    save_seed_followups,
     tenant_allowed_channel_ids,
+)
+from orchestrator.core.followup_context_service import (
+    FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
+    close_followup_contexts,
+    upsert_followup_context,
 )
 from orchestrator.core.discord.policy import (
     can_execute_sensitive_command,
@@ -19,7 +23,7 @@ from orchestrator.core.discord.policy import (
     normalize_allowlist_requests,
     normalize_allowlisted_user_ids,
 )
-from orchestrator.storage.models import Project, Tenant
+from orchestrator.storage.models import FollowupContext, Project, Tenant
 
 SENSITIVE_COMMANDS = {"run", "cancel", "retry", "reply", "promote", "issues"}
 PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "pm", "gap", "request", "bug"}
@@ -420,53 +424,35 @@ def store_seed_followup_context(
     normalized_questions = [value.strip() for value in questions if value and value.strip()]
     normalized_request_id = (request_id or "").strip() or uuid4().hex
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    entries = tenant_seed_followups(tenant)
-    updated_entries: list[dict] = []
-    stored = False
-    for entry in entries:
-        if entry.get("request_id") != normalized_request_id:
-            updated_entries.append(entry)
-            continue
-        updated_entries.append(
-            {
-                "request_id": normalized_request_id,
-                "user_id": user_id.strip() or entry.get("user_id"),
-                "channel_ids": normalized_channel_ids or entry.get("channel_ids", []),
-                "questions": normalized_questions or entry.get("questions", []),
-                "issue_keys": normalized_issue_keys or entry.get("issue_keys", []),
-                "project_id": project_id.strip() or entry.get("project_id"),
-                "project_key": project_key.strip().upper() or entry.get("project_key"),
-                "prompt_markdown": prompt_markdown.strip() or entry.get("prompt_markdown", ""),
-                "updated_at": now_iso,
-            }
-        )
-        stored = True
-    if not stored:
-        updated_entries.append(
-            {
-                "request_id": normalized_request_id,
-                "user_id": user_id.strip() or None,
-                "channel_ids": normalized_channel_ids,
-                "questions": normalized_questions,
-                "issue_keys": normalized_issue_keys,
-                "project_id": project_id.strip() or None,
-                "project_key": project_key.strip().upper() or None,
-                "prompt_markdown": prompt_markdown.strip(),
-                "updated_at": now_iso,
-            }
-        )
-
-    discord_config = dict(tenant.discord_config or {})
-    discord_config["seed_followups"] = updated_entries[-MAX_PENDING_SEED_FOLLOWUPS:]
-    tenant.discord_config = discord_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
+    metadata = {
+        "request_id": normalized_request_id,
+        "user_id": user_id.strip() or None,
+        "channel_ids": normalized_channel_ids,
+        "questions": normalized_questions,
+        "issue_keys": normalized_issue_keys,
+        "project_id": project_id.strip() or None,
+        "project_key": project_key.strip().upper() or None,
+        "prompt_markdown": prompt_markdown.strip(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    root_channel_id = normalized_channel_ids[0] if normalized_channel_ids else None
+    thread_channel_id = next((value for value in normalized_channel_ids if value != root_channel_id), None)
+    upsert_followup_context(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        project_id=project_id.strip() or None,
+        context_type=FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
+        channel_id=root_channel_id,
+        thread_channel_id=thread_channel_id,
+        request_id=normalized_request_id,
+        metadata=metadata,
+    )
     return normalized_request_id
 
 
 def find_seed_followup_context(
     *,
+    session: Session,
     tenant: Tenant,
     channel_id: str,
     user_id: str | None = None,
@@ -475,14 +461,35 @@ def find_seed_followup_context(
     normalized_channel_id = channel_id.strip()
     if not normalized_channel_id:
         return None
-    entries = tenant_seed_followups(tenant)
     now = datetime.now(timezone.utc)
+    rows = (
+        session.execute(
+            select(FollowupContext)
+            .where(
+                FollowupContext.tenant_id == tenant.tenant_id,
+                FollowupContext.context_type == FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
+                FollowupContext.status == "active",
+            )
+            .order_by(FollowupContext.updated_at.desc())
+        )
+        .scalars()
+        .all()
+    )
     active_entries: list[dict] = []
-    for entry in reversed(entries):
+    for row in rows:
+        entry = dict(row.metadata_json or {})
+        entry.setdefault("request_id", row.request_id)
+        entry.setdefault("project_id", row.project_id)
+        channel_ids = [
+            value
+            for value in (str(row.channel_id or "").strip(), str(row.thread_channel_id or "").strip())
+            if value
+        ]
+        if channel_ids:
+            entry["channel_ids"] = channel_ids
         if _is_seed_followup_stale(entry, now=now):
             continue
         active_entries.append(entry)
-        channel_ids = entry.get("channel_ids")
         if not isinstance(channel_ids, list):
             continue
         if normalized_channel_id in channel_ids:
@@ -518,20 +525,11 @@ def clear_seed_followup_context(
     normalized_request_id = request_id.strip()
     if not normalized_request_id:
         return
-    entries = tenant_seed_followups(tenant)
-    kept_entries = [entry for entry in entries if entry.get("request_id") != normalized_request_id]
-    removed_entry = next((entry for entry in entries if entry.get("request_id") == normalized_request_id), None)
-
-    removed_channel_ids: set[str] = set()
-    if isinstance(removed_entry, dict):
-        removed_channels = removed_entry.get("channel_ids")
-        if isinstance(removed_channels, list):
-            removed_channel_ids = {str(value).strip() for value in removed_channels if str(value).strip()}
-    save_seed_followups(
+    close_followup_contexts(
         session=session,
-        tenant=tenant,
-        entries=kept_entries,
-        removed_channel_ids=removed_channel_ids,
+        tenant_id=tenant.tenant_id,
+        context_type=FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
+        request_id=normalized_request_id,
     )
 
 
@@ -544,42 +542,41 @@ def remove_issue_key_from_seed_followups(
     normalized_issue_key = issue_key.strip().upper()
     if not normalized_issue_key:
         return 0, 0
-    entries = tenant_seed_followups(tenant)
-    updated_entries: list[dict] = []
-    removed_channel_ids: set[str] = set()
+    rows = (
+        session.execute(
+            select(FollowupContext)
+            .where(
+                FollowupContext.tenant_id == tenant.tenant_id,
+                FollowupContext.context_type == FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
+                FollowupContext.status == "active",
+            )
+            .order_by(FollowupContext.updated_at.desc())
+        )
+        .scalars()
+        .all()
+    )
     removed_contexts = 0
     removed_issue_refs = 0
 
-    for entry in entries:
+    for row in rows:
+        entry = dict(row.metadata_json or {})
         raw_issue_keys = entry.get("issue_keys")
         issue_keys = [str(value).strip().upper() for value in raw_issue_keys if str(value).strip()] if isinstance(raw_issue_keys, list) else []
         if not issue_keys:
-            updated_entries.append(entry)
             continue
         kept_issue_keys = [key for key in issue_keys if key != normalized_issue_key]
         removed_for_entry = len(issue_keys) - len(kept_issue_keys)
         if removed_for_entry <= 0:
-            updated_entries.append(entry)
             continue
         removed_issue_refs += removed_for_entry
         if not kept_issue_keys:
             removed_contexts += 1
-            raw_channels = entry.get("channel_ids")
-            if isinstance(raw_channels, list):
-                removed_channel_ids.update(
-                    str(value).strip() for value in raw_channels if str(value).strip()
-                )
+            row.status = "closed"
+            row.closed_at = datetime.now(timezone.utc)
+            row.updated_at = datetime.now(timezone.utc)
             continue
-        updated_entry = dict(entry)
-        updated_entry["issue_keys"] = kept_issue_keys
-        updated_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
-        updated_entries.append(updated_entry)
-
-    if removed_contexts or removed_issue_refs:
-        save_seed_followups(
-            session=session,
-            tenant=tenant,
-            entries=updated_entries,
-            removed_channel_ids=removed_channel_ids,
-        )
+        entry["issue_keys"] = kept_issue_keys
+        entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        row.metadata_json = entry
+        row.updated_at = datetime.now(timezone.utc)
     return removed_contexts, removed_issue_refs

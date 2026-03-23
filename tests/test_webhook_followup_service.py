@@ -115,6 +115,37 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self.assertEqual(len(transport.actions), 1)
         self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
         self.assertEqual(transport.actions[0].issue_key, "MAB-159")
+        self.assertEqual(transport.actions[0].followup_context_type, "ask_thread")
+
+    def test_command_followup_marks_decision_gate_threads_with_explicit_context(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(
+            side_effect=HTTPException(
+                status_code=409,
+                detail=(
+                    "Decision Gate still needs clarification for `GP-124`.\n"
+                    "Reason: Clarify relink policy"
+                ),
+            )
+        )
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!run GP-124",
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        self.assertEqual(len(transport.actions), 1)
+        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self.assertEqual(transport.actions[0].issue_key, "GP-124")
+        self.assertEqual(transport.actions[0].followup_context_type, "decision_gate")
 
     def test_command_followup_uses_thread_reply_transport_when_replying(self) -> None:
         session = MagicMock()

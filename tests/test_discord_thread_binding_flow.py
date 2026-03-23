@@ -36,14 +36,15 @@ class DiscordThreadBindingFlowTests(unittest.TestCase):
                 side_effect=HTTPException(
                     status_code=409,
                     detail=(
-                        "Good To Do still needs clarification for GP-114.\n"
-                        "Missing criteria: Dependencies and risks are identified"
+                        "Decision Gate still needs clarification for `GP-114`.\n"
+                        "Reason: Dependencies and risks are identified."
                     ),
                 ),
             ),
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup_runtime.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup_threading.upsert_followup_context") as upsert_context_mock,
             patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as followup_client_cls,
             patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as interaction_followup_mock,
         ):
@@ -65,14 +66,10 @@ class DiscordThreadBindingFlowTests(unittest.TestCase):
             )
 
         interaction_followup_mock.assert_not_called()
-        self.assertEqual(
-            (project.discord_config or {}).get("thread_issue_by_channel_id", {}).get("thread-gp114"),
-            "GP-114",
-        )
-        self.assertEqual(
-            (tenant.discord_config or {}).get("thread_issue_by_channel_id", {}).get("thread-gp114"),
-            "GP-114",
-        )
+        upsert_context_mock.assert_called_once()
+        self.assertEqual(upsert_context_mock.call_args.kwargs["context_type"], "decision_gate")
+        self.assertEqual(upsert_context_mock.call_args.kwargs["thread_channel_id"], "thread-gp114")
+        self.assertEqual(upsert_context_mock.call_args.kwargs["issue_key"], "GP-114")
 
         gateway_settings = SimpleNamespace(secrets_encryption_key="enc")
         with patch("orchestrator.core.discord.gateway_listener.create_session_factory", return_value=lambda: nullcontext(session)):
@@ -81,8 +78,10 @@ class DiscordThreadBindingFlowTests(unittest.TestCase):
 
         gateway_response = SimpleNamespace(command="reply", message="ok", data={"recheck_required": False})
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+                return_value=SimpleNamespace(context_type="decision_gate", issue_key="GP-114"),
+            ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=gateway_response) as execute_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),

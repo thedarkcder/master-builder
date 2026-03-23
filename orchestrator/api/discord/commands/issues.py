@@ -97,6 +97,7 @@ def dispatch_issues_command(
                 detail="Follow-up replies require a Discord channel context",
             )
         context = find_seed_followup_context(
+            session=session,
             tenant=tenant,
             channel_id=payload.channel_id,
             user_id=normalized_user_id,

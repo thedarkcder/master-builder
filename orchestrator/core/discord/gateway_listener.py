@@ -36,7 +36,8 @@ from orchestrator.api.discord.interactions.auth import (
 )
 from orchestrator.api.discord.interactions.dispatcher import DiscordInteractionDispatchDeps
 from orchestrator.api.discord.interactions.followup import (
-    _decision_gate_issue_for_thread as _interaction_decision_gate_issue_for_thread,
+    _resolve_followup_context as _interaction_resolve_followup_context,
+    _resolve_followup_reaction as _interaction_resolve_followup_reaction,
     _resolve_thread_channel_for_reply as _interaction_resolve_thread_channel_for_reply,
     _run_discord_application_command_followup,
     _run_discord_ask_confirmation_followup,
@@ -57,7 +58,6 @@ from orchestrator.api.discord.shared.followup_format import (
     resolve_tenant_jira_browse_base_url,
 )
 from orchestrator.api.discord.shared.state import (
-    find_seed_followup_context,
     live_voice_linked_channel_ids_from_discord_config,
 )
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
@@ -74,16 +74,12 @@ from orchestrator.core.discord.personas import (
     format_voice_room_persona_label,
 )
 from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.decision_reply_service import active_case_and_cycle_for_issue
-from orchestrator.core.run_human_input_service import (
-    pending_human_input_for_thread,
-    resume_run_from_human_input_reply,
-)
+from orchestrator.core.followup_context_service import resolve_followup_context, resolve_followup_reaction
+from orchestrator.core.run_human_input_service import pending_human_input_for_request_id, resume_run_from_human_input_reply
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.discord.thread_context import get_thread_issue_key, remove_thread_issue_key
 from orchestrator.core.voice import VoiceTranscriptionError, download_audio_bytes, transcribe_audio_bytes
 from orchestrator.core.voice.tts import VoiceReplyError, synthesize_reply_audio
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
@@ -240,46 +236,17 @@ def _project_seed_followup_thread_project_keys(*, session, tenant_id: str) -> di
 
 
 def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str) -> str | None:  # noqa: ANN001
-    normalized_channel_id = str(channel_id or "").strip()
-    if not normalized_channel_id:
+    context = resolve_followup_context(
+        session=session,
+        tenant_id=tenant_id,
+        channel_id=channel_id,
+    )
+    if context is None or str(getattr(context, "context_type", "") or "").strip() != "decision_gate":
         return None
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
-        )
-    ).scalars().all()
-    for project in projects:
-        issue_key = get_thread_issue_key(discord_config=project.discord_config, channel_id=normalized_channel_id)
-        if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
-            _, cycle = active_case_and_cycle_for_issue(
-                session=session,
-                tenant_id=tenant_id,
-                issue_key=issue_key,
-            )
-            if cycle is not None:
-                return issue_key
-            project.discord_config = remove_thread_issue_key(
-                discord_config=project.discord_config,
-                channel_id=normalized_channel_id,
-            )
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
+    issue_key = str(getattr(context, "issue_key", "") or "").strip().upper()
+    if not issue_key or _ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
         return None
-    issue_key = get_thread_issue_key(discord_config=tenant.discord_config, channel_id=normalized_channel_id)
-    if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
-        _, cycle = active_case_and_cycle_for_issue(
-            session=session,
-            tenant_id=tenant_id,
-            issue_key=issue_key,
-        )
-        if cycle is not None:
-            return issue_key
-        tenant.discord_config = remove_thread_issue_key(
-            discord_config=tenant.discord_config,
-            channel_id=normalized_channel_id,
-        )
-    return None
+    return issue_key
 
 
 class DiscordGatewayListener:
@@ -457,7 +424,8 @@ class DiscordGatewayListener:
             find_focused_discord_option=_find_focused_discord_option,
             discord_issue_autocomplete_choices=_discord_issue_autocomplete_choices,
             resolve_thread_channel_for_reply=_interaction_resolve_thread_channel_for_reply,
-            decision_gate_issue_for_thread=_interaction_decision_gate_issue_for_thread,
+            resolve_followup_context=_interaction_resolve_followup_context,
+            resolve_followup_reaction=_interaction_resolve_followup_reaction,
             run_discord_ask_confirmation_followup=_run_discord_ask_confirmation_followup,
             run_discord_command_followup=_run_discord_command_followup,
             run_discord_decision_gate_reply_followup=_run_discord_decision_gate_reply_followup,
@@ -477,12 +445,10 @@ class DiscordGatewayListener:
                 bot_token=bot_token,
                 **kwargs,
             ),
-            pending_human_input_for_thread=pending_human_input_for_thread,
+            load_pending_human_input_request=pending_human_input_for_request_id,
             resume_run_from_human_input_reply=resume_run_from_human_input_reply,
-            decision_gate_issue_for_thread=_decision_gate_issue_for_thread,
-            project_seed_followup_thread_ids=_project_seed_followup_thread_ids,
-            project_seed_followup_thread_project_keys=_project_seed_followup_thread_project_keys,
-            find_seed_followup_context=find_seed_followup_context,
+            resolve_followup_context=resolve_followup_context,
+            resolve_followup_reaction=resolve_followup_reaction,
             execute_tenant_discord_command=execute_tenant_discord_command,
             resolve_tenant_jira_browse_base_url=resolve_tenant_jira_browse_base_url,
             build_command_followup_message=build_command_followup_message,

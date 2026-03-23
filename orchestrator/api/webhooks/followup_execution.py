@@ -29,6 +29,19 @@ ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 ISSUE_KEY_IN_TEXT_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 
+def _followup_context_type_for_message(*, command_name: str | None, content: str, issue_key: str | None) -> str:
+    normalized_command_name = str(command_name or "").strip().lower()
+    normalized_content = str(content or "").strip()
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    if normalized_issue_key and (
+        normalized_command_name == "reply"
+        or "Decision Gate still needs clarification for `" in normalized_content
+        or "Good To Do still needs clarification for `" in normalized_content
+    ):
+        return "decision_gate"
+    return "ask_thread"
+
+
 @dataclass(frozen=True)
 class DiscordFollowupExecutionDeps:
     session_factory: Callable[[], AbstractContextManager[Session]]
@@ -149,6 +162,7 @@ async def run_discord_command_followup(
                                             content=content,
                                             components=components,
                                             issue_key=issue_key,
+                                            followup_context_type="ask_thread",
                                         )
                                     )
                                     sent_to_thread = True
@@ -246,6 +260,11 @@ async def run_discord_command_followup(
                                     content=content,
                                     components=components,
                                     issue_key=issue_key,
+                                    followup_context_type=_followup_context_type_for_message(
+                                        command_name=None,
+                                        content=content,
+                                        issue_key=issue_key,
+                                    ),
                                 )
                             )
                             sent_to_thread = True

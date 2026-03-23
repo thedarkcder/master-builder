@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from orchestrator.api.routes.webhook_discord_interactions import ingest_discord_interaction
+from orchestrator.core.followup_context_service import FollowupReaction
 
 pytestmark = pytest.mark.contract
 
@@ -44,7 +45,8 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             "_run_discord_command_followup": AsyncMock(),
             "_run_discord_decision_gate_reply_followup": AsyncMock(),
             "_resolve_thread_channel_for_reply": MagicMock(side_effect=lambda **kwargs: kwargs["channel_id"]),
-            "_decision_gate_issue_for_thread": MagicMock(return_value=None),
+            "_resolve_followup_context": MagicMock(return_value=None),
+            "_resolve_followup_reaction": MagicMock(return_value=None),
             "_run_discord_application_command_followup": AsyncMock(),
             "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_schedule_and_track)),
             "ASK_REPLY_OPEN_CUSTOM_ID": "ask.reply.open",
@@ -204,8 +206,7 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"Missing interaction user_id", missing_user.body)
 
     async def test_modal_submit_routes_decision_gate_thread_replies_to_gate_handler(self) -> None:
-        run_decision_gate_followup = AsyncMock()
-        run_ask_followup = AsyncMock()
+        run_command_followup = AsyncMock()
         await self._call(
             {
                 "type": 5,
@@ -215,16 +216,21 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
                 "data": {"custom_id": "ask.reply.m1"},
                 "user": {"id": "u-direct"},
             },
-            _decision_gate_issue_for_thread=MagicMock(return_value=("tenant-1", "MAB-158")),
-            _run_discord_decision_gate_reply_followup=run_decision_gate_followup,
-            _run_discord_command_followup=run_ask_followup,
+            _find_tenant_for_discord_channel=MagicMock(return_value=SimpleNamespace(tenant_id="tenant-1")),
+            _resolve_followup_context=MagicMock(return_value=SimpleNamespace(context_type="decision_gate", issue_key="MAB-158")),
+            _resolve_followup_reaction=MagicMock(
+                return_value=FollowupReaction(
+                    kind="command",
+                    command_text="!reply",
+                    command_params={"issue_key": "MAB-158", "reply_text": "next step"},
+                )
+            ),
+            _run_discord_command_followup=run_command_followup,
         )
-        run_decision_gate_followup.assert_called_once()
-        run_ask_followup.assert_not_called()
+        run_command_followup.assert_called_once()
 
     async def test_modal_submit_resolves_reply_context_to_thread_and_routes_issue_bound_replies(self) -> None:
-        run_decision_gate_followup = AsyncMock()
-        run_ask_followup = AsyncMock()
+        run_command_followup = AsyncMock()
         await self._call(
             {
                 "type": 5,
@@ -235,21 +241,27 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
                 "user": {"id": "u-direct"},
             },
             _resolve_thread_channel_for_reply=MagicMock(return_value="thread-1"),
-            _decision_gate_issue_for_thread=MagicMock(return_value=("tenant-1", "MAB-158")),
-            _run_discord_decision_gate_reply_followup=run_decision_gate_followup,
-            _run_discord_command_followup=run_ask_followup,
+            _find_tenant_for_discord_channel=MagicMock(return_value=SimpleNamespace(tenant_id="tenant-1")),
+            _resolve_followup_context=MagicMock(return_value=SimpleNamespace(context_type="decision_gate", issue_key="MAB-158")),
+            _resolve_followup_reaction=MagicMock(
+                return_value=FollowupReaction(
+                    kind="command",
+                    command_text="!reply",
+                    command_params={"issue_key": "MAB-158", "reply_text": "next step"},
+                )
+            ),
+            _run_discord_command_followup=run_command_followup,
         )
-        run_decision_gate_followup.assert_called_once_with(
+        run_command_followup.assert_called_once_with(
             tenant_id="tenant-1",
             user_id="u-direct",
             channel_id="thread-1",
-            issue_key="MAB-158",
-            reply_text="next step",
+            command_text="!reply",
+            command_params={"issue_key": "MAB-158", "reply_text": "next step"},
             application_id="app",
             interaction_token="tok",
             reply_to_message_id="m1",
         )
-        run_ask_followup.assert_not_called()
 
     async def test_modal_submit_resolves_reply_context_to_thread_for_generic_ask_followups(self) -> None:
         run_ask_followup = AsyncMock()
@@ -263,14 +275,19 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
                 "user": {"id": "u-direct"},
             },
             _resolve_thread_channel_for_reply=MagicMock(return_value="thread-1"),
-            _decision_gate_issue_for_thread=MagicMock(return_value=None),
+            _find_tenant_for_discord_channel=MagicMock(return_value=SimpleNamespace(tenant_id="tenant-1")),
+            _resolve_followup_context=MagicMock(return_value=SimpleNamespace(context_type="ask_thread")),
+            _resolve_followup_reaction=MagicMock(
+                return_value=FollowupReaction(kind="command", command_text="!ask next step")
+            ),
             _run_discord_command_followup=run_ask_followup,
         )
         run_ask_followup.assert_called_once_with(
-            tenant_id=None,
+            tenant_id="tenant-1",
             user_id="u-direct",
             channel_id="thread-1",
             command_text="!ask next step",
+            command_params=None,
             application_id="app",
             interaction_token="tok",
             reply_to_message_id="m1",

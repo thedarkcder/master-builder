@@ -24,7 +24,10 @@ from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEven
 from orchestrator.core.decision_reply_service import (
     unresolved_question_feedback_for_cycle,
 )
-from orchestrator.core.discord.thread_context import remove_thread_issue_key
+from orchestrator.core.followup_context_service import (
+    FOLLOWUP_CONTEXT_DECISION_GATE,
+    close_followup_contexts,
+)
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.precheck_question_lock import (
@@ -663,15 +666,13 @@ def dispatch_run_control_command(
             )
 
         thread_channel_id = str(payload.channel_id or "").strip()
-        if thread_channel_id:
-            project.discord_config = remove_thread_issue_key(
-                discord_config=project.discord_config,
-                channel_id=thread_channel_id,
-            )
-            tenant.discord_config = remove_thread_issue_key(
-                discord_config=tenant.discord_config,
-                channel_id=thread_channel_id,
-            )
+        close_followup_contexts(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            context_type=FOLLOWUP_CONTEXT_DECISION_GATE,
+            issue_key=issue_key,
+            thread_channel_id=thread_channel_id or None,
+        )
 
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
         ensure_issue_is_executable(

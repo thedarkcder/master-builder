@@ -481,6 +481,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
             patch("orchestrator.api.discord.interactions.followup._project_ask_thread_channel_ids_for_tenant", return_value=set()),
+            patch("orchestrator.api.discord.interactions.followup_threading.upsert_followup_context") as upsert_mock,
             patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
         ):
             client = MagicMock()
@@ -495,10 +496,12 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
                 user_id="u1",
                 content="content",
                 issue_key="MAB-159",
+                followup_context_type="decision_gate",
             )
 
-        mapping = project.discord_config.get("decision_gate_thread_issue_by_channel_id", {})
-        self.assertEqual(mapping.get("thread-1"), "MAB-159")
+        self.assertEqual(upsert_mock.call_args.kwargs["context_type"], "decision_gate")
+        self.assertEqual(upsert_mock.call_args.kwargs["issue_key"], "MAB-159")
+        self.assertEqual(upsert_mock.call_args.kwargs["thread_channel_id"], "thread-1")
         session.commit.assert_called_once()
 
     def test_send_discord_ask_response_with_thread_requires_token_and_message_id(self) -> None:
@@ -563,7 +566,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         client.post_message.assert_called_once()
         client.create_thread_from_message.assert_not_called()
-        session.commit.assert_not_called()
+        session.commit.assert_called_once()
 
     def test_send_discord_ask_response_with_thread_project_none_branch(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_ask_response_with_thread
@@ -608,6 +611,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup_threading.upsert_followup_context") as upsert_mock,
         ):
             client = MagicMock()
             client.post_message.side_effect = [{"id": "seed-msg"}, {"id": "thread-msg"}]
@@ -624,8 +628,9 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
                     questions=["q1", ""],
                 )
         self.assertIn("thread-2", project.discord_config["seed_followup_thread_channel_ids"])
-        self.assertIn("ch-1", tenant.discord_config["seed_followups"][0]["channel_ids"])
-        self.assertIn("thread-2", tenant.discord_config["seed_followups"][0]["channel_ids"])
+        self.assertEqual(upsert_mock.call_args.kwargs["context_type"], "seed_followup")
+        self.assertEqual(upsert_mock.call_args.kwargs["thread_channel_id"], "thread-2")
+        self.assertEqual(upsert_mock.call_args.kwargs["request_id"], "req-1")
         session.commit.assert_called_once()
 
     def test_send_discord_seed_followup_with_thread_reuses_existing_thread(self) -> None:
@@ -657,7 +662,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         client.post_message.assert_called_once()
         client.create_thread_from_message.assert_not_called()
-        session.commit.assert_not_called()
+        session.commit.assert_called_once()
 
     def test_send_discord_seed_followup_with_thread_requires_token_and_message_id(self) -> None:
         from orchestrator.api.discord.interactions.followup import _send_discord_seed_followup_with_thread
@@ -718,6 +723,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._project_seed_followup_thread_channel_ids_for_tenant", return_value=set()),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup_threading.upsert_followup_context") as upsert_mock,
             patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as client_cls,
         ):
             client = MagicMock()
@@ -737,8 +743,7 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         # Existing thread id branch (already present) should not duplicate.
         self.assertEqual(project.discord_config["seed_followup_thread_channel_ids"], ["thread-2"])
-        # Non-dict and non-matching request entries are preserved.
-        self.assertEqual(tenant.discord_config["seed_followups"][0], {"request_id": "other", "channel_ids": ["c0"]})
+        self.assertEqual(upsert_mock.call_args.kwargs["request_id"], "req-missing")
         session.commit.assert_called_once()
 
     def test_async_followup_wrappers_invoke_service(self) -> None:
@@ -974,19 +979,11 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="tenant-1")
-        project = SimpleNamespace(
-            discord_config={
-                "decision_gate_thread_issue_by_channel_id": {
-                    "thread-1": "mab-158",
-                }
-            }
-        )
         with (
-            patch("orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel", return_value=tenant),
-            patch("orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup.resolve_tenant_for_discord_channel", return_value=tenant),
             patch(
-                "orchestrator.api.discord.interactions.followup_state.active_case_and_cycle_for_issue",
-                return_value=(object(), SimpleNamespace(cycle_id="cycle-1", status="open")),
+                "orchestrator.api.discord.interactions.followup._resolve_followup_context_impl",
+                return_value=SimpleNamespace(context_type="decision_gate", issue_key="mab-158"),
             ),
         ):
             self.assertEqual(
@@ -998,21 +995,12 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         from orchestrator.api.discord.interactions.followup import _decision_gate_issue_for_thread
 
         session = MagicMock()
-        tenant = SimpleNamespace(
-            tenant_id="tenant-1",
-            discord_config={
-                "thread_issue_by_channel_id": {
-                    "thread-2": "mab-200",
-                }
-            },
-        )
-        project = SimpleNamespace(discord_config={})
+        tenant = SimpleNamespace(tenant_id="tenant-1")
         with (
-            patch("orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel", return_value=tenant),
-            patch("orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel", return_value=project),
+            patch("orchestrator.api.discord.interactions.followup.resolve_tenant_for_discord_channel", return_value=tenant),
             patch(
-                "orchestrator.api.discord.interactions.followup_state.active_case_and_cycle_for_issue",
-                return_value=(object(), SimpleNamespace(cycle_id="cycle-1", status="open")),
+                "orchestrator.api.discord.interactions.followup._resolve_followup_context_impl",
+                return_value=SimpleNamespace(context_type="decision_gate", issue_key="mab-200"),
             ),
         ):
             self.assertEqual(
@@ -1025,25 +1013,11 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
 
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="tenant-1", discord_config={})
-        project = SimpleNamespace(
-            discord_config={
-                "decision_gate_thread_issue_by_channel_id": {
-                    "thread-3": "mab-201",
-                }
-            }
-        )
         with (
-            patch("orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel", return_value=tenant),
-            patch("orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel", return_value=project),
-            patch(
-                "orchestrator.api.discord.interactions.followup_state.active_case_and_cycle_for_issue",
-                return_value=(object(), None),
-            ),
+            patch("orchestrator.api.discord.interactions.followup.resolve_tenant_for_discord_channel", return_value=tenant),
+            patch("orchestrator.api.discord.interactions.followup._resolve_followup_context_impl", return_value=None),
         ):
             self.assertIsNone(_decision_gate_issue_for_thread(session=session, channel_id="thread-3"))
-
-        self.assertEqual(project.discord_config["thread_issue_by_channel_id"], {})
-        self.assertEqual(project.discord_config["decision_gate_thread_issue_by_channel_id"], {})
 
     def test_decision_gate_reply_followup_rechecks_before_retry(self) -> None:
         from orchestrator.api.discord.interactions.followup import _run_discord_decision_gate_reply_followup_blocking
