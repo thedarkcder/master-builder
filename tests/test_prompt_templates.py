@@ -43,6 +43,20 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("XCUITest", prompt_text)
         self.assertIn('Never output "linux" when mandatory macos signals exist', prompt_text)
 
+    def test_pm_user_prompt_defines_decision_state_evidence_contract(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "pm_user.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("`decision_state` means the persisted Decision Gate / clarification state", prompt_text)
+        self.assertIn("The only authoritative way to determine `decision_state` is the `decision.read_state` tool", prompt_text)
+        self.assertIn('Do not emit `missing_evidence_sources=["decision_state"]` unless you actually called `decision.read_state`', prompt_text)
+        self.assertIn("If `decision.read_state` succeeds and reports that no prior decision state exists, that is a valid result", prompt_text)
+
     def test_test_user_prompt_requires_changed_scope_before_full_suite(self) -> None:
         prompt_path = (
             Path(__file__).resolve().parents[1]

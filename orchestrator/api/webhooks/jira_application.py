@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -14,11 +15,15 @@ from orchestrator.api.webhooks.jira_enqueue_planner import (
 from orchestrator.api.webhooks.jira_event_classifier import evaluate_jira_trigger_state
 from orchestrator.api.webhooks.jira_webhook_types import (
     JiraWebhookContext,
+    JiraWebhookContextSnapshot,
+    hydrate_jira_webhook_context,
     jira_webhook_response,
+    snapshot_jira_webhook_context,
 )
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.communications import HttpJsonResponseAction, IngressResult, TransportAction, TransportEnvelope
 from orchestrator.core.observability import reset_log_context, set_log_context
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
 
 logger = logging.getLogger(__name__)
@@ -72,10 +77,11 @@ async def build_jira_webhook_ingress_result(
             session=session,
             settings=settings,
         )
+        context_snapshot = snapshot_jira_webhook_context(context=context)
         return _http_json_result(
-            _process_jira_webhook_context(
-                context=context,
-                session=session,
+            await asyncio.to_thread(
+                _process_jira_webhook_context_in_thread,
+                context_snapshot=context_snapshot,
                 settings=settings,
             )
         )
@@ -132,6 +138,27 @@ def _process_jira_webhook_context(
         content=run_plan.content,
         actions=run_plan.actions,
     )
+
+
+def _process_jira_webhook_context_in_thread(
+    *,
+    context_snapshot: JiraWebhookContextSnapshot,
+    settings,  # noqa: ANN001
+) -> JiraWebhookPlan:
+    session_factory = create_session_factory(getattr(settings, "database_url", None))
+    session = session_factory()
+    try:
+        context = hydrate_jira_webhook_context(
+            snapshot=context_snapshot,
+            session=session,
+        )
+        return _process_jira_webhook_context(
+            context=context,
+            session=session,
+            settings=settings,
+        )
+    finally:
+        session.close()
 
 
 def _http_json_result(plan: JiraWebhookPlan) -> IngressResult:
