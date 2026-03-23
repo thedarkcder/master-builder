@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
 from orchestrator.core.worker.queue_selector import (
+    claim_next_queued_run,
     coerce_positive_int,
     select_next_queued_run,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
 
 
 class WorkerQueueSelectorTests(unittest.TestCase):
@@ -69,7 +70,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertEqual(result.terminal_run.last_error, "Tenant not found for queued run")
             self.assertIsNotNone(result.terminal_run.finished_at)
 
-    def test_select_next_queued_run_skips_concurrency_limited_tenant(self) -> None:
+    def test_claim_next_queued_run_skips_concurrency_limited_tenant(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.add(
@@ -156,11 +157,12 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             )
             session.commit()
 
-            result = select_next_queued_run(
+            result = claim_next_queued_run(
                 session,
                 queued_status="queued",
                 running_status="running",
                 failed_status="failed",
+                worker_service_instance_id="node-a:1234",
             )
 
             self.assertIsNone(result.terminal_run)
@@ -168,6 +170,9 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertIsNotNone(result.tenant)
             self.assertEqual(result.run.run_id, "run-b-queued")
             self.assertEqual(result.tenant.tenant_id, "tenant-b")
+            self.assertEqual(result.run.status, "running")
+            claim_row = session.get(TenantRunClaim, "tenant-b")
+            self.assertIsNotNone(claim_row)
 
     def test_select_next_queued_run_applies_project_overrides_when_project_id_unset(self) -> None:
         now = datetime.now(timezone.utc)
@@ -282,7 +287,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
 
             self.assertIsNone(result.terminal_run)
             self.assertIsNotNone(result.run)
-            self.assertEqual(result.run.run_id, "run-b-queued")
+            self.assertEqual(result.run.run_id, "run-a-queued-unbound")
 
     def test_select_next_queued_run_skips_incompatible_worker_capabilities(self) -> None:
         now = datetime.now(timezone.utc)

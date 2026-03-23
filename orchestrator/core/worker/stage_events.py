@@ -68,6 +68,28 @@ def decision_gate_required_update(
     )
 
 
+def run_not_ready_update(
+    *,
+    tenant_id: str,
+    issue_key: str | None,
+    run_id: str,
+    jira_url: str | None,
+    run_url: str | None = None,
+    reason: str,
+    next_steps: Iterable[str],
+) -> dict[str, str]:
+    return _build_stage_update(
+        tenant_id=tenant_id,
+        issue_key=issue_key,
+        run_id=run_id,
+        stage="run_not_ready",
+        jira_url=jira_url,
+        run_url=run_url,
+        error=reason,
+        next_steps=next_steps,
+    )
+
+
 def lock_acquired_update(
     *,
     tenant_id: str,

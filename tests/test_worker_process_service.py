@@ -135,17 +135,15 @@ class WorkerProcessServiceTests(unittest.TestCase):
         )
         self.assertIsNone(_extract_capability_requeue_target(workflow_result))
 
-    def test_process_next_queued_run_retries_start_claim_conflicts(self) -> None:
+    def test_process_next_queued_run_uses_claimed_run_from_claim_service(self) -> None:
         run = SimpleNamespace(run_id="run-1", tenant_id="tenant-1", issue_key="GP-122", project_id="project-1")
         tenant = SimpleNamespace(tenant_id="tenant-1")
         selection = SimpleNamespace(
             run=run,
             tenant=tenant,
             terminal_run=None,
-            effective_policy={"max_concurrent_runs": 1},
         )
-        selection_fn = MagicMock(return_value=selection)
-        start_run_fn = MagicMock(side_effect=[None, run])
+        claim_next_queued_run_fn = MagicMock(return_value=selection)
         decision_gate_run = SimpleNamespace(run_id="decision-gate-result")
 
         result = process_next_queued_run(
@@ -158,7 +156,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 project_repo_checkout_base_dir="/tmp/workdirs",
                 admin_ui_base_url="http://localhost:4100",
             ),
-            select_next_queued_run_fn=selection_fn,
+            claim_next_queued_run_fn=claim_next_queued_run_fn,
             apply_decision_gate_fn=lambda **_: (
                 decision_gate_run,
                 {"send_result": SimpleNamespace(sent=True), "stage_update": {"stage": "decision_gate_required"}},
@@ -172,7 +170,6 @@ class WorkerProcessServiceTests(unittest.TestCase):
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
-            start_run_fn=start_run_fn,
             build_run_heartbeat_controller_fn=lambda **_: _FakeHeartbeatController(),
             bind_run_project_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(),
@@ -201,11 +198,9 @@ class WorkerProcessServiceTests(unittest.TestCase):
         )
 
         self.assertIs(result, decision_gate_run)
-        self.assertEqual(start_run_fn.call_count, 2)
-        start_kwargs = start_run_fn.call_args.kwargs
-        self.assertEqual(start_kwargs["expected_status"], "queued")
-        self.assertEqual(start_kwargs["max_concurrent_runs"], 1)
-        self.assertEqual(start_kwargs["worker_service_instance_id"], "node-a:1234")
+        claim_next_queued_run_fn.assert_called_once()
+        claim_kwargs = claim_next_queued_run_fn.call_args.kwargs
+        self.assertEqual(claim_kwargs["worker_service_instance_id"], "node-a:1234")
 
     def test_process_next_queued_run_returns_run_when_ownership_is_lost(self) -> None:
         now = datetime.now(timezone.utc)
@@ -254,11 +249,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 worker_run_heartbeat_interval_seconds=30,
                 tenant_id="tenant-1",
             ),
-            select_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
                 run=run,
                 tenant=tenant,
                 terminal_run=None,
-                effective_policy={"max_concurrent_runs": 1},
             ),
             apply_decision_gate_fn=lambda **_: (None, None),
             send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
@@ -270,7 +264,6 @@ class WorkerProcessServiceTests(unittest.TestCase):
             ensure_project_repository_checkout_fn=MagicMock(),
             fail_project_repository_checkout_fn=MagicMock(),
             cleanup_run_workspaces_fn=MagicMock(),
-            start_run_fn=MagicMock(return_value=run),
             build_run_heartbeat_controller_fn=lambda **_: heartbeat,
             bind_run_project_fn=MagicMock(),
             workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
@@ -369,11 +362,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     worker_run_heartbeat_interval_seconds=30,
                     tenant_id="tenant-1",
                 ),
-                select_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
                     run=run,
                     tenant=tenant,
                     terminal_run=None,
-                    effective_policy={"max_concurrent_runs": 1},
                 ),
                 apply_decision_gate_fn=lambda **_: (None, None),
                 send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
@@ -385,7 +377,6 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 ensure_project_repository_checkout_fn=MagicMock(),
                 fail_project_repository_checkout_fn=MagicMock(),
                 cleanup_run_workspaces_fn=MagicMock(),
-                start_run_fn=MagicMock(return_value=run),
                 build_run_heartbeat_controller_fn=lambda **_: heartbeat,
                 bind_run_project_fn=MagicMock(),
                 workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),

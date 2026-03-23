@@ -305,68 +305,30 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         self.assertEqual(body["command"], "help")
         self.assertIn("!run", body["message"])
 
-    def test_run_command_surfaces_decision_gate_questions_through_real_route(self) -> None:
+    def test_run_command_requires_ready_label_through_real_route(self) -> None:
         fake_jira_client = _FakeJiraClient(
             issue_key="TP-42",
             summary="Cross-account relink policy",
             status="To Do",
             description="Clarify the device relink policy.",
-            labels=["agent:ready"],
+            labels=[],
         )
         fake_oauth = SimpleNamespace(
             client=fake_jira_client,
             connection=SimpleNamespace(cloud_id="cloud-1"),
             access_token="access-token",
         )
-        blocked_policy_payload = {
-            "triggered": True,
-            "reason": "Cross-account relink policy still needs clarification",
-            "missing_sections": [],
-            "questions": [
-                "If a device_id is already linked to User A and then signs in as User B, should the relink be rejected or transferred?"
-            ],
-            "recommendation": "Decision required before build",
-            "tags": ["[NEEDS-PM]"],
-            "gtd_valid": True,
-            "gtd_missing_criteria": [],
-            "gtd_clarification_questions": [],
-        }
-        blocked_planner_payload = {
-            "gate_status": "blocked_decision_gate",
-            "reason": "Cross-account relink policy still needs clarification",
-            "questions": [
-                {
-                    "question_id": "dg-1",
-                    "kind": "decision_gate",
-                    "question": "If a device_id is already linked to User A and then signs in as User B, should the relink be rejected or transferred?",
-                    "status": "open",
-                }
-            ],
-            "question_states": [
-                {
-                    "question_id": "dg-1",
-                    "kind": "decision_gate",
-                    "question": "If a device_id is already linked to User A and then signs in as User B, should the relink be rejected or transferred?",
-                    "status": "open",
-                }
-            ],
-            "resolved_items": [],
-            "missing_items": [],
-            "captured_answer_summary": "No decision answers are currently persisted for TP-42.",
-        }
 
         with (
             patch("orchestrator.api.discord.ask.context.tenant_jira_oauth_context", return_value=fake_oauth),
             patch("orchestrator.api.discord.ask.context._refresh_jira_connection_tokens", return_value="access-token"),
             patch("orchestrator.api.discord.ask.context._jira_oauth_client", return_value=fake_jira_client),
-            patch("orchestrator.core.precheck_policy.invoke_codex_json", return_value=blocked_policy_payload),
-            patch("orchestrator.core.decision_planner.invoke_codex_json_with_tools", return_value=blocked_planner_payload),
         ):
             response = self._post_command("!run TP-42")
 
         self.assertEqual(response.status_code, 409)
-        self.assertIn("Decision Gate still needs clarification for `TP-42`.", response.json()["detail"])
-        self.assertIn("Cross-account relink policy", response.json()["detail"])
+        self.assertIn("missing the configured ready label", response.json()["detail"])
+        self.assertIn("agent:ready", response.json()["detail"])
 
     def test_reply_command_returns_controlled_message_when_no_active_cycle_exists(self) -> None:
         fake_jira_client = _FakeJiraClient(

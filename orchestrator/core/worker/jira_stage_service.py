@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 JIRA_STAGE_COMMENT_EVENTS = {
     "decision_gate_required",
+    "run_not_ready",
     "run_failed",
     "test_feedback",
     "dev_rationale",
