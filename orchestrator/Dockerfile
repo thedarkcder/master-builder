@@ -98,16 +98,29 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 COPY --from=live-voice-transport-builder /root/.local /root/.local
 COPY --from=live-voice-transport-builder /tmp/live-voice-transport /usr/local/bin/live-voice-transport
-COPY pyproject.toml README.md ./
-COPY .codex ./.codex
-COPY orchestrator ./orchestrator
-COPY alembic.ini ./alembic.ini
+COPY pyproject.toml ./
 
 RUN python -m venv "${VIRTUAL_ENV}"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip && \
-    "${VIRTUAL_ENV}/bin/pip" install .
+    python - <<'PY' && \
+    "${VIRTUAL_ENV}/bin/python" -m pip install --upgrade pip setuptools wheel && \
+    "${VIRTUAL_ENV}/bin/pip" install -r /tmp/requirements.txt
+from pathlib import Path
+import tomllib
+
+project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+dependencies = project.get("project", {}).get("dependencies", [])
+Path("/tmp/requirements.txt").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
+PY
+
+COPY README.md ./
+COPY .codex ./.codex
+COPY orchestrator ./orchestrator
+COPY alembic.ini ./alembic.ini
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    "${VIRTUAL_ENV}/bin/pip" install --no-deps .
 
 RUN mkdir -p /app/data
 
