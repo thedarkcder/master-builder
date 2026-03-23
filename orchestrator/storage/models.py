@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     LargeBinary,
@@ -173,6 +174,48 @@ class RunHumanInputRequest(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FollowupContext(Base):
+    __tablename__ = "followup_contexts"
+    __table_args__ = (
+        Index("ix_followup_contexts_tenant_status_thread", "tenant_id", "status", "thread_channel_id"),
+        Index("ix_followup_contexts_tenant_status_channel", "tenant_id", "status", "channel_id"),
+        Index("ix_followup_contexts_tenant_status_root_message", "tenant_id", "status", "root_message_id"),
+        Index("ix_followup_contexts_tenant_status_request", "tenant_id", "status", "request_id"),
+        Index("ix_followup_contexts_tenant_type_issue", "tenant_id", "context_type", "issue_key"),
+    )
+
+    context_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    context_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    thread_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    root_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class RunLock(Base):

@@ -23,7 +23,6 @@ from orchestrator.api.discord.interactions.followup_runtime import (
 )
 from orchestrator.api.discord.interactions.followup_state import (
     ask_thread_message_map_from_config as _ask_thread_message_map_from_config_impl,
-    decision_gate_issue_for_thread as _decision_gate_issue_for_thread_impl,
     project_ask_thread_channel_ids_for_tenant as _project_ask_thread_channel_ids_for_tenant_impl,
     project_channel_ids_for_tenant as _project_channel_ids_for_tenant_impl,
     project_seed_followup_thread_channel_ids_for_tenant as _project_seed_followup_thread_channel_ids_for_tenant_impl,
@@ -47,10 +46,13 @@ from orchestrator.api.discord.shared.followup_format import (
     build_command_followup_message,
     resolve_tenant_jira_browse_base_url,
 )
+from orchestrator.core.followup_context_service import (
+    resolve_followup_context as _resolve_followup_context_impl,
+    resolve_followup_reaction as _resolve_followup_reaction_impl,
+)
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
-from orchestrator.core.discord.thread_context import put_thread_issue_key
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
@@ -140,13 +142,53 @@ def _ask_reply_components() -> list[dict]:
     ]
 
 
+def _resolve_followup_context(
+    *,
+    session: Session,
+    tenant_id: str,
+    channel_id: str,
+    root_message_id: str | None = None,
+):
+    return _resolve_followup_context_impl(
+        session=session,
+        tenant_id=tenant_id,
+        channel_id=channel_id,
+        root_message_id=root_message_id,
+    )
+
+
+def _resolve_followup_reaction(
+    *,
+    raw_text: str,
+    source_ref: str | None,
+    followup_context,
+    room_mode: bool,
+    room_source: str | None = None,
+):
+    return _resolve_followup_reaction_impl(
+        raw_text=raw_text,
+        source_ref=source_ref,
+        followup_context=followup_context,
+        room_mode=room_mode,
+        room_source=room_source,
+    )
+
 
 def _decision_gate_issue_for_thread(*, session: Session, channel_id: str) -> tuple[str, str] | None:
-    return _decision_gate_issue_for_thread_impl(
+    tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
+    if tenant is None:
+        return None
+    context = _resolve_followup_context_impl(
         session=session,
+        tenant_id=tenant.tenant_id,
         channel_id=channel_id,
-        issue_key_pattern=ISSUE_KEY_PATTERN,
     )
+    if context is None or str(getattr(context, "context_type", "") or "").strip() != "decision_gate":
+        return None
+    issue_key = str(getattr(context, "issue_key", "") or "").strip().upper()
+    if not issue_key or ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
+        return None
+    return tenant.tenant_id, issue_key
 
 
 def _resolve_thread_channel_for_reply(
@@ -251,12 +293,12 @@ def _send_discord_ask_response_with_thread(
     content: str,
     components: list[dict] | None = None,
     issue_key: str | None = None,
+    followup_context_type: str = "ask_thread",
     discord_api_client_fn=None,
     project_ask_thread_channel_ids_for_tenant_fn=None,
     resolve_project_for_channel_fn=None,
     ask_thread_message_map_from_config_fn=None,
     ask_reply_components_fn=None,
-    put_thread_issue_key_fn=None,
 ) -> None:  # noqa: ANN001
     return _send_discord_ask_response_with_thread_impl(
         session=session,
@@ -267,6 +309,7 @@ def _send_discord_ask_response_with_thread(
         content=content,
         components=components,
         issue_key=issue_key,
+        followup_context_type=followup_context_type,
         discord_api_client_fn=discord_api_client_fn or _discord_api_client,
         project_ask_thread_channel_ids_for_tenant_fn=(
             project_ask_thread_channel_ids_for_tenant_fn or _project_ask_thread_channel_ids_for_tenant
@@ -276,7 +319,6 @@ def _send_discord_ask_response_with_thread(
             ask_thread_message_map_from_config_fn or _ask_thread_message_map_from_config
         ),
         ask_reply_components_fn=ask_reply_components_fn or _ask_reply_components,
-        put_thread_issue_key_fn=put_thread_issue_key_fn or put_thread_issue_key,
     )
 
 

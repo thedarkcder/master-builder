@@ -166,6 +166,7 @@ class DiscordAskWithThreadAction(TransportAction):
     content: str
     components: list[dict[str, Any]] | None = None
     issue_key: str | None = None
+    followup_context_type: str = "ask_thread"
 
 
 @dataclass(frozen=True)

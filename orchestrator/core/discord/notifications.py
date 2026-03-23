@@ -8,11 +8,14 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import Settings
+from orchestrator.core.followup_context_service import (
+    FOLLOWUP_CONTEXT_DECISION_GATE,
+    upsert_followup_context,
+)
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.discord.thread_context import put_thread_issue_key
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
@@ -110,10 +113,19 @@ def send_tenant_discord_message(
                 if event == "decision_gate_required":
                     matched_issue_key = ISSUE_KEY_PATTERN.search(safe_thread_name)
                     if matched_issue_key is not None:
-                        project_discord_config = put_thread_issue_key(
-                            discord_config=project_discord_config,
-                            channel_id=thread_channel_id,
+                        upsert_followup_context(
+                            session=session,
+                            tenant_id=tenant.tenant_id,
+                            project_id=project.project_id,
+                            context_type=FOLLOWUP_CONTEXT_DECISION_GATE,
+                            channel_id=channel_id,
+                            thread_channel_id=thread_channel_id,
+                            root_message_id=posted_message_id,
                             issue_key=matched_issue_key.group(0).upper(),
+                            metadata={
+                                "event": event,
+                                "thread_name": safe_thread_name,
+                            },
                         )
                 project.discord_config = project_discord_config
                 project.updated_at = datetime.now(timezone.utc)

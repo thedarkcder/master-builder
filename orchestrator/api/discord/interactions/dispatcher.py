@@ -22,7 +22,8 @@ class DiscordInteractionDispatchDeps:
     find_focused_discord_option: Callable[[object], tuple[str, str] | None]
     discord_issue_autocomplete_choices: Callable[..., list[dict]]
     resolve_thread_channel_for_reply: Callable[..., str]
-    decision_gate_issue_for_thread: Callable[..., tuple[str, str] | None]
+    resolve_followup_context: Callable[..., object | None]
+    resolve_followup_reaction: Callable[..., object | None]
     run_discord_ask_confirmation_followup: Callable[..., object]
     run_discord_command_followup: Callable[..., object]
     run_discord_decision_gate_reply_followup: Callable[..., object]
@@ -231,24 +232,40 @@ def _handle_modal_submit(*, payload: dict, session, deps: DiscordInteractionDisp
             reply_to_message_id,
             effective_channel_id,
         )
-    decision_gate_context = deps.decision_gate_issue_for_thread(session=session, channel_id=effective_channel_id)
-    if decision_gate_context is not None:
-        resolved_tenant_id, issue_key = decision_gate_context
+    tenant = deps.find_tenant_for_discord_channel(session=session, channel_id=effective_channel_id)
+    followup_context = None
+    if tenant is not None:
+        followup_context = deps.resolve_followup_context(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            channel_id=effective_channel_id,
+            root_message_id=reply_to_message_id,
+        )
+    reaction = deps.resolve_followup_reaction(
+        raw_text=question,
+        source_ref=reply_to_message_id,
+        followup_context=followup_context,
+        room_mode=False,
+    )
+    if reaction is not None and getattr(reaction, "kind", "") == "command":
+        resolved_command_text = str(getattr(reaction, "command_text", "") or "").strip() or f"!ask {question}"
+        resolved_command_params = getattr(reaction, "command_params", None)
         deps.logger.info(
-            "discord_reply_context_issue_bound source=%s channel_id=%s effective_channel_id=%s reply_to_message_id=%s issue_key=%s",
+            "discord_reply_context_reaction_resolved source=%s channel_id=%s effective_channel_id=%s reply_to_message_id=%s context_type=%s command_text=%s",
             deps.transport_source,
             normalized_channel_id,
             effective_channel_id,
             reply_to_message_id,
-            issue_key,
+            str(getattr(followup_context, "context_type", "") or "").strip() or "none",
+            resolved_command_text,
         )
         deps.task_scheduler(
-            deps.run_discord_decision_gate_reply_followup(
-                tenant_id=resolved_tenant_id,
+            deps.run_discord_command_followup(
+                tenant_id=str(getattr(tenant, "tenant_id", "") or "").strip() or None,
                 user_id=user_id,
                 channel_id=effective_channel_id,
-                issue_key=issue_key,
-                reply_text=question,
+                command_text=resolved_command_text,
+                command_params=dict(resolved_command_params) if isinstance(resolved_command_params, dict) else None,
                 application_id=application_id,
                 interaction_token=interaction_token,
                 reply_to_message_id=reply_to_message_id,
@@ -264,7 +281,7 @@ def _handle_modal_submit(*, payload: dict, session, deps: DiscordInteractionDisp
         )
         deps.task_scheduler(
             deps.run_discord_command_followup(
-                tenant_id=None,
+                tenant_id=str(getattr(tenant, "tenant_id", "") or "").strip() or None,
                 user_id=user_id,
                 channel_id=effective_channel_id,
                 command_text=f"!ask {question}",

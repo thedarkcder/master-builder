@@ -33,7 +33,6 @@ from orchestrator.core.communications import (
     TransportAction,
 )
 from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.discord.thread_context import put_thread_issue_key
 from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
@@ -82,23 +81,23 @@ class DiscordThreadActionHandler:
     def execute_ask_with_thread(self, *, action: DiscordAskWithThreadAction) -> None:
         self._with_followup_context(
             tenant_id=action.tenant_id,
-            callback=lambda session, settings, tenant: self._ask_with_thread_sender(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                channel_id=action.channel_id,
-                user_id=action.user_id,
-                content=action.content,
-                components=action.components,
-                issue_key=action.issue_key,
-                discord_api_client_fn=self._discord_api_client,
-                project_ask_thread_channel_ids_for_tenant_fn=project_ask_thread_channel_ids_for_tenant,
-                resolve_project_for_channel_fn=resolve_project_for_channel,
-                ask_thread_message_map_from_config_fn=ask_thread_message_map_from_config,
-                ask_reply_components_fn=_default_ask_reply_components,
-                put_thread_issue_key_fn=put_thread_issue_key,
-            ),
-        )
+                callback=lambda session, settings, tenant: self._ask_with_thread_sender(
+                    session=session,
+                    settings=settings,
+                    tenant=tenant,
+                    channel_id=action.channel_id,
+                    user_id=action.user_id,
+                    content=action.content,
+                    components=action.components,
+                    issue_key=action.issue_key,
+                    followup_context_type=action.followup_context_type,
+                    discord_api_client_fn=self._discord_api_client,
+                    project_ask_thread_channel_ids_for_tenant_fn=project_ask_thread_channel_ids_for_tenant,
+                    resolve_project_for_channel_fn=resolve_project_for_channel,
+                    ask_thread_message_map_from_config_fn=ask_thread_message_map_from_config,
+                    ask_reply_components_fn=_default_ask_reply_components,
+                ),
+            )
 
     def execute_seed_with_thread(self, *, action: DiscordSeedWithThreadAction) -> None:
         self._with_followup_context(
