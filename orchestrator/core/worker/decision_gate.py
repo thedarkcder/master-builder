@@ -5,14 +5,20 @@ from types import SimpleNamespace
 
 from sqlalchemy import delete
 
-from orchestrator.core.decision_engine import evaluate_worker_decision
+from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.pre_run_check import evaluate_execution_readiness_only
 from orchestrator.core.runs import mark_run_terminal
 from orchestrator.storage.models import RunLock
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
-from orchestrator.core.worker.stage_events import decision_gate_required_update
+from orchestrator.core.worker.stage_events import run_not_ready_update
+
+
+def _oauth_context_value(oauth_context: object, field: str) -> object | None:
+    if isinstance(oauth_context, dict):
+        return oauth_context.get(field)
+    return getattr(oauth_context, field, None)
 
 
 def apply_decision_gate(
@@ -22,7 +28,7 @@ def apply_decision_gate(
     tenant,
     settings,
     tenant_jira_oauth_context_fn,
-    evaluate_pre_run_check_fn=evaluate_pre_run_check,
+    evaluate_execution_readiness_fn=evaluate_execution_readiness_only,
     send_discord_message_fn,
     send_jira_message_fn,
     ask_reply_components_fn,
@@ -30,26 +36,35 @@ def apply_decision_gate(
     failed_status: str,
 ) -> tuple[object | None, dict | None]:
     project = resolve_project_for_run(session, run=run)
-    worker_decision = evaluate_worker_decision(
-        run_plan=run.plan,
-        tenant_id=run.tenant_id,
-        project_id=run.project_id,
-        issue_key=run.issue_key,
-        run_id=run.run_id,
-        issue_summary=run.issue_summary,
-        issue_description=run.issue_description,
-        session=session,
-        tenant=tenant,
-        project=project,
-        issue_labels=[],
-        settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
-        evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
-    )
-
-    if worker_decision.configuration_error:
+    try:
+        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        oauth_client = _oauth_context_value(oauth, "client")
+        oauth_connection = _oauth_context_value(oauth, "connection")
+        oauth_access_token = _oauth_context_value(oauth, "access_token")
+        cloud_id = getattr(oauth_connection, "cloud_id", None)
+        if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
+            raise RuntimeError("Tenant Jira OAuth context is incomplete")
+        issue_detail = oauth_client.get_issue_detail(
+            access_token=str(oauth_access_token),
+            cloud_id=str(cloud_id),
+            issue_id_or_key=run.issue_key,
+        )
+        issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or run.issue_summary
+        issue_description = str(getattr(issue_detail, "description", "") or "").strip() or run.issue_description
+        raw_labels = getattr(issue_detail, "labels", None)
+        issue_labels = [str(label).strip() for label in raw_labels if str(label).strip()] if isinstance(raw_labels, list) else []
+        pre_check = evaluate_execution_readiness_fn(
+            tenant_id=run.tenant_id,
+            project_id=run.project_id,
+            issue_key=run.issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            issue_labels=issue_labels,
+            ready_label=(tenant.jira_config or {}).get("ready_label"),
+        )
+    except Exception as exc:  # noqa: BLE001
         run.status = failed_status
-        run.last_error = f"Decision Gate configuration error: {worker_decision.configuration_error}"
+        run.last_error = f"Execution readiness check failed: {exc}"
         run.finished_at = datetime.now(timezone.utc)
         session.execute(
             delete(RunLock).where(
@@ -62,46 +77,30 @@ def apply_decision_gate(
         session.refresh(run)
         return run, None
 
-    if worker_decision.block_reason not in {"decision_gate_required", "gtd_required"}:
+    if str(pre_check.outcome or "").strip() != "missing_ready_label":
         return None, None
 
-    pre_check = worker_decision.pre_check
-    decision_gate = getattr(pre_check, "decision_gate", None) if pre_check is not None else None
-    gtd = getattr(pre_check, "gtd", None) if pre_check is not None else None
-    reason = ""
-    questions: list[str] = []
-    if worker_decision.block_reason == "decision_gate_required" and decision_gate is not None:
-        reason = str(getattr(decision_gate, "reason", "") or "").strip()
-        questions = [str(question).strip() for question in getattr(decision_gate, "questions", ()) if str(question).strip()]
-        decision_gate_payload = decision_gate.to_payload()
-    else:
-        missing = [
-            str(item).strip()
-            for item in getattr(gtd, "missing_criteria", ())
-            if str(item).strip()
-        ]
-        reason = "Good To Do details are incomplete."
-        if missing:
-            reason = f"Missing GTD criteria: {', '.join(missing)}"
-        questions = [str(question).strip() for question in getattr(gtd, "clarification_questions", ()) if str(question).strip()]
-        decision_gate_payload = {
-            "triggered": True,
-            "reason": reason,
-            "missing_sections": missing,
-            "questions": questions,
-            "recommendation": "Clarification required before execution.",
-            "tags": [],
-        }
+    ready_label = str(pre_check.ready_label or "").strip()
+    reason = (
+        f"{enqueue_reason_guidance('missing_ready_label')} ({ready_label})"
+        if ready_label
+        else enqueue_reason_guidance("missing_ready_label")
+    )
+    next_steps = (
+        [f"Apply ready label `{ready_label}` to the Jira issue, then retry the run."]
+        if ready_label
+        else ["Apply the configured ready label to the Jira issue, then retry the run."]
+    )
 
     jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=run.issue_key)
-    stage_update = decision_gate_required_update(
+    stage_update = run_not_ready_update(
         tenant_id=run.tenant_id,
         issue_key=run.issue_key,
         run_id=run.run_id,
         jira_url=jira_url,
         run_url=admin_run_url(admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id),
         reason=reason,
-        questions=questions,
+        next_steps=next_steps,
     )
     previous_plan = run.plan if isinstance(run.plan, dict) else {}
     previous_trigger_context = (
@@ -116,7 +115,10 @@ def apply_decision_gate(
         "test_guidance": [],
         "pr_url": None,
         "stage_updates": [stage_update],
-        "decision_gate": decision_gate_payload,
+        "run_not_ready": {
+            "ready_label": ready_label or None,
+            "reason": reason,
+        },
         "pre_check": {
             "outcome": getattr(pre_check, "outcome", None) if pre_check is not None else None,
         },
@@ -128,7 +130,7 @@ def apply_decision_gate(
         session,
         run_id=run.run_id,
         terminal_status=blocked_status,
-        last_error=f"Decision Gate required: {reason}",
+        last_error=reason,
     )
     send_result = SimpleNamespace(sent=False, reason="not_attempted")
     send_error: str | None = None
@@ -140,13 +142,7 @@ def apply_decision_gate(
             message=stage_update["discord_message"],
             settings=settings,
             event="decision_gate_required",
-            open_thread=True,
-            thread_name=f"{run.issue_key}-decision-gate",
-            thread_intro=(
-                "Reply here with clarification questions, then update the Jira issue with GTD details "
-                "and run !retry <ISSUE_KEY>."
-            ),
-            thread_intro_components=ask_reply_components_fn(),
+            open_thread=False,
         )
         send_jira_message_fn(
             session=session,

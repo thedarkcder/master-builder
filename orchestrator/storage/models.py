@@ -238,6 +238,17 @@ class RunLock(Base):
     locked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class TenantRunClaim(Base):
+    __tablename__ = "tenant_run_claims"
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class WebhookDelivery(Base):
     __tablename__ = "webhook_deliveries"
 

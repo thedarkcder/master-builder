@@ -63,6 +63,69 @@ def _imported_modules(module_path: Path) -> set[str]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
+    def test_run_controls_do_not_directly_reopen_decision_gate(self) -> None:
+        module_path = ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "orchestrator.core.decision_clarification_service"
+                and any(alias.name == "evaluate_issue_clarification_state" for alias in node.names)
+            ):
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+
+        self.assertEqual(
+            violations,
+            [],
+            msg="Run controls must not evaluate Decision Gate directly; board-ingress owns clarification.",
+        )
+
+    def test_worker_decision_gate_does_not_use_runtime_decision_engine(self) -> None:
+        module_path = ROOT / "orchestrator" / "core" / "worker" / "decision_gate.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "orchestrator.core.decision_engine"
+                and any(alias.name == "evaluate_worker_decision" for alias in node.names)
+            ):
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+            if isinstance(node, ast.Name) and node.id == "evaluate_worker_decision":
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+
+        self.assertEqual(
+            violations,
+            [],
+            msg="Worker start gating must remain readiness-only and not re-evaluate Decision Gate.",
+        )
+
+    def test_run_lifecycle_does_not_use_tenant_row_as_claim_mutex(self) -> None:
+        module_path = ROOT / "orchestrator" / "core" / "worker" / "run_lifecycle.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "orchestrator.storage.models"
+                and any(alias.name == "Tenant" for alias in node.names)
+            ):
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:Tenant import")
+            if isinstance(node, ast.FunctionDef) and node.name == "_lock_tenant_row_for_claim":
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:tenant claim helper")
+            if isinstance(node, ast.Name) and node.id == "_lock_tenant_row_for_claim":
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:tenant claim reference")
+
+        self.assertEqual(
+            violations,
+            [],
+            msg="Worker run claim must not lock the business tenants table.",
+        )
+
     def test_discord_thread_actions_do_not_embed_runtime_objects(self) -> None:
         runtime_field_names = {"session", "settings", "tenant"}
         for action_type in (DiscordThreadReplyAction, DiscordAskWithThreadAction, DiscordSeedWithThreadAction):

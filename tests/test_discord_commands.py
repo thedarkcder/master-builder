@@ -280,7 +280,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: run command should carry Jira detail context.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
             return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
@@ -321,7 +321,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 ],
             ),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+                "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
                 return_value=self._ready_precheck_result(),
             ) as precheck_mock,
         ):
@@ -335,13 +335,7 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertIn("agent:ready", precheck_mock.call_args.kwargs["issue_labels"])
         self.assertEqual(issue_description, "Objective: run command should carry Jira detail context.")
 
-    def test_run_applies_ready_label_when_precheck_reports_missing(self) -> None:
-        oauth_client = SimpleNamespace(add_issue_labels=unittest.mock.MagicMock())
-        oauth_context = {
-            "connection": SimpleNamespace(cloud_id="cloud-1"),
-            "access_token": "tok-1",
-            "client": oauth_client,
-        }
+    def test_run_rejects_when_ready_label_is_missing(self) -> None:
         with (
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
@@ -357,9 +351,8 @@ class DiscordCommandApiTests(unittest.TestCase):
                     labels=[],
                 ),
             ),
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
             patch(
-                "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+                "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
                 return_value=self._missing_ready_precheck_result(),
             ),
         ):
@@ -368,14 +361,9 @@ class DiscordCommandApiTests(unittest.TestCase):
                 json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!run TP-20"},
             )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json()["ok"])
-        oauth_client.add_issue_labels.assert_called_once_with(
-            access_token="tok-1",
-            cloud_id="cloud-1",
-            issue_id_or_key="TP-20",
-            labels=["agent:ready"],
-        )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("missing the configured ready label", response.json()["detail"])
+        self.assertIn("agent:ready", response.json()["detail"])
 
     def test_run_conflict_includes_active_run_details(self) -> None:
         self._queue_run(run_id="run-active-1", issue_key="TP-20", status="running")
@@ -383,7 +371,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
             return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
@@ -409,7 +397,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
             return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
@@ -439,7 +427,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 description="Objective: refreshed from Jira for retry.",
             ),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
             return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
@@ -458,7 +446,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
             return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
         ), patch(
-            "orchestrator.api.discord.commands.run_controls.evaluate_pre_run_check",
+            "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
             return_value=self._ready_precheck_result(),
         ):
             response = self.client.post(
@@ -556,39 +544,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                         auto_resolved_slots=[],
                         cycle_id=None,
                     ),
-                ),
-            ),
-            patch(
-                "orchestrator.api.discord.commands.run_controls._evaluate_precheck_decision_with_labels",
-                return_value=SimpleNamespace(
-                    decision=SimpleNamespace(
-                        block_reason=None,
-                        pre_check=PreRunCheckResult(
-                            outcome="ready_for_agent",
-                            ready_label="agent:ready",
-                            ready_label_present=True,
-                            required_worker_capability="linux",
-                            required_worker_label="worker:linux",
-                            required_worker_label_present=True,
-                            decision_gate=DecisionGateResult(
-                                triggered=False,
-                                reason="Decision Gate not required",
-                                missing_sections=(),
-                                questions=(),
-                                recommendation="Proceed",
-                                tags=(),
-                            ),
-                            gtd=GoodToDoValidationResult(
-                                valid=True,
-                                missing_criteria=(),
-                                clarification_questions=(),
-                            ),
-                        ),
-                    ),
-                    classification="clear",
-                    missing_slots=[],
-                    auto_resolved_slots=[],
-                    cycle_id=None,
                 ),
             ),
         ):
@@ -1015,19 +970,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.commands.run_controls.enqueue_issue_run_with_precheck",
                 return_value=enqueue_result,
             ) as enqueue_mock,
-            patch(
-                "orchestrator.api.discord.commands.run_controls._evaluate_precheck_decision_with_labels",
-                return_value=SimpleNamespace(
-                    decision=SimpleNamespace(
-                        block_reason=None,
-                        pre_check=ready_result,
-                    ),
-                    classification="clear",
-                    missing_slots=[],
-                    auto_resolved_slots=[],
-                    cycle_id=None,
-                ),
-            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",

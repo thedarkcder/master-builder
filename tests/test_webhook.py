@@ -27,6 +27,7 @@ from orchestrator.api.discord.interactions.parser import (
     _find_tenant_for_discord_channel,
     _parse_discord_interaction_command,
 )
+from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext
 from orchestrator.api.routes.webhook import (
     _parse_jira_comment_command,
 )
@@ -37,6 +38,7 @@ from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck_question_lock import build_precheck_questions_block
 from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests, webhook_health_tracker
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -475,6 +477,180 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertFalse(body["pre_run_check"]["decision_gate_triggered"])
         self.assertEqual(body["pre_run_check"]["required_worker_label"], "worker:linux")
         notify_mock.assert_not_called()
+
+    def test_evaluate_precheck_decision_with_labels_writes_open_questions_to_jira(self) -> None:
+        self._default_precheck_decision_patch.stop()
+        try:
+            from orchestrator.api.webhooks import jira_webhook_precheck
+
+            unresolved_pre_check = PreRunCheckResult(
+                outcome="decision_gate_required",
+                ready_label="agent:ready",
+                ready_label_present=False,
+                required_worker_capability="linux",
+                required_worker_label="worker:linux",
+                required_worker_label_present=True,
+                decision_gate=DecisionGateResult(
+                    triggered=True,
+                    reason="Cross-account relink policy is missing.",
+                    missing_sections=(),
+                    questions=("What happens when a device relinks to another user?",),
+                    recommendation="Clarify the device ownership policy before execution.",
+                    tags=(),
+                ),
+                gtd=GoodToDoValidationResult(
+                    valid=True,
+                    missing_criteria=(),
+                    clarification_questions=(),
+                ),
+            )
+
+            with self.session_factory() as session:
+                tenant = session.get(Tenant, "tenant-webhook")
+                project = session.execute(
+                    select(Project)
+                    .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                    .limit(1)
+                ).scalar_one()
+                assert tenant is not None
+                context = JiraWebhookContext(
+                    request_id="req-1",
+                    tenant_id="tenant-webhook",
+                    tenant=tenant,
+                    payload={},
+                    webhook_event="jira:issue_updated",
+                    issue_key="TP-777",
+                    issue_labels=[],
+                    issue_status="To Do",
+                    issue_status_category_key="new",
+                    issue_summary="Clarify relink policy",
+                    issue_description="Original description.",
+                    comment_command=None,
+                    comment_command_argument=None,
+                    comment_command_error=None,
+                    delivery_id="delivery-1",
+                    project=project,
+                )
+                oauth_client = MagicMock()
+                oauth_context = SimpleNamespace(
+                    access_token="tok",
+                    connection=SimpleNamespace(cloud_id="cloud-1"),
+                    client=oauth_client,
+                )
+                decision_result = SimpleNamespace(
+                    decision=SimpleNamespace(
+                        pre_check=unresolved_pre_check,
+                        block_reason="decision_gate_required",
+                        policy_error=None,
+                    ),
+                    issue_labels=[],
+                    auto_resolved_slots=[],
+                    cycle_id="cycle-1",
+                )
+
+                with patch.object(
+                    jira_webhook_precheck,
+                    "evaluate_issue_clarification_state",
+                    return_value=decision_result,
+                ), patch.object(
+                    jira_webhook_precheck,
+                    "tenant_jira_oauth_context",
+                    return_value=oauth_context,
+                ):
+                    result = jira_webhook_precheck.evaluate_precheck_decision_with_labels(
+                        context=context,
+                        session=session,
+                        settings=get_settings(),
+                    )
+
+            self.assertIs(result, decision_result)
+            oauth_client.update_issue_summary_and_description.assert_called_once()
+            updated_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
+            self.assertIn("Decision Gate reason: Cross-account relink policy is missing.", updated_description)
+            self.assertIn("What happens when a device relinks to another user?", updated_description)
+            self.assertEqual(context.issue_description, updated_description)
+        finally:
+            self._default_precheck_decision_patch.start()
+
+    def test_evaluate_precheck_decision_with_labels_removes_resolved_question_block_from_jira(self) -> None:
+        self._default_precheck_decision_patch.stop()
+        try:
+            from orchestrator.api.webhooks import jira_webhook_precheck
+
+            existing_block = build_precheck_questions_block(
+                decision_gate_reason="Cross-account relink policy is missing.",
+                decision_gate_questions=["What happens when a device relinks to another user?"],
+                gtd_questions=[],
+            )
+            assert existing_block is not None
+            starting_description = f"Original description.\n\n{existing_block}"
+
+            with self.session_factory() as session:
+                tenant = session.get(Tenant, "tenant-webhook")
+                project = session.execute(
+                    select(Project)
+                    .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                    .limit(1)
+                ).scalar_one()
+                assert tenant is not None
+                context = JiraWebhookContext(
+                    request_id="req-2",
+                    tenant_id="tenant-webhook",
+                    tenant=tenant,
+                    payload={},
+                    webhook_event="jira:issue_updated",
+                    issue_key="TP-778",
+                    issue_labels=["agent:ready"],
+                    issue_status="To Do",
+                    issue_status_category_key="new",
+                    issue_summary="Clarify relink policy",
+                    issue_description=starting_description,
+                    comment_command=None,
+                    comment_command_argument=None,
+                    comment_command_error=None,
+                    delivery_id="delivery-2",
+                    project=project,
+                )
+                oauth_client = MagicMock()
+                oauth_context = SimpleNamespace(
+                    access_token="tok",
+                    connection=SimpleNamespace(cloud_id="cloud-1"),
+                    client=oauth_client,
+                )
+                decision_result = SimpleNamespace(
+                    decision=SimpleNamespace(
+                        pre_check=self._pre_run_check(),
+                        block_reason=None,
+                        policy_error=None,
+                    ),
+                    issue_labels=["agent:ready"],
+                    auto_resolved_slots=[],
+                    cycle_id="cycle-2",
+                )
+
+                with patch.object(
+                    jira_webhook_precheck,
+                    "evaluate_issue_clarification_state",
+                    return_value=decision_result,
+                ), patch.object(
+                    jira_webhook_precheck,
+                    "tenant_jira_oauth_context",
+                    return_value=oauth_context,
+                ):
+                    result = jira_webhook_precheck.evaluate_precheck_decision_with_labels(
+                        context=context,
+                        session=session,
+                        settings=get_settings(),
+                    )
+
+            self.assertIs(result, decision_result)
+            oauth_client.update_issue_summary_and_description.assert_called_once()
+            updated_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
+            self.assertIn("Original description.", updated_description)
+            self.assertNotIn("Decision Gate reason:", updated_description)
+            self.assertEqual(context.issue_description, updated_description)
+        finally:
+            self._default_precheck_decision_patch.start()
 
     def test_webhook_applies_required_worker_label_using_pre_run_check(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-126", status_name="To Do", labels=["agent:ready"])
