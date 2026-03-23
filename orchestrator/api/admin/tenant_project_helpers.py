@@ -6,11 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.platform_secret_service import (
-    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
-    PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
-    resolve_platform_secret_ref,
-)
+from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordTextChannel
 
@@ -90,16 +86,8 @@ def resolve_project_discord_channel_binding(
     if not bot_token:
         raise ValueError(f"Discord bot token secret is missing: {token_ref}")
 
-    guild_id = settings.discord_guild_id.strip()
-    if not guild_id:
-        guild_id = (
-            resolve_platform_secret_ref(
-                session,
-                secret_ref=PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
-                encryption_key=settings.secrets_encryption_key,
-            )
-            or ""
-        ).strip()
+    tenant_discord_config = getattr(tenant, "discord_config", None) or {}
+    guild_id = str(tenant_discord_config.get("guild_id") or "").strip()
     if not guild_id:
         raise ValueError("Discord guild ID is not configured")
 

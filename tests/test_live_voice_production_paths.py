@@ -85,7 +85,7 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
         self.sidecar = _FakeSidecarClient()
         self.service = DiscordLiveVoiceService(
             settings=SimpleNamespace(
-                discord_guild_id="guild-1",
+                discord_guild_id="",
                 secrets_encryption_key="enc",
                 codex_model="gpt-5",
                 voice_reply_provider="enabled",
