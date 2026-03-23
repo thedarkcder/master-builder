@@ -3,6 +3,7 @@ import os
 import json
 import hmac
 import hashlib
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
@@ -279,6 +280,87 @@ class JiraWebhookTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["enqueued"])
+
+    def test_webhook_offloads_processing_to_thread(self) -> None:
+        from orchestrator.api.webhooks.jira_application import JiraWebhookPlan
+
+        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
+        observed: dict[str, object] = {}
+
+        async def _to_thread_passthrough(func, /, *args, **kwargs):
+            observed["func"] = func
+            observed["args"] = args
+            observed["kwargs"] = kwargs
+            return func(*args, **kwargs)
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.jira_application._process_jira_webhook_context_in_thread",
+                return_value=JiraWebhookPlan(
+                    content={
+                        "request_id": "threaded-request",
+                        "tenant_id": "tenant-webhook",
+                        "issue_key": "TP-123",
+                        "enqueued": True,
+                    }
+                ),
+            ) as process_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_application.asyncio.to_thread",
+                side_effect=_to_thread_passthrough,
+            ) as to_thread_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enqueued"])
+        self.assertTrue(to_thread_mock.called)
+        process_mock.assert_called_once()
+        self.assertIs(observed.get("func"), process_mock)
+
+    def test_webhook_processing_does_not_block_health_endpoint(self) -> None:
+        from orchestrator.api.webhooks import jira_application
+
+        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
+        entered = threading.Event()
+        release = threading.Event()
+        response_holder: dict[str, object] = {}
+        error_holder: dict[str, BaseException] = {}
+        original_thread_processor = jira_application._process_jira_webhook_context_in_thread
+
+        def _blocking_thread_processor(*, context_snapshot, settings):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release webhook processor")
+            return original_thread_processor(
+                context_snapshot=context_snapshot,
+                settings=settings,
+            )
+
+        def _post_webhook() -> None:
+            try:
+                response_holder["response"] = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            except BaseException as exc:  # pragma: no cover - test harness safety
+                error_holder["error"] = exc
+
+        with patch(
+            "orchestrator.api.webhooks.jira_application._process_jira_webhook_context_in_thread",
+            side_effect=_blocking_thread_processor,
+        ):
+            request_thread = threading.Thread(target=_post_webhook, daemon=True)
+            request_thread.start()
+            self.assertTrue(entered.wait(timeout=2))
+            health = self.client.get("/health")
+            release.set()
+            request_thread.join(timeout=5)
+
+        if "error" in error_holder:
+            raise error_holder["error"]
+        self.assertEqual(health.status_code, 200)
+        self.assertFalse(request_thread.is_alive())
+        webhook_response = response_holder.get("response")
+        self.assertIsNotNone(webhook_response)
+        self.assertEqual(webhook_response.status_code, 200)
 
     def test_webhook_does_not_enqueue_when_issue_is_in_backlog_for_configured_board_on_create_sends_notification(self) -> None:
         with self.session_factory() as session:
@@ -1209,13 +1291,12 @@ class JiraWebhookTests(unittest.TestCase):
                 return_value=(SimpleNamespace(case_id="case-1"), SimpleNamespace(cycle_id="cycle-1")),
             ),
             patch(
-                "orchestrator.api.webhooks.jira_webhook_comment_flow.capture_decision_reply",
-                return_value=SimpleNamespace(evidence_id="evidence-jira-1"),
-            ),
-            patch(
-                "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_precheck_decision_with_labels",
-                return_value=decision_result,
-            ) as evaluate_mock,
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.capture_decision_reply_and_recheck",
+                return_value=SimpleNamespace(
+                    evidence_id="evidence-jira-1",
+                    decision_result=decision_result,
+                ),
+            ) as capture_mock,
             patch(
                 "orchestrator.api.webhooks.jira_webhook_comment_flow.unresolved_question_feedback_for_cycle",
                 return_value=[{"question_id": "dg_1", "question_text": "Need entitlement confirmation"}],
@@ -1224,8 +1305,11 @@ class JiraWebhookTests(unittest.TestCase):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 200)
+        decision_event = capture_mock.call_args.kwargs["decision_event_factory"](
+            SimpleNamespace(evidence_id="evidence-jira-1")
+        )
         self.assertEqual(
-            evaluate_mock.call_args.kwargs["idempotency_key"],
+            decision_event.idempotency_key,
             "decision-reply:evidence-jira-1",
         )
         body = response.json()
@@ -1254,7 +1338,7 @@ class JiraWebhookTests(unittest.TestCase):
                 return_value=(SimpleNamespace(case_id="case-1"), SimpleNamespace(cycle_id="cycle-1")),
             ),
             patch(
-                "orchestrator.api.webhooks.jira_webhook_comment_flow.capture_decision_reply",
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.capture_decision_reply_and_recheck",
                 side_effect=CodexRuntimeError("bad structured output"),
             ),
         ):

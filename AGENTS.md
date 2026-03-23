@@ -28,6 +28,7 @@ Repository execution policy for Codex terminal sessions.
 - Read `.codex/OPERATING.md`.
 - Apply `.codex/skills/staff-engineer-review/SKILL.md`.
 - Apply `.codex/skills/jira-feature-flow/SKILL.md`.
+- Read `.codex/skills/verification-before-completion/SKILL.md`.
 - Read the most relevant language file from `.codex/policy_pack.*.json`.
 - If the proposed solution does not meet the coding standard, re-engineer your implementation coding.
 

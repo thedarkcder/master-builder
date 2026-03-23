@@ -1267,6 +1267,66 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         self.assertEqual(result.decision.block_reason, None)
         self.assertIn("objective", result.auto_resolved_slots)
 
+    def test_serializes_auto_resolved_slot_timestamps_for_decision_metadata(self) -> None:
+        def _stub_precheck(**kwargs: object) -> PreRunCheckResult:
+            description = str(kwargs.get("issue_description") or "")
+            if "Auto-resolved context for precheck:" in description:
+                return _precheck_result(outcome="ready_for_agent")
+            return _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Missing objective",
+                decision_gate_questions=("What is the objective?",),
+                decision_gate_missing_sections=("objective",),
+            )
+
+        from orchestrator.core.knowledge_base import SlotResolution
+
+        source_time = datetime(2026, 3, 23, 13, 30, tzinfo=timezone.utc)
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+            with patch(
+                "orchestrator.core.decision_engine.resolve_missing_slots_from_knowledge",
+                return_value={
+                    "objective": SlotResolution(
+                        slot_name="objective",
+                        slot_value="Implement centralized decision engine.",
+                        source_timestamp=source_time,
+                        confidence=0.95,
+                        citation={"title": "KB fact", "source_type": "manual"},
+                        inferred=False,
+                    )
+                },
+            ):
+                result = evaluate_decision_event(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    event=DecisionEventInput(
+                        source="jira_webhook",
+                        event_type="issue_updated",
+                        idempotency_key="resolve-datetime-1",
+                        issue_key="MAB-164",
+                        issue_summary="Summary",
+                        issue_description="Description",
+                        issue_labels=[],
+                    ),
+                    settings=self.settings,
+                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    evaluate_pre_run_check_fn=_stub_precheck,
+                )
+
+            case = existing_case_for_issue(session=session, tenant_id=tenant.tenant_id, issue_key="MAB-164")
+            assert case is not None
+
+        self.assertEqual(result.decision.block_reason, None)
+        stored_answers = dict(case.metadata_json.get("auto_resolved_answers") or {})
+        objective = dict(stored_answers.get("objective") or {})
+        self.assertEqual(objective.get("source_timestamp"), source_time.isoformat())
+
     def test_requires_resolved_project_for_decision_evaluation(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-stateful")
