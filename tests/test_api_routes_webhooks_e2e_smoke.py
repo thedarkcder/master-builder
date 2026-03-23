@@ -14,7 +14,6 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
-from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.communications import (
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
@@ -143,18 +142,6 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             patch(
                 "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
                 side_effect=lambda **kwargs: dict(kwargs.get("discord_config") or {}),
-            )
-        )
-        self.patch_stack.enter_context(
-            patch(
-                "orchestrator.api.discord.ingress.executor.execute_tenant_command_ingress",
-                return_value=DiscordCommandResponse(ok=True, command="ask", message="ok", data=None),
-            )
-        )
-        self.patch_stack.enter_context(
-            patch(
-                "orchestrator.api.routes.webhook_discord.execute_discord_ingress_command",
-                return_value=DiscordCommandResponse(ok=True, command="ask", message="ok", data=None),
             )
         )
         self.patch_stack.enter_context(
@@ -761,7 +748,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ),
             ("POST", "/discord/command/{tenant_id}"): RouteScenario(
                 path="/discord/command/route25",
-                json={"user_id": "u1", "command": "!ask test", "channel_id": "c1"},
+                json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
             ),
             ("POST", "/discord/interactions"): RouteScenario(
                 path="/discord/interactions",
@@ -769,7 +756,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ),
             ("POST", "/discord/webhook/{tenant_id}"): RouteScenario(
                 path="/discord/webhook/route25",
-                json={"user_id": "u1", "command": "!ask test", "channel_id": "c1"},
+                json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
             ),
             ("POST", "/github/webhook"): RouteScenario(path="/github/webhook", json={"action": "opened"}),
             ("GET", "/health"): RouteScenario(path="/health"),
@@ -778,7 +765,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/runs/{run_id}"): RouteScenario(path="/runs/run-e2e", auth=admin),
         }
 
-    def test_every_external_route_has_strict_e2e_scenario_and_no_500(self) -> None:
+    def test_every_external_route_has_smoke_scenario_and_no_500(self) -> None:
         scenarios = self._route_scenarios()
         discovered: set[tuple[str, str]] = set()
         for route in self.app.routes:
