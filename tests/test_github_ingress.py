@@ -5,10 +5,13 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from orchestrator.api.webhooks.github_ingress import ingest_github_webhook_event
 from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
+
+pytestmark = pytest.mark.contract
 
 
 class GitHubIngressTests(unittest.IsolatedAsyncioTestCase):

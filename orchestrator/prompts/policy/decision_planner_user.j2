@@ -13,7 +13,13 @@ Current cycle metadata JSON:
 {{ current_cycle_metadata_json }}
 
 Allowed tools for this stage: {{ allowed_tools_json }}
-Agent tool command: {{ agent_tool_command }}
+
+Structured tool bridge:
+- To call an allowed tool, return JSON only in this shape:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When you are done, return JSON only in this shape:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
 
 Required process:
 1. Use `decision.read_state` to inspect persisted decision answers/evidence before asking new questions.

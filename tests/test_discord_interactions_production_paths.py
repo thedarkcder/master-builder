@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -27,6 +28,8 @@ from orchestrator.storage.models import (
     Project,
     Tenant,
 )
+
+pytestmark = pytest.mark.production_path
 
 
 class _DeferredTaskHarness:

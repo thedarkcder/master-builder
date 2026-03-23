@@ -30,3 +30,15 @@ Repository execution policy for Codex terminal sessions.
 - Apply `.codex/skills/jira-feature-flow/SKILL.md`.
 - Read the most relevant language file from `.codex/policy_pack.*.json`.
 - If the proposed solution does not meet the coding standard, re-engineer your implementation coding.
+
+## Subagent Strategy
+- Use subagents liberally to keep main context window clean
+- Offload research, exploration, and parallel analysis to subagents
+- For complex problens, throw more compute at it via subagents
+- One task per subagent for focused execution
+
+## Self-Improvement Loop
+- After ANY correction from the user: update 'tasks/lessons.md" with the pattern
+- Write rules for yourself that prevent the same mistake
+- Ruthlessly iterate on these lessons until mistake rate drops
+- Review lessons at session start for relevant project

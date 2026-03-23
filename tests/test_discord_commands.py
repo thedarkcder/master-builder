@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
@@ -33,6 +34,9 @@ from orchestrator.tools.jira_oauth import (
     JiraIssuePreview,
     JiraOAuthError,
 )
+
+
+pytestmark = pytest.mark.contract
 
 
 class DiscordCommandApiTests(unittest.TestCase):

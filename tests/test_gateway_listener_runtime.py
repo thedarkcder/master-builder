@@ -6,7 +6,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
+
+pytestmark = pytest.mark.contract
 
 
 class _FakeWebSocket:

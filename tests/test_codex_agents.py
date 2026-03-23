@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import patch
 import json
-import sys
 
 from orchestrator.core.codex_agents import (
     CodexWorkflowAgents,
@@ -151,8 +150,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
         self.assertEqual(captured["allow_pr_creation"], "false")
-        self.assertTrue(str(captured["agent_tool_command"]).startswith(sys.executable))
-        self.assertIn("agent-tool", str(captured["agent_tool_command"]))
+        self.assertIn("decision.read_state", str(captured["allowed_tools_json"]))
+        self.assertNotIn("agent_tool_command", captured)
 
     def test_stage_prompts_include_answered_human_inputs(self) -> None:
         runtime = CodexRuntime(
@@ -207,7 +206,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         self.assertEqual(json.loads(str(captured["human_inputs_json"]))[0]["value"], "123456")
         self.assertEqual(captured["allow_pr_creation"], "true")
-        self.assertTrue(str(captured["agent_tool_command"]).startswith(sys.executable))
+        self.assertIn("value", json.loads(str(captured["human_inputs_json"]))[0])
+        self.assertNotIn("agent_tool_command", captured)
 
     def test_review_prompt_includes_allow_pr_creation(self) -> None:
         runtime = CodexRuntime(
@@ -257,7 +257,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             agents.review(request, plan, dev, test_result, 1)
 
         self.assertEqual(captured["allow_pr_creation"], "true")
-        self.assertTrue(str(captured["agent_tool_command"]).startswith(sys.executable))
+        self.assertNotIn("agent_tool_command", captured)
 
     def test_resume_session_id_is_applied_to_selected_stage(self) -> None:
         runtime = CodexRuntime(
@@ -295,7 +295,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.codex_agents.invoke_codex_json", side_effect=_invoke_codex_json),
+            patch("orchestrator.core.codex_agents.invoke_codex_json_with_tools", side_effect=_invoke_codex_json),
         ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             agents.dev(request, plan, 1, None)

@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
-from orchestrator.core.agent_tools import allowed_tools_for_stage, build_agent_tool_command
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
+from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json_with_tools
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.storage.models import DecisionCase, DecisionCycle, Project, Tenant
@@ -48,7 +48,7 @@ def plan_decision_questions(
     runtime = build_codex_runtime(session=session, settings=settings)
     allowed_tools = sorted(allowed_tools_for_stage("decision_planner"))
     try:
-        payload = invoke_codex_json(
+        payload = invoke_codex_json_with_tools(
             runtime=runtime,
             context=CodexInvocationContext(
                 channel="system",
@@ -74,13 +74,18 @@ def plan_decision_questions(
                 current_questions_json=json.dumps(cycle.question_set_json if cycle is not None else []),
                 current_cycle_metadata_json=json.dumps(cycle.metadata_json if cycle is not None else {}),
                 allowed_tools_json=json.dumps(allowed_tools),
-                agent_tool_command=build_agent_tool_command(
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                    run_id=None,
-                    issue_key=issue_key,
-                    stage="decision_planner",
-                ),
+            ),
+            allowed_tools=set(allowed_tools),
+            execute_tool=lambda tool_name, tool_args: execute_agent_tool(
+                session=session,
+                settings=settings,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                run_id=None,
+                issue_key=issue_key,
+                stage="decision_planner",
+                tool_name=tool_name,
+                tool_args=tool_args,
             ),
         )
     except CodexRuntimeError as exc:

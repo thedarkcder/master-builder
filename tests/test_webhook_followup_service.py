@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
@@ -16,6 +17,9 @@ from orchestrator.core.communications import (
 )
 from orchestrator.core.observability import current_log_context, reset_log_context, set_log_context
 from orchestrator.tools.discord_api import DiscordApiError
+
+
+pytestmark = pytest.mark.contract
 
 
 class RecordingExecutor:

@@ -6,10 +6,13 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from orchestrator.api.discord.interactions.followup import _run_discord_command_followup
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
+
+pytestmark = pytest.mark.contract
 
 
 class DiscordThreadBindingFlowTests(unittest.TestCase):
@@ -39,6 +42,7 @@ class DiscordThreadBindingFlowTests(unittest.TestCase):
                 ),
             ),
             patch("orchestrator.api.discord.interactions.followup.resolve_platform_secret_ref", return_value="token"),
+            patch("orchestrator.api.discord.interactions.followup_runtime.resolve_platform_secret_ref", return_value="token"),
             patch("orchestrator.api.discord.interactions.followup._resolve_project_for_channel", return_value=project),
             patch("orchestrator.api.discord.interactions.followup_transport.DiscordApiClient") as followup_client_cls,
             patch("orchestrator.api.discord.interactions.followup._send_discord_interaction_followup") as interaction_followup_mock,
