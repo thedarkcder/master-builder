@@ -83,6 +83,27 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Mention them naturally in spoken language", user_prompt_text)
         self.assertIn("Use clean, grammatical sentences with one main idea per sentence.", user_prompt_text)
 
+    def test_voice_room_persona_prompts_treat_transcript_as_direct_request(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "discord"
+        for persona in ("architect", "engineer", "pm", "qa", "security"):
+            system_prompt_text = (prompts_dir / f"voice_room_{persona}_system.j2").read_text(encoding="utf-8")
+            user_prompt_text = (prompts_dir / f"voice_room_{persona}_user.j2").read_text(encoding="utf-8")
+
+            self.assertIn("Treat the routed transcript as the user's direct request to you.", system_prompt_text)
+            self.assertIn("direct", system_prompt_text)
+            self.assertIn("Treat the transcript as the user's direct request", user_prompt_text)
+            self.assertIn("Prefer the best direct", user_prompt_text)
+
+    def test_voice_room_pm_prompt_avoids_scope_triage_fallback(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "discord"
+        system_prompt_text = (prompts_dir / "voice_room_pm_system.j2").read_text(encoding="utf-8")
+        user_prompt_text = (prompts_dir / "voice_room_pm_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("Do not default to intake or scope-triage language", system_prompt_text)
+        self.assertIn("Prefer the best direct recommendation, decision, or next step", user_prompt_text)
+        self.assertIn("Do not fall back to intake or scope-triage language", user_prompt_text)
+        self.assertNotIn("If the brief is incomplete", user_prompt_text)
+
 
 if __name__ == "__main__":
     unittest.main()
