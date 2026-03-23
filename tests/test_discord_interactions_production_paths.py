@@ -286,7 +286,7 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
         self.assertEqual(discord_client.posted_messages[1]["channel_id"], "thread-1")
         self.assertIn("Continue here with follow-up questions", str(discord_client.posted_messages[1]["content"]))
 
-    def test_issue_bound_reply_modal_routes_through_real_reply_followup(self) -> None:
+    def test_stale_issue_bound_reply_modal_falls_back_to_ask_followup(self) -> None:
         harness = _DeferredTaskHarness()
         discord_client = _FakeDiscordApiClient()
         issue_key = "TP-42"
@@ -382,6 +382,18 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
                 "orchestrator.api.discord.ingress.jira_runtime.jira_oauth_client",
                 return_value=fake_jira_client,
             ),
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
+                return_value=[],
+            ),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "Board answer"},
+            ),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                return_value="Board answer",
+            ),
         ):
             response = self._post_interaction(payload)
             self.assertEqual(response.status_code, 200)
@@ -391,8 +403,8 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
         self.assertEqual(discord_client.created_threads, [])
         self.assertEqual(len(discord_client.posted_messages), 1)
         self.assertEqual(discord_client.posted_messages[0]["channel_id"], "thread-1")
-        self.assertIn("No active Decision Gate cycle exists", str(discord_client.posted_messages[0]["content"]))
-        self.assertNotIn("Codex board assistant is unavailable", str(discord_client.posted_messages[0]["content"]))
+        self.assertIn("Board answer", str(discord_client.posted_messages[0]["content"]))
+        self.assertNotIn("No active Decision Gate cycle exists", str(discord_client.posted_messages[0]["content"]))
 
 
 if __name__ == "__main__":

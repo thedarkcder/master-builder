@@ -9,6 +9,7 @@ from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.decision_precheck_mapping import apply_frozen_cycle_to_precheck
 from orchestrator.core.decision_reply_service import (
     capture_decision_reply,
+    latest_recorded_answers_for_issue,
     serialize_recorded_answers_for_policy,
     sync_cycle_answers_from_planner,
     unresolved_question_feedback_for_cycle,
@@ -187,30 +188,62 @@ class DecisionReplyServiceTests(unittest.TestCase):
             ],
         )
 
-    def test_capture_decision_reply_records_evidence_without_mutating_accepted_answer(self) -> None:
-        with self.session_factory() as session:
+    def test_capture_decision_reply_persists_accepted_answer_and_stages_effects(self) -> None:
+        with (
+            self.session_factory() as session,
+            unittest.mock.patch(
+                "orchestrator.core.decision_reply_service.build_codex_runtime",
+                return_value=object(),
+            ),
+            unittest.mock.patch(
+                "orchestrator.core.decision_reply_service.invoke_codex_json",
+                return_value={
+                    "answers": [
+                        {
+                            "question_id": "dg_1",
+                            "status": "accepted",
+                            "answer": "Reject relink; device_id stays bound to one user only.",
+                            "notes": "Cross-account relink policy confirmed.",
+                        }
+                    ]
+                },
+            ),
+        ):
             tenant = session.get(Tenant, "tenant-reply")
             project = session.get(Project, "project-reply")
             assert tenant is not None and project is not None
 
             capture = capture_decision_reply(
                 session=session,
+                settings=self.settings,
                 tenant=tenant,
                 project=project,
                 issue_key="MAB-173",
-                reply_text="Follow-up reply",
+                reply_text="Reject relink; device_id stays bound to one user only.",
                 source_transport="discord",
                 source_ref="msg-1",
             )
             session.commit()
 
             answer = session.get(DecisionAnswer, "answer-1")
+            latest_answers = latest_recorded_answers_for_issue(
+                session=session,
+                tenant_id="tenant-reply",
+                issue_key="MAB-173",
+            )
 
         assert answer is not None
-        self.assertEqual(capture.accepted_question_ids, ())
+        self.assertEqual(capture.accepted_question_ids, ("dg_1",))
         self.assertEqual(capture.answered_question_ids, ())
         self.assertEqual(answer.status, "accepted")
-        self.assertEqual(answer.normalized_answer, "Accepted config answer.")
+        self.assertEqual(
+            answer.normalized_answer,
+            "Reject relink; device_id stays bound to one user only.",
+        )
+        self.assertEqual(answer.evidence_ids_json, [capture.evidence_id])
+        self.assertEqual(len(capture.effect_ids), 1)
+        self.assertEqual(capture.unresolved_question_feedback, ())
+        self.assertEqual([item.question_id for item in latest_answers], ["dg_1"])
         self.assertTrue(capture.evidence_id)
 
     def test_planner_state_drives_unresolved_feedback_from_missing_items(self) -> None:
@@ -230,15 +263,35 @@ class DecisionReplyServiceTests(unittest.TestCase):
             cycle = session.get(DecisionCycle, "cycle-1")
             assert tenant is not None and project is not None and case is not None and cycle is not None
 
-            capture = capture_decision_reply(
-                session=session,
-                tenant=tenant,
-                project=project,
-                issue_key="MAB-173",
-                reply_text="Follow-up reply",
-                source_transport="discord",
-                source_ref="msg-2",
-            )
+            with (
+                unittest.mock.patch(
+                    "orchestrator.core.decision_reply_service.build_codex_runtime",
+                    return_value=object(),
+                ),
+                unittest.mock.patch(
+                    "orchestrator.core.decision_reply_service.invoke_codex_json",
+                    return_value={
+                        "answers": [
+                            {
+                                "question_id": "dg_1",
+                                "status": "answered",
+                                "answer": "Use the production bundle id.",
+                                "notes": "Entitlement confirmation is still missing.",
+                            }
+                        ]
+                    },
+                ),
+            ):
+                capture = capture_decision_reply(
+                    session=session,
+                    settings=self.settings,
+                    tenant=tenant,
+                    project=project,
+                    issue_key="MAB-173",
+                    reply_text="Follow-up reply",
+                    source_transport="discord",
+                    source_ref="msg-2",
+                )
             accepted_ids, answered_ids, effect_ids = sync_cycle_answers_from_planner(
                 session=session,
                 tenant=tenant,
@@ -261,7 +314,7 @@ class DecisionReplyServiceTests(unittest.TestCase):
             question_feedback = list(unresolved_question_feedback_for_cycle(session=session, cycle_id=cycle.cycle_id))
             comment = build_cycle_comment(session=session, case=case, cycle=cycle)
 
-        self.assertEqual(capture.answered_question_ids, ())
+        self.assertEqual(capture.answered_question_ids, ("dg_1",))
         self.assertEqual(accepted_ids, ())
         self.assertEqual(answered_ids, ("dg_1",))
         self.assertEqual(effect_ids, ())

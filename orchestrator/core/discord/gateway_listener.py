@@ -74,6 +74,7 @@ from orchestrator.core.discord.personas import (
     format_voice_room_persona_label,
 )
 from orchestrator.core.error_observability import emit_hard_error
+from orchestrator.core.decision_reply_service import active_case_and_cycle_for_issue
 from orchestrator.core.run_human_input_service import (
     pending_human_input_for_thread,
     resume_run_from_human_input_reply,
@@ -82,7 +83,7 @@ from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.discord.thread_context import get_thread_issue_key
+from orchestrator.core.discord.thread_context import get_thread_issue_key, remove_thread_issue_key
 from orchestrator.core.voice import VoiceTranscriptionError, download_audio_bytes, transcribe_audio_bytes
 from orchestrator.core.voice.tts import VoiceReplyError, synthesize_reply_audio
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
@@ -251,13 +252,33 @@ def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str)
     for project in projects:
         issue_key = get_thread_issue_key(discord_config=project.discord_config, channel_id=normalized_channel_id)
         if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
-            return issue_key
+            _, cycle = active_case_and_cycle_for_issue(
+                session=session,
+                tenant_id=tenant_id,
+                issue_key=issue_key,
+            )
+            if cycle is not None:
+                return issue_key
+            project.discord_config = remove_thread_issue_key(
+                discord_config=project.discord_config,
+                channel_id=normalized_channel_id,
+            )
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         return None
     issue_key = get_thread_issue_key(discord_config=tenant.discord_config, channel_id=normalized_channel_id)
     if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
-        return issue_key
+        _, cycle = active_case_and_cycle_for_issue(
+            session=session,
+            tenant_id=tenant_id,
+            issue_key=issue_key,
+        )
+        if cycle is not None:
+            return issue_key
+        tenant.discord_config = remove_thread_issue_key(
+            discord_config=tenant.discord_config,
+            channel_id=normalized_channel_id,
+        )
     return None
 
 

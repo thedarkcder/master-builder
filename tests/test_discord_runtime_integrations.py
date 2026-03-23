@@ -289,10 +289,14 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         session.execute.return_value.scalars.return_value.all.return_value = [project]
         session.get.return_value = tenant
 
-        self.assertEqual(
-            _decision_gate_issue_for_thread(session=session, tenant_id="route25", channel_id="thread-1"),
-            "GP-80",
-        )
+        with patch(
+            "orchestrator.core.discord.gateway_listener.active_case_and_cycle_for_issue",
+            return_value=(object(), SimpleNamespace(cycle_id="cycle-1", status="open")),
+        ):
+            self.assertEqual(
+                _decision_gate_issue_for_thread(session=session, tenant_id="route25", channel_id="thread-1"),
+                "GP-80",
+            )
 
     def test_handle_message_create_http_exception_and_internal_exception(self) -> None:
         listener, session = self._listener()
@@ -545,6 +549,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch(
+                "orchestrator.core.discord.gateway_listener.active_case_and_cycle_for_issue",
+                return_value=(object(), SimpleNamespace(cycle_id="cycle-1", status="open")),
+            ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),

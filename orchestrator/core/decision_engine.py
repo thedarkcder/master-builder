@@ -32,6 +32,7 @@ from orchestrator.core.decision_reply_service import (
     active_case_and_cycle_for_issue,
     accepted_question_ids_for_cycle,
     classification_for_cycle_questions,
+    latest_recorded_answers_for_issue,
     sync_cycle_answers_from_planner,
     recorded_cycle_answers,
     serialize_recorded_answers_for_policy,
@@ -619,7 +620,11 @@ def evaluate_decision_event(
     recorded_answers = (
         recorded_cycle_answers(session=session, cycle_id=existing_cycle.cycle_id)
         if existing_cycle is not None
-        else []
+        else latest_recorded_answers_for_issue(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            issue_key=event.issue_key,
+        )
     )
     structured_recorded_answers = serialize_recorded_answers_for_policy(recorded_answers)
     current_issue_fingerprint = issue_fingerprint_state(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -26,6 +27,8 @@ from orchestrator.core.decision_reply_service import (
     capture_decision_reply,
     unresolved_question_feedback_for_cycle,
 )
+from orchestrator.core.decision_effect_service import publish_decision_effects
+from orchestrator.core.discord.thread_context import remove_thread_issue_key
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
 from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.precheck_question_lock import (
@@ -505,6 +508,7 @@ def dispatch_run_control_command(
             issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
             capture = capture_decision_reply(
                 session=session,
+                settings=settings,
                 tenant=tenant,
                 project=project,
                 issue_key=issue_key,
@@ -544,6 +548,15 @@ def dispatch_run_control_command(
                 return True, None
             except Exception as exc:  # noqa: BLE001
                 return False, str(exc)
+
+        capture_effect_ids = tuple(getattr(capture, "effect_ids", ()) or ())
+        if capture_effect_ids:
+            publish_decision_effects(
+                session=session,
+                effect_ids=capture_effect_ids,
+                publish_jira_comment_fn=_publish_jira_comment,
+                occurred_at=datetime.now(timezone.utc),
+            )
 
         decision_result = _evaluate_precheck_decision_with_labels(
             session=session,
@@ -652,6 +665,17 @@ def dispatch_run_control_command(
                     "auto_resolved_slots": auto_resolved_slots,
                     "knowledge_mode": None,
                 },
+            )
+
+        thread_channel_id = str(payload.channel_id or "").strip()
+        if thread_channel_id:
+            project.discord_config = remove_thread_issue_key(
+                discord_config=project.discord_config,
+                channel_id=thread_channel_id,
+            )
+            tenant.discord_config = remove_thread_issue_key(
+                discord_config=tenant.discord_config,
+                channel_id=thread_channel_id,
             )
 
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)

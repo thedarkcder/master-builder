@@ -13,11 +13,19 @@ These are the highest-signal tests for user-facing and runtime behavior today:
 - `tests/test_discord_commands_production_paths.py`
 - `tests/test_discord_interactions_production_paths.py`
 - `tests/test_agent_tool_cli_runtime.py`
+- `tests/test_jira_webhook_production_paths.py`
+- `tests/test_github_webhook_production_paths.py`
+- `tests/test_gateway_listener_production_paths.py`
+- `tests/test_live_voice_production_paths.py`
 
 These are the suites CI should treat as confidence for the currently hardened areas:
 
 - Discord command endpoint behavior
 - Discord interaction + deferred followup behavior
+- Jira webhook ingestion and decision/reply behavior
+- GitHub webhook ingress, remediation, and publication behavior
+- Gateway listener deferred task behavior
+- Live voice ingress and followup behavior
 - Codex/agent-tool CLI runtime behavior
 - Decision-engine stateful behavior
 - Decision-planner behavior
@@ -47,13 +55,15 @@ Reasons these do not count as production confidence:
 
 ## Remaining subsystems without enough real confidence tests
 
-These still need production-path replacements or additions:
+These still need additional production-path depth beyond the new baseline:
 
-- Jira webhook ingestion and decision/reply flows
-- GitHub webhook ingress, remediation, and publication flows
-- Live voice / voice ingress and followup flows
-- Gateway listener behavior under real deferred task execution instead of closed tasks
+- Jira webhook coverage for project-not-mapped skip and notification side effects
+- GitHub remediation completion publication and broader review-trigger coverage
+- Live voice transport-room event coverage beyond direct turn processing
+- Gateway listener coverage for issue-bound reply and seed followup thread flows
 
 ## Confidence rule
 
 When a change touches a user-facing command, webhook, followup, or external-service seam, at least one `production_path` test should cover the real internal path for that subsystem. `contract` and `smoke` tests are still useful, but they should not be treated as the primary release signal.
+
+No command is considered covered unless there is at least one production-path test that runs the real route and the real command module without patching the command’s main orchestration function.

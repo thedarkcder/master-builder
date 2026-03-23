@@ -984,6 +984,10 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel", return_value=tenant),
             patch("orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel", return_value=project),
+            patch(
+                "orchestrator.api.discord.interactions.followup_state.active_case_and_cycle_for_issue",
+                return_value=(object(), SimpleNamespace(cycle_id="cycle-1", status="open")),
+            ),
         ):
             self.assertEqual(
                 _decision_gate_issue_for_thread(session=session, channel_id="thread-1"),
@@ -1006,11 +1010,40 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel", return_value=tenant),
             patch("orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel", return_value=project),
+            patch(
+                "orchestrator.api.discord.interactions.followup_state.active_case_and_cycle_for_issue",
+                return_value=(object(), SimpleNamespace(cycle_id="cycle-1", status="open")),
+            ),
         ):
             self.assertEqual(
                 _decision_gate_issue_for_thread(session=session, channel_id="thread-2"),
                 ("tenant-1", "MAB-200"),
             )
+
+    def test_decision_gate_issue_for_thread_clears_stale_project_mapping(self) -> None:
+        from orchestrator.api.discord.interactions.followup import _decision_gate_issue_for_thread
+
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="tenant-1", discord_config={})
+        project = SimpleNamespace(
+            discord_config={
+                "decision_gate_thread_issue_by_channel_id": {
+                    "thread-3": "mab-201",
+                }
+            }
+        )
+        with (
+            patch("orchestrator.api.discord.interactions.followup_state.resolve_tenant_for_discord_channel", return_value=tenant),
+            patch("orchestrator.api.discord.interactions.followup_state.resolve_project_for_discord_channel", return_value=project),
+            patch(
+                "orchestrator.api.discord.interactions.followup_state.active_case_and_cycle_for_issue",
+                return_value=(object(), None),
+            ),
+        ):
+            self.assertIsNone(_decision_gate_issue_for_thread(session=session, channel_id="thread-3"))
+
+        self.assertEqual(project.discord_config["thread_issue_by_channel_id"], {})
+        self.assertEqual(project.discord_config["decision_gate_thread_issue_by_channel_id"], {})
 
     def test_decision_gate_reply_followup_rechecks_before_retry(self) -> None:
         from orchestrator.api.discord.interactions.followup import _run_discord_decision_gate_reply_followup_blocking

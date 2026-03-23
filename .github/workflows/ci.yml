@@ -279,6 +279,10 @@ jobs:
           pytest -q \
             tests/test_discord_interactions_production_paths.py \
             tests/test_discord_commands_production_paths.py \
+            tests/test_jira_webhook_production_paths.py \
+            tests/test_github_webhook_production_paths.py \
+            tests/test_gateway_listener_production_paths.py \
+            tests/test_live_voice_production_paths.py \
             tests/test_agent_tool_cli_runtime.py \
             tests/test_decision_engine_stateful.py \
             tests/test_decision_planner.py
