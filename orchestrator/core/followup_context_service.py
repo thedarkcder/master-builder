@@ -143,8 +143,8 @@ def resolve_followup_context(
 
     for predicate in (
         FollowupContext.thread_channel_id == normalized_channel_id,
-        FollowupContext.channel_id == normalized_channel_id,
         FollowupContext.root_message_id == normalized_root_message_id if normalized_root_message_id else None,
+        FollowupContext.channel_id == normalized_channel_id,
     ):
         if predicate is None:
             continue

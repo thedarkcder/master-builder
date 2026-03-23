@@ -27,6 +27,7 @@ from orchestrator.tools.discord_api import DiscordApiError
 logger = logging.getLogger(__name__)
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 ISSUE_KEY_IN_TEXT_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+THREAD_POSTED_ACK_TEXT = "Posted response in a follow-up thread."
 
 
 def _followup_context_type_for_message(*, command_name: str | None, content: str, issue_key: str | None) -> str:
@@ -89,6 +90,7 @@ async def run_discord_command_followup(
     content = f"<@{user_id}> Command failed due to an internal error."
     components: list[dict] | None = None
     sent_to_thread = False
+    interaction_ack_sent = False
     try:
         context_tokens = set_log_context(
             correlation_id=correlation_id,
@@ -275,6 +277,36 @@ async def run_discord_command_followup(
                                 user_id,
                                 exc,
                             )
+            if sent_to_thread and not reply_to_message_id:
+                try:
+                    deps.transport_executor.execute(
+                        action=DiscordInteractionFollowupAction(
+                            application_id=application_id,
+                            interaction_token=interaction_token,
+                            content=THREAD_POSTED_ACK_TEXT,
+                            ephemeral=False,
+                            components=None,
+                            reply_to_message_id=None,
+                            channel_id=channel_id,
+                        )
+                    )
+                    interaction_ack_sent = True
+                except DiscordInteractionWebhookExpiredError as exc:
+                    logger.exception(
+                        "discord_command_followup_thread_ack_expired tenant_id=%s user_id=%s channel_id=%s error=%s",
+                        tenant_id,
+                        user_id,
+                        channel_id,
+                        exc,
+                    )
+                except Exception as exc:  # pragma: no cover
+                    logger.exception(
+                        "discord_command_followup_thread_ack_failed tenant_id=%s user_id=%s channel_id=%s error=%s",
+                        tenant_id,
+                        user_id,
+                        channel_id,
+                        exc,
+                    )
         except Exception as exc:  # pragma: no cover
             error_ref = uuid4().hex[:8]
             logger.exception(
@@ -291,7 +323,7 @@ async def run_discord_command_followup(
                 context={"tenant_id": tenant_id, "user_id": user_id, "channel_id": channel_id},
             )
             content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
-        if not sent_to_thread:
+        if not sent_to_thread and not interaction_ack_sent:
             try:
                 deps.transport_executor.execute(
                     action=DiscordInteractionFollowupAction(

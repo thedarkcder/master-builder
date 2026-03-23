@@ -97,3 +97,37 @@ class FollowupContextServiceTests(unittest.TestCase):
                     channel_id="thread-1",
                 )
             )
+
+    def test_resolve_followup_context_prefers_root_message_over_parent_channel(self) -> None:
+        with self.session_factory() as session:
+            upsert_followup_context(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                context_type="ask_thread",
+                channel_id="discord-channel-1",
+                root_message_id="message-1",
+                request_id="req-1",
+            )
+            upsert_followup_context(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                context_type="decision_gate",
+                channel_id="discord-channel-1",
+                root_message_id="message-2",
+                issue_key="GP-124",
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            context = resolve_followup_context(
+                session=session,
+                tenant_id="example",
+                channel_id="discord-channel-1",
+                root_message_id="message-2",
+            )
+
+            self.assertIsNotNone(context)
+            self.assertEqual(context.root_message_id, "message-2")
+            self.assertEqual(context.context_type, "decision_gate")

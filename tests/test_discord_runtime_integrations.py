@@ -540,6 +540,42 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         session.commit.assert_not_called()
         client_cls.return_value.post_message.assert_called_once()
 
+    def test_handle_message_create_parent_channel_reply_passes_root_message_id_to_followup_resolution(self) -> None:
+        listener, _session = self._listener()
+        tenant = SimpleNamespace(tenant_id="example")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="reply", message="ok", data={})
+
+        with (
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+                return_value=SimpleNamespace(context_type="decision_gate", issue_key="GP-124"),
+            ) as resolve_context_mock,
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
+        ):
+            listener._handle_message_create(
+                {
+                    "id": "m-parent-reply",
+                    "author": {"id": "u1"},
+                    "channel_id": "discord-channel-1",
+                    "content": "Reject relink; device_id stays bound to one user only.",
+                    "attachments": [],
+                    "message_reference": {
+                        "message_id": "root-message-1",
+                        "channel_id": "discord-channel-1",
+                    },
+                },
+                bot_token="token",
+            )
+
+        self.assertEqual(
+            resolve_context_mock.call_args.kwargs["root_message_id"],
+            "root-message-1",
+        )
+
     def test_handle_message_create_does_not_manage_session_when_command_fails(self) -> None:
         listener, session = self._listener()
         tenant = SimpleNamespace(tenant_id="example")

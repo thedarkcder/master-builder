@@ -21,12 +21,10 @@ class DiscordMessageIngressDeps:
     room_channel_ids_from_discord_config: object
     is_audio_attachment: object
     transcribe_audio_attachment: object
-    pending_human_input_for_thread: object
+    load_pending_human_input_request: object
     resume_run_from_human_input_reply: object
-    decision_gate_issue_for_thread: object
-    project_seed_followup_thread_ids: object
-    project_seed_followup_thread_project_keys: object
-    find_seed_followup_context: object
+    resolve_followup_context: object
+    resolve_followup_reaction: object
     execute_tenant_discord_command: object
     resolve_tenant_jira_browse_base_url: object
     build_command_followup_message: object
@@ -76,6 +74,20 @@ def _log_ignored_message(
         normalized_content.startswith("/"),
         len(_normalized_attachments(payload)),
     )
+
+
+def _root_message_id_from_payload(payload: dict) -> str | None:
+    message_reference = payload.get("message_reference")
+    if isinstance(message_reference, dict):
+        normalized = str(message_reference.get("message_id") or "").strip()
+        if normalized:
+            return normalized
+    referenced_message = payload.get("referenced_message")
+    if isinstance(referenced_message, dict):
+        normalized = str(referenced_message.get("id") or "").strip()
+        if normalized:
+            return normalized
+    return None
 
 
 def build_discord_message_ingress_result(
@@ -176,93 +188,59 @@ def build_discord_message_ingress_result(
         )
         return IngressResult()
 
-    pending_human_input = deps.pending_human_input_for_thread(
-        session=session,
-        tenant_id=tenant.tenant_id,
-        thread_channel_id=channel_id,
-    )
-    if pending_human_input is not None and not content.startswith("!"):
-        try:
-            resumed_run = deps.resume_run_from_human_input_reply(
-                session=session,
-                settings=deps.settings,
-                request=pending_human_input,
-                reply_text=content,
-                source_ref=str(payload.get("id") or "").strip() or None,
-            )
-            message_content = (
-                f"<@{user_id}> Captured input for `{pending_human_input.issue_key}` "
-                f"and queued resumed run `{resumed_run.run_id}`."
-            )
-        except Exception as exc:  # noqa: BLE001
-            deps.logger.exception(
-                "discord_gateway_human_input_resume_failed tenant_id=%s user_id=%s channel_id=%s request_id=%s error=%s",
-                tenant.tenant_id,
-                user_id,
-                channel_id,
-                pending_human_input.request_id,
-                exc,
-            )
-            message_content = f"<@{user_id}> Failed to capture the requested input: {exc}"
-        return IngressResult(
-            actions=(discord_channel_message_action(channel_id=channel_id, content=message_content),),
-        )
-
-    decision_gate_issue_key = deps.decision_gate_issue_for_thread(
+    root_message_id = _root_message_id_from_payload(payload)
+    followup_context = deps.resolve_followup_context(
         session=session,
         tenant_id=tenant.tenant_id,
         channel_id=channel_id,
+        root_message_id=root_message_id,
     )
-    if decision_gate_issue_key and not content.startswith("!"):
-        command_text = "!reply"
-        command_params = {
-            "issue_key": decision_gate_issue_key,
-            "reply_text": content,
-            "source_ref": str(payload.get("id") or "").strip(),
-        }
-    else:
-        command_text = content
-        command_params = None
-
-    seed_followup_thread_ids = deps.project_seed_followup_thread_ids(
-        session=session,
-        tenant_id=tenant.tenant_id,
+    reaction = deps.resolve_followup_reaction(
+        raw_text=content,
+        source_ref=str(payload.get("id") or "").strip() or None,
+        followup_context=followup_context,
+        room_mode=(channel_id in room_channel_ids) or voice_note_reply_requested,
+        room_source=room_source_mode,
     )
-    seed_followup_thread_project_keys = deps.project_seed_followup_thread_project_keys(
-        session=session,
-        tenant_id=tenant.tenant_id,
-    )
-    seed_followup_context = deps.find_seed_followup_context(
-        tenant=tenant,
-        channel_id=channel_id,
-    )
-    if seed_followup_context is None and channel_id in seed_followup_thread_ids:
-        seed_followup_context = deps.find_seed_followup_context(
-            tenant=tenant,
-            channel_id=channel_id,
-            user_id=user_id,
-            project_key=seed_followup_thread_project_keys.get(channel_id),
+    if reaction is not None and getattr(reaction, "kind", "") == "human_input":
+        request = deps.load_pending_human_input_request(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            request_id=str(getattr(reaction, "request_id", "") or "").strip(),
         )
-    if (
-        channel_id in seed_followup_thread_ids
-        and seed_followup_context is not None
-        and not command_text.startswith("!")
-    ):
-        command_text = f"!issues followup {command_text}"
-    if channel_id in room_channel_ids and not command_text.startswith("!"):
-        command_text = f"!pm {command_text}"
-        command_params = {
-            **(command_params or {}),
-            "room_mode": "true",
-            "room_source": room_source_mode,
-        }
-    elif voice_note_reply_requested and not command_text.startswith("!"):
-        command_text = f"!pm {command_text}"
-        command_params = {
-            **(command_params or {}),
-            "voice_mode": "true",
-            "voice_source": room_source_mode,
-        }
+        if request is not None:
+            try:
+                resumed_run = deps.resume_run_from_human_input_reply(
+                    session=session,
+                    settings=deps.settings,
+                    request=request,
+                    reply_text=content,
+                    source_ref=str(payload.get("id") or "").strip() or None,
+                )
+                message_content = (
+                    f"<@{user_id}> Captured input for `{request.issue_key}` "
+                    f"and queued resumed run `{resumed_run.run_id}`."
+                )
+            except Exception as exc:  # noqa: BLE001
+                deps.logger.exception(
+                    "discord_gateway_human_input_resume_failed tenant_id=%s user_id=%s channel_id=%s request_id=%s error=%s",
+                    tenant.tenant_id,
+                    user_id,
+                    channel_id,
+                    request.request_id,
+                    exc,
+                )
+                message_content = f"<@{user_id}> Failed to capture the requested input: {exc}"
+            return IngressResult(
+                actions=(discord_channel_message_action(channel_id=channel_id, content=message_content),),
+            )
+
+    command_text = content
+    command_params = None
+    if reaction is not None and getattr(reaction, "kind", "") == "command":
+        command_text = str(getattr(reaction, "command_text", "") or "").strip() or content
+        params = getattr(reaction, "command_params", None)
+        command_params = dict(params) if isinstance(params, dict) and params else None
 
     message_content = f"<@{user_id}> Command failed due to an internal error."
     components: list[dict] | None = None

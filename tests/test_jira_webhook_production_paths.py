@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
-from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvidence, Tenant
+from orchestrator.core.followup_context_service import upsert_followup_context
+from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvidence, FollowupContext, Tenant
 from tests.production_path_support import (
     clear_runtime_environment,
     configure_runtime_environment,
@@ -118,6 +119,17 @@ class JiraWebhookProductionPathTests(unittest.TestCase):
                     ),
                 ]
             )
+            upsert_followup_context(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                context_type="decision_gate",
+                channel_id="discord-channel-1",
+                thread_channel_id="thread-1",
+                root_message_id="message-1",
+                issue_key="TP-42",
+                metadata={"source": "discord"},
+            )
             session.commit()
 
         runtime = unittest.mock.MagicMock()
@@ -156,9 +168,17 @@ class JiraWebhookProductionPathTests(unittest.TestCase):
                 )
             ).scalars().all()
             case = session.get(DecisionCase, "case-1")
+            followup_context = session.execute(
+                select(FollowupContext).where(
+                    FollowupContext.tenant_id == "example",
+                    FollowupContext.issue_key == "TP-42",
+                )
+            ).scalars().one()
 
         self.assertEqual(len(evidences), 1)
         self.assertIn("Reject relink", evidences[0].raw_text)
         assert case is not None
         self.assertIsNone(case.active_cycle_id)
         self.assertTrue(case.decision_gate_closed_permanently)
+        self.assertEqual(followup_context.status, "closed")
+        self.assertIsNotNone(followup_context.closed_at)
