@@ -28,6 +28,7 @@ from orchestrator.storage.models import (
     Project,
     Tenant,
 )
+from tests.production_path_support import load_json_fixture
 
 pytestmark = pytest.mark.production_path
 
@@ -246,15 +247,7 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
     def test_application_help_command_runs_real_deferred_followup_and_creates_thread(self) -> None:
         harness = _DeferredTaskHarness()
         discord_client = _FakeDiscordApiClient()
-        payload = {
-            "id": "interaction-1",
-            "type": 2,
-            "application_id": "app-1",
-            "token": "token-1",
-            "channel_id": "discord-channel-1",
-            "member": {"user": {"id": "u-1"}},
-            "data": {"name": "help", "options": []},
-        }
+        payload = load_json_fixture("discord", "interactions", "application_command_help.json")
 
         with (
             patch(
@@ -324,29 +317,7 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             )
             session.commit()
 
-        payload = {
-            "id": "interaction-2",
-            "type": 5,
-            "application_id": "app-1",
-            "token": "token-1",
-            "channel_id": "discord-channel-1",
-            "member": {"user": {"id": "u-1"}},
-            "data": {
-                "custom_id": "ask.reply.123456789012345",
-                "components": [
-                    {
-                        "type": 1,
-                        "components": [
-                            {
-                                "type": 4,
-                                "custom_id": "question",
-                                "value": "Use the existing relink policy.",
-                            }
-                        ],
-                    }
-                ],
-            },
-        }
+        payload = load_json_fixture("discord", "interactions", "modal_submit_ask_reply.json")
         fake_jira_client = type(
             "FakeJiraClient",
             (),

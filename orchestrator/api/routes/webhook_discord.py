@@ -83,7 +83,6 @@ async def _run_discord_webhook_command(
             payload=payload,
             session=session,
             defer_seed_issues=defer_seed_issues,
-            allow_plain_ask=True,
         )
     finally:
         session.close()

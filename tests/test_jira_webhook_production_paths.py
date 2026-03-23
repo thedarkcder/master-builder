@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -13,8 +12,9 @@ from sqlalchemy import select
 from orchestrator.api.main import create_app
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvidence, Tenant
 from tests.production_path_support import (
-    configure_runtime_environment,
     clear_runtime_environment,
+    configure_runtime_environment,
+    load_json_fixture,
     seed_core_runtime_state,
     session_factory_for,
 )
@@ -39,59 +39,6 @@ class JiraWebhookProductionPathTests(unittest.TestCase):
         self.temp_dir.cleanup()
         clear_runtime_environment()
 
-    @staticmethod
-    def _issue_payload(
-        *,
-        issue_key: str = "TP-42",
-        summary: str = "Cross-account relink policy",
-        description: str = (
-            "Objective: clarify the device relink policy. "
-            "Acceptance criteria: one binding rule. "
-            "How to test: reply to the gate. "
-            "NFR intent: MVP. Risks/dependencies: none."
-        ),
-        labels: list[str] | None = None,
-        status_name: str = "To Do",
-    ) -> dict:
-        return {
-            "webhookEvent": "jira:issue_updated",
-            "issue": {
-                "key": issue_key,
-                "fields": {
-                    "summary": summary,
-                    "description": {
-                        "type": "doc",
-                        "version": 1,
-                        "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
-                    },
-                    "labels": list(labels or []),
-                    "status": {
-                        "name": status_name,
-                        "statusCategory": {"key": "indeterminate"},
-                    },
-                },
-            },
-        }
-
-    @staticmethod
-    def _comment_payload(*, issue_key: str, comment_text: str) -> dict:
-        payload = JiraWebhookProductionPathTests._issue_payload(issue_key=issue_key, labels=[])
-        payload["webhookEvent"] = "comment_created"
-        payload["comment"] = {
-            "author": {"accountId": "jira-user-1"},
-            "body": {
-                "type": "doc",
-                "version": 1,
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": comment_text}],
-                    }
-                ],
-            },
-        }
-        return payload
-
     def test_disabled_tenant_short_circuits_on_real_route(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "example")
@@ -99,14 +46,18 @@ class JiraWebhookProductionPathTests(unittest.TestCase):
             tenant.is_enabled = False
             session.commit()
 
-        response = self.client.post("/jira/webhook/example", json=self._issue_payload())
+        response = self.client.post(
+            "/jira/webhook/example",
+            json=load_json_fixture("jira", "webhooks", "issue_updated.json"),
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reason"], "tenant_disabled")
         self.assertFalse(response.json()["enqueued"])
 
     def test_ready_label_override_enqueues_through_real_route(self) -> None:
-        payload = self._issue_payload(labels=["ready_for_agent"])
+        payload = load_json_fixture("jira", "webhooks", "issue_updated.json")
+        payload["issue"]["fields"]["labels"] = ["ready_for_agent"]
 
         response = self.client.post("/jira/webhook/example", json=payload)
 
@@ -169,35 +120,32 @@ class JiraWebhookProductionPathTests(unittest.TestCase):
             )
             session.commit()
 
-        decision_result = SimpleNamespace(
-            classification="decision_gate",
-            cycle_id="cycle-1",
-            decision=SimpleNamespace(
-                pre_check=SimpleNamespace(
-                    decision_gate=SimpleNamespace(
-                        questions=("What should happen when a linked device_id is used by another user?",)
-                    )
-                )
-            ),
-        )
-        with patch(
-            "orchestrator.api.webhooks.jira_webhook_precheck.evaluate_precheck_decision_with_labels",
-            return_value=decision_result,
+        runtime = unittest.mock.MagicMock()
+        runtime.run_json.return_value = {
+            "answers": [
+                {
+                    "question_id": "q1",
+                    "status": "accepted",
+                    "answer": "Reject relink; the device_id stays bound to the original user.",
+                    "notes": "",
+                }
+            ]
+        }
+        with (
+            patch("orchestrator.core.decision_reply_service.build_codex_runtime", return_value=runtime),
+            patch("orchestrator.api.webhooks.jira_webhook_comment_flow.post_jira_comment", return_value=(True, None)),
         ):
             response = self.client.post(
                 "/jira/webhook/example",
-                json=self._comment_payload(
-                    issue_key="TP-42",
-                    comment_text="Reject relink; the device_id stays bound to the original user.",
-                ),
+                json=load_json_fixture("jira", "webhooks", "comment_created.json"),
                 headers={"X-Atlassian-Webhook-Identifier": "delivery-1"},
             )
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["reason"], "decision_reply_recorded")
-        self.assertEqual(body["classification"], "decision_gate")
-        self.assertEqual(body["cycle_id"], "cycle-1")
+        self.assertEqual(body["classification"], "clear")
+        self.assertIsNone(body["cycle_id"])
 
         with self.session_factory() as session:
             evidences = session.execute(
@@ -207,6 +155,10 @@ class JiraWebhookProductionPathTests(unittest.TestCase):
                     DecisionEvidence.issue_key == "TP-42",
                 )
             ).scalars().all()
+            case = session.get(DecisionCase, "case-1")
 
         self.assertEqual(len(evidences), 1)
         self.assertIn("Reject relink", evidences[0].raw_text)
+        assert case is not None
+        self.assertIsNone(case.active_cycle_id)
+        self.assertTrue(case.decision_gate_closed_permanently)

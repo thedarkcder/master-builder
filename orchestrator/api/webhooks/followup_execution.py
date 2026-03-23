@@ -106,7 +106,6 @@ async def run_discord_command_followup(
                             ),
                             session=session,
                             defer_seed_issues=False,
-                            require_ask_confirmation=True,
                             ingress_source="discord",
                         )
                         data = command_response.data if isinstance(command_response.data, dict) else {}

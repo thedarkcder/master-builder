@@ -653,6 +653,9 @@ def capture_decision_reply(
         evidence_id=evidence.evidence_id,
         now=now,
     )
+    # Flush captured answer state before the immediate recheck path runs so
+    # planner sync updates the same rows instead of inserting duplicates.
+    session.flush()
     updated_answers = list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
 
     return DecisionReplyCaptureResult(

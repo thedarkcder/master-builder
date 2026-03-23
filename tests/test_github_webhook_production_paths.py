@@ -12,6 +12,7 @@ from orchestrator.api.main import create_app
 from tests.production_path_support import (
     clear_runtime_environment,
     configure_runtime_environment,
+    load_json_fixture,
     seed_core_runtime_state,
     session_factory_for,
 )
@@ -117,39 +118,10 @@ class GitHubWebhookProductionPathTests(unittest.TestCase):
         self.temp_dir.cleanup()
         clear_runtime_environment()
 
-    @staticmethod
-    def _payload(*, event: str, action: str | None = None) -> dict:
-        payload = {
-            "installation": {"id": "12345"},
-            "repository": {"full_name": "org/repo"},
-        }
-        if action is not None:
-            payload["action"] = action
-        if event == "pull_request_review_comment":
-            payload.update(
-                {
-                    "comment": {
-                        "id": 901,
-                        "body": "@mb fix this",
-                        "user": {"login": "thedarkcder", "type": "User"},
-                        "html_url": "https://github.com/org/repo/pull/11#discussion_r901",
-                        "path": "app/models.py",
-                        "line": 42,
-                    },
-                    "sender": {"login": "thedarkcder", "type": "User"},
-                    "issue": {
-                        "number": 11,
-                        "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"},
-                    },
-                    "pull_request": {"number": 11},
-                }
-            )
-        return payload
-
     def test_ignored_event_runs_through_real_route(self) -> None:
         response = self.client.post(
             "/github/webhook",
-            json=self._payload(event="issues", action="opened"),
+            json=load_json_fixture("github", "webhooks", "issues_opened.json"),
             headers={"X-GitHub-Event": "issues", "X-GitHub-Delivery": "delivery-1"},
         )
 
@@ -190,7 +162,7 @@ class GitHubWebhookProductionPathTests(unittest.TestCase):
         ):
             response = self.client.post(
                 "/github/webhook",
-                json=self._payload(event="pull_request_review_comment", action="created"),
+                json=load_json_fixture("github", "webhooks", "pull_request_review_comment_created.json"),
                 headers={
                     "X-GitHub-Event": "pull_request_review_comment",
                     "X-GitHub-Delivery": "delivery-2",

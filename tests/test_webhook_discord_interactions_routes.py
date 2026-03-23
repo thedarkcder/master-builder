@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -17,10 +18,12 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
     async def _call(self, payload: dict, *, headers: dict[str, str] | None = None, **overrides):
         request = SimpleNamespace(headers=headers or {})
         session = MagicMock()
+        tasks: list[asyncio.Task[object]] = []
 
-        def _capture_and_close(coro):  # noqa: ANN001
-            coro.close()
-            return MagicMock()
+        def _schedule_and_track(coro):  # noqa: ANN001
+            task = asyncio.create_task(coro)
+            tasks.append(task)
+            return task
 
         base = {
             "get_settings": MagicMock(return_value=SimpleNamespace()),
@@ -43,7 +46,7 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             "_resolve_thread_channel_for_reply": MagicMock(side_effect=lambda **kwargs: kwargs["channel_id"]),
             "_decision_gate_issue_for_thread": MagicMock(return_value=None),
             "_run_discord_application_command_followup": AsyncMock(),
-            "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_capture_and_close)),
+            "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_schedule_and_track)),
             "ASK_REPLY_OPEN_CUSTOM_ID": "ask.reply.open",
         }
         base.update(overrides)
@@ -51,7 +54,10 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         with ExitStack() as stack:
             for name, value in base.items():
                 stack.enter_context(patch(f"orchestrator.api.routes.webhook_discord_interactions.{name}", value))
-            return await ingest_discord_interaction(request=request, session=session)
+            response = await ingest_discord_interaction(request=request, session=session)
+        if tasks:
+            await asyncio.gather(*tasks)
+        return response
 
     async def test_ping_and_unsupported_type(self) -> None:
         ping = await self._call({"type": 1})

@@ -142,37 +142,23 @@ Jira final comment:
 - notes (rollout/migrations/monitoring)
 - follow-ups created (Backlog)
 
-## 9) Universal UX principles
 
-Apply these to all UI/UX work by default:
+## 9) Shared Logic Recognition & Reuse Standard
 
-### Consistent structure
-- Maintain uniform layouts.
-- Similar tasks should follow the same structural pattern, whether modular steps or single cohesive flows.
+When designing new commands, workflows, or logic paths, the agent must assume that similar problems may already have been solved elsewhere in the system. Before implementing any new logic, the agent should actively evaluate whether an existing service, module, or function provides the same or similar behaviour. This reflects the principle that systems should evolve toward a **single implementation of shared behaviour**, rather than duplicating logic across multiple paths.
 
-### Clear navigation
-- Ensure users always know where they are.
-- Use clear headings, breadcrumbs, or step indicators.
+If a potential overlap is identified, the agent must not proceed with implementation immediately. Instead, it should pause and validate intent by asking:  
+- “Does this new functionality rely on the same underlying logic as an existing capability?”  
+- “Should this reuse or extend an existing service, or is this intentionally different?”  
 
-### Predictable feedback
-- Alerts, errors, or confirmations should always appear in a consistent spot (for example top-right toast or top banner).
+This ensures alignment with product expectations and prevents divergence in behaviour across the system.
 
-### Responsive design
-- On all screen sizes, layouts adapt.
-- On mobile, components should use full width or stack vertically.
+## 10)  Agent Design Behaviour (Engineering Mindset)
 
-### Consistent spacing and typographic hierarchy
-- Use consistent spacing scales and clear typography for hierarchy.
+The agent must think like an experienced engineer: pattern recognition comes before implementation. When multiple inputs, commands, or workflows appear to produce similar outcomes, the agent should treat them as **clients of a shared capability**, not as independent implementations. If no shared abstraction exists yet, the agent should propose creating one before proceeding.
 
-### Accessible interactions
-- All interactions must be keyboard-accessible, with clear focus states.
+In ambiguous cases—especially where acceptance criteria are incomplete or unclear—the agent must surface the assumption explicitly. For example:  
+- “This appears similar to existing behaviour in [X]. Should this follow the same logic?”  
+- “If these paths are expected to behave consistently, I recommend extracting this into a shared service/module.”  
 
-### Context retention
-- Multi-step flows must retain input and context across steps.
-- No resets.
-
-### Guided user flow
-- Guide users with clear next steps or progress indicators.
-
-### Full-width for data-dense interfaces
-- For admin dashboards or data-heavy screens, always use full-width layouts to maximize space and clarity.
+The default behaviour is **reuse and centralisation**, not duplication. Any deviation from shared logic must be intentional and explicitly confirmed.

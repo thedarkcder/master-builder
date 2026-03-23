@@ -1,0 +1,30 @@
+{
+  "id": "1485466159443742740",
+  "type": 0,
+  "channel_id": "discord-channel-1",
+  "guild_id": "guild-1",
+  "content": "!help",
+  "author": {
+    "id": "u-1",
+    "username": "example-user",
+    "discriminator": "0",
+    "bot": false
+  },
+  "member": {
+    "user": {
+      "id": "u-1",
+      "username": "example-user"
+    },
+    "roles": [],
+    "permissions": "0"
+  },
+  "attachments": [],
+  "mentions": [],
+  "mention_everyone": false,
+  "mention_roles": [],
+  "pinned": false,
+  "tts": false,
+  "timestamp": "2026-03-23T02:32:11.157272+00:00",
+  "edited_timestamp": null,
+  "flags": 0
+}

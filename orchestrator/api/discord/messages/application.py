@@ -53,6 +53,31 @@ def discord_channel_message_action(
     )
 
 
+def _log_ignored_message(
+    *,
+    deps: DiscordMessageIngressDeps,
+    reason: str,
+    payload: dict,
+    channel_id: str | None = None,
+    user_id: str | None = None,
+    content: str | None = None,
+) -> None:
+    normalized_channel_id = str(channel_id or payload.get("channel_id") or "").strip()
+    normalized_user_id = str(user_id or ((payload.get("author") or {}) if isinstance(payload.get("author"), dict) else {}).get("id") or "").strip()
+    normalized_content = str(content if content is not None else payload.get("content") or "").strip()
+    deps.logger.info(
+        "discord_gateway_message_ignored reason=%s message_id=%s channel_id=%s user_id=%s has_content=%s starts_with_bang=%s starts_with_slash=%s attachment_count=%s",
+        reason,
+        str(payload.get("id") or "").strip(),
+        normalized_channel_id,
+        normalized_user_id,
+        bool(normalized_content),
+        normalized_content.startswith("!"),
+        normalized_content.startswith("/"),
+        len(_normalized_attachments(payload)),
+    )
+
+
 def build_discord_message_ingress_result(
     *,
     payload: dict,
@@ -61,16 +86,27 @@ def build_discord_message_ingress_result(
 ) -> IngressResult:
     author = payload.get("author")
     if isinstance(author, dict) and author.get("bot") is True:
+        _log_ignored_message(deps=deps, reason="bot_author", payload=payload)
         return IngressResult()
 
     channel_id = str(payload.get("channel_id") or "").strip()
     if not channel_id:
+        _log_ignored_message(deps=deps, reason="missing_channel_id", payload=payload)
         return IngressResult()
     user_id = str((author or {}).get("id") or "").strip()
     if not user_id:
+        _log_ignored_message(deps=deps, reason="missing_user_id", payload=payload, channel_id=channel_id)
         return IngressResult()
     content = str(payload.get("content") or "").strip()
     if content.startswith("/"):
+        _log_ignored_message(
+            deps=deps,
+            reason="slash_command_message",
+            payload=payload,
+            channel_id=channel_id,
+            user_id=user_id,
+            content=content,
+        )
         return IngressResult()
 
     attachments = _normalized_attachments(payload)
@@ -130,6 +166,14 @@ def build_discord_message_ingress_result(
             )
 
     if not content:
+        _log_ignored_message(
+            deps=deps,
+            reason="empty_content",
+            payload=payload,
+            channel_id=channel_id,
+            user_id=user_id,
+            content=content,
+        )
         return IngressResult()
 
     pending_human_input = deps.pending_human_input_for_thread(
@@ -239,8 +283,6 @@ def build_discord_message_ingress_result(
                 attachments=attachments,
             ),
             session=session,
-            require_ask_confirmation=True,
-            allow_plain_ask=True,
         )
         message_content = deps.build_command_followup_message(
             user_id=user_id,
