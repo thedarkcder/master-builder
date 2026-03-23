@@ -235,8 +235,8 @@ jobs:
             echo "No build script found; skipping."
           fi
 
-  python:
-    name: Python (ruff/pytest)
+  python-confidence:
+    name: Python confidence
     needs: detect
     if: needs.detect.outputs.is_python == 'true'
     runs-on: self-hosted
@@ -272,11 +272,53 @@ jobs:
           set -euo pipefail
           ruff check . || (echo "ruff failed" && exit 1)
 
+      - name: Pytest confidence pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          pytest -q \
+            tests/test_discord_interactions_production_paths.py \
+            tests/test_discord_commands_production_paths.py \
+            tests/test_agent_tool_cli_runtime.py \
+            tests/test_decision_engine_stateful.py \
+            tests/test_decision_planner.py
+
+  python-rest:
+    name: Python coverage
+    needs: detect
+    if: needs.detect.outputs.is_python == 'true'
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f "pyproject.toml" ]; then
+            python -m pip install -e .[dev] || python -m pip install -e .
+            python -m pip install ruff pytest pytest-cov httpx
+          elif [ -f "requirements.txt" ]; then
+            python -m pip install -r requirements.txt
+            python -m pip install ruff pytest pytest-cov httpx
+          else
+            python -m pip install ruff pytest pytest-cov httpx
+          fi
+
       - name: Pytest with coverage
         shell: bash
         run: |
           set -euo pipefail
-          pytest -q --cov=orchestrator --cov-report=term-missing --cov-report=xml
+          pytest -q -m "not production_path" --cov=orchestrator --cov-report=term-missing --cov-report=xml
 
       - name: Upload Python coverage report
         uses: actions/upload-artifact@v4
@@ -294,7 +336,7 @@ jobs:
 
   summary:
     name: CI summary
-    needs: [detect, java, node, python]
+    needs: [detect, java, node, python-confidence, python-rest]
     runs-on: self-hosted
     if: always()
     steps:

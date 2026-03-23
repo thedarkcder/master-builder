@@ -1,10 +1,13 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
+
+pytestmark = pytest.mark.contract
 
 
 class ApiErrorObservabilityTests(unittest.TestCase):

@@ -7,6 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 
@@ -28,6 +29,9 @@ from orchestrator.core.discord.gateway_listener import (
 )
 from orchestrator.storage.models import Base
 from orchestrator.tools.discord_api import DiscordApiError
+
+
+pytestmark = pytest.mark.contract
 
 
 class _SessionCtx:

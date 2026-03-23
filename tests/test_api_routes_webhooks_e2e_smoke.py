@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -24,6 +25,8 @@ from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+
+pytestmark = pytest.mark.smoke
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,7 +8,7 @@ from orchestrator.core.decision_planner import plan_decision_questions
 
 
 class DecisionPlannerTests(unittest.TestCase):
-    def test_planner_prompt_uses_current_python_for_agent_tool_command(self) -> None:
+    def test_planner_prompt_uses_structured_tool_contract_without_agent_tool_command(self) -> None:
         tenant = SimpleNamespace(tenant_id="tenant-1")
         project = SimpleNamespace(project_id="project-1")
         cycle = SimpleNamespace(cycle_id="cycle-1", question_set_json=[], metadata_json={})
@@ -24,7 +23,7 @@ class DecisionPlannerTests(unittest.TestCase):
         with (
             patch("orchestrator.core.decision_planner.build_codex_runtime", return_value=SimpleNamespace()),
             patch(
-                "orchestrator.core.decision_planner.invoke_codex_json",
+                "orchestrator.core.decision_planner.invoke_codex_json_with_tools",
                 return_value={"gate_status": "clear", "reason": "", "questions": [], "question_states": []},
             ),
             patch("orchestrator.core.decision_planner.render_prompt", side_effect=_render_prompt),
@@ -44,8 +43,8 @@ class DecisionPlannerTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(captured["project_id"], "project-1")
-        self.assertTrue(str(captured["agent_tool_command"]).startswith(sys.executable))
-        self.assertIn("agent-tool", str(captured["agent_tool_command"]))
+        self.assertIn("decision.read_state", str(captured["allowed_tools_json"]))
+        self.assertNotIn("agent_tool_command", captured)
 
 
 if __name__ == "__main__":

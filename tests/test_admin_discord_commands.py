@@ -1,15 +1,32 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
+from orchestrator.core.config import get_settings
 from orchestrator.core.discord.command_sync_status import DiscordCommandSyncStatusSnapshot
+
+pytestmark = pytest.mark.contract
 
 
 class AdminDiscordCommandsRouteTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
+        os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
+        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
+        get_settings.cache_clear()
+
+    def tearDown(self) -> None:
+        os.environ.pop("ORCHESTRATOR_ADMIN_USERNAME", None)
+        os.environ.pop("ORCHESTRATOR_ADMIN_PASSWORD", None)
+        os.environ.pop("ORCHESTRATOR_ADMIN_TOKEN_SECRET", None)
+        get_settings.cache_clear()
+
     def test_status_endpoint_returns_current_sync_status(self) -> None:
         status = DiscordCommandSyncStatusSnapshot(
             synced=True,
@@ -33,7 +50,7 @@ class AdminDiscordCommandsRouteTests(unittest.TestCase):
         ):
             app = create_app()
             with TestClient(app, raise_server_exceptions=False) as client:
-                response = client.get("/api/admin/discord/commands/status", auth=("admin", "change-me"))
+                response = client.get("/api/admin/discord/commands/status", auth=("admin", "secret"))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -77,7 +94,7 @@ class AdminDiscordCommandsRouteTests(unittest.TestCase):
         ):
             app = create_app()
             with TestClient(app, raise_server_exceptions=False) as client:
-                response = client.post("/api/admin/discord/commands/sync", auth=("admin", "change-me"))
+                response = client.post("/api/admin/discord/commands/sync", auth=("admin", "secret"))
 
         self.assertEqual(response.status_code, 200)
         sync_mock.assert_called_once()

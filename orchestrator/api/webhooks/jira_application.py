@@ -54,12 +54,14 @@ async def build_jira_webhook_ingress_result(
                 tenant_id,
             )
             return _http_json_result(
-                {
-                    "request_id": envelope.request_id,
-                    "tenant_id": tenant_id,
-                    "enqueued": False,
-                    "reason": "tenant_disabled",
-                }
+                JiraWebhookPlan(
+                    content={
+                        "request_id": envelope.request_id,
+                        "tenant_id": tenant_id,
+                        "enqueued": False,
+                        "reason": "tenant_disabled",
+                    }
+                )
             )
 
         context = await stage_parse_jira_webhook_context(

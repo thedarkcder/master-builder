@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from cryptography.fernet import Fernet
 
 from orchestrator.cli import main as cli_main
@@ -26,6 +27,8 @@ from orchestrator.storage.models import (
     Project,
     Tenant,
 )
+
+pytestmark = pytest.mark.production_path
 
 
 class AgentToolCliRuntimeTests(unittest.TestCase):

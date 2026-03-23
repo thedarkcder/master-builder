@@ -4,11 +4,20 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_invocation import (
+    CodexInvocationContext,
+    invoke_codex_json,
+    invoke_codex_json_with_tools,
+)
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 
 
 class CodexInvocationTests(unittest.TestCase):
+    class _Writer:
+        def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
+            _ = invocation_id
+            return None
+
     def test_turn_completed_log_line_is_persisted_even_when_sampled(self) -> None:
         def _request(  # noqa: ANN001
             _system_prompt,
@@ -45,11 +54,6 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         persisted_messages: list[str] = []
 
         def _capture_persist(*, context, stream: str, message: str) -> None:  # noqa: ANN001
@@ -58,7 +62,7 @@ class CodexInvocationTests(unittest.TestCase):
             persisted_messages.append(message)
 
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.codex_invocation._enqueue_codex_log_line", side_effect=_capture_persist),
             patch("orchestrator.core.codex_invocation._append_raw_log_line"),
             patch("orchestrator.core.codex_invocation._emit_invocation_event"),
@@ -118,11 +122,6 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         events: list[tuple[str, dict[str, object]]] = []
 
         def _capture_event(*, context, event_kind: str, payload: dict[str, object]) -> None:  # noqa: ANN001
@@ -130,7 +129,7 @@ class CodexInvocationTests(unittest.TestCase):
             events.append((event_kind, payload))
 
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.codex_invocation._emit_invocation_event", side_effect=_capture_event),
         ):
             payload = invoke_codex_json(
@@ -168,7 +167,7 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
+        class _CaptureWriter:
             def __init__(self) -> None:
                 self.flushed_invocations: list[str] = []
 
@@ -176,7 +175,7 @@ class CodexInvocationTests(unittest.TestCase):
                 _ = timeout_seconds
                 self.flushed_invocations.append(invocation_id)
 
-        writer = _Writer()
+        writer = _CaptureWriter()
         with patch("orchestrator.core.codex_invocation._get_log_writer", return_value=writer):
             payload = invoke_codex_json(
                 runtime=runtime,
@@ -222,13 +221,8 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.codex_invocation._load_run_codex_session_id",
                 return_value="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -284,13 +278,8 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.codex_invocation._load_run_codex_session_id", return_value=None) as load_mock,
             patch("orchestrator.core.codex_invocation._persist_run_codex_session_id") as persist_mock,
         ):
@@ -343,13 +332,8 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.codex_invocation._load_run_codex_session_id",
                 return_value="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -409,11 +393,6 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         events: list[tuple[str, dict[str, object]]] = []
 
         def _capture_event(*, context, event_kind: str, payload: dict[str, object]) -> None:  # noqa: ANN001
@@ -421,7 +400,7 @@ class CodexInvocationTests(unittest.TestCase):
             events.append((event_kind, payload))
 
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.codex_invocation._emit_invocation_event", side_effect=_capture_event),
         ):
             payload = invoke_codex_json(
@@ -460,13 +439,8 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.codex_invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.3-codex-spark", "high", True),
@@ -504,13 +478,8 @@ class CodexInvocationTests(unittest.TestCase):
             reasoning_effort="medium",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.codex_invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.3-codex-spark", "high", True),
@@ -549,13 +518,8 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.codex_invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", False, "aggressive", "gpt-5.3-codex-spark", "high", True),
@@ -603,12 +567,7 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
-        with patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()):
+        with patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()):
             payload = invoke_codex_json(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
@@ -635,13 +594,8 @@ class CodexInvocationTests(unittest.TestCase):
             run_id="run-1",
         )
 
-        class _Writer:
-            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:  # noqa: ARG002
-                _ = invocation_id
-                return None
-
         with (
-            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=_Writer()),
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(CodexRuntimeError),
         ):
             invoke_codex_json(
@@ -650,6 +604,116 @@ class CodexInvocationTests(unittest.TestCase):
                 system_prompt="system",
                 user_prompt="user",
                 require_json=False,
+            )
+
+    def test_invoke_codex_json_with_tools_executes_request_and_resumes_same_session(self) -> None:
+        runtime_calls: list[dict[str, object]] = []
+        tool_calls: list[tuple[str, dict[str, object]]] = []
+
+        class _Runtime:
+            def run_json(self, **kwargs):  # noqa: ANN003
+                runtime_calls.append(kwargs)
+                if len(runtime_calls) == 1:
+                    on_session_id = kwargs.get("on_session_id")
+                    if callable(on_session_id):
+                        on_session_id("tool-session-1")
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {"issue_key": "GP-124"},
+                    }
+                return {
+                    "type": "final_response",
+                    "result": {"gate_status": "clear", "reason": "", "questions": []},
+                }
+
+        context = CodexInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        with patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_codex_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"decision.read_state"},
+                execute_tool=lambda tool_name, tool_args: tool_calls.append((tool_name, tool_args)) or {"case": "ok"},
+            )
+
+        self.assertEqual(payload, {"gate_status": "clear", "reason": "", "questions": []})
+        self.assertEqual(tool_calls, [("decision.read_state", {"issue_key": "GP-124"})])
+        self.assertIsNone(runtime_calls[0]["resume_session_id"])
+        self.assertEqual(runtime_calls[1]["resume_session_id"], "tool-session-1")
+        self.assertIn('"tool_name": "decision.read_state"', str(runtime_calls[1]["user_prompt"]))
+        self.assertIn('"ok": true', str(runtime_calls[1]["user_prompt"]).lower())
+
+    def test_invoke_codex_json_with_tools_rejects_disallowed_tool(self) -> None:
+        class _Runtime:
+            def run_json(self, **_kwargs):  # noqa: ANN003
+                return {
+                    "type": "tool_request",
+                    "tool_name": "decision.read_state",
+                    "tool_args": {},
+                }
+
+        context = CodexInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        with (
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaisesRegex(RuntimeError, "disallowed tool"),
+        ):
+            invoke_codex_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools=set(),
+                execute_tool=lambda _tool_name, _tool_args: {"ok": True},
+            )
+
+    def test_invoke_codex_json_with_tools_fails_after_tool_hop_limit(self) -> None:
+        class _Runtime:
+            def run_json(self, **_kwargs):  # noqa: ANN003
+                return {
+                    "type": "tool_request",
+                    "tool_name": "decision.read_state",
+                    "tool_args": {},
+                }
+
+        context = CodexInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        with (
+            patch("orchestrator.core.codex_invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaisesRegex(RuntimeError, "tool hop limit"),
+        ):
+            invoke_codex_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"decision.read_state"},
+                execute_tool=lambda _tool_name, _tool_args: {"ok": True},
+                max_tool_hops=1,
             )
 
 

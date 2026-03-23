@@ -5,9 +5,12 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from orchestrator.api.routes.webhook_discord import _run_discord_webhook_command, ingest_discord_webhook
+
+pytestmark = pytest.mark.contract
 
 
 class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):

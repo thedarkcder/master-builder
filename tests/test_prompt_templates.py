@@ -112,6 +112,9 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Never improvise direct database inspection", system_prompt_text)
         self.assertIn("Persisted decision state must be read via `decision.read_state`", user_prompt_text)
         self.assertIn("If `decision.read_state` or another allowed tool fails", user_prompt_text)
+        self.assertIn('"type":"tool_request"', user_prompt_text)
+        self.assertIn('"type":"final_response"', user_prompt_text)
+        self.assertNotIn("Agent tool command:", user_prompt_text)
 
     def test_workflow_stage_prompts_forbid_direct_db_inspection(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
@@ -121,6 +124,12 @@ class PromptTemplateTests(unittest.TestCase):
         for prompt_name in ("pm_system.j2", "dev_system.j2", "test_system.j2", "review_system.j2"):
             prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
             self.assertIn(expected_text, prompt_text)
+
+        for prompt_name in ("pm_user.j2", "dev_user.j2", "test_user.j2", "review_user.j2"):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn('"type":"tool_request"', prompt_text)
+            self.assertIn('"type":"final_response"', prompt_text)
+            self.assertNotIn("Agent tool command:", prompt_text)
 
 
 if __name__ == "__main__":

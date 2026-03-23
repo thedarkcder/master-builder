@@ -8,6 +8,14 @@ Tests must verify real behavior, not mock behavior. Mocks are a means to isolate
 
 **Core principle:** Test what the code does, not what the mocks do.
 
+In this repo, release confidence for external-service behavior must come from:
+- real FastAPI endpoints
+- real DB and migrations
+- real command/webhook/interaction dispatch
+- fake external clients only at the network boundary
+
+If a test patches a top-level ingress, dispatcher, or executor function, it is a contract test, not a confidence test.
+
 **Following strict TDD prevents these anti-patterns.**
 
 ## The Iron Laws
@@ -247,6 +255,48 @@ TDD cycle:
 3. Refactor
 4. THEN claim complete
 ```
+
+## Anti-Pattern 6: Closing Deferred Work Instead of Running It
+
+**The violation:**
+```python
+def _capture_and_close(coro):
+    coro.close()
+    return MagicMock()
+```
+
+**Why this is wrong:**
+- Background failures never surface
+- Route tests only prove the request returned `200`
+- Followup regressions in Discord/webhooks will ship undetected
+
+**The fix:**
+```python
+class DeferredTaskHarness:
+    def create_task(self, coro):
+        ...
+        asyncio.run(coro)
+```
+
+Run the deferred work to completion and fail the test if the task raises.
+
+## Anti-Pattern 7: Patching the Entry Point You Claim to Test
+
+**The violation:**
+```python
+patch("orchestrator.api.routes.webhook_discord.execute_discord_ingress_command")
+patch("orchestrator.api.routes.webhook_discord_interactions._run_discord_command_followup")
+patch("orchestrator.api.routes.webhook.build_jira_webhook_ingress_result")
+```
+
+**Why this is wrong:**
+- The route no longer exercises the production stack
+- Signature drift and wiring regressions are invisible
+- The test becomes a thin wrapper assertion, not behavior coverage
+
+**Repo rule:**
+- If you patch a top-level ingress builder, command executor, followup runner, or dispatcher, mark the test as `contract` or `smoke`
+- Do not count it as production-path confidence
 
 ## When Mocks Become Too Complex
 

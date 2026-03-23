@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -41,6 +42,8 @@ from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError
+
+pytestmark = pytest.mark.contract
 
 
 class JiraWebhookTests(unittest.TestCase):

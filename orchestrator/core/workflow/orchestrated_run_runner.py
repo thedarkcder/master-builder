@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 from typing import Protocol
 
 from orchestrator.core.codex_agents import CodexWorkflowAgents
@@ -87,10 +88,15 @@ class OrchestratedRunWorkflowExecutor:
         runtime: CodexRuntime,
         log_sink: Callable[[dict], None] | None = None,
         stage_agents: StageAgents | None = None,
+        execute_tool: Callable[
+            [str, str | None, str | None, str, str, str, dict[str, object]],
+            dict[str, Any],
+        ] | None = None,
     ):
         self._runtime = runtime
         self._log_sink = log_sink
         self._stage_agents = stage_agents
+        self._execute_tool = execute_tool
 
     def execute(
         self,
@@ -98,7 +104,23 @@ class OrchestratedRunWorkflowExecutor:
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
     ) -> WorkflowResult:
-        agents = self._stage_agents or CodexWorkflowAgents(runtime=self._runtime, log_sink=self._log_sink)
+        agents = self._stage_agents or CodexWorkflowAgents(
+            runtime=self._runtime,
+            log_sink=self._log_sink,
+            execute_tool=(
+                None
+                if self._execute_tool is None
+                else lambda context, tool_name, tool_args: self._execute_tool(
+                    context.tenant_id or "",
+                    context.project_id,
+                    context.run_id,
+                    context.issue_key or "",
+                    context.stage,
+                    tool_name,
+                    tool_args,
+                )
+            ),
+        )
         history: list[dict[str, str]] = []
         stage_trace: list[dict[str, object]] = []
         test_guidance = list(request.suggested_test_commands or ["Run relevant project tests"])
