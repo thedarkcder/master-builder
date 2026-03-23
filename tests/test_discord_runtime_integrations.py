@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -27,7 +28,7 @@ from orchestrator.core.discord.gateway_listener import (
     _decision_gate_issue_for_thread,
     _project_seed_followup_thread_ids,
 )
-from orchestrator.storage.models import Base
+from orchestrator.storage.models import Base, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -82,6 +83,25 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return self._settings_obj
 
+    def _seed_tenant(self, *, tenant_id: str, guild_id: str | None, enabled: bool = True) -> None:
+        with self._session_factory() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                Tenant(
+                    tenant_id=tenant_id,
+                    name=tenant_id,
+                    is_enabled=enabled,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={"guild_id": guild_id} if guild_id is not None else {},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
     def test_sync_discord_guild_commands_guard_paths(self) -> None:
         settings = self._settings()
         resolver = MagicMock(return_value="")
@@ -97,8 +117,7 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertFalse(status.bot_token_configured)
 
         settings = self._settings()
-        settings.discord_guild_id = ""
-        resolver = MagicMock(side_effect=lambda _session, **kwargs: "token" if kwargs["secret_ref"] != "DISCORD_GUILD_ID" else "")
+        resolver = MagicMock(return_value="token")
         self.assertFalse(
             sync_discord_guild_commands(
                 settings=settings,
@@ -112,11 +131,13 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
 
     def test_sync_discord_guild_commands_success_and_failure(self) -> None:
         settings = self._settings()
+        self._seed_tenant(tenant_id="tenant-1", guild_id="guild-tenant-1")
+        self._seed_tenant(tenant_id="tenant-2", guild_id="guild-tenant-2")
 
         def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
             if secret_ref == "DISCORD_BOT_TOKEN":
                 return "bot-token"
-            return "guild-from-secret"
+            raise AssertionError("guild IDs should come from tenant discord config")
 
         client = MagicMock()
         client.get_application_id.return_value = "app-1"
@@ -130,12 +151,17 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
                 client_factory=MagicMock(return_value=client),
             )
         )
-        client.overwrite_guild_commands.assert_called_once()
+        self.assertEqual(client.overwrite_guild_commands.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["guild_id"] for call in client.overwrite_guild_commands.call_args_list],
+            ["guild-tenant-1", "guild-tenant-2"],
+        )
         status = get_discord_command_sync_status(settings=settings)
         self.assertTrue(status.synced)
         self.assertTrue(status.healthy)
         self.assertEqual(status.application_id, "app-1")
         self.assertEqual(status.command_count, 1)
+        self.assertEqual(status.guild_id, "guild-tenant-1")
 
         client_factory = MagicMock(side_effect=DiscordApiError("boom"))
         self.assertFalse(
@@ -150,13 +176,36 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertEqual(status.last_failure_reason, "discord_api_error")
         self.assertIn("boom", status.last_error or "")
 
-    def test_sync_discord_guild_commands_does_not_clobber_persisted_status_when_lock_busy(self) -> None:
+    def test_sync_discord_guild_commands_ignores_legacy_global_guild_setting(self) -> None:
         settings = self._settings()
+        settings.discord_guild_id = "legacy-global-guild"
 
         def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
             if secret_ref == "DISCORD_BOT_TOKEN":
                 return "bot-token"
-            return "guild-1"
+            raise AssertionError("guild IDs should not be resolved from secrets")
+
+        self.assertFalse(
+            sync_discord_guild_commands(
+                settings=settings,
+                session_factory=self._session_factory,
+                secret_resolver=_resolver,
+                client_factory=MagicMock(side_effect=AssertionError("should not attempt sync")),
+            )
+        )
+
+        status = get_discord_command_sync_status(settings=settings)
+        self.assertEqual(status.last_failure_reason, "missing_guild_id")
+        self.assertFalse(status.guild_id_configured)
+
+    def test_sync_discord_guild_commands_does_not_clobber_persisted_status_when_lock_busy(self) -> None:
+        settings = self._settings()
+        self._seed_tenant(tenant_id="tenant-1", guild_id="guild-1")
+
+        def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
+            if secret_ref == "DISCORD_BOT_TOKEN":
+                return "bot-token"
+            raise AssertionError("guild IDs should come from tenant discord config")
 
         client = MagicMock()
         client.get_application_id.return_value = "app-1"
