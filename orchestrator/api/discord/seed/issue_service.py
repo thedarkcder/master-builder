@@ -24,6 +24,18 @@ _ENGINEERING_CHILD_LABEL = "engineering-child"
 _SYNC_CURRENT_LABEL = "sync-current"
 _SYNC_STALE_LABEL = "sync-stale"
 _SYNC_BLOCKED_LABEL = "sync-blocked"
+_PARENT_MULTI_STORY_HINTS = (
+    "multi-story",
+    "multi story",
+    "multi-step",
+    "multi step",
+    "cross-cutting",
+    "cross cutting",
+    "program",
+    "initiative",
+    "roadmap",
+)
+_PARENT_PRIMARY_ISSUE_TYPES = ("Story", "Feature", "Task", "Issue")
 
 
 def _string_list_field(*, issue_index: int, field_name: str, raw_value: object) -> list[str]:
@@ -233,6 +245,90 @@ def _child_issue_catalog(*, oauth: dict[str, Any], project_key: str, parent_issu
     return list(matched.values())
 
 
+def list_child_issue_previews_for_parent(
+    *,
+    oauth: dict[str, Any],
+    project_key: str,
+    parent_issue_key: str,
+) -> list[JiraIssuePreview]:
+    return _child_issue_catalog(
+        oauth=oauth,
+        project_key=project_key,
+        parent_issue_key=parent_issue_key,
+    )
+
+
+def _project_available_issue_types(*, oauth: dict[str, Any], project_key: str) -> list[str]:
+    client = oauth.get("client")
+    list_issue_types = getattr(client, "list_project_issue_types_for_create", None)
+    if callable(list_issue_types):
+        try:
+            payload = list_issue_types(
+                access_token=oauth["access_token"],
+                cloud_id=oauth["cloud_id"],
+                project_key=project_key,
+            )
+        except (AttributeError, TypeError, ValueError, JiraOAuthError):
+            return []
+        return [str(value).strip() for value in payload if str(value).strip()]
+    return []
+
+
+def _first_present_issue_type(choices: tuple[str, ...], available_issue_types: list[str]) -> str | None:
+    if not available_issue_types:
+        return choices[0] if choices else None
+    by_lower = {name.casefold(): name for name in available_issue_types if str(name).strip()}
+    for choice in choices:
+        matched = by_lower.get(choice.casefold())
+        if matched:
+            return matched
+    return None
+
+
+def _parent_should_default_to_epic(*, parent_issue: dict[str, Any], engineering_children: list[dict[str, Any]]) -> bool:
+    if len(engineering_children) > 1:
+        return True
+    candidate_text = " ".join(
+        [
+            str(parent_issue.get("summary") or ""),
+            str(parent_issue.get("objective") or ""),
+            str(parent_issue.get("recommendation") or ""),
+            " ".join(str(value) for value in parent_issue.get("scope_in") or []),
+            " ".join(str(value) for value in parent_issue.get("success_outcomes") or []),
+        ]
+    ).casefold()
+    return any(hint in candidate_text for hint in _PARENT_MULTI_STORY_HINTS)
+
+
+def _normalize_parent_issue_type(
+    *,
+    parent_issue: dict[str, Any],
+    engineering_children: list[dict[str, Any]],
+    available_issue_types: list[str],
+) -> str:
+    requested_issue_type = str(parent_issue.get("issue_type") or "").strip()
+    if available_issue_types:
+        by_lower = {name.casefold(): name for name in available_issue_types if str(name).strip()}
+        requested_match = by_lower.get(requested_issue_type.casefold()) if requested_issue_type else None
+        if requested_match:
+            return requested_match
+
+    preferred_choices: tuple[str, ...]
+    if _parent_should_default_to_epic(parent_issue=parent_issue, engineering_children=engineering_children):
+        preferred_choices = ("Epic", *_PARENT_PRIMARY_ISSUE_TYPES)
+    else:
+        preferred_choices = (*_PARENT_PRIMARY_ISSUE_TYPES, "Epic")
+    normalized = _first_present_issue_type(preferred_choices, available_issue_types)
+    if normalized:
+        return normalized
+    if requested_issue_type:
+        return requested_issue_type
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="No supported parent Jira issue type is available for this project",
+    )
+
+
 def _parse_parent_issue(
     *,
     raw_parent: object,
@@ -250,8 +346,6 @@ def _parse_parent_issue(
         field_name="issue_type",
         raw_value=raw_parent.get("issue_type"),
     )
-    if not issue_type:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex parent_issue is missing issue_type")
     requested_issue_key = _normalize_issue_key(
         raw_parent.get("issue_key"),
         field_name="issue_key",
@@ -570,6 +664,12 @@ def seed_issues_with_codex(
         tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
     )
     browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
+    available_issue_types = _project_available_issue_types(oauth=oauth, project_key=project_key)
+    parent_issue["issue_type"] = _normalize_parent_issue_type(
+        parent_issue=parent_issue,
+        engineering_children=engineering_children,
+        available_issue_types=available_issue_types,
+    )
     try:
         all_project_issues = _project_issue_catalog(oauth=oauth, project_key=project_key)
         matched_issue_keys: set[str] = set()

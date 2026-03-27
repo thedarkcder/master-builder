@@ -7,6 +7,7 @@ import pytest
 
 from orchestrator.core.followup_context_service import (
     close_followup_contexts,
+    resolve_issue_followup_context,
     resolve_followup_context,
     upsert_followup_context,
 )
@@ -131,3 +132,29 @@ class FollowupContextServiceTests(unittest.TestCase):
             self.assertIsNotNone(context)
             self.assertEqual(context.root_message_id, "message-2")
             self.assertEqual(context.context_type, "decision_gate")
+
+    def test_resolve_issue_followup_context_by_issue_key(self) -> None:
+        with self.session_factory() as session:
+            upsert_followup_context(
+                session=session,
+                tenant_id="route25",
+                project_id="route25-default",
+                context_type="engineering_clarification",
+                issue_key="TP-42",
+                request_id="engineering-clarification:TP-42",
+                metadata={"source": "jira"},
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            context = resolve_issue_followup_context(
+                session=session,
+                tenant_id="route25",
+                issue_key="TP-42",
+                context_type="engineering_clarification",
+            )
+
+            self.assertIsNotNone(context)
+            assert context is not None
+            self.assertEqual(context.issue_key, "TP-42")
+            self.assertEqual(context.context_type, "engineering_clarification")

@@ -430,6 +430,29 @@ class JiraOAuthIssueService:
             },
         )
 
+    def replace_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        normalized_issue = issue_id_or_key.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue label replace")
+        normalized_labels = [str(label).strip() for label in labels if str(label).strip()]
+        self._request_json(
+            method="PUT",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
+            access_token=access_token,
+            payload={
+                "fields": {
+                    "labels": normalized_labels,
+                }
+            },
+        )
+
     def add_issue_comment(
         self,
         *,
