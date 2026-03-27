@@ -1,7 +1,7 @@
 """add run stream events journal
 
-Revision ID: 20260327_0040
-Revises: 20260327_0039
+Revision ID: 20260327_0042
+Revises: 20260327_0041
 Create Date: 2026-03-27 20:00:00.000000
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260327_0040"
-down_revision = "20260327_0039"
+revision = "20260327_0042"
+down_revision = "20260327_0041"
 branch_labels = None
 depends_on = None
 
