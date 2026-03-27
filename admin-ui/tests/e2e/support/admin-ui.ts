@@ -111,6 +111,10 @@ export async function installBffApiMocks(page: Page, handlers: AppRouteHandler[]
   await installApiMocks(page, APP_BASE_URL, handlers);
 }
 
+export async function installAppApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, APP_BASE_URL, handlers);
+}
+
 export async function installBackendApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
   await installApiMocks(page, BACKEND_BASE_URL, handlers);
 }

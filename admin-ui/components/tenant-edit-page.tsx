@@ -14,15 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   archiveTenant,
-  createTenantDiscordInvite,
-  createTenantInvite,
-  createTenantTeam,
   disconnectJira,
-  getTenantDiscordIdentity,
   listCodexModels,
-  listTenantInvites,
-  listTenantMembers,
-  listTenantTeams,
   getTenant,
   getJiraWebhookDiagnostics,
   listJiraProjects,
@@ -34,27 +27,18 @@ import {
   type ReadyGatePreviewRecord,
   type JiraWebhookDiagnosticsRecord,
   startJiraConnect,
-  startTenantDiscordLink,
   startDiscordInstall,
   startGitHubInstall,
   resetJiraWebhook,
-  resendTenantInvite,
   testGithub,
   testJira,
   unarchiveTenant,
-  revokeTenantInvite,
   createProject,
   updateTenant,
-  updateTenantMemberRecord,
   updateProject,
-  updateTenantTeamRecord,
   type TenantRecord,
   type TenantUpdatePayload,
   type JiraProjectRecord,
-  type TenantMemberRecord,
-  type TenantInviteRecord,
-  type TenantTeamRecord,
-  type TenantDiscordIdentityRecord,
   type ProjectCreatePayload,
   type ProjectRecord,
   type ProjectUpdatePayload
@@ -71,20 +55,7 @@ type TenantEditSection =
   | "health"
   | "config"
   | "projects"
-  | "access"
   | "notifications";
-
-const TEAM_PERMISSION_OPTIONS = [
-  "tenant.manage",
-  "members.manage",
-  "teams.manage",
-  "analytics.business.view",
-  "analytics.technical.view",
-  "runs.business.view",
-  "runs.technical.view",
-  "settings.business.view",
-  "settings.technical.view"
-] as const;
 
 export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const params = useParams<{ tenantId: string }>();
@@ -113,19 +84,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [discordOnboardingChannelId, setDiscordOnboardingChannelId] = useState("");
   const [discordInviteExpirySeconds, setDiscordInviteExpirySeconds] = useState("86400");
   const [discordInviteMaxUses, setDiscordInviteMaxUses] = useState("1");
-  const [members, setMembers] = useState<TenantMemberRecord[]>([]);
-  const [teams, setTeams] = useState<TenantTeamRecord[]>([]);
-  const [invites, setInvites] = useState<TenantInviteRecord[]>([]);
-  const [discordIdentity, setDiscordIdentity] = useState<TenantDiscordIdentityRecord | null>(null);
-  const [accessBusy, setAccessBusy] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteName, setInviteName] = useState("");
-  const [inviteRole, setInviteRole] = useState<"tenant_admin" | "technical_member" | "business_member">("business_member");
-  const [inviteTeamIds, setInviteTeamIds] = useState<string>("");
-  const [inviteModeOverride, setInviteModeOverride] = useState<"technical" | "non_technical" | "">("");
-  const [newTeamName, setNewTeamName] = useState("");
-  const [newTeamDescription, setNewTeamDescription] = useState("");
-  const [newTeamPermissions, setNewTeamPermissions] = useState<string[]>(["analytics.business.view"]);
 
   const statusClasses = useMemo(() => {
     const normalized = statusLine.toLowerCase();
@@ -196,40 +154,11 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
   }
 
-  async function loadAccessData() {
-    if (!credentials) {
-      return;
-    }
-    setAccessBusy(true);
-    try {
-      const [nextMembers, nextTeams, nextInvites, nextDiscordIdentity] = await Promise.all([
-        listTenantMembers(credentials, params.tenantId),
-        listTenantTeams(credentials, params.tenantId),
-        listTenantInvites(credentials, params.tenantId),
-        getTenantDiscordIdentity(credentials, params.tenantId),
-      ]);
-      setMembers(nextMembers);
-      setTeams(nextTeams);
-      setInvites(nextInvites.items);
-      setDiscordIdentity(nextDiscordIdentity);
-    } catch (error) {
-      setStatusLine(`Failed to load access settings: ${(error as Error).message}`);
-    } finally {
-      setAccessBusy(false);
-    }
-  }
-
   useEffect(() => {
     if (ready && credentials) {
       void loadTenant();
     }
   }, [ready, credentials]);
-
-  useEffect(() => {
-    if (ready && credentials && section === "access") {
-      void loadAccessData();
-    }
-  }, [ready, credentials, section]);
 
   useEffect(() => {
     if (searchParams.get("github_install") === "success") {
@@ -489,176 +418,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setStatusLine(`Unable to update project: ${(error as Error).message}`);
     } finally {
       setProjectsBusy(false);
-    }
-  }
-
-  async function handleSaveExperienceMode(defaultMode: "technical" | "non_technical") {
-    if (!credentials || !tenant) {
-      return;
-    }
-    setSaving(true);
-    try {
-      const updated = await updateTenant(credentials, tenant.tenant_id, {
-        name: tenant.name,
-        is_enabled: tenant.is_enabled,
-        jira: tenant.jira,
-        github: tenant.github,
-        repos: tenant.repos,
-        policy: tenant.policy,
-        discord: tenant.discord,
-        experience: { ...(tenant.experience ?? {}), default_mode: defaultMode },
-      });
-      setTenant(updated);
-      setStatusLine(`Default experience set to ${defaultMode.replace("_", " ")}.`);
-    } catch (error) {
-      setStatusLine(`Unable to update experience mode: ${(error as Error).message}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleCreateInvite() {
-    if (!credentials) {
-      return;
-    }
-    setAccessBusy(true);
-    try {
-      await createTenantInvite(credentials, params.tenantId, {
-        email: inviteEmail.trim(),
-        full_name: inviteName.trim() || null,
-        role: inviteRole,
-        team_ids: inviteTeamIds
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
-        mode_override: inviteModeOverride || null,
-      });
-      setInviteEmail("");
-      setInviteName("");
-      setInviteTeamIds("");
-      setInviteModeOverride("");
-      await loadAccessData();
-      setStatusLine("Invite created.");
-    } catch (error) {
-      setStatusLine(`Unable to create invite: ${(error as Error).message}`);
-    } finally {
-      setAccessBusy(false);
-    }
-  }
-
-  async function handleCreateTeam() {
-    if (!credentials) {
-      return;
-    }
-    setAccessBusy(true);
-    try {
-      await createTenantTeam(credentials, params.tenantId, {
-        name: newTeamName.trim(),
-        description: newTeamDescription.trim() || null,
-        permission_keys: newTeamPermissions,
-      });
-      setNewTeamName("");
-      setNewTeamDescription("");
-      setNewTeamPermissions(["analytics.business.view"]);
-      await loadAccessData();
-      setStatusLine("Team created.");
-    } catch (error) {
-      setStatusLine(`Unable to create team: ${(error as Error).message}`);
-    } finally {
-      setAccessBusy(false);
-    }
-  }
-
-  async function handleToggleTeamPermission(team: TenantTeamRecord, permissionKey: string) {
-    if (!credentials) {
-      return;
-    }
-    const nextPermissions = team.permission_keys.includes(permissionKey)
-      ? team.permission_keys.filter((key) => key !== permissionKey)
-      : [...team.permission_keys, permissionKey];
-    setAccessBusy(true);
-    try {
-      await updateTenantTeamRecord(credentials, params.tenantId, team.team_id, {
-        name: team.name,
-        description: team.description,
-        permission_keys: nextPermissions,
-      });
-      await loadAccessData();
-      setStatusLine(`Updated team ${team.name}.`);
-    } catch (error) {
-      setStatusLine(`Unable to update team: ${(error as Error).message}`);
-    } finally {
-      setAccessBusy(false);
-    }
-  }
-
-  async function handleUpdateMember(
-    member: TenantMemberRecord,
-    patch: Partial<Pick<TenantMemberRecord, "role" | "mode_override" | "is_active" | "team_ids">>
-  ) {
-    if (!credentials) {
-      return;
-    }
-    setAccessBusy(true);
-    try {
-      await updateTenantMemberRecord(credentials, params.tenantId, member.membership_id, {
-        role: (patch.role ?? member.role) as "tenant_admin" | "technical_member" | "business_member",
-        team_ids: patch.team_ids ?? member.team_ids,
-        mode_override: (patch.mode_override ?? member.mode_override) as "technical" | "non_technical" | null,
-        is_active: patch.is_active ?? member.is_active,
-      });
-      await loadAccessData();
-      setStatusLine(`Updated member ${member.email}.`);
-    } catch (error) {
-      setStatusLine(`Unable to update member: ${(error as Error).message}`);
-    } finally {
-      setAccessBusy(false);
-    }
-  }
-
-  async function handleInviteAction(inviteId: string, action: "resend" | "revoke") {
-    if (!credentials) {
-      return;
-    }
-    setAccessBusy(true);
-    try {
-      if (action === "resend") {
-        await resendTenantInvite(credentials, params.tenantId, inviteId);
-      } else {
-        await revokeTenantInvite(credentials, params.tenantId, inviteId);
-      }
-      await loadAccessData();
-      setStatusLine(`Invite ${action} complete.`);
-    } catch (error) {
-      setStatusLine(`Unable to ${action} invite: ${(error as Error).message}`);
-    } finally {
-      setAccessBusy(false);
-    }
-  }
-
-  async function handleLinkDiscord() {
-    if (!credentials) {
-      return;
-    }
-    try {
-      const result = await startTenantDiscordLink(credentials, params.tenantId, "/get-started");
-      window.location.href = result.authorize_url;
-    } catch (error) {
-      setStatusLine(`Unable to start Discord link: ${(error as Error).message}`);
-    }
-  }
-
-  async function handleCreateDiscordInvite() {
-    if (!credentials) {
-      return;
-    }
-    try {
-      const invite = await createTenantDiscordInvite(credentials, params.tenantId);
-      await navigator.clipboard.writeText(invite.invite_url);
-      await loadAccessData();
-      setStatusLine("Discord invite generated and copied to clipboard.");
-    } catch (error) {
-      setStatusLine(`Unable to generate Discord invite: ${(error as Error).message}`);
     }
   }
 
@@ -1077,281 +836,6 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             </div>
           </CardContent>
         </Card>
-      ) : null}
-
-      {section === "access" ? (
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Experience</CardTitle>
-              <CardDescription>Choose the default business or technical experience for this tenant.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm">
-              <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  variant={(tenant.experience?.default_mode ?? "technical") === "non_technical" ? "default" : "outline"}
-                  onClick={() => void handleSaveExperienceMode("non_technical")}
-                  disabled={saving}
-                >
-                  Non-technical
-                </Button>
-                <Button
-                  variant={(tenant.experience?.default_mode ?? "technical") === "technical" ? "default" : "outline"}
-                  onClick={() => void handleSaveExperienceMode("technical")}
-                  disabled={saving}
-                >
-                  Technical
-                </Button>
-              </div>
-              <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                Non-technical mode hides token, diagnostics, and cost-heavy surfaces and defaults analytics to delivery summaries.
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Discord Onboarding</CardTitle>
-              <CardDescription>Link your Discord identity and generate onboarding invites for members.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <p>
-                <strong>Identity:</strong>{" "}
-                {discordIdentity?.linked
-                  ? `${discordIdentity.discord_global_name ?? discordIdentity.discord_username ?? discordIdentity.discord_user_id}`
-                  : "Not linked"}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={() => void handleLinkDiscord()}>
-                  Link Discord
-                </Button>
-                <Button variant="outline" onClick={() => void handleCreateDiscordInvite()}>
-                  Generate Join Invite
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Members</CardTitle>
-              <CardDescription>Review role, mode, onboarding, team assignments, and Discord status.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {members.length === 0 ? (
-                <p className="text-muted-foreground">No members found.</p>
-              ) : (
-                <div className="space-y-3">
-                  {members.map((member) => (
-                    <div key={member.membership_id} className="rounded-lg border p-3">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium">{member.full_name || member.email}</p>
-                          <p className="text-xs text-muted-foreground">{member.email}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Discord:{" "}
-                            {member.discord_state.welcome_status
-                              ? `${String(member.discord_state.linked ? "linked" : "not linked")} / ${String(
-                                  member.discord_state.guild_joined ? "joined" : "not joined"
-                                )} / welcome ${String(member.discord_state.welcome_status)}`
-                              : String(member.discord_state.linked ? "linked" : "not linked")}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <select
-                            className="rounded-md border bg-background px-2 py-1"
-                            value={member.role}
-                            onChange={(event) =>
-                              void handleUpdateMember(member, {
-                                role: event.target.value as TenantMemberRecord["role"],
-                              })
-                            }
-                          >
-                            <option value="business_member">business_member</option>
-                            <option value="technical_member">technical_member</option>
-                            <option value="tenant_admin">tenant_admin</option>
-                          </select>
-                          <select
-                            className="rounded-md border bg-background px-2 py-1"
-                            value={member.mode_override ?? ""}
-                            onChange={(event) =>
-                              void handleUpdateMember(member, {
-                                mode_override: (event.target.value || null) as TenantMemberRecord["mode_override"],
-                              })
-                            }
-                          >
-                            <option value="">tenant default</option>
-                            <option value="non_technical">non_technical</option>
-                            <option value="technical">technical</option>
-                          </select>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => void handleUpdateMember(member, { is_active: !member.is_active })}
-                          >
-                            {member.is_active ? "Deactivate" : "Reactivate"}
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {teams.map((team) => {
-                          const assigned = member.team_ids.includes(team.team_id);
-                          return (
-                            <Button
-                              key={`${member.membership_id}-${team.team_id}`}
-                              variant={assigned ? "default" : "outline"}
-                              size="sm"
-                              onClick={() =>
-                                void handleUpdateMember(member, {
-                                  team_ids: assigned
-                                    ? member.team_ids.filter((teamId) => teamId !== team.team_id)
-                                    : [...member.team_ids, team.team_id],
-                                })
-                              }
-                            >
-                              {team.name}
-                            </Button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Teams</CardTitle>
-              <CardDescription>Create teams and tune permission bundles.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm">
-              <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-2">
-                <Input placeholder="Team name" value={newTeamName} onChange={(event) => setNewTeamName(event.target.value)} />
-                <Input
-                  placeholder="Description"
-                  value={newTeamDescription}
-                  onChange={(event) => setNewTeamDescription(event.target.value)}
-                />
-                <div className="md:col-span-2 flex flex-wrap gap-2">
-                  {TEAM_PERMISSION_OPTIONS.map((permissionKey) => {
-                    const selected = newTeamPermissions.includes(permissionKey);
-                    return (
-                      <Button
-                        key={permissionKey}
-                        type="button"
-                        variant={selected ? "default" : "outline"}
-                        size="sm"
-                        onClick={() =>
-                          setNewTeamPermissions((current) =>
-                            current.includes(permissionKey)
-                              ? current.filter((item) => item !== permissionKey)
-                              : [...current, permissionKey]
-                          )
-                        }
-                      >
-                        {permissionKey}
-                      </Button>
-                    );
-                  })}
-                </div>
-                <div className="md:col-span-2">
-                  <Button onClick={() => void handleCreateTeam()} disabled={accessBusy || !newTeamName.trim()}>
-                    Create team
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {teams.map((team) => (
-                  <div key={team.team_id} className="rounded-lg border p-3">
-                    <p className="font-medium">{team.name}</p>
-                    <p className="text-xs text-muted-foreground">{team.description || "No description"}</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {TEAM_PERMISSION_OPTIONS.map((permissionKey) => (
-                        <Button
-                          key={`${team.team_id}-${permissionKey}`}
-                          variant={team.permission_keys.includes(permissionKey) ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => void handleToggleTeamPermission(team, permissionKey)}
-                        >
-                          {permissionKey}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Invites</CardTitle>
-              <CardDescription>Create, resend, and revoke email invites.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm">
-              <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-2">
-                <Input placeholder="Email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
-                <Input placeholder="Full name" value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
-                <select
-                  className="rounded-md border bg-background px-3 py-2"
-                  value={inviteRole}
-                  onChange={(event) =>
-                    setInviteRole(event.target.value as "tenant_admin" | "technical_member" | "business_member")
-                  }
-                >
-                  <option value="business_member">business_member</option>
-                  <option value="technical_member">technical_member</option>
-                  <option value="tenant_admin">tenant_admin</option>
-                </select>
-                <select
-                  className="rounded-md border bg-background px-3 py-2"
-                  value={inviteModeOverride}
-                  onChange={(event) => setInviteModeOverride(event.target.value as "technical" | "non_technical" | "")}
-                >
-                  <option value="">tenant default mode</option>
-                  <option value="non_technical">non_technical</option>
-                  <option value="technical">technical</option>
-                </select>
-                <div className="md:col-span-2">
-                  <Input
-                    placeholder="Team IDs, comma separated"
-                    value={inviteTeamIds}
-                    onChange={(event) => setInviteTeamIds(event.target.value)}
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <Button onClick={() => void handleCreateInvite()} disabled={accessBusy || !inviteEmail.trim()}>
-                    Send invite
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {invites.map((invite) => (
-                  <div key={invite.invite_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
-                    <div>
-                      <p className="font-medium">{invite.email}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {invite.status} • {invite.role} • teams {invite.team_ids.length > 0 ? invite.team_ids.join(", ") : "none"}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => void handleInviteAction(invite.invite_id, "resend")}>
-                        Resend
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={() => void handleInviteAction(invite.invite_id, "revoke")}>
-                        Revoke
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
       ) : null}
 
       {section === "notifications" ? (

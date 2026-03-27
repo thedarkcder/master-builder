@@ -83,7 +83,12 @@ export default function AcceptInvitePage() {
             />
           </div>
           {errorMessage ? (
-            <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">{errorMessage}</p>
+            <p
+              className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+              role="alert"
+            >
+              {errorMessage}
+            </p>
           ) : null}
           <Button className="w-full" type="submit" disabled={submitting}>
             {submitting ? "Joining..." : "Accept invite"}

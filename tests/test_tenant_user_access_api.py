@@ -130,6 +130,57 @@ class TenantUserAccessApiTests(unittest.TestCase):
         self.assertEqual(payload["principal"]["principal_type"], "tenant_user")
         self.assertEqual(payload["principal"]["memberships"][0]["role"], "tenant_admin")
 
+    def test_tenant_user_can_update_profile_settings_for_tenant(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        profile_response = self.client.put(
+            "/api/app/me/profile",
+            json={
+                "full_name": "Owner Renamed",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(profile_response.status_code, 200, profile_response.text)
+        profile_payload = profile_response.json()
+        self.assertEqual(profile_payload["full_name"], "Owner Renamed")
+
+        response = self.client.put(
+            f"/api/app/tenants/{tenant_id}/me/settings",
+            json={
+                "mode_override": "non_technical",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["full_name"], "Owner Renamed")
+        self.assertEqual(payload["memberships"][0]["mode_override"], "non_technical")
+
+    def test_tenant_user_can_change_password(self) -> None:
+        self._register()
+        token = self._login()
+
+        response = self.client.post(
+            "/api/app/me/password",
+            json={
+                "current_password": "S3cret-passphrase",
+                "new_password": "Changed-pass-456",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+
+        login_response = self.client.post(
+            "/api/app/auth/login",
+            json={"email": "owner@example.com", "password": "Changed-pass-456"},
+        )
+        self.assertEqual(login_response.status_code, 200, login_response.text)
+
     def test_tenant_user_list_tenants_returns_only_memberships(self) -> None:
         first = self._register(email="owner1@example.com", tenant_name="Tenant One")
         self._register(email="owner2@example.com", tenant_name="Tenant Two")
@@ -270,6 +321,46 @@ class TenantUserAccessApiTests(unittest.TestCase):
             self.assertEqual(revoke_response.status_code, 200, revoke_response.text)
             self.assertEqual(revoke_response.json()["invite"]["status"], "revoked")
             self.assertEqual(email_mock.call_count, 2)
+
+    def test_public_invite_acceptance_creates_user_and_marks_invite_accepted(self) -> None:
+        registration = self._register()
+        owner_token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        with patch("orchestrator.core.invites.email_delivery.send_tenant_invite_email") as email_mock:
+            create_response = self.client.post(
+                f"/api/admin/tenants/{tenant_id}/invites",
+                json={
+                    "email": "invitee@example.com",
+                    "full_name": "Invitee",
+                    "role": "business_member",
+                    "team_ids": [],
+                    "mode_override": "non_technical",
+                },
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+            self.assertEqual(create_response.status_code, 201, create_response.text)
+            invite_payload = create_response.json()
+            invite_token = parse_qs(urlparse(invite_payload["invite_url"]).query)["token"][0]
+            invite_id = invite_payload["invite_id"]
+            email_mock.assert_called_once()
+
+        accepted = self._accept_invite(token=invite_token, password="Business-pass-123")
+        self.assertEqual(accepted["principal"]["email"], "invitee@example.com")
+        self.assertEqual(accepted["principal"]["memberships"][0]["tenant_id"], tenant_id)
+
+        session_factory = create_session_factory(self.database_url)
+        from orchestrator.storage.models import TenantInvite, TenantUser  # local import keeps test deps scoped
+
+        with session_factory() as session:
+            invite = session.get(TenantInvite, invite_id)
+            self.assertIsNotNone(invite)
+            assert invite is not None
+            tenant_user = session.get(TenantUser, invite.accepted_by_user_id)
+            self.assertEqual(invite.status, "accepted")
+            self.assertIsNotNone(invite.accepted_at)
+            self.assertIsNotNone(tenant_user)
+            self.assertEqual(tenant_user.email, "invitee@example.com")
 
     def test_tenant_admin_can_start_discord_install_and_callback_persists_guild(self) -> None:
         registration = self._register()

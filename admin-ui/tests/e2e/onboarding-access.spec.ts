@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   fulfillJson,
-  installBackendApiMocks,
+  installAppApiMocks,
   installBffApiMocks,
   makeDeliverySummary,
   makeDiscordIdentity,
@@ -36,7 +36,7 @@ test("registers a tenant admin and redirects into the setup onboarding flow", as
     discord: null,
   });
 
-  await installBackendApiMocks(page, [
+  await installAppApiMocks(page, [
     {
       method: "POST",
       pathname: "/api/public/register",
@@ -109,7 +109,7 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
     },
   });
 
-  await installBackendApiMocks(page, [
+  await installAppApiMocks(page, [
     {
       method: "POST",
       pathname: "/api/public/invites/accept",
@@ -203,7 +203,7 @@ test("redirects non-technical users away from technical analytics surfaces", asy
   await expect(page.getByRole("link", { name: "Secrets" })).toHaveCount(0);
 });
 
-test("lets tenant admins manage experience, teams, and invites from Experience & Access", async ({ page }) => {
+test("lets tenant admins manage team settings from dedicated Team tabs", async ({ page }) => {
   const membership = makeMembership({
     tenant_id: "example",
     role: "tenant_admin",
@@ -348,24 +348,145 @@ test("lets tenant admins manage experience, teams, and invites from Experience &
     },
   ]);
 
-  await page.goto("/tenants/example/edit/access");
+  await page.goto("/tenants/example/team/members");
 
-  await expect(page.getByRole("heading", { name: "Experience" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Members" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Teams" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Invites" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Members" })).toBeVisible();
-  await expect(page.getByText("welcome sent")).toBeVisible();
 
-  await page.getByRole("button", { name: "Non-technical" }).click();
-  await expect(page.getByText("Default experience set to non technical.")).toBeVisible();
+  await expect(page.getByText("Welcome sent")).toBeVisible();
 
+  await page.getByRole("link", { name: "Teams" }).click();
+  await expect(page.getByRole("heading", { name: "Teams" })).toBeVisible();
+  await expect(page.getByText("Create groups and decide what each team can access.")).toBeVisible();
+  await expect(page.getByPlaceholder("Team name")).toHaveCount(0);
+  await page.getByRole("button", { name: "New team" }).click();
+  await expect(page.getByRole("button", { name: "Workspace administration" }).first()).toBeVisible();
+  await expect(page.getByText("tenant.manage")).toHaveCount(0);
   await page.getByPlaceholder("Team name").fill("Ops");
   await page.getByPlaceholder("Description").fill("Ops and enablement");
   await page.getByRole("button", { name: "Create team" }).click();
-  await expect(page.getByRole("button", { name: "Ops", exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Ops", { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("Team name")).toHaveCount(0);
 
+  await page.getByRole("link", { name: "Invites" }).click();
+  await expect(page.getByRole("heading", { name: "Invites" })).toBeVisible();
+  await expect(page.getByText("Invite people to the workspace and choose their access.")).toBeVisible();
+  await expect(page.getByText("Team IDs, comma separated")).toHaveCount(0);
+  await expect(page.locator('select[aria-label="Role"]')).toContainText("Business member");
+  await expect(page.locator('select[aria-label="Experience view"]')).toHaveCount(0);
   await page.getByPlaceholder("Email").fill("newhire@example.com");
   await page.getByPlaceholder("Full name").fill("New Hire");
+  await page.getByRole("button", { name: "Delivery" }).click();
   await page.getByRole("button", { name: "Send invite" }).click();
   await expect(page.getByText("newhire@example.com")).toBeVisible();
+  await expect(page.getByText("Pending • Business member • Delivery")).toBeVisible();
+});
+
+test("lets a tenant user manage profile details, experience, and password from Profile", async ({ page }) => {
+  const tenantId = "route 25";
+  const encodedTenantId = encodeURIComponent(tenantId);
+  const membership = makeMembership({
+    tenant_id: tenantId,
+    role: "technical_member",
+    effective_mode: "technical",
+    mode_override: null,
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+  });
+  let principal = makeTenantUserPrincipal({
+    email: "person@example.com",
+    full_name: "Person Example",
+    memberships: [membership],
+  });
+  const tenant = makeTenant({
+    tenant_id: tenantId,
+    experience: { default_mode: "technical" },
+    discord: {
+      guild_id: "guild-123",
+      installed_at: "2026-03-27T11:00:00Z",
+      onboarding_channel_id: "channel-456",
+      onboarding_invite_expires_in_seconds: 86400,
+      onboarding_invite_max_uses: 1,
+      notify_events: [],
+    },
+  });
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodedTenantId}`,
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodedTenantId}/projects`,
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodedTenantId}/discord/identity`,
+      handler: (route) => fulfillJson(route, makeDiscordIdentity({ linked: true, discord_username: "person-discord" })),
+    },
+    {
+      method: "PUT",
+      pathname: "/api/bff/api/app/me/profile",
+      handler: async (route) => {
+        const payload = JSON.parse(route.request().postData() ?? "{}") as { full_name: string };
+        principal = makeTenantUserPrincipal({
+          ...principal,
+          full_name: payload.full_name,
+          memberships: [...principal.memberships],
+        });
+        await fulfillJson(route, principal);
+      },
+    },
+    {
+      method: "PUT",
+      pathname: `/api/bff/api/app/tenants/${encodedTenantId}/me/settings`,
+      handler: async (route) => {
+        const payload = JSON.parse(route.request().postData() ?? "{}") as { mode_override: "technical" | "non_technical" | null };
+        principal = makeTenantUserPrincipal({
+          ...principal,
+          memberships: [
+            makeMembership({
+              ...principal.memberships[0],
+              mode_override: payload.mode_override,
+              effective_mode: payload.mode_override ?? "technical",
+            }),
+          ],
+        });
+        await fulfillJson(route, principal);
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/app/me/password",
+      handler: async (route) => {
+        await fulfillJson(route, principal);
+      },
+    },
+  ]);
+
+  await page.goto(`/tenants/${encodedTenantId}/profile`);
+
+  await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
+  await page.getByLabel("Full name").fill("Person Renamed");
+  await page.getByLabel("Experience preference").selectOption("non_technical");
+  await page.getByRole("button", { name: "Save profile" }).click();
+  await expect(page.getByText("Profile updated.")).toBeVisible();
+
+  await page.getByLabel("Current password").fill("old-password");
+  await page.getByLabel("New password").fill("updated-password");
+  await page.getByRole("button", { name: "Update password" }).click();
+  await expect(page.getByText("Password updated.")).toBeVisible();
 });
 
 test("resumes the wizard on the Discord step after a successful install callback", async ({ page }) => {

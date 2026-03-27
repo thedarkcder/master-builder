@@ -15,6 +15,8 @@ import {
   Menu,
   Settings2,
   SwitchCamera,
+  User,
+  Users,
   X,
   Zap
 } from "lucide-react";
@@ -401,6 +403,18 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           label: "Analytics",
           icon: BarChart3,
           matchPrefix: `/tenants/${decodedTenantId}/analytics`
+        },
+        {
+          href: `/tenants/${decodedTenantId}/team/members`,
+          label: "Team",
+          icon: Users,
+          matchPrefix: `/tenants/${decodedTenantId}/team`
+        },
+        {
+          href: `/tenants/${decodedTenantId}/profile`,
+          label: "Profile",
+          icon: User,
+          matchPrefix: `/tenants/${decodedTenantId}/profile`
         },
         {
           href: `/tenants/${decodedTenantId}/edit/integrations`,
