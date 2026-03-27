@@ -16,25 +16,21 @@ from orchestrator.core.communications.enqueue_reason_contract import (
     enqueue_reason_guidance,
     format_enqueue_conflict_detail,
 )
-from orchestrator.core.decision_engine import (
-    DecisionEngineResult,
-    DecisionEventInput,
-    DecisionSource,
-    evaluate_decision_event,
+from orchestrator.core.decision_clarification_service import (
+    capture_decision_reply_and_recheck,
 )
+from orchestrator.core.decision_engine import DecisionEventInput, DecisionSource
 from orchestrator.core.decision_reply_service import (
-    capture_decision_reply,
     unresolved_question_feedback_for_cycle,
 )
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.precheck_decision import build_precheck_message
-from orchestrator.core.precheck_question_lock import (
-    build_precheck_questions_block,
-    remove_precheck_questions_block,
-    upsert_precheck_questions_block,
+from orchestrator.core.followup_context_service import (
+    FOLLOWUP_CONTEXT_DECISION_GATE,
+    close_followup_contexts,
 )
+from orchestrator.core.pre_run_check import evaluate_execution_readiness_only, evaluate_pre_run_check
+from orchestrator.core.precheck_decision import build_precheck_message
 from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck, resolve_run_gate_block
+from orchestrator.core.run_gate_service import enqueue_issue_run_with_precheck
 from orchestrator.core.runs import cancel_run
 from orchestrator.storage.models import Run, Tenant
 
@@ -44,44 +40,6 @@ def _oauth_context_value(oauth_context: Any, field: str) -> Any:
     if isinstance(oauth_context, dict):
         return oauth_context.get(field)
     return getattr(oauth_context, field, None)
-
-
-def _evaluate_precheck_decision_with_labels(
-    *,
-    session: Session,
-    tenant: Tenant,
-    project: Any,  # noqa: ANN401
-    source: DecisionSource,
-    issue_key: str,
-    issue_summary: str | None,
-    issue_description: str | None,
-    issue_labels: list[str] | None,
-    settings_factory: Callable[[], Any],
-    tenant_jira_oauth_context: Callable[..., Any],
-    oauth_context: Any | None = None,
-    publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
-    idempotency_key: str | None = None,
-) -> DecisionEngineResult:
-    settings = settings_factory()
-    return evaluate_decision_event(
-        session=session,
-        tenant=tenant,
-        project=project,
-        event=DecisionEventInput(
-            source=source,
-            event_type=f"discord_{source}",
-            idempotency_key=idempotency_key,
-            issue_key=issue_key,
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            issue_labels=issue_labels,
-        ),
-        settings=settings,
-        tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-        oauth_context=oauth_context,
-        publish_jira_comment_fn=publish_jira_comment_fn,
-        evaluate_pre_run_check_fn=evaluate_pre_run_check,
-    )
 
 
 def _decision_gate_remaining_questions_message(*, issue_key: str, reason: str, questions: list[str]) -> str:
@@ -119,18 +77,6 @@ def _decision_gate_unresolved_feedback_message(
     return "\n".join(lines), questions
 
 
-def _gtd_missing_message(*, issue_key: str, missing_criteria: tuple[str, ...], questions: tuple[str, ...]) -> str:
-    lines = [f"Good To Do still needs clarification for `{issue_key}`."]
-    cleaned_missing = [item.strip() for item in missing_criteria if item.strip()]
-    cleaned_questions = [question.strip() for question in questions if question.strip()]
-    if cleaned_missing:
-        lines.append("Missing criteria: " + ", ".join(cleaned_missing))
-    if cleaned_questions:
-        lines.append("Please reply with:")
-        lines.extend(f"- {question}" for question in cleaned_questions)
-    return "\n".join(lines)
-
-
 def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides: dict) -> tuple[bool, str]:
     effective_policy = resolve_effective_policy(
         tenant_policy=tenant_policy,
@@ -141,40 +87,6 @@ def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides:
     if mode not in {"safe", "balanced", "aggressive"}:
         mode = "aggressive"
     return enabled, mode
-
-
-def _persist_precheck_questions_block(
-    *,
-    oauth_client,  # noqa: ANN001
-    oauth_access_token: str,
-    cloud_id: str,
-    issue_key: str,
-    issue_summary: str,
-    current_description: str,
-    decision_gate_reason: str | None,
-    decision_gate_questions: list[str],
-    gtd_questions: list[str],
-) -> str:
-    block = build_precheck_questions_block(
-        decision_gate_reason=decision_gate_reason,
-        decision_gate_questions=decision_gate_questions,
-        gtd_questions=gtd_questions,
-    )
-    next_description = (
-        upsert_precheck_questions_block(current_description=current_description, block=block)
-        if block
-        else remove_precheck_questions_block(current_description=current_description)
-    )
-    if next_description.strip() == str(current_description or "").strip():
-        return current_description
-    oauth_client.update_issue_summary_and_description(
-        access_token=oauth_access_token,
-        cloud_id=cloud_id,
-        issue_id_or_key=issue_key,
-        summary=issue_summary,
-        description=next_description,
-    )
-    return next_description
 
 
 def _queue_run_from_issue_context(
@@ -193,47 +105,20 @@ def _queue_run_from_issue_context(
     conflict_prefix: str,
     success_message: str,
 ) -> DiscordCommandResponse:
-    decision_result = _evaluate_precheck_decision_with_labels(
-        session=session,
-        tenant=tenant,
-        project=project,
-        source=source,
+    ready_label = str((tenant.jira_config or {}).get("ready_label") or "").strip() or None
+    pre_check = evaluate_execution_readiness_only(
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id if project is not None else None,
         issue_key=issue_key,
         issue_summary=issue_summary,
         issue_description=issue_description,
         issue_labels=issue_labels,
-        settings_factory=settings_factory,
-        tenant_jira_oauth_context=tenant_jira_oauth_context,
+        ready_label=ready_label,
     )
-    precheck_decision = decision_result.decision
-    gate_block = resolve_run_gate_block(decision_result=decision_result)
-    if gate_block is not None and gate_block.reason == "policy_eval_failed":
+    if pre_check.outcome == "missing_ready_label":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=enqueue_reason_guidance("policy_eval_failed"),
-        )
-    if gate_block is not None and gate_block.reason == "decision_gate_required":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=_decision_gate_remaining_questions_message(
-                issue_key=issue_key,
-                reason=str(gate_block.decision_gate_reason or "").strip(),
-                questions=list(gate_block.decision_gate_questions),
-            ),
-        )
-    if gate_block is not None and gate_block.reason == "gtd_required":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=_gtd_missing_message(
-                issue_key=issue_key,
-                missing_criteria=gate_block.gtd_missing_criteria,
-                questions=gate_block.gtd_questions,
-            ),
-        )
-    if gate_block is not None and gate_block.reason == "missing_ready_label":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"{enqueue_reason_guidance('missing_ready_label')} ({str(gate_block.ready_label or '').strip()})",
+            detail=f"{enqueue_reason_guidance('missing_ready_label')} ({str(pre_check.ready_label or '').strip()})",
         )
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
@@ -244,7 +129,7 @@ def _queue_run_from_issue_context(
         issue_description=issue_description,
         repo_url=project.github_repository,
         delivery_id=None,
-        precheck_outcome=precheck_decision.pre_check.outcome if precheck_decision.pre_check is not None else None,
+        precheck_outcome=pre_check.outcome,
         max_concurrent_runs=resolve_effective_policy(
             tenant_policy=tenant.policy_config,
             project_overrides=project.policy_overrides,
@@ -503,20 +388,6 @@ def dispatch_run_control_command(
             )
             issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or None
             issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
-            capture = capture_decision_reply(
-                session=session,
-                tenant=tenant,
-                project=project,
-                issue_key=issue_key,
-                reply_text=reply_text,
-                source_transport="discord",
-                source_ref=source_ref,
-                actor_ref=payload.user_id,
-                metadata={
-                    "channel_id": payload.channel_id,
-                    "ingress": "discord",
-                },
-            )
             labels_raw = getattr(issue_detail, "labels", None)
             issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()] if isinstance(labels_raw, list) else None
         except ValueError as exc:
@@ -545,21 +416,44 @@ def dispatch_run_control_command(
             except Exception as exc:  # noqa: BLE001
                 return False, str(exc)
 
-        decision_result = _evaluate_precheck_decision_with_labels(
-            session=session,
-            tenant=tenant,
-            project=project,
-            source="discord_reply",
-            issue_key=issue_key,
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            issue_labels=issue_labels,
-            settings_factory=settings_factory,
-            tenant_jira_oauth_context=tenant_jira_oauth_context,
-            oauth_context=oauth,
-            publish_jira_comment_fn=_publish_jira_comment,
-            idempotency_key=f"decision-reply:{capture.evidence_id}",
-        )
+        try:
+            reply_result = capture_decision_reply_and_recheck(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project=project,
+                issue_key=issue_key,
+                reply_text=reply_text,
+                source_transport="discord",
+                source_ref=source_ref,
+                actor_ref=payload.user_id,
+                metadata={
+                    "channel_id": payload.channel_id,
+                    "ingress": "discord",
+                },
+                decision_event_factory=lambda capture: DecisionEventInput(
+                    source="discord_reply",
+                    event_type="discord_discord_reply",
+                    idempotency_key=f"decision-reply:{capture.evidence_id}",
+                    issue_key=issue_key,
+                    issue_summary=issue_summary,
+                    issue_description=issue_description,
+                    issue_labels=issue_labels,
+                ),
+                tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+                evaluate_pre_run_check_fn=evaluate_pre_run_check,
+                oauth_context=oauth,
+                publish_jira_comment_fn=_publish_jira_comment,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"No active Decision Gate cycle exists for `{issue_key}`. "
+                    f"Run `!run {issue_key}` or `!retry {issue_key}` to reopen clarification first."
+                ),
+            ) from exc
+        decision_result = reply_result.decision_result
         precheck_decision = decision_result.decision
         if precheck_decision.pre_check is None:
             return DiscordCommandResponse(
@@ -654,12 +548,28 @@ def dispatch_run_control_command(
                 },
             )
 
+        thread_channel_id = str(payload.channel_id or "").strip()
+        close_followup_contexts(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            context_type=FOLLOWUP_CONTEXT_DECISION_GATE,
+            issue_key=issue_key,
+            thread_channel_id=thread_channel_id or None,
+        )
+
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
         ensure_issue_is_executable(
             issue_status=issue_preview.status,
             tenant=tenant,
             extra_executable_statuses=("In Progress",),
         )
+        rechecked_issue_labels = getattr(decision_result, "issue_labels", None)
+        effective_issue_labels = list(rechecked_issue_labels or issue_labels or [])
+        pre_check = getattr(getattr(decision_result, "decision", None), "pre_check", None)
+        ready_label = str(getattr(pre_check, "ready_label", "") or "").strip()
+        ready_label_present = bool(getattr(pre_check, "ready_label_present", False))
+        if ready_label and ready_label_present and ready_label not in effective_issue_labels:
+            effective_issue_labels.append(ready_label)
         return _queue_run_from_issue_context(
             session=session,
             tenant=tenant,
@@ -669,7 +579,7 @@ def dispatch_run_control_command(
             issue_key=issue_key,
             issue_summary=issue_preview.summary,
             issue_description=issue_description,
-            issue_labels=issue_labels,
+            issue_labels=effective_issue_labels or None,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",

@@ -166,6 +166,7 @@ class DiscordAskWithThreadAction(TransportAction):
     content: str
     components: list[dict[str, Any]] | None = None
     issue_key: str | None = None
+    followup_context_type: str = "ask_thread"
 
 
 @dataclass(frozen=True)
@@ -234,45 +235,6 @@ class GitHubInlineReviewBatchAction(TransportAction):
     project_id: str
     findings: tuple[Any, ...]
     changed_paths: set[str]
-
-
-@dataclass(frozen=True)
-class GitHubStickyRemediationCommentAction(TransportAction):
-    kind: ClassVar[str] = "github_sticky_remediation_comment"
-    repo_full_name: str
-    pr_number: int
-    tenant_id: str
-    project_id: str
-    issue_key: str | None
-    issue_url: str | None
-    issue_created: bool
-    enqueued: bool
-    reason: str | None
-    run_id: str | None
-    head_sha: str | None
-    event: str
-    action_name: str | None
-    status_label: str | None = None
-
-
-@dataclass(frozen=True)
-class GitHubStickyRemediationReviewThreadReplyAction(TransportAction):
-    kind: ClassVar[str] = "github_sticky_remediation_review_thread_reply"
-    repo_full_name: str
-    pr_number: int
-    tenant_id: str
-    project_id: str
-    triggering_comment_id: int
-    issue_key: str | None
-    issue_url: str | None
-    issue_created: bool
-    enqueued: bool
-    reason: str | None
-    run_id: str | None
-    head_sha: str | None
-    event: str
-    action_name: str | None
-    status_label: str | None = None
 
 
 @dataclass(frozen=True)

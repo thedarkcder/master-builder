@@ -7,15 +7,12 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
     agent_observability_tracker,
     reset_agent_observability_for_tests,
 )
 from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
-from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
 from orchestrator.core.workflow.runner import (
     PmPlan,
     WorkflowDiagnostics,
@@ -27,62 +24,6 @@ from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Project, Run, RunLock, Tenant
 from orchestrator.worker import process_next_queued_run
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
-
-
-def _evaluate_pre_run_check_test_stub(
-    *,
-    issue_summary: str | None = None,
-    issue_description: str | None = None,
-    **_: object,
-) -> PreRunCheckResult:
-    summary = (issue_summary or "").lower()
-    description = (issue_description or "").lower()
-    if "unclear requirements" in summary or "tbd:" in description:
-        return PreRunCheckResult(
-            outcome="decision_gate_required",
-            ready_label="agent:ready",
-            ready_label_present=True,
-            required_worker_capability="linux",
-            required_worker_label="worker:linux",
-            required_worker_label_present=True,
-            decision_gate=DecisionGateResult(
-                triggered=True,
-                reason="Decision Gate required.",
-                missing_sections=("Objective", "Scope"),
-                questions=(
-                    "What is the objective?",
-                    "What is in scope?",
-                ),
-                recommendation="Decision required before build",
-                tags=("[NEEDS-PM]",),
-            ),
-            gtd=GoodToDoValidationResult(
-                valid=True,
-                missing_criteria=(),
-                clarification_questions=(),
-            ),
-        )
-    return PreRunCheckResult(
-        outcome="ready_for_agent",
-        ready_label="agent:ready",
-        ready_label_present=True,
-        required_worker_capability="linux",
-        required_worker_label="worker:linux",
-        required_worker_label_present=True,
-        decision_gate=DecisionGateResult(
-            triggered=False,
-            reason="Decision Gate not required",
-            missing_sections=(),
-            questions=(),
-            recommendation="Proceed",
-            tags=(),
-        ),
-        gtd=GoodToDoValidationResult(
-            valid=True,
-            missing_criteria=(),
-            clarification_questions=(),
-        ),
-    )
 
 
 class _SuccessRunner:
@@ -174,6 +115,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         reset_agent_observability_for_tests()
         run_migrations(database_url=self.database_url)
         self.session_factory = create_session_factory(database_url=self.database_url)
+        self._jira_issue_details: dict[str, dict[str, object]] = {}
         self.checkout_patcher = patch(
             "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
         )
@@ -193,11 +135,11 @@ class WorkerWorkflowTests(unittest.TestCase):
             return_value=SimpleNamespace(stale=False, message=None),
         )
         self.freshness_patcher.start()
-        self.decision_gate_patcher = patch(
-            "orchestrator.core.worker.execution_service.evaluate_pre_run_check",
-            new=_evaluate_pre_run_check_test_stub,
+        self.jira_oauth_patcher = patch(
+            "orchestrator.core.worker.execution_service.tenant_jira_oauth_context",
+            side_effect=self._tenant_jira_oauth_context_stub,
         )
-        self.decision_gate_patcher.start()
+        self.jira_oauth_patcher.start()
         self._create_tenant()
         self._seed_checked_out_repo()
 
@@ -209,7 +151,7 @@ class WorkerWorkflowTests(unittest.TestCase):
         self.temp_dir.cleanup()
         os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
         os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
-        self.decision_gate_patcher.stop()
+        self.jira_oauth_patcher.stop()
         get_settings.cache_clear()
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
@@ -270,6 +212,29 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             session.commit()
 
+    def _tenant_jira_oauth_context_stub(self, *, session, tenant, settings):  # noqa: ANN001
+        _ = session, tenant, settings
+
+        class _Client:
+            def __init__(self, issue_details: dict[str, dict[str, object]]) -> None:
+                self.issue_details = issue_details
+
+            def get_issue_detail(self, *, access_token: str, cloud_id: str, issue_id_or_key: str):  # noqa: ARG002
+                detail = self.issue_details.get(issue_id_or_key, {})
+                labels = detail["labels"] if "labels" in detail else ["agent:ready"]
+                return SimpleNamespace(
+                    key=issue_id_or_key,
+                    summary=str(detail.get("summary") or f"Implement {issue_id_or_key}"),
+                    description=str(detail.get("description") or ""),
+                    labels=list(labels),
+                )
+
+        return SimpleNamespace(
+            client=_Client(self._jira_issue_details),
+            connection=SimpleNamespace(cloud_id="cloud-1"),
+            access_token="access-token",
+        )
+
     def _queue_run(
         self,
         issue_key: str,
@@ -307,6 +272,11 @@ class WorkerWorkflowTests(unittest.TestCase):
                 )
             )
             session.commit()
+        self._jira_issue_details[issue_key] = {
+            "summary": effective_summary,
+            "description": effective_description,
+            "labels": ["agent:ready"],
+        }
         return run_id
 
     def _seed_checked_out_repo(self) -> None:
@@ -507,50 +477,24 @@ class WorkerWorkflowTests(unittest.TestCase):
         self.assertIn("TASK_STARTED", event_types)
         self.assertNotIn("TASK_FAILED", event_types)
 
-    def test_process_next_queued_run_blocks_when_decision_gate_is_required(self) -> None:
+    def test_process_next_queued_run_blocks_when_ready_label_is_missing(self) -> None:
         run_id = self._queue_run(
             "TP-302",
             issue_summary="Unclear requirements",
             issue_description="TBD: need to decide later?",
         )
+        self._jira_issue_details["TP-302"]["labels"] = []
 
-        with (
-            patch(
-                "orchestrator.core.worker.execution_service.evaluate_pre_run_check",
-                return_value=PreRunCheckResult(
-                    outcome="decision_gate_required",
-                    ready_label="agent:ready",
-                    ready_label_present=True,
-                    required_worker_capability="linux",
-                    required_worker_label="worker:linux",
-                    required_worker_label_present=True,
-                    decision_gate=DecisionGateResult(
-                        triggered=True,
-                        reason="Ambiguous requirements and unclear dependencies",
-                        missing_sections=(),
-                        questions=("What is the acceptance criteria?",),
-                        recommendation="Add clarification questions in Jira and clarify scope.",
-                        tags=("gtd",),
-                    ),
-                    gtd=GoodToDoValidationResult(
-                        valid=True,
-                        missing_criteria=(),
-                        clarification_questions=(),
-                    ),
-                ),
-            ),
-            self.session_factory() as session,
-        ):
+        with self.session_factory() as session:
             processed = process_next_queued_run(session, _SuccessRunner())
             self.assertIsNotNone(processed)
             self.assertEqual(processed.run_id, run_id)
             self.assertEqual(processed.status, "blocked")
-            self.assertIn("Decision Gate required", processed.last_error or "")
+            self.assertIn("Issue is missing the configured ready label", processed.last_error or "")
             self.assertIsInstance(processed.plan, dict)
-            self.assertIn("decision_gate", processed.plan)
-            self.assertTrue(processed.plan["decision_gate"]["triggered"])
+            self.assertIn("run_not_ready", processed.plan)
             stage_updates = processed.plan["stage_updates"]
-            self.assertEqual([entry["stage"] for entry in stage_updates], ["decision_gate_required"])
+            self.assertEqual([entry["stage"] for entry in stage_updates], ["run_not_ready"])
             retry_enqueue = enqueue_run(
                 session,
                 tenant_id="tenant-worker",
@@ -583,12 +527,13 @@ class WorkerWorkflowTests(unittest.TestCase):
             lock = self._get_lock(session, issue_key="TP-3021")
             self.assertIsNone(lock)
 
-    def test_decision_gate_notification_includes_reply_components(self) -> None:
+    def test_run_not_ready_notification_does_not_open_reply_thread(self) -> None:
         run_id = self._queue_run(
             "TP-399",
             issue_summary="Unclear requirements",
             issue_description="TBD: need to decide later?",
         )
+        self._jira_issue_details["TP-399"]["labels"] = []
 
         with self.session_factory() as session, patch(
             "orchestrator.worker.send_tenant_discord_message",
@@ -601,9 +546,8 @@ class WorkerWorkflowTests(unittest.TestCase):
 
         send_mock.assert_called_once()
         kwargs = send_mock.call_args.kwargs
-        self.assertTrue(kwargs["open_thread"])
-        self.assertIsInstance(kwargs["thread_intro_components"], list)
-        self.assertEqual(kwargs["thread_intro_components"][0]["components"][0]["custom_id"], "ask.reply.open")
+        self.assertFalse(kwargs["open_thread"])
+        self.assertNotIn("thread_intro_components", kwargs)
 
     def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
         with self.session_factory() as session:

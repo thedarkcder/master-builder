@@ -804,6 +804,281 @@ class DecisionEngineStatefulTests(unittest.TestCase):
         self.assertIsNone(case.active_cycle_id)
         self.assertIsNone(case.blocked_reason)
 
+    def test_closed_cycle_does_not_reopen_when_issue_summary_description_and_labels_change(self) -> None:
+        precheck_calls = 0
+
+        def _evaluate_pre_run_check_stub(**kwargs: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
+            recorded_answers = kwargs.get("recorded_answers")
+            has_relink_policy = any(
+                isinstance(item, dict)
+                and str(item.get("question_id") or "").strip() == "dg_relink"
+                and str(item.get("status") or "").strip() == "accepted"
+                and "Reject relink" in str(item.get("answer") or "")
+                for item in (recorded_answers or [])
+            )
+            if has_relink_policy:
+                return _precheck_result(
+                    outcome="ready_for_agent",
+                    decision_gate_triggered=False,
+                    decision_gate_reason="Decision Gate not required",
+                    decision_gate_questions=(),
+                    decision_gate_missing_sections=(),
+                )
+            return _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Need relink policy",
+                decision_gate_questions=("What is the cross-account relink policy?",),
+                decision_gate_missing_sections=("policy",),
+            )
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need relink policy",
+                    questions=(("dg_relink", "What is the cross-account relink policy?"),),
+                ),
+                _planner_result(
+                    gate_status="clear",
+                    reason="Clarification complete",
+                    questions=(("dg_relink", "What is the cross-account relink policy?"),),
+                    statuses={"dg_relink": "accepted"},
+                    details={"dg_relink": "Reject relink; device_id stays bound to one user only."},
+                ),
+            ],
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="answer-context-fingerprint-1",
+                    issue_key="MAB-170",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            self.assertEqual(first.classification, "decision_gate")
+            cycle = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle is not None
+
+            from orchestrator.storage.models import DecisionAnswer
+
+            session.add(
+                DecisionAnswer(
+                    answer_id="ans-170",
+                    case_id=first.case_id,
+                    cycle_id=str(first.cycle_id),
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key="MAB-170",
+                    question_id=str(cycle.question_set_json[0]["id"]),
+                    question_kind="decision_gate",
+                    question_text="What is the cross-account relink policy?",
+                    status="accepted",
+                    normalized_answer="Reject relink; device_id stays bound to one user only.",
+                    source_transport="discord",
+                    source_ref=None,
+                    evidence_ids_json=[],
+                    metadata_json={},
+                    accepted_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            cleared = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_reply",
+                    event_type="reply_added",
+                    idempotency_key="answer-context-fingerprint-2",
+                    issue_key="MAB-170",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+
+            reused = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_run",
+                    event_type="discord_discord_run",
+                    idempotency_key="answer-context-fingerprint-3",
+                    issue_key="MAB-170",
+                    issue_summary="Summary changed after clarification closed",
+                    issue_description="Description changed after clarification closed.\n\nRecorded answer block changed.",
+                    issue_labels=["agent:ready", "ios", "payments"],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            case = session.query(DecisionCase).filter_by(issue_key="MAB-170").one()
+            cycle_count = session.query(DecisionCycle).filter_by(issue_key="MAB-170").count()
+
+        self.assertEqual(cleared.classification, "clear")
+        self.assertEqual(reused.classification, "clear")
+        self.assertEqual(reused.case_state, "ready_for_execution")
+        self.assertFalse(reused.decision.pre_check.decision_gate.triggered)
+        self.assertEqual(precheck_calls, 1)
+        self.assertIsNone(case.active_cycle_id)
+        self.assertEqual(cycle_count, 1)
+
+    def test_closed_cycle_can_block_on_missing_ready_label_without_reopening_gate(self) -> None:
+        prechecks = [
+            _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Need relink policy",
+                decision_gate_questions=("What is the cross-account relink policy?",),
+                decision_gate_missing_sections=("policy",),
+            ),
+        ]
+        precheck_calls = 0
+
+        def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
+            return prechecks.pop(0)
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision_engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need relink policy",
+                    questions=(("dg_relink", "What is the cross-account relink policy?"),),
+                ),
+                _planner_result(
+                    gate_status="clear",
+                    reason="Clarification complete",
+                    questions=(("dg_relink", "What is the cross-account relink policy?"),),
+                    statuses={"dg_relink": "accepted"},
+                    details={"dg_relink": "Reject relink; device_id stays bound to one user only."},
+                ),
+            ],
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+            tenant.jira_config = {"ready_label": "agent:ready"}
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="jira_webhook",
+                    event_type="issue_updated",
+                    idempotency_key="missing-ready-after-close-1",
+                    issue_key="MAB-171",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=["agent:ready"],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            self.assertEqual(first.classification, "decision_gate")
+            cycle = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle is not None
+
+            from orchestrator.storage.models import DecisionAnswer
+
+            session.add(
+                DecisionAnswer(
+                    answer_id="ans-171",
+                    case_id=first.case_id,
+                    cycle_id=str(first.cycle_id),
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key="MAB-171",
+                    question_id=str(cycle.question_set_json[0]["id"]),
+                    question_kind="decision_gate",
+                    question_text="What is the cross-account relink policy?",
+                    status="accepted",
+                    normalized_answer="Reject relink; device_id stays bound to one user only.",
+                    source_transport="discord",
+                    source_ref=None,
+                    evidence_ids_json=[],
+                    metadata_json={},
+                    accepted_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            cleared = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_reply",
+                    event_type="reply_added",
+                    idempotency_key="missing-ready-after-close-2",
+                    issue_key="MAB-171",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=["agent:ready"],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            rerun = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_run",
+                    event_type="discord_discord_run",
+                    idempotency_key="missing-ready-after-close-3",
+                    issue_key="MAB-171",
+                    issue_summary="Summary changed",
+                    issue_description="Description changed",
+                    issue_labels=["ios", "payments"],
+                ),
+                settings=self.settings,
+                tenant_jira_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            case = session.query(DecisionCase).filter_by(issue_key="MAB-171").one()
+            cycle_count = session.query(DecisionCycle).filter_by(issue_key="MAB-171").count()
+
+        self.assertEqual(cleared.classification, "clear")
+        self.assertEqual(rerun.classification, "clear")
+        self.assertEqual(rerun.decision.block_reason, "missing_ready_label")
+        self.assertFalse(rerun.decision.pre_check.decision_gate.triggered)
+        self.assertEqual(precheck_calls, 1)
+        self.assertIsNone(case.active_cycle_id)
+        self.assertEqual(cycle_count, 1)
+
     def test_existing_case_load_normalizes_stale_clear_snapshot(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-stateful")
@@ -991,3 +1266,87 @@ class DecisionEngineStatefulTests(unittest.TestCase):
 
         self.assertEqual(result.decision.block_reason, None)
         self.assertIn("objective", result.auto_resolved_slots)
+
+    def test_serializes_auto_resolved_slot_timestamps_for_decision_metadata(self) -> None:
+        def _stub_precheck(**kwargs: object) -> PreRunCheckResult:
+            description = str(kwargs.get("issue_description") or "")
+            if "Auto-resolved context for precheck:" in description:
+                return _precheck_result(outcome="ready_for_agent")
+            return _precheck_result(
+                outcome="decision_gate_required",
+                decision_gate_triggered=True,
+                decision_gate_reason="Missing objective",
+                decision_gate_questions=("What is the objective?",),
+                decision_gate_missing_sections=("objective",),
+            )
+
+        from orchestrator.core.knowledge_base import SlotResolution
+
+        source_time = datetime(2026, 3, 23, 13, 30, tzinfo=timezone.utc)
+
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+            with patch(
+                "orchestrator.core.decision_engine.resolve_missing_slots_from_knowledge",
+                return_value={
+                    "objective": SlotResolution(
+                        slot_name="objective",
+                        slot_value="Implement centralized decision engine.",
+                        source_timestamp=source_time,
+                        confidence=0.95,
+                        citation={"title": "KB fact", "source_type": "manual"},
+                        inferred=False,
+                    )
+                },
+            ):
+                result = evaluate_decision_event(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    event=DecisionEventInput(
+                        source="jira_webhook",
+                        event_type="issue_updated",
+                        idempotency_key="resolve-datetime-1",
+                        issue_key="MAB-164",
+                        issue_summary="Summary",
+                        issue_description="Description",
+                        issue_labels=[],
+                    ),
+                    settings=self.settings,
+                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    evaluate_pre_run_check_fn=_stub_precheck,
+                )
+
+            case = existing_case_for_issue(session=session, tenant_id=tenant.tenant_id, issue_key="MAB-164")
+            assert case is not None
+
+        self.assertEqual(result.decision.block_reason, None)
+        stored_answers = dict(case.metadata_json.get("auto_resolved_answers") or {})
+        objective = dict(stored_answers.get("objective") or {})
+        self.assertEqual(objective.get("source_timestamp"), source_time.isoformat())
+
+    def test_requires_resolved_project_for_decision_evaluation(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-stateful")
+            assert tenant is not None
+
+            with self.assertRaisesRegex(ValueError, "requires a resolved project"):
+                evaluate_decision_event(
+                    session=session,
+                    tenant=tenant,
+                    project=None,
+                    event=DecisionEventInput(
+                        source="jira_webhook",
+                        event_type="issue_updated",
+                        idempotency_key="missing-project-1",
+                        issue_key="MAB-999",
+                        issue_summary="Summary",
+                        issue_description="Description",
+                        issue_labels=[],
+                    ),
+                    settings=self.settings,
+                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    evaluate_pre_run_check_fn=lambda **__: _precheck_result(outcome="ready_for_agent"),
+                )

@@ -20,6 +20,7 @@ from orchestrator.core.worker.run_health import (
     worker_service_instance_id,
 )
 from orchestrator.core.worker.execution_service import (
+    process_next_webhook_job_with_dependencies as _process_next_webhook_job_with_dependencies,
     process_next_queued_run_with_dependencies as _process_next_queued_run_with_dependencies,
 )
 from orchestrator.core.worker.queue_listener import (
@@ -118,6 +119,9 @@ def process_next_queued_run(session, runner):  # noqa: ANN001
 
 def _process_next_queued_run_once(*, session_factory):  # noqa: ANN001
     with session_factory() as session:
+        webhook_job = _process_next_webhook_job_with_dependencies(session=session)
+        if webhook_job is not None:
+            return webhook_job
         try:
             runner = build_workflow_runner_for_session(session=session)
         except CodexRuntimeError as exc:

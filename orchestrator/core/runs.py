@@ -41,6 +41,16 @@ class EnqueueRunResult:
     run: Run
 
 
+@dataclass(frozen=True)
+class RunBootstrap:
+    plan: dict[str, object] | None = None
+    branch: str | None = None
+    pr_url: str | None = None
+    pm_session_id: str | None = None
+    dev_session_id: str | None = None
+    orchestrated_session_id: str | None = None
+
+
 def normalize_run_dedupe_scope(raw_scope: object | None) -> str:
     normalized = str(raw_scope or "").strip().lower()
     if normalized == RUN_DEDUPE_SCOPE_PR_REMEDIATION:
@@ -153,6 +163,17 @@ def _coerce_positive_limit(value: int | None) -> int | None:
     return max(1, parsed)
 
 
+def _build_initial_plan(
+    *,
+    bootstrap: RunBootstrap | None,
+    normalized_precheck_outcome: str | None,
+) -> dict[str, object] | None:
+    next_plan = dict(bootstrap.plan) if bootstrap is not None and isinstance(bootstrap.plan, dict) else {}
+    if normalized_precheck_outcome is not None:
+        next_plan["pre_check"] = {"outcome": normalized_precheck_outcome}
+    return next_plan or None
+
+
 def enqueue_run(
     session: Session,
     *,
@@ -167,6 +188,7 @@ def enqueue_run(
     precheck_source_plan: object | None = None,
     max_concurrent_runs: int | None = None,
     dedupe_scope: str | None = None,
+    bootstrap: RunBootstrap | None = None,
 ) -> EnqueueRunResult:
     normalized_dedupe_scope = normalize_run_dedupe_scope(dedupe_scope)
     if delivery_id:
@@ -211,6 +233,10 @@ def enqueue_run(
         precheck_outcome=precheck_outcome,
         precheck_source_plan=precheck_source_plan,
     )
+    initial_plan = _build_initial_plan(
+        bootstrap=bootstrap,
+        normalized_precheck_outcome=normalized_precheck_outcome,
+    )
     run = Run(
         run_id=str(uuid4()),
         tenant_id=tenant_id,
@@ -219,12 +245,13 @@ def enqueue_run(
         issue_summary=issue_summary,
         issue_description=issue_description,
         repo_url=repo_url,
-        branch=None,
-        pr_url=None,
+        branch=bootstrap.branch if bootstrap is not None else None,
+        pr_url=bootstrap.pr_url if bootstrap is not None else None,
+        pm_session_id=bootstrap.pm_session_id if bootstrap is not None else None,
+        dev_session_id=bootstrap.dev_session_id if bootstrap is not None else None,
+        orchestrated_session_id=bootstrap.orchestrated_session_id if bootstrap is not None else None,
         dedupe_scope=normalized_dedupe_scope,
-        plan=None
-        if normalized_precheck_outcome is None
-        else {"pre_check": {"outcome": normalized_precheck_outcome}},
+        plan=initial_plan,
         status=RUN_STATUS_QUEUED,
         last_error=None,
         created_at=now,
@@ -404,3 +431,47 @@ def cancel_run(
     session.commit()
     session.refresh(run)
     return run
+
+
+def cancel_queued_issue_runs(
+    session: Session,
+    *,
+    tenant_id: str,
+    issue_key: str,
+    cancelled_by: str,
+    dedupe_scope: str | None = None,
+) -> list[Run]:
+    normalized_dedupe_scope = normalize_run_dedupe_scope(dedupe_scope)
+    queued_runs = session.execute(
+        select(Run).where(
+            Run.tenant_id == tenant_id,
+            Run.issue_key == issue_key,
+            Run.status == RUN_STATUS_QUEUED,
+            Run.dedupe_scope == normalized_dedupe_scope,
+        )
+    ).scalars().all()
+    if not queued_runs:
+        return []
+
+    now = _now()
+    cancellation_reason = f"Cancelled by {cancelled_by}"
+    cancelled_run_ids = {run.run_id for run in queued_runs}
+    for run in queued_runs:
+        run.status = RUN_STATUS_CANCELLED
+        run.last_error = cancellation_reason
+        if run.started_at is None:
+            run.started_at = now
+        run.finished_at = now
+
+    session.execute(
+        delete(RunLock).where(
+            RunLock.tenant_id == tenant_id,
+            RunLock.issue_key == issue_key,
+            RunLock.dedupe_scope == normalized_dedupe_scope,
+            RunLock.run_id.in_(cancelled_run_ids),
+        )
+    )
+    session.commit()
+    for run in queued_runs:
+        session.refresh(run)
+    return queued_runs

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from orchestrator.core.codex_invocation import CodexInvocationContext
-from orchestrator.core.knowledge_base import SlotResolution
+from orchestrator.core.knowledge_base import SlotResolution, parse_source_timestamp
 from orchestrator.core.project_policy import resolve_effective_policy
 
 logger = logging.getLogger(__name__)
@@ -268,7 +268,7 @@ def deserialize_slot_resolution(*, slot_name: str, value: object) -> SlotResolut
     return SlotResolution(
         slot_name=slot_name,
         slot_value=slot_value,
-        source_timestamp=value.get("source_timestamp"),
+        source_timestamp=parse_source_timestamp(value.get("source_timestamp")),
         confidence=float(value.get("confidence") or 0.0),
         citation=dict(citation) if isinstance(citation, dict) else {},
         inferred=bool(value.get("inferred", False)),
@@ -278,7 +278,7 @@ def deserialize_slot_resolution(*, slot_name: str, value: object) -> SlotResolut
 def serialize_slot_resolution(answer: SlotResolution) -> dict[str, object]:
     return {
         "slot_value": answer.slot_value,
-        "source_timestamp": answer.source_timestamp,
+        "source_timestamp": answer.source_timestamp.isoformat() if answer.source_timestamp else None,
         "confidence": answer.confidence,
         "citation": dict(answer.citation),
         "inferred": answer.inferred,

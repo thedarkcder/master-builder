@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 from orchestrator.api.webhooks.followup_service import DiscordWebhookFollowupService
@@ -16,6 +17,9 @@ from orchestrator.core.communications import (
 )
 from orchestrator.core.observability import current_log_context, reset_log_context, set_log_context
 from orchestrator.tools.discord_api import DiscordApiError
+
+
+pytestmark = pytest.mark.contract
 
 
 class RecordingExecutor:
@@ -35,6 +39,12 @@ class RecordingExecutor:
 
 
 class DiscordWebhookFollowupServiceTests(unittest.TestCase):
+    def _assert_thread_delivery_with_ack(self, transport: RecordingExecutor, action_type: type[object]) -> None:
+        self.assertEqual(len(transport.actions), 2)
+        self.assertIsInstance(transport.actions[0], action_type)
+        self.assertIsInstance(transport.actions[1], DiscordInteractionFollowupAction)
+        self.assertIn("Posted response in a follow-up thread", transport.actions[1].content)
+
     def _build_service(
         self,
         *,
@@ -81,8 +91,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         self.assertEqual(transport.actions[0].issue_key, "example-46")
 
     def test_command_followup_passes_issue_key_to_thread_transport(self) -> None:
@@ -108,9 +117,38 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         self.assertEqual(transport.actions[0].issue_key, "MAB-159")
+        self.assertEqual(transport.actions[0].followup_context_type, "ask_thread")
+
+    def test_command_followup_marks_decision_gate_threads_with_explicit_context(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(
+            side_effect=HTTPException(
+                status_code=409,
+                detail=(
+                    "Decision Gate still needs clarification for `GP-124`.\n"
+                    "Reason: Clarify relink policy"
+                ),
+            )
+        )
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!run GP-124",
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
+        self.assertEqual(transport.actions[0].issue_key, "GP-124")
+        self.assertEqual(transport.actions[0].followup_context_type, "decision_gate")
 
     def test_command_followup_uses_thread_reply_transport_when_replying(self) -> None:
         session = MagicMock()
@@ -225,8 +263,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         sent_content = transport.actions[0].content
         self.assertIn("ask confirmation payload was incomplete", sent_content)
 
@@ -258,8 +295,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         self.assertEqual(transport.actions[0].components, [{"type": 1, "request_id": "req-1"}])
 
     def test_command_followup_falls_back_to_reply_components_when_thread_send_fails(self) -> None:
@@ -302,8 +338,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         sent_content = transport.actions[0].content
         self.assertIn("Command failed: bad request", sent_content)
 
@@ -325,8 +360,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         self.assertEqual(transport.actions[0].issue_key, "GP-114")
 
     def test_command_followup_http_exception_extracts_issue_key_from_command_text(self) -> None:
@@ -346,8 +380,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         self.assertEqual(transport.actions[0].issue_key, "GP-118")
 
     def test_command_followup_without_issue_context_binds_none(self) -> None:
@@ -373,8 +406,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         self.assertIsNone(transport.actions[0].issue_key)
 
     def test_command_followup_response_issue_key_overrides_command_hint(self) -> None:
@@ -401,8 +433,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         self.assertEqual(transport.actions[0].issue_key, "GP-200")
 
     def test_command_followup_disabled_tenant(self) -> None:
@@ -447,8 +478,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
 
         emit_mock.assert_called_once()
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         sent_content = transport.actions[0].content
         self.assertIn("Ref:", sent_content)
 
@@ -513,8 +543,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(transport.actions), 1)
-        self.assertIsInstance(transport.actions[0], DiscordSeedWithThreadAction)
+        self._assert_thread_delivery_with_ack(transport, DiscordSeedWithThreadAction)
         self.assertEqual(transport.actions[0].questions, ["Which issue key?"])
 
     def test_ask_confirmation_rejects_non_owner(self) -> None:

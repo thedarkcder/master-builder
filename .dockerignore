@@ -16,3 +16,4 @@ __pycache__/
 *.pyd
 *.db
 /tmp/
+.workdirs

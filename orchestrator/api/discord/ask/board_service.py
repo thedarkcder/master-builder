@@ -14,6 +14,9 @@ def ask_board_message(
     channel_id: str,
     question: str,
     scoped_issue_key: str | None,
+    scoped_project_id: str | None,
+    prune_missing_issue_keys_from_ask_history_fn,
+    recent_ask_history_fn,
     collect_ask_context_with_history_context_fn,
     get_settings_fn,
     build_codex_runtime_fn,
@@ -26,13 +29,32 @@ def ask_board_message(
     codex_runtime_error_type,
     store_ask_history_entry_fn,
 ):  # noqa: ANN001
+    prune_missing_issue_keys_from_ask_history_fn(
+        session=session,
+        tenant=tenant,
+        user_id=user_id,
+        channel_id=channel_id,
+    )
+    effective_scoped_issue_key = scoped_issue_key
+    if not effective_scoped_issue_key:
+        history_context = recent_ask_history_fn(
+            tenant=tenant,
+            user_id=user_id,
+            channel_id=channel_id,
+        )
+        for entry in reversed(history_context):
+            candidate_issue_key = str(entry.get("issue_key") or "").strip().upper()
+            if candidate_issue_key:
+                effective_scoped_issue_key = candidate_issue_key
+                break
+
     normalized_issue_key, requested_status, issues, status_counts, history_context = collect_ask_context_with_history_context_fn(
         session=session,
         tenant=tenant,
         user_id=user_id,
         channel_id=channel_id,
         question=question,
-        scoped_issue_key=scoped_issue_key,
+        scoped_issue_key=effective_scoped_issue_key,
     )
 
     settings = get_settings_fn()
@@ -56,7 +78,7 @@ def ask_board_message(
         session=session,
         tenant=tenant,
         settings=settings,
-        project_id=None,
+        project_id=scoped_project_id,
         project_keys=scoped_project_keys,
     )
     try:
@@ -69,11 +91,11 @@ def ask_board_message(
             invocation_context=CodexInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
-                project_id=None,
+                project_id=scoped_project_id,
                 command="ask",
                 stage="answer",
                 working_dir=codex_working_dir,
-                issue_key=scoped_issue_key,
+                issue_key=effective_scoped_issue_key,
             ),
             history=history_context,
             github_context=github_context,

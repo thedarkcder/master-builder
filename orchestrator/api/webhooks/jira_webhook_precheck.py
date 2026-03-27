@@ -8,16 +8,24 @@ from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_con
 from orchestrator.api.webhooks.contracts import post_jira_comment
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, TODO_STATUS
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
-from orchestrator.core.decision_engine import (
-    DecisionEngineResult,
-    DecisionEventInput,
-    evaluate_decision_event,
-)
+from orchestrator.core.decision_clarification_service import evaluate_issue_clarification_state
+from orchestrator.core.decision_engine import DecisionEngineResult, DecisionEventInput
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.precheck_question_lock import (
+    build_precheck_questions_block,
+    remove_precheck_questions_block,
+    upsert_precheck_questions_block,
+)
 from orchestrator.api.discord.shared.state import normalize_status_name
 
 logger = logging.getLogger(__name__)
+
+
+def _oauth_context_value(oauth_context: object, field: str) -> object | None:
+    if isinstance(oauth_context, dict):
+        return oauth_context.get(field)
+    return getattr(oauth_context, field, None)
 
 
 def is_todo_status(status_name: str) -> bool:
@@ -192,7 +200,7 @@ def evaluate_precheck_decision_with_labels(
             settings=settings,
         )
 
-    result = evaluate_decision_event(
+    result = evaluate_issue_clarification_state(
         session=session,
         tenant=context.tenant,
         project=context.project,
@@ -222,4 +230,77 @@ def evaluate_precheck_decision_with_labels(
             context.issue_key,
             ",".join(context.issue_labels),
         )
+    _sync_precheck_questions_block(
+        context=context,
+        session=session,
+        settings=settings,
+        decision_result=result,
+        current_description=effective_description,
+    )
     return result
+
+
+def _sync_precheck_questions_block(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+    decision_result: DecisionEngineResult,
+    current_description: str | None,
+) -> None:
+    if context.project is None or not str(context.issue_key or "").strip():
+        return
+    pre_check = decision_result.decision.pre_check
+    if pre_check is None:
+        return
+    decision_gate_reason = (
+        str(getattr(pre_check, "decision_gate_reason", "") or "").strip() or None
+        if bool(getattr(pre_check, "decision_gate_triggered", False))
+        else None
+    )
+    decision_gate_questions = [
+        str(question).strip()
+        for question in getattr(getattr(pre_check, "decision_gate", None), "questions", ())
+        if str(question).strip()
+    ]
+    gtd_questions = [
+        str(question).strip()
+        for question in getattr(pre_check, "gtd_clarification_questions", ())
+        if str(question).strip()
+    ]
+    block = build_precheck_questions_block(
+        decision_gate_reason=decision_gate_reason,
+        decision_gate_questions=decision_gate_questions,
+        gtd_questions=gtd_questions,
+    )
+    next_description = (
+        upsert_precheck_questions_block(current_description=str(current_description or ""), block=block)
+        if block
+        else remove_precheck_questions_block(current_description=str(current_description or ""))
+    )
+    if next_description.strip() == str(current_description or "").strip():
+        return
+    try:
+        oauth = tenant_jira_oauth_context(session=session, tenant=context.tenant, settings=settings)
+        oauth_client = _oauth_context_value(oauth, "client")
+        oauth_connection = _oauth_context_value(oauth, "connection")
+        oauth_access_token = _oauth_context_value(oauth, "access_token")
+        cloud_id = getattr(oauth_connection, "cloud_id", None)
+        if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
+            raise RuntimeError("Tenant Jira OAuth context is incomplete")
+        oauth_client.update_issue_summary_and_description(
+            access_token=str(oauth_access_token),
+            cloud_id=str(cloud_id),
+            issue_id_or_key=context.issue_key,
+            summary=str(context.issue_summary or ""),
+            description=next_description,
+        )
+        context.issue_description = next_description
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "jira_webhook_precheck_question_block_sync_failed request_id=%s tenant_id=%s issue_key=%s error=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            exc,
+        )

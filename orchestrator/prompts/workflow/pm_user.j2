@@ -30,7 +30,13 @@ Current worker capability: {{ current_worker_capability }}
 Available worker capabilities: {{ available_worker_capabilities_json }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
-Agent tool command: {{ agent_tool_command }}
+
+Structured tool bridge:
+- To call an allowed governed tool, return JSON only:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When planning is complete, return JSON only:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
 
 Required actions:
 1. Produce concrete, ordered execution steps.
@@ -49,6 +55,12 @@ Required actions:
    - Output "linux" only when all required implementation and verification work can run without macOS-only tooling.
 7. Output only compact evidence conclusions:
    - missing_evidence_sources: source names you could not load or validate (for example: jira_issue, decision_state, knowledge, runtime_values).
+   - `decision_state` means the persisted Decision Gate / clarification state for this issue.
+   - The only authoritative way to determine `decision_state` is the `decision.read_state` tool.
+   - Do not emit `missing_evidence_sources=["decision_state"]` unless you actually called `decision.read_state` and that tool failed or returned unavailable.
+   - If `decision.read_state` succeeds and reports that no prior decision state exists, that is a valid result, not missing evidence.
+   - `jira_issue` means authoritative Jira issue details loaded via `jira.get_issue`.
+   - `knowledge` means authoritative knowledge lookups loaded via `knowledge.read` or `knowledge.exact_read`.
    - confirmed_external_blockers: only evidence-backed external blockers that should stop implementation now.
    - resolved_prerequisites: concise prerequisite facts that are already satisfied.
    - unresolved_prerequisites: concise prerequisite facts that remain unresolved but are not raw source dumps.
@@ -57,6 +69,7 @@ Required actions:
 10. Use runtime-values tools only for runtime config/secrets explicitly required by this ticket's implementation or verification path (for example SUPABASE_URL, SUPABASE_ANON_KEY), not for stable project metadata already present in context.
 11. If additional runtime values are needed but not explicitly listed in this ticket, request them via `run.request_human_input`, continue planning, and do not treat that as terminal evidence failure.
 12. Only emit missing_evidence_sources=`runtime_values` when the ticket explicitly names required runtime values and they remain unresolved; that path should block PM planning.
+13. Never guess that an evidence source is missing from ticket wording alone. For `decision_state`, `jira_issue`, and `knowledge`, first call the matching tool and use the result.
 
 Output contract:
 - plan_steps: array of concrete execution steps.

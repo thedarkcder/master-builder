@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 from typing import Protocol
 
 from orchestrator.core.codex_agents import CodexWorkflowAgents
@@ -87,10 +88,15 @@ class OrchestratedRunWorkflowExecutor:
         runtime: CodexRuntime,
         log_sink: Callable[[dict], None] | None = None,
         stage_agents: StageAgents | None = None,
+        execute_tool: Callable[
+            [str, str | None, str | None, str, str, str, dict[str, object]],
+            dict[str, Any],
+        ] | None = None,
     ):
         self._runtime = runtime
         self._log_sink = log_sink
         self._stage_agents = stage_agents
+        self._execute_tool = execute_tool
 
     def execute(
         self,
@@ -98,7 +104,23 @@ class OrchestratedRunWorkflowExecutor:
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
     ) -> WorkflowResult:
-        agents = self._stage_agents or CodexWorkflowAgents(runtime=self._runtime, log_sink=self._log_sink)
+        agents = self._stage_agents or CodexWorkflowAgents(
+            runtime=self._runtime,
+            log_sink=self._log_sink,
+            execute_tool=(
+                None
+                if self._execute_tool is None
+                else lambda context, tool_name, tool_args: self._execute_tool(
+                    context.tenant_id or "",
+                    context.project_id,
+                    context.run_id,
+                    context.issue_key or "",
+                    context.stage,
+                    tool_name,
+                    tool_args,
+                )
+            ),
+        )
         history: list[dict[str, str]] = []
         stage_trace: list[dict[str, object]] = []
         test_guidance = list(request.suggested_test_commands or ["Run relevant project tests"])
@@ -132,6 +154,47 @@ class OrchestratedRunWorkflowExecutor:
                     attempt=1,
                     summary="Resumed from persisted PM plan.",
                 )
+            )
+        elif _should_resume_from_review(request):
+            plan = _resume_pm_plan(request.resume_source_plan)
+            if plan is None:
+                return self._failure_result(
+                    request=request,
+                    state=_ExecutionState(
+                        plan=None,
+                        stage_trace=stage_trace,
+                        history=history,
+                        dev_rationale=[],
+                        review_summary=[],
+                        review_feedback=None,
+                        test_guidance=test_guidance,
+                    ),
+                    stage="review",
+                    attempts=1,
+                    message="Cannot resume review stage because no persisted PM plan is available.",
+                    classification="resume_invalid",
+                )
+            stage_trace.extend(
+                [
+                    _stage_trace_entry(
+                        stage="pm",
+                        status="completed",
+                        attempt=1,
+                        summary="Resumed from persisted PM plan.",
+                    ),
+                    _stage_trace_entry(
+                        stage="dev",
+                        status="completed",
+                        attempt=1,
+                        summary="Resumed from persisted dev result.",
+                    ),
+                    _stage_trace_entry(
+                        stage="test",
+                        status="completed",
+                        attempt=1,
+                        summary="Resumed from persisted passing test result.",
+                    ),
+                ]
             )
         else:
             try:
@@ -178,6 +241,75 @@ class OrchestratedRunWorkflowExecutor:
             review_feedback=None,
             test_guidance=test_guidance,
         )
+
+        if _should_resume_from_review(request):
+            source_state = _resume_source_state(request)
+            resumed_dev_result = _resume_dev_result(source_state)
+            resumed_test_result = _resume_test_result(source_state, default_guidance=test_guidance)
+            state.dev_rationale[:] = list(resumed_dev_result.change_summary)
+            state.test_guidance[:] = list(resumed_test_result.guidance or state.test_guidance)
+            state.review_summary[:] = list(source_state.get("review_summary", []) or [])
+            state.review_feedback = (
+                str(source_state.get("review_feedback") or "").strip() or None
+            )
+            try:
+                review_result = agents.review(request, plan, resumed_dev_result, resumed_test_result, 1)
+            except Exception as exc:  # noqa: BLE001
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="review",
+                    attempts=1,
+                    message=f"Review stage failed: {exc}",
+                    classification="review_failure",
+                )
+
+            last_review_result = review_result
+            state.review_summary[:] = list(review_result.summary)
+            state.review_feedback = review_result.feedback
+            review_message = _summarize_review_result(review_result)
+            review_outcome = _normalize_review_outcome(review_result)
+            if review_outcome == "approved":
+                pr_url = review_result.pr_url or resumed_dev_result.pr_url
+                stage_trace.append(
+                    _stage_trace_entry(
+                        stage="review",
+                        status="completed",
+                        attempt=1,
+                        summary=review_message,
+                    )
+                )
+                return WorkflowResult(
+                    succeeded=True,
+                    plan=plan,
+                    pr_url=pr_url,
+                    summary=list(review_result.summary or resumed_dev_result.change_summary or ["Workflow completed"]),
+                    test_guidance=list(state.test_guidance),
+                    attempts=1,
+                    dev_rationale=list(state.dev_rationale),
+                    review_summary=list(state.review_summary),
+                    review_feedback=None,
+                    orchestration_stage_trace=list(stage_trace),
+                    orchestration_workstream_trace=[],
+                )
+
+            history.append({"stage": "review", "attempt": "1", "event": review_message})
+            stage_trace.append(
+                _stage_trace_entry(
+                    stage="review",
+                    status="failed" if review_outcome != "blocked" else "blocked",
+                    attempt=1,
+                    summary=review_result.feedback or review_message,
+                )
+            )
+            return self._failure_result(
+                request=request,
+                state=state,
+                stage="review",
+                attempts=1,
+                message=f"Review resume ended without approval. Last feedback: {review_result.feedback or review_message}",
+                classification="review_needs_changes",
+            )
 
         capability_mismatch_message = _capability_mismatch_message(request=request, plan=plan)
         if capability_mismatch_message is not None:
@@ -493,6 +625,39 @@ def _should_resume_from_dev(request: WorkflowRequest) -> bool:
         str(request.resume_mode or "").strip().lower() == "resume"
         and str(request.resume_stage or "").strip().lower() == "dev"
     )
+
+
+def _should_resume_from_review(request: WorkflowRequest) -> bool:
+    return (
+        str(request.resume_mode or "").strip().lower() == "resume"
+        and str(request.resume_stage or "").strip().lower() == "review"
+    )
+
+
+def _resume_source_state(request: WorkflowRequest) -> dict[str, Any]:
+    trigger_context = request.trigger_context if isinstance(request.trigger_context, dict) else {}
+    payload = trigger_context.get("resume_source_state")
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _resume_dev_result(source_state: dict[str, Any]) -> DevResult:
+    change_summary = source_state.get("dev_rationale")
+    if not isinstance(change_summary, list):
+        change_summary = source_state.get("summary")
+    normalized_summary = [str(item).strip() for item in change_summary or [] if str(item).strip()]
+    if not normalized_summary:
+        normalized_summary = ["Resumed from persisted development result."]
+    pr_url = str(source_state.get("pr_url") or "").strip() or None
+    return DevResult(change_summary=normalized_summary, pr_url=pr_url)
+
+
+def _resume_test_result(source_state: dict[str, Any], *, default_guidance: list[str]) -> TestResult:
+    guidance = source_state.get("test_guidance")
+    normalized_guidance = [str(item).strip() for item in guidance or [] if str(item).strip()]
+    if not normalized_guidance:
+        normalized_guidance = list(default_guidance or ["Run relevant project tests"])
+    feedback = str(source_state.get("test_feedback") or "").strip() or None
+    return TestResult(passed=True, guidance=normalized_guidance, feedback=feedback)
 
 
 def _resume_pm_plan(payload: dict | None) -> PmPlan | None:

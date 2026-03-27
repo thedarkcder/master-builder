@@ -1,0 +1,33 @@
+{
+  "action": "created",
+  "installation": {
+    "id": "12345"
+  },
+  "repository": {
+    "full_name": "org/repo"
+  },
+  "comment": {
+    "id": 901,
+    "body": "@mb fix this",
+    "user": {
+      "login": "thedarkcder",
+      "type": "User"
+    },
+    "html_url": "https://github.com/org/repo/pull/11#discussion_r901",
+    "path": "app/models.py",
+    "line": 42
+  },
+  "sender": {
+    "login": "thedarkcder",
+    "type": "User"
+  },
+  "issue": {
+    "number": 11,
+    "pull_request": {
+      "url": "https://api.github.com/repos/org/repo/pulls/11"
+    }
+  },
+  "pull_request": {
+    "number": 11
+  }
+}

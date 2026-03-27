@@ -24,6 +24,11 @@ Jira webhook run triggers:
 Worker pick/start decisions:
 - `orchestrator/core/worker/queue_selector.py`
 - `orchestrator/core/worker/execution_service.py`
+- `orchestrator/core/worker/decision_gate.py`
+
+Board-ingress qualification and Decision Gate:
+- `orchestrator/api/webhooks/jira_webhook_precheck.py`
+- `orchestrator/core/decision_clarification_service.py`
 - `orchestrator/core/worker/process_service.py`
 
 ## Ingress Paths That Can Queue Runs
@@ -46,7 +51,7 @@ Worker pick/start decisions:
 ### Jira webhook automation
 
 When webhook context is eligible:
-- Applies readiness and decision-gate cooldown checks.
+- Applies board-ingress qualification and readiness checks.
 - Optional retry mode requires a retryable prior run.
 - Calls `enqueue_run(...)`.
 - Implemented in `orchestrator/api/webhooks/jira_ingress.py`.
@@ -84,8 +89,19 @@ From `orchestrator/core/worker/queue_selector.py`:
 - Skips queued runs that cannot be started yet due to active limits.
 
 From `orchestrator/core/worker/process_service.py` and `orchestrator/core/worker/decision_gate.py`:
-- Before full execution, Decision Gate can move run to `blocked` with guidance.
-- If Decision Gate triggers, run does not proceed to normal build/test execution.
+- Before full execution, worker rechecks execution readiness only.
+- If the configured ready label is missing, run moves to `blocked` with `run_not_ready` guidance.
+- Worker does not create, reopen, or re-evaluate Decision Gate.
+
+## Decision Gate Contract
+
+Decision Gate is a board-ingress qualification workflow, not a run-time gate.
+
+- It runs when an issue is added to the configured board in `To Do`.
+- It uses persisted answers, project knowledge, and live Jira issue context to self-resolve first.
+- If unresolved, it writes the open questions back to Jira and asks the user.
+- When all required answers are resolved, it applies the configured ready label.
+- `!run`, `!retry`, and worker start checks only enforce execution readiness; they do not surface Decision Gate questions.
 
 ## What Is Not The Run Decision Engine
 

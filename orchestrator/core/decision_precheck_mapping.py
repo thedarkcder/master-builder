@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
-from typing import Any
+import logging
+from typing import Any, Callable
+
+from sqlalchemy.orm import Session
 
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.knowledge_base import SlotResolution
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
 from orchestrator.core.precheck_decision import precheck_missing_slots
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.decision_types import (
+    DecisionSource,
     DecisionEventInput,
     DecisionLabelAction,
     IngressDecision,
@@ -23,13 +27,78 @@ from orchestrator.storage.models import DecisionCase, DecisionCycle
 QUESTION_KIND_DG = "decision_gate"
 QUESTION_KIND_GTD = "gtd"
 BLOCKED_CLASSIFICATIONS = {"decision_gate", "gtd", "both"}
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EvaluationResult:
+    decision: IngressDecision
+    issue_labels: list[str]
+
+
+def evaluate_with_labels(
+    *,
+    session: Session,
+    tenant,
+    project,
+    source: DecisionSource,
+    issue_key: str,
+    issue_summary: str | None,
+    issue_description: str | None,
+    recorded_answers: list[dict[str, str]] | None,
+    issue_labels: list[str] | None,
+    settings,  # noqa: ANN001
+    tenant_jira_oauth_context_fn: Callable[..., Any],
+    evaluate_ingress_precheck_fn: Callable[..., IngressDecision],
+    oauth_context: Any | None = None,
+    evaluate_pre_run_check_fn: Callable[..., object] = evaluate_pre_run_check,
+):
+    from orchestrator.core.label_action_service import apply_issue_label_actions
+
+    decision = evaluate_ingress_precheck_fn(
+        source=source,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id if project is not None else None,
+        issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+        recorded_answers=recorded_answers,
+        issue_labels=issue_labels,
+        ready_label=(tenant.jira_config or {}).get("ready_label"),
+        evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
+    )
+    normalized_labels = [str(label).strip() for label in (issue_labels or []) if str(label).strip()]
+    if decision.pre_check is None:
+        return EvaluationResult(decision=decision, issue_labels=normalized_labels)
+
+    apply_result = apply_issue_label_actions(
+        session=session,
+        tenant=tenant,
+        project_policy_overrides=project.policy_overrides if project is not None else {},
+        issue_key=issue_key,
+        existing_labels=normalized_labels,
+        actions=decision.label_actions,
+        settings=settings,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+        oauth_context=oauth_context,
+        logger=logger,
+    )
+    label_set = {label.casefold() for label in normalized_labels}
+    for label in apply_result.applied_labels:
+        if label.casefold() in label_set:
+            continue
+        normalized_labels.append(label)
+        label_set.add(label.casefold())
+    resolved = decision.with_applied_labels(list(apply_result.applied_labels))
+    return EvaluationResult(decision=resolved, issue_labels=normalized_labels)
 
 
 def derive_label_actions(pre_check: object) -> tuple[DecisionLabelAction, ...]:
     actions: list[DecisionLabelAction] = []
     ready_label_missing = bool(getattr(pre_check, "ready_label_missing", False))
     ready_label = str(getattr(pre_check, "ready_label", "") or "").strip()
-    if ready_label_missing and ready_label:
+    outcome = str(getattr(pre_check, "outcome", "") or "").strip().lower()
+    if ready_label_missing and ready_label and outcome == "missing_ready_label":
         actions.append(
             DecisionLabelAction(
                 label=ready_label,

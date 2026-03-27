@@ -2,14 +2,16 @@ import os
 import unittest
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from orchestrator.core.worker.queue_selector import (
+    claim_next_queued_run,
     coerce_positive_int,
     select_next_queued_run,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
 
 
 class WorkerQueueSelectorTests(unittest.TestCase):
@@ -69,7 +71,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertEqual(result.terminal_run.last_error, "Tenant not found for queued run")
             self.assertIsNotNone(result.terminal_run.finished_at)
 
-    def test_select_next_queued_run_skips_concurrency_limited_tenant(self) -> None:
+    def test_claim_next_queued_run_skips_concurrency_limited_tenant(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.add(
@@ -156,11 +158,12 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             )
             session.commit()
 
-            result = select_next_queued_run(
+            result = claim_next_queued_run(
                 session,
                 queued_status="queued",
                 running_status="running",
                 failed_status="failed",
+                worker_service_instance_id="node-a:1234",
             )
 
             self.assertIsNone(result.terminal_run)
@@ -168,6 +171,71 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertIsNotNone(result.tenant)
             self.assertEqual(result.run.run_id, "run-b-queued")
             self.assertEqual(result.tenant.tenant_id, "tenant-b")
+            self.assertEqual(result.run.status, "running")
+            claim_row = session.get(TenantRunClaim, "tenant-b")
+            self.assertIsNotNone(claim_row)
+
+    def test_claim_next_queued_run_recovers_when_claim_row_is_inserted_concurrently(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-race",
+                    name="Tenant Race",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/race"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-race-queued",
+                    tenant_id="tenant-race",
+                    issue_key="MAB-904",
+                    issue_summary="Tenant race queued",
+                    issue_description="queued",
+                    repo_url="https://github.com/example/race",
+                    branch=None,
+                    pr_url=None,
+                    status="queued",
+                    last_error=None,
+                    plan={"required_worker_capability": "linux"},
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                )
+            )
+            session.commit()
+
+        with self.session_factory() as seed_session:
+            seed_session.add(TenantRunClaim(tenant_id="tenant-race", updated_at=now))
+            seed_session.commit()
+
+        with self.session_factory() as session:
+            original_get = session.get
+
+            def _racy_get(model, ident, *args, **kwargs):
+                if model is TenantRunClaim and ident == "tenant-race":
+                    return None
+                return original_get(model, ident, *args, **kwargs)
+
+            with patch.object(session, "get", side_effect=_racy_get):
+                result = claim_next_queued_run(
+                    session,
+                    queued_status="queued",
+                    running_status="running",
+                    failed_status="failed",
+                    worker_service_instance_id="node-a:1234",
+                )
+
+            self.assertIsNotNone(result.run)
+            self.assertEqual(result.run.run_id, "run-race-queued")
+            self.assertEqual(result.run.status, "running")
 
     def test_select_next_queued_run_applies_project_overrides_when_project_id_unset(self) -> None:
         now = datetime.now(timezone.utc)
@@ -282,7 +350,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
 
             self.assertIsNone(result.terminal_run)
             self.assertIsNotNone(result.run)
-            self.assertEqual(result.run.run_id, "run-b-queued")
+            self.assertEqual(result.run.run_id, "run-a-queued-unbound")
 
     def test_select_next_queued_run_skips_incompatible_worker_capabilities(self) -> None:
         now = datetime.now(timezone.utc)

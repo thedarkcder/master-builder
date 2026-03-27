@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 
@@ -26,8 +28,11 @@ from orchestrator.core.discord.gateway_listener import (
     _decision_gate_issue_for_thread,
     _project_seed_followup_thread_ids,
 )
-from orchestrator.storage.models import Base
+from orchestrator.storage.models import Base, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
+
+
+pytestmark = pytest.mark.contract
 
 
 class _SessionCtx:
@@ -78,6 +83,25 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return self._settings_obj
 
+    def _seed_tenant(self, *, tenant_id: str, guild_id: str | None, enabled: bool = True) -> None:
+        with self._session_factory() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                Tenant(
+                    tenant_id=tenant_id,
+                    name=tenant_id,
+                    is_enabled=enabled,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={"guild_id": guild_id} if guild_id is not None else {},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
     def test_sync_discord_guild_commands_guard_paths(self) -> None:
         settings = self._settings()
         resolver = MagicMock(return_value="")
@@ -93,8 +117,7 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertFalse(status.bot_token_configured)
 
         settings = self._settings()
-        settings.discord_guild_id = ""
-        resolver = MagicMock(side_effect=lambda _session, **kwargs: "token" if kwargs["secret_ref"] != "DISCORD_GUILD_ID" else "")
+        resolver = MagicMock(return_value="token")
         self.assertFalse(
             sync_discord_guild_commands(
                 settings=settings,
@@ -108,11 +131,13 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
 
     def test_sync_discord_guild_commands_success_and_failure(self) -> None:
         settings = self._settings()
+        self._seed_tenant(tenant_id="tenant-1", guild_id="guild-tenant-1")
+        self._seed_tenant(tenant_id="tenant-2", guild_id="guild-tenant-2")
 
         def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
             if secret_ref == "DISCORD_BOT_TOKEN":
                 return "bot-token"
-            return "guild-from-secret"
+            raise AssertionError("guild IDs should come from tenant discord config")
 
         client = MagicMock()
         client.get_application_id.return_value = "app-1"
@@ -126,12 +151,17 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
                 client_factory=MagicMock(return_value=client),
             )
         )
-        client.overwrite_guild_commands.assert_called_once()
+        self.assertEqual(client.overwrite_guild_commands.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["guild_id"] for call in client.overwrite_guild_commands.call_args_list],
+            ["guild-tenant-1", "guild-tenant-2"],
+        )
         status = get_discord_command_sync_status(settings=settings)
         self.assertTrue(status.synced)
         self.assertTrue(status.healthy)
         self.assertEqual(status.application_id, "app-1")
         self.assertEqual(status.command_count, 1)
+        self.assertEqual(status.guild_id, "guild-tenant-1")
 
         client_factory = MagicMock(side_effect=DiscordApiError("boom"))
         self.assertFalse(
@@ -146,13 +176,36 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertEqual(status.last_failure_reason, "discord_api_error")
         self.assertIn("boom", status.last_error or "")
 
-    def test_sync_discord_guild_commands_does_not_clobber_persisted_status_when_lock_busy(self) -> None:
+    def test_sync_discord_guild_commands_ignores_legacy_global_guild_setting(self) -> None:
         settings = self._settings()
+        settings.discord_guild_id = "legacy-global-guild"
 
         def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
             if secret_ref == "DISCORD_BOT_TOKEN":
                 return "bot-token"
-            return "guild-1"
+            raise AssertionError("guild IDs should not be resolved from secrets")
+
+        self.assertFalse(
+            sync_discord_guild_commands(
+                settings=settings,
+                session_factory=self._session_factory,
+                secret_resolver=_resolver,
+                client_factory=MagicMock(side_effect=AssertionError("should not attempt sync")),
+            )
+        )
+
+        status = get_discord_command_sync_status(settings=settings)
+        self.assertEqual(status.last_failure_reason, "missing_guild_id")
+        self.assertFalse(status.guild_id_configured)
+
+    def test_sync_discord_guild_commands_does_not_clobber_persisted_status_when_lock_busy(self) -> None:
+        settings = self._settings()
+        self._seed_tenant(tenant_id="tenant-1", guild_id="guild-1")
+
+        def _resolver(_session, *, secret_ref: str, encryption_key: str) -> str:  # noqa: ARG001
+            if secret_ref == "DISCORD_BOT_TOKEN":
+                return "bot-token"
+            raise AssertionError("guild IDs should come from tenant discord config")
 
         client = MagicMock()
         client.get_application_id.return_value = "app-1"
@@ -274,21 +327,14 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_decision_gate_issue_for_thread_falls_back_to_tenant_mapping(self) -> None:
         session = MagicMock()
-        project = SimpleNamespace(discord_config={})
-        tenant = SimpleNamespace(
-            discord_config={
-                "thread_issue_by_channel_id": {
-                    "thread-1": "gp-80",
-                }
-            }
-        )
-        session.execute.return_value.scalars.return_value.all.return_value = [project]
-        session.get.return_value = tenant
-
-        self.assertEqual(
-            _decision_gate_issue_for_thread(session=session, tenant_id="example", channel_id="thread-1"),
-            "GP-80",
-        )
+        with patch(
+            "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+            return_value=SimpleNamespace(context_type="decision_gate", issue_key="gp-80"),
+        ):
+            self.assertEqual(
+                _decision_gate_issue_for_thread(session=session, tenant_id="example", channel_id="thread-1"),
+                "GP-80",
+            )
 
     def test_handle_message_create_http_exception_and_internal_exception(self) -> None:
         listener, session = self._listener()
@@ -338,7 +384,11 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.core.discord.gateway_listener.pending_human_input_for_thread",
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+                return_value=SimpleNamespace(context_type="human_input", request_id="request-1"),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.pending_human_input_for_request_id",
                 return_value=request,
             ),
             patch(
@@ -375,11 +425,9 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value={"thread-1"}),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={"thread-1": "GP"}),
             patch(
-                "orchestrator.core.discord.gateway_listener.find_seed_followup_context",
-                return_value={"request_id": "req-1"},
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+                return_value=SimpleNamespace(context_type="seed_followup", request_id="req-1"),
             ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
@@ -409,9 +457,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         command_response = SimpleNamespace(command="ask", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value={"thread-1"}),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={"thread-1": "GP"}),
-            patch("orchestrator.core.discord.gateway_listener.find_seed_followup_context", side_effect=[None, None]),
+            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context", return_value=None),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -437,11 +483,9 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         command_response = SimpleNamespace(command="ask", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value={"thread-1"}),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={"thread-1": "GP"}),
             patch(
-                "orchestrator.core.discord.gateway_listener.find_seed_followup_context",
-                side_effect=[None, {"request_id": "req-1", "project_key": "GP", "user_id": "u1"}],
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+                return_value=SimpleNamespace(context_type="seed_followup", request_id="req-1"),
             ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
@@ -468,7 +512,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         command_response = SimpleNamespace(command="reply", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._decision_gate_issue_for_thread", return_value="GP-80"),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+                return_value=SimpleNamespace(context_type="decision_gate", issue_key="GP-80"),
+            ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -492,6 +539,42 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command_params["source_ref"], "m-1")
         session.commit.assert_not_called()
         client_cls.return_value.post_message.assert_called_once()
+
+    def test_handle_message_create_parent_channel_reply_passes_root_message_id_to_followup_resolution(self) -> None:
+        listener, _session = self._listener()
+        tenant = SimpleNamespace(tenant_id="example")
+        listener._find_tenant_for_channel = MagicMock(return_value=tenant)
+        command_response = SimpleNamespace(command="reply", message="ok", data={})
+
+        with (
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+                return_value=SimpleNamespace(context_type="decision_gate", issue_key="GP-124"),
+            ) as resolve_context_mock,
+            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
+            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
+            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
+        ):
+            listener._handle_message_create(
+                {
+                    "id": "m-parent-reply",
+                    "author": {"id": "u1"},
+                    "channel_id": "discord-channel-1",
+                    "content": "Reject relink; device_id stays bound to one user only.",
+                    "attachments": [],
+                    "message_reference": {
+                        "message_id": "root-message-1",
+                        "channel_id": "discord-channel-1",
+                    },
+                },
+                bot_token="token",
+            )
+
+        self.assertEqual(
+            resolve_context_mock.call_args.kwargs["root_message_id"],
+            "root-message-1",
+        )
 
     def test_handle_message_create_does_not_manage_session_when_command_fails(self) -> None:
         listener, session = self._listener()
@@ -539,8 +622,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         session.get.return_value = mapped_tenant
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
+                return_value=SimpleNamespace(context_type="decision_gate", issue_key="GP-114"),
+            ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -645,6 +730,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context", return_value=None),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -722,6 +808,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         with (
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context", return_value=None),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -811,6 +898,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value=set()),
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
             patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context", return_value=None),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
             patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
@@ -837,7 +925,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         payload = command_mock.call_args.kwargs["payload"]
         self.assertEqual(payload.command, "!pm Summarize the deployment blockers")
-        self.assertEqual(payload.command_params, {"voice_mode": "true", "voice_source": "voice_note"})
+        self.assertEqual(payload.command_params, {"room_mode": "true", "room_source": "voice_note"})
         client_cls.return_value.post_message.assert_not_called()
         build_voice_reply.assert_called_once()
         self.assertEqual(build_voice_reply.call_args.kwargs["text"], "Deployment is blocked on the worker image rebuild.")

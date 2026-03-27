@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -169,6 +170,43 @@ def _ensure_repo_checkout_exists(repo_dir: Path) -> None:
 
 def allowed_tools_for_stage(stage: str) -> set[str]:
     return set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
+
+
+def build_agent_tool_command(
+    *,
+    tenant_id: str,
+    project_id: str | None,
+    run_id: str | None,
+    issue_key: str,
+    stage: str,
+) -> str:
+    command = [
+        sys.executable,
+        "-m",
+        "orchestrator",
+        "agent-tool",
+        "--tenant",
+        str(tenant_id or "").strip(),
+    ]
+    normalized_project_id = str(project_id or "").strip()
+    if normalized_project_id:
+        command.extend(["--project", normalized_project_id])
+    normalized_run_id = str(run_id or "").strip()
+    if normalized_run_id:
+        command.extend(["--run", normalized_run_id])
+    command.extend(
+        [
+            "--issue",
+            str(issue_key or "").strip(),
+            "--stage",
+            str(stage or "").strip(),
+            "--tool",
+            "<tool_name>",
+            "--args",
+            "<json-object>",
+        ]
+    )
+    return shlex.join(command)
 
 
 def execute_agent_tool(

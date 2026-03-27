@@ -19,6 +19,8 @@ from orchestrator.core.decision_resolution_service import serialize_slot_resolut
 from orchestrator.core.precheck_decision import precheck_missing_slots
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvent
 
+DECISION_GATE_CLOSURE_METADATA_KEY = "decision_gate_closure"
+
 
 def active_cycle(*, session, case: DecisionCase) -> DecisionCycle | None:
     if not case.active_cycle_id:
@@ -62,8 +64,12 @@ def load_or_create_case(
         last_event_at=None,
         required_worker_capability=None,
         required_worker_label=None,
+        required_worker_label_present=False,
         ready_label=None,
         ready_label_present=False,
+        decision_gate_closed_permanently=False,
+        decision_gate_closed_at=None,
+        decision_gate_closed_cycle_id=None,
         metadata_json={},
         created_at=now,
         updated_at=now,
@@ -88,6 +94,32 @@ def existing_case_for_issue(*, session, tenant_id: str, issue_key: str) -> Decis
     return case
 
 
+def decision_gate_closed_permanently(*, case: DecisionCase | None) -> bool:
+    if case is None:
+        return False
+    if bool(getattr(case, "decision_gate_closed_permanently", False)):
+        return True
+    if not isinstance(case.metadata_json, dict):
+        return False
+    closure = case.metadata_json.get(DECISION_GATE_CLOSURE_METADATA_KEY)
+    return isinstance(closure, dict) and bool(closure.get("closed"))
+
+
+def decision_gate_closed_cycle_id(*, case: DecisionCase | None) -> str | None:
+    if case is None:
+        return None
+    persisted = str(getattr(case, "decision_gate_closed_cycle_id", "") or "").strip()
+    if persisted:
+        return persisted
+    if not isinstance(case.metadata_json, dict):
+        return None
+    closure = case.metadata_json.get(DECISION_GATE_CLOSURE_METADATA_KEY)
+    if not isinstance(closure, dict):
+        return None
+    cycle_id = str(closure.get("cycle_id") or "").strip()
+    return cycle_id or None
+
+
 def persist_decision_state(
     *,
     session,
@@ -105,6 +137,7 @@ def persist_decision_state(
     auto_resolved_answers,
     accepted_question_ids: set[str],
     issue_fingerprint_fn,
+    terminal_gate_closed_cycle_id: str | None = None,
 ) -> tuple[DecisionCase, DecisionCycle | None, tuple[str, ...]]:
     case = load_or_create_case(
         session=session,
@@ -205,6 +238,11 @@ def persist_decision_state(
         if pre_check is not None
         else None
     )
+    case.required_worker_label_present = (
+        bool(getattr(pre_check, "required_worker_label_present", False))
+        if pre_check is not None
+        else False
+    )
     case.ready_label = (
         str(getattr(pre_check, "ready_label", "") or "").strip() or None
         if pre_check is not None
@@ -219,6 +257,19 @@ def persist_decision_state(
         decision=decision,
         serialize_slot_resolution_fn=serialize_slot_resolution,
     )
+    if terminal_gate_closed_cycle_id:
+        case.decision_gate_closed_permanently = True
+        case.decision_gate_closed_cycle_id = terminal_gate_closed_cycle_id
+        if case.decision_gate_closed_at is None:
+            case.decision_gate_closed_at = occurred_at
+        case.metadata_json = {
+            **dict(case.metadata_json or {}),
+            DECISION_GATE_CLOSURE_METADATA_KEY: {
+                "closed": True,
+                "closed_at": occurred_at.isoformat(),
+                "cycle_id": terminal_gate_closed_cycle_id,
+            },
+        }
     case.updated_at = occurred_at
 
     outbox_effect_ids: list[str] = []

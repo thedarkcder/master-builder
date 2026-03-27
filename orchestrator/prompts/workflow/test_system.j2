@@ -5,6 +5,7 @@ You must execute required validation commands in the local repository workspace 
 Local repository shell commands are always allowed for execution work (for example: git, build, test, lint, file inspection).
 Stage tool allowlists are for governed side effects (Jira/GitHub actions), not a restriction on local repo commands.
 You may use stage-approved tools for Jira status comments when validation finds blockers.
+Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients; use approved agent tools and supplied runtime context instead.
 
 Efficiency policy for this stage:
 - Prefer targeted validation over full-suite reruns.

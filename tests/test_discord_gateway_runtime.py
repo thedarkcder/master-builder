@@ -70,7 +70,11 @@ class _FakeEvent:
 
 class DiscordGatewayRuntimeTests(unittest.TestCase):
     def test_run_discord_gateway_registers_command_executor_before_loop(self) -> None:
-        settings = SimpleNamespace(log_level="INFO")
+        settings = SimpleNamespace(
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release="dev-local",
+        )
         with (
             patch("orchestrator.core.discord.gateway_runtime.get_settings", return_value=settings),
             patch("orchestrator.core.discord.gateway_runtime.configure_logging"),

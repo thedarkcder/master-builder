@@ -1066,8 +1066,7 @@ def _tenant_guild_id(*, tenant: Tenant, settings: Settings) -> str | None:
     guild_id = str(tenant_discord_config.get("guild_id") or "").strip()
     if guild_id:
         return guild_id
-    fallback = str(getattr(settings, "discord_guild_id", "") or "").strip()
-    return fallback or None
+    return None
 
 
 def _set_discord_config(*, target: Tenant | Project, discord_config: dict[str, Any]) -> None:

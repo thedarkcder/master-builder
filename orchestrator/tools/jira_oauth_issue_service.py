@@ -134,11 +134,17 @@ class JiraOAuthIssueService:
         summary = summary_raw.strip() if isinstance(summary_raw, str) and summary_raw.strip() else key
 
         status_name = "Unknown"
+        status_category_key: str | None = None
         status_obj = fields.get("status")
         if isinstance(status_obj, dict):
             status_raw = status_obj.get("name")
             if isinstance(status_raw, str) and status_raw.strip():
                 status_name = status_raw.strip()
+            status_category = status_obj.get("statusCategory")
+            if isinstance(status_category, dict):
+                category_raw = status_category.get("key")
+                if isinstance(category_raw, str) and category_raw.strip():
+                    status_category_key = category_raw.strip()
 
         description = _adf_to_plain_text(fields.get("description")).strip()
         labels_raw = fields.get("labels")
@@ -149,6 +155,7 @@ class JiraOAuthIssueService:
             key=key,
             summary=summary,
             status=status_name,
+            status_category_key=status_category_key,
             description=description,
             labels=labels,
         )

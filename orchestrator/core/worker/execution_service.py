@@ -9,11 +9,12 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.pre_run_check import evaluate_execution_readiness_only
+from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
-from orchestrator.core.worker.queue_selector import select_next_queued_run
+from orchestrator.core.worker.queue_selector import claim_next_queued_run
 from orchestrator.core.worker.run_health import WorkerRunHeartbeatController, worker_service_instance_id
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
@@ -26,7 +27,6 @@ from orchestrator.core.worker.run_lifecycle import (
     requeue_workflow_result_for_capability,
     requeue_workflow_result_for_stale_snapshot,
     resolve_project_for_run,
-    start_run,
 )
 from orchestrator.core.worker.stage_events import (
     lock_acquired_update,
@@ -93,6 +93,17 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
     return _process_next_queued_run_impl(session=session, runner=runner, send_discord_message_fn=send_tenant_discord_message)
 
 
+def process_next_webhook_job_with_dependencies(
+    *,
+    session: Session,
+) -> object | None:
+    return process_next_webhook_job(
+        session=session,
+        settings=get_settings(),
+        owner_id=f"worker:{worker_service_instance_id()}",
+    )
+
+
 def _process_next_queued_run_impl(
     *,
     session: Session,
@@ -119,7 +130,7 @@ def _process_next_queued_run_impl(
             tenant=tenant,
             settings=settings,
             tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
-            evaluate_pre_run_check_fn=evaluate_pre_run_check,
+            evaluate_execution_readiness_fn=evaluate_execution_readiness_only,
             send_discord_message_fn=send_discord_message_fn,
             send_jira_message_fn=send_jira_message_fn,
             ask_reply_components_fn=ask_reply_components_fn,
@@ -151,7 +162,7 @@ def _process_next_queued_run_impl(
         runner=runner,
         logger=logger,
         settings_fn=get_settings,
-        select_next_queued_run_fn=select_next_queued_run,
+        claim_next_queued_run_fn=claim_next_queued_run,
         apply_decision_gate_fn=_apply_decision_gate,
         send_discord_message_fn=send_discord_message_fn,
         send_jira_message_fn=_send_stage_update_to_jira,
@@ -162,7 +173,6 @@ def _process_next_queued_run_impl(
         ensure_project_repository_checkout_fn=ensure_project_repository_checkout,
         fail_project_repository_checkout_fn=fail_project_repository_checkout,
         cleanup_run_workspaces_fn=cleanup_run_workspaces,
-        start_run_fn=start_run,
         build_run_heartbeat_controller_fn=lambda *, run_id, worker_service_instance_id, heartbeat_interval_seconds: WorkerRunHeartbeatController(
             database_url=get_settings().database_url,
             run_id=run_id,

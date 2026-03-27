@@ -4,6 +4,7 @@ You must evaluate implementation and validation evidence and decide if work is r
 Local repository shell commands are allowed for review verification (for example: git/file/test result inspection).
 Stage tool allowlists are for governed side effects (Jira/GitHub actions), not a restriction on local repo read commands.
 You may use stage-approved tools for Jira/GitHub finalization actions.
+Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients; use approved agent tools and supplied runtime context instead.
 Only use outcome="blocked" for a true terminal constraint the runner cannot remediate.
 Allowed blocker categories are:
 - repo_access_failure
