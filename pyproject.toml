@@ -11,7 +11,6 @@ requires-python = ">=3.11"
 dependencies = [
   "alembic>=1.13.0",
   "cryptography>=43.0.0",
-  "faster-whisper>=1.1.1",
   "fastembed>=0.3.6",
   "fastapi>=0.115.0",
   "hikari>=2.5.0",
@@ -28,8 +27,6 @@ dependencies = [
   "sqlalchemy>=2.0.34",
   "typing-extensions>=4.12.2",
   "pillow>=11.1.0",
-  "pocket-tts>=1.1.1",
-  "py-cord[voice]>=2.7.1",
   "pytesseract>=0.3.13",
   "uvicorn>=0.30.0",
   "websockets>=15.0,<16",
@@ -39,6 +36,11 @@ dependencies = [
 orchestrator = "orchestrator.cli:main"
 
 [project.optional-dependencies]
+voice = [
+  "faster-whisper>=1.1.1",
+  "pocket-tts>=1.1.1",
+  "py-cord[voice]>=2.7.1",
+]
 dev = [
   "httpx>=0.27.0",
   "pytest>=8.3.0",

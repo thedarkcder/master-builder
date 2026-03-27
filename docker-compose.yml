@@ -20,6 +20,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-api
@@ -75,6 +76,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: android-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-worker
@@ -119,6 +121,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: voice-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-discord-gateway
@@ -162,6 +165,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: voice-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-discord-live-voice
@@ -208,6 +212,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-knowledge-sync
