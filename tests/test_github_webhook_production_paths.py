@@ -24,6 +24,7 @@ pytestmark = pytest.mark.production_path
 
 class _FakeGitHubClient:
     def __init__(self) -> None:
+        self.pull_request_reactions: list[dict[str, object]] = []
         self.review_comment_reactions: list[dict[str, object]] = []
         self.issue_comment_reactions: list[dict[str, object]] = []
         self.review_thread_replies: list[dict[str, object]] = []
@@ -53,6 +54,11 @@ class _FakeGitHubClient:
     def add_issue_comment_reaction(self, *, repo_full_name: str, comment_id: int, content: str) -> None:
         self.issue_comment_reactions.append(
             {"repo_full_name": repo_full_name, "comment_id": comment_id, "content": content}
+        )
+
+    def sync_pull_request_reaction(self, *, repo_full_name: str, pr_number: int, content: str) -> None:
+        self.pull_request_reactions.append(
+            {"repo_full_name": repo_full_name, "pr_number": pr_number, "content": content}
         )
 
     def list_pull_request_review_comments(self, *, repo_full_name: str, pr_number: int):  # noqa: ARG002
@@ -230,3 +236,68 @@ class GitHubWebhookProductionPathTests(unittest.TestCase):
         enqueue_mock.assert_not_called()
         self.assertFalse(fake_client.review_comment_reactions)
         self.assertFalse(fake_client.review_thread_replies)
+
+    def test_pull_request_opened_syncs_pr_reaction_and_posts_review_comment(self) -> None:
+        fake_client = _FakeGitHubClient()
+        payload = {
+            "action": "opened",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "org/repo"},
+            "pull_request": {
+                "number": 17,
+                "title": "GP-123: example",
+                "body": "desc",
+                "html_url": "https://github.com/org/repo/pull/17",
+                "state": "open",
+                "head": {"sha": "abc123", "ref": "feature/GP-123"},
+                "base": {"ref": "main"},
+            },
+        }
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
+                return_value=SimpleNamespace(
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="needs_changes", message="needs changes")
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
+                return_value=SimpleNamespace(
+                    triggered=False,
+                    issue_key=None,
+                    issue_created=False,
+                    enqueued=False,
+                    reason="not_needed",
+                    run=None,
+                    head_sha="abc123",
+                ),
+            ),
+        ):
+            response = self.client.post(
+                "/github/webhook",
+                json=payload,
+                headers={
+                    "X-GitHub-Event": "pull_request",
+                    "X-GitHub-Delivery": "delivery-pr-opened",
+                },
+            )
+            processed = self._process_one_webhook_job()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertEqual(
+            fake_client.pull_request_reactions,
+            [
+                {"repo_full_name": "org/repo", "pr_number": 17, "content": "eyes"},
+                {"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"},
+            ],
+        )
+        self.assertTrue(fake_client.issue_comments)
+        self.assertTrue(any("Codex PR Review" in str(comment["body"]) for comment in fake_client.issue_comments))

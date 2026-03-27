@@ -46,7 +46,7 @@ PY
 Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
 For containers, run one-time login and keep the shared Codex auth volume:
 ```bash
-docker compose run --rm worker-runtime codex login --device-auth
+docker compose run --rm run-worker codex login --device-auth
 ```
 
 ## Jira release-train automation (repo-level)
@@ -131,7 +131,8 @@ curl \
 ## CLI entrypoints
 ```bash
 python -m orchestrator migrate
-python -m orchestrator worker
+python -m orchestrator worker-runs
+python -m orchestrator worker-webhooks
 python -m orchestrator run --tenant TENANT_ID --issue MAB-123
 python -m orchestrator poll --tenant all
 python -m orchestrator poll --tenant TENANT_ID
@@ -148,9 +149,14 @@ Start API:
 uvicorn orchestrator.api.main:app --reload --port 4000
 ```
 
-Start worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
+Start run worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
 ```bash
-python -m orchestrator worker
+python -m orchestrator worker-runs
+```
+
+Start webhook worker (processes queued Jira/GitHub/Discord webhook jobs):
+```bash
+python -m orchestrator worker-webhooks
 ```
 
 ## Admin UI (Next.js + shadcn)
@@ -192,8 +198,8 @@ The worker image now includes:
 
 Quick checks:
 ```bash
-docker compose run --rm worker-runtime java -version
-docker compose run --rm worker-runtime sdkmanager --version
+docker compose run --rm run-worker java -version
+docker compose run --rm run-worker sdkmanager --version
 ```
 
 Swift/iOS note:

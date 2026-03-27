@@ -363,6 +363,37 @@ def test_review_publication_state_blocks_duplicate_and_recovers_after_failure() 
         )
         assert published_duplicate.acquired is False
         assert published_duplicate.reason == "duplicate_signature"
+
+
+def test_review_publication_state_persists_large_review_id() -> None:
+    with _review_session() as session:
+        acquired = acquire_review_publication(
+            session,
+            tenant_id="t1",
+            project_id="p1",
+            repo_full_name="org/repo",
+            pr_number=13,
+            head_sha="sha-3",
+            review_kind=PR_REVIEW_PUBLICATION_KIND_INLINE,
+            signature="sig-large",
+            request_id="req-large",
+        )
+        assert acquired.acquired is True
+        assert acquired.publication is not None
+
+        large_review_id = 4_294_967_299
+        mark_review_publication_published(
+            session,
+            publication=acquired.publication,
+            review_id=large_review_id,
+        )
+        session.commit()
+
+        persisted = session.get(PrReviewPublication, acquired.publication.publication_id)
+        assert persisted is not None
+        assert persisted.review_id == large_review_id
+
+
 def test_upsert_manual_fix_review_thread_reply_creates_and_updates() -> None:
     github_client = SimpleNamespace(
         list_pull_request_review_comments=lambda **_kwargs: [],

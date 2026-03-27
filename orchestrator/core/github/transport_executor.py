@@ -16,6 +16,7 @@ from orchestrator.core.communications import (
     GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
+    GitHubPullRequestReactionAction,
     GitHubPullRequestReviewCommentReactionAction,
     GitHubStickyReviewCommentAction,
     TransportAction,
@@ -50,6 +51,13 @@ class GitHubTransportExecutor:
             self._github_client.add_pull_request_review_comment_reaction(
                 repo_full_name=action.repo_full_name,
                 comment_id=action.comment_id,
+                content=action.content,
+            )
+            return
+        if isinstance(action, GitHubPullRequestReactionAction):
+            self._github_client.sync_pull_request_reaction(
+                repo_full_name=action.repo_full_name,
+                pr_number=action.pr_number,
                 content=action.content,
             )
             return

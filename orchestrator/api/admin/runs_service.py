@@ -46,7 +46,8 @@ def _build_rerun_bootstrap(
     source_plan = source_run.plan if isinstance(source_run.plan, dict) else {}
     next_trigger_context = _copy_trigger_context(source_plan)
     next_trigger_context["rerun_mode"] = normalized_mode
-    bootstrap_kwargs: dict[str, object] = {}
+    source_branch = str(getattr(source_run, "branch", "") or "").strip() or None
+    bootstrap_kwargs: dict[str, object] = {"branch": source_branch}
 
     if normalized_mode == "resume":
         session_by_stage = {

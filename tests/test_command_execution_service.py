@@ -39,7 +39,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
                 session=MagicMock(),
                 defer_seed_issues=False,
                 require_ask_confirmation=False,
-                allow_plain_ask=False,
                 ingress_source="discord",
                 deps=deps,
             )
@@ -57,7 +56,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=False,
             require_ask_confirmation=False,
-            allow_plain_ask=False,
             ingress_source="discord",
             deps=deps,
         )
@@ -75,7 +73,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=False,
             require_ask_confirmation=False,
-            allow_plain_ask=False,
             ingress_source="jira_comment",
             deps=deps,
         )
@@ -107,7 +104,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=False,
             require_ask_confirmation=False,
-            allow_plain_ask=False,
             ingress_source="discord",
             deps=deps,
         )
@@ -140,7 +136,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=False,
             require_ask_confirmation=False,
-            allow_plain_ask=False,
             ingress_source="discord",
             deps=deps,
         )
