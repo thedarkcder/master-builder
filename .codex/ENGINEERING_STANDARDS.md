@@ -31,10 +31,12 @@ These are non-negotiable standards for agent and human changes in this repo. If 
 - Keep side effects at the edges (DB / HTTP / queues / browser / filesystem / third-party APIs) to keep core logic clean and testable.
 - Tests must validate the layer where the behavior actually lives.
 - Never mock the layer you are trying to prove works; mock only beyond the system boundary.
+- A page rendering is not proof of behavior.
+- The proof point is the state-changing action.
 - Don’t just prove the feature works; actively try to break it the way a real tester would.
+- Never describe partial coverage as full coverage.
 - For bug fixes, add a regression test that fails before the fix and passes after it.
 - Implementation is not complete until the relevant automated tests are written and passing.
-
 
 ## UI automation standard
 
