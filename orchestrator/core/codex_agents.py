@@ -75,6 +75,11 @@ class CodexWorkflowAgents:
             return session_id
         return None
 
+    def _resume_source_state(self, *, request: WorkflowRequest) -> dict[str, Any]:
+        trigger_context = request.trigger_context if isinstance(request.trigger_context, dict) else {}
+        payload = trigger_context.get("resume_source_state")
+        return dict(payload) if isinstance(payload, dict) else {}
+
     def _invoke_stage_payload(
         self,
         *,
@@ -394,6 +399,7 @@ class CodexWorkflowAgents:
         test_result: TestResult,
         attempt: int,
     ) -> ReviewResult:
+        resume_source_state = self._resume_source_state(request=request)
         payload = self._invoke_stage_payload(
             request=request,
             stage="review",
@@ -427,6 +433,8 @@ class CodexWorkflowAgents:
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
+                previous_review_summary_json=json.dumps(resume_source_state.get("review_summary") or []),
+                previous_review_feedback=str(resume_source_state.get("review_feedback") or "").strip() or "none",
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
             ),
         )

@@ -17,6 +17,8 @@ def tenant_to_schema(tenant: Tenant) -> TenantRead:
         repos=tenant.repos_config,
         policy=tenant.policy_config,
         discord=tenant.discord_config,
+        experience=tenant.experience_config or {},
+        setup_state=tenant.setup_state or {},
         created_at=tenant.created_at,
         updated_at=tenant.updated_at,
     )

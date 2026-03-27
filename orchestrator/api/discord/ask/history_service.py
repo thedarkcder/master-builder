@@ -249,6 +249,7 @@ class DiscordAskHistoryService:
         scoped_issue_key: str | None,
         collect_ask_context_fn: Callable[..., tuple[str | None, str | None, list[dict], dict[str, int]]],
         existing_issue_keys_fn: Callable[..., set[str]],
+        prune_history: bool = True,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
         history_context = self.recent_ask_history(
             tenant=tenant,
@@ -256,7 +257,7 @@ class DiscordAskHistoryService:
             channel_id=channel_id,
             limit=self._max_history_context,
         )
-        if self.prune_missing_issue_keys_from_ask_history(
+        if prune_history and self.prune_missing_issue_keys_from_ask_history(
             session=session,
             tenant=tenant,
             user_id=user_id,

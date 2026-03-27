@@ -8,22 +8,21 @@ import { Zap } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { credentials, ready, login } = useAuth();
+  const { credentials, ready, login, needsOnboarding } = useAuth();
 
-  const [username, setUsername] = useState("admin");
+  const [identifier, setIdentifier] = useState("admin");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (ready && credentials) {
-      router.replace("/dashboard");
+      router.replace(needsOnboarding ? "/get-started" : "/dashboard");
     }
-  }, [credentials, ready, router]);
+  }, [credentials, needsOnboarding, ready, router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -31,13 +30,12 @@ export default function LoginPage() {
     setIsSubmitting(true);
     try {
       await login({
-        apiBaseUrl: DEFAULT_API_BASE_URL,
-        username: username.trim(),
+        identifier: identifier.trim(),
         password
       });
       router.push("/dashboard");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid admin credentials";
+      const message = error instanceof Error ? error.message : "Invalid credentials";
       setErrorMessage(message);
     } finally {
       setIsSubmitting(false);
@@ -66,18 +64,18 @@ export default function LoginPage() {
 
         {/* Frosted glass card */}
         <div className="rounded-2xl border border-white/10 bg-white/5 p-8 backdrop-blur-xl shadow-2xl">
-          <h2 className="mb-1 text-lg font-semibold text-white">Admin sign in</h2>
-          <p className="mb-6 text-sm text-slate-400">Sign in to manage tenants and monitor runs.</p>
+          <h2 className="mb-1 text-lg font-semibold text-white">Sign in</h2>
+          <p className="mb-6 text-sm text-slate-400">Use your email for tenant access or a username for platform administration.</p>
 
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-300" htmlFor="username">
-                Username
+              <label className="text-sm font-medium text-slate-300" htmlFor="identifier">
+                Email or username
               </label>
               <Input
-                id="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                id="identifier"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
                 required
                 className="border-white/10 bg-white/10 text-white placeholder:text-slate-500 focus-visible:ring-indigo-500"
               />
@@ -109,6 +107,13 @@ export default function LoginPage() {
             >
               {isSubmitting ? "Signing in..." : "Sign in"}
             </Button>
+
+            <p className="text-center text-sm text-slate-400">
+              New to Master Builder?{" "}
+              <Link href="/register" className="text-indigo-300 underline-offset-2 hover:underline">
+                Create your workspace
+              </Link>
+            </p>
 
             <p className="text-center text-xs text-slate-500">
               <Link href="/privacy" className="text-indigo-400 underline-offset-2 hover:underline">

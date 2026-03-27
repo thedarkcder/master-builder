@@ -9,6 +9,7 @@ import {
   getTenant,
   listGitHubRepositories,
   listJiraProjects,
+  startDiscordInstall,
   startGitHubInstall,
   startJiraConnect,
   updateTenant,
@@ -102,6 +103,15 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       }
       return null;
     }
+    if (stepKey === "discord") {
+      if (!values.discord.guild_id?.trim()) {
+        return "Install the Discord bot before continuing.";
+      }
+      if (!values.discord.onboarding_channel_id?.trim()) {
+        return "Choose an onboarding channel before continuing.";
+      }
+      return null;
+    }
     if (stepKey === "repos") {
       if (!textFields.githubRepositoryText.trim()) {
         return "Select a GitHub repository before continuing.";
@@ -148,6 +158,8 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
         setSelectedRepoUrl(form.repos.github_repository ?? "");
         if (searchParams.get("github_install") === "success") {
           setStatusLine("GitHub App install completed. Load repositories to continue setup.");
+        } else if (searchParams.get("discord_install") === "success") {
+          setStatusLine("Discord bot install completed. Confirm the onboarding channel and invite settings.");
         } else {
           setStatusLine(`Loaded tenant ${record.tenant_id}.`);
         }
@@ -273,6 +285,22 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
   }
 
+  async function startDiscordInstallFlow() {
+    if (!credentials) {
+      return;
+    }
+    const tenantId = await ensureTenantCreated();
+    if (!tenantId) {
+      return;
+    }
+    try {
+      const result = await startDiscordInstall(credentials, tenantId, { returnTo: "wizard" });
+      window.location.href = result.install_url;
+    } catch (error) {
+      setStatusLine(`Unable to start Discord bot install: ${(error as Error).message}`);
+    }
+  }
+
   async function loadInstallationRepositories() {
     if (!credentials || !createdTenantId) {
       return;
@@ -306,13 +334,13 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     void loadInstallationRepositories();
   }, [stepKey, values.github.installation_id, installationRepos.length]);
 
-  async function saveTenant() {
+  async function saveTenant(): Promise<boolean> {
     if (!credentials) {
-      return;
+      return false;
     }
     const tenantId = await ensureTenantCreated();
     if (!tenantId) {
-      return;
+      return false;
     }
 
     setSaving(true);
@@ -323,8 +351,10 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       setValues(form);
       setTextFields(formValuesToTextFields(form));
       setStatusLine(`Saved tenant ${updated.tenant_id}.`);
+      return true;
     } catch (error) {
       setStatusLine(`Save failed: ${(error as Error).message}`);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -350,6 +380,13 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     if (stepKey === "jira") {
       const tenantId = await ensureTenantCreated();
       if (!tenantId) {
+        return;
+      }
+    }
+
+    if (stepKey === "discord" || stepKey === "repos") {
+      const saved = await saveTenant();
+      if (!saved) {
         return;
       }
     }
@@ -387,6 +424,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     loadJiraProjectsForConnection,
     toggleJiraProject,
     startGitHubInstallFlow,
+    startDiscordInstallFlow,
     loadInstallationRepositories,
     saveTenant
   };

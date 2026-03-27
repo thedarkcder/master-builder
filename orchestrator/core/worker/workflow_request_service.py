@@ -341,7 +341,7 @@ def _extract_resume_stage(trigger_context: dict | None) -> str | None:
     if not isinstance(trigger_context, dict):
         return None
     value = str(trigger_context.get("resume_stage") or "").strip().lower()
-    return value if value in {"orchestrated", "pm", "dev"} else None
+    return value if value in {"orchestrated", "pm", "dev", "review"} else None
 
 
 def _extract_resume_session_id(trigger_context: dict | None) -> str | None:

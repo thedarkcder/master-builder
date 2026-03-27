@@ -125,6 +125,8 @@ def dispatch_ask_command(
     normalized_channel_id: str,
     require_ask_confirmation: bool,
     issue_key_pattern: Pattern[str],
+    prune_missing_issue_keys_from_ask_history: Callable[..., Any],
+    recent_ask_history: Callable[..., Any],
     collect_ask_context_with_history_context: Callable[..., Any],
     collect_github_ask_context: Callable[..., Any],
     store_pending_ask_action: Callable[..., Any],
@@ -434,12 +436,29 @@ def dispatch_ask_command(
         )
 
     if require_ask_confirmation:
+        prune_missing_issue_keys_from_ask_history(
+            session=session,
+            tenant=tenant,
+            user_id=normalized_user_id,
+            channel_id=normalized_channel_id,
+        )
+        history_context = recent_ask_history(
+            tenant=tenant,
+            user_id=normalized_user_id,
+            channel_id=normalized_channel_id,
+        )
+        if not scoped_issue_key:
+            for entry in reversed(history_context):
+                candidate_issue_key = str(entry.get("issue_key") or "").strip().upper()
+                if candidate_issue_key:
+                    scoped_issue_key = candidate_issue_key
+                    break
         (
             normalized_issue_key,
             requested_status,
             issues,
             status_counts,
-            history_context,
+            collected_history_context,
         ) = collect_ask_context_with_history_context(
             session=session,
             tenant=tenant,
@@ -448,6 +467,8 @@ def dispatch_ask_command(
             question=question,
             scoped_issue_key=scoped_issue_key,
         )
+        if collected_history_context:
+            history_context = collected_history_context
         settings = get_settings()
         runtime = build_codex_runtime(session=session, settings=settings)
         invocation_context = CodexInvocationContext(

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import { BasicsStep } from "@/components/tenant-setup/steps/basics-step";
+import { DiscordStep } from "@/components/tenant-setup/steps/discord-step";
 import { GitHubStep } from "@/components/tenant-setup/steps/github-step";
 import { JiraStep } from "@/components/tenant-setup/steps/jira-step";
 import { ReposStep } from "@/components/tenant-setup/steps/repos-step";
@@ -46,6 +47,7 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
     loadJiraProjectsForConnection,
     toggleJiraProject,
     startGitHubInstallFlow,
+    startDiscordInstallFlow,
     loadInstallationRepositories,
     saveTenant
   } = useTenantSetupController(stepKey);
@@ -104,6 +106,46 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
           />
         ) : null}
 
+        {stepKey === "discord" ? (
+          <DiscordStep
+            createdTenantId={createdTenantId}
+            tenantIdPreview={tenantIdPreview}
+            guildId={values.discord.guild_id}
+            installedAt={values.discord.installed_at}
+            onboardingChannelId={values.discord.onboarding_channel_id}
+            inviteExpirySeconds={values.discord.onboarding_invite_expires_in_seconds}
+            inviteMaxUses={values.discord.onboarding_invite_max_uses}
+            onStartInstall={() => void startDiscordInstallFlow()}
+            onOnboardingChannelChange={(value) =>
+              setValues((prev) => ({
+                ...prev,
+                discordEnabled: true,
+                discord: { ...prev.discord, onboarding_channel_id: value || null }
+              }))
+            }
+            onInviteExpiryChange={(value) =>
+              setValues((prev) => ({
+                ...prev,
+                discordEnabled: true,
+                discord: {
+                  ...prev.discord,
+                  onboarding_invite_expires_in_seconds: value.trim() ? Number(value) : null
+                }
+              }))
+            }
+            onInviteMaxUsesChange={(value) =>
+              setValues((prev) => ({
+                ...prev,
+                discordEnabled: true,
+                discord: {
+                  ...prev.discord,
+                  onboarding_invite_max_uses: value.trim() ? Number(value) : null
+                }
+              }))
+            }
+          />
+        ) : null}
+
         {stepKey === "repos" ? (
           <ReposStep
             selectedRepoUrl={selectedRepoUrl}
@@ -134,7 +176,7 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
           <Button variant="outline" onClick={previousStep} disabled={stepIndex === 0}>
             <ArrowLeft className="mr-2 h-4 w-4" /> Back
           </Button>
-          <Button onClick={() => void nextStep()} disabled={stepIndex >= 4 || saving}>
+          <Button onClick={() => void nextStep()} disabled={stepIndex >= 5 || saving}>
             Next <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>

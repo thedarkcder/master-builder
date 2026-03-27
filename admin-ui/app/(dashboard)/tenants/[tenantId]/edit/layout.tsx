@@ -8,6 +8,7 @@ const tabs = [
   { label: "Jira", section: "jira" },
   { label: "GitHub", section: "github" },
   { label: "Discord", section: "discord" },
+  { label: "Experience & Access", section: "access" },
   { label: "Configuration", section: "config" },
   { label: "Health", section: "health" },
   { label: "Notifications", section: "notifications" }

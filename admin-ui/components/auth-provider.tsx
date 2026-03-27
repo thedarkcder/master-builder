@@ -1,111 +1,113 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { getSession, SessionProvider, signIn, signOut, useSession } from "next-auth/react";
 
-import { authenticateAdmin, verifyAdminCredentials, type AdminLoginInput, type Credentials } from "@/lib/api";
 import {
-  AUTH_COOKIE_KEY,
-  AUTH_COOKIE_TTL_SECONDS,
-  AUTH_STORAGE_KEY,
-  DEFAULT_API_BASE_URL
-} from "@/lib/auth-constants";
+  readAuthenticatedPrincipal,
+  type AuthenticatedPrincipalRecord,
+  type Credentials
+} from "@/lib/api";
+
+type AuthLoginInput = {
+  identifier: string;
+  password: string;
+};
 
 type AuthContextValue = {
   credentials: Credentials | null;
+  principal: AuthenticatedPrincipalRecord | null;
   ready: boolean;
-  login: (nextCredentials: AdminLoginInput) => Promise<void>;
-  logout: () => void;
+  needsOnboarding: boolean;
+  login: (input: AuthLoginInput) => Promise<void>;
+  logout: () => Promise<void>;
+  refreshPrincipal: () => Promise<void>;
 };
+
+type SessionUserShape = Record<string, never>;
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-function writeSessionCookie(enabled: boolean): void {
-  if (typeof document === "undefined") {
-    return;
+function hasPendingOnboarding(principal: AuthenticatedPrincipalRecord | null): boolean {
+  if (!principal || principal.principal_type !== "tenant_user") {
+    return false;
   }
-  if (!enabled) {
-    document.cookie = `${AUTH_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
-    return;
-  }
-  document.cookie = `${AUTH_COOKIE_KEY}=1; path=/; max-age=${AUTH_COOKIE_TTL_SECONDS}; samesite=lax`;
+  return principal.memberships.some((membership) => membership.onboarding_completed_at == null);
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [ready, setReady] = useState(false);
-  const [credentials, setCredentials] = useState<Credentials | null>(null);
+function AuthProviderInner({ children }: { children: React.ReactNode }) {
+  const { data: session, status } = useSession();
+  const [principal, setPrincipal] = useState<AuthenticatedPrincipalRecord | null>(null);
+  const sessionUser = session?.user as SessionUserShape | undefined;
+
+  const credentials = useMemo<Credentials | null>(() => {
+    if (!sessionUser || status !== "authenticated") {
+      return null;
+    }
+    return {
+      apiBaseUrl: ""
+    };
+  }, [sessionUser, status]);
+
+  async function refreshPrincipal(nextCredentials: Credentials | null = credentials): Promise<void> {
+    if (!nextCredentials) {
+      setPrincipal(null);
+      return;
+    }
+    try {
+      const nextPrincipal = await readAuthenticatedPrincipal(nextCredentials);
+      setPrincipal(nextPrincipal);
+    } catch {
+      setPrincipal(null);
+    }
+  }
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function hydrate(): Promise<void> {
-      const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
-      if (!raw) {
-        if (isMounted) {
-          setReady(true);
-        }
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(raw) as Credentials;
-        if (parsed.accessToken) {
-          const sessionFromEnv: Credentials = {
-            apiBaseUrl: DEFAULT_API_BASE_URL,
-            accessToken: parsed.accessToken
-          };
-          await verifyAdminCredentials(sessionFromEnv);
-          if (!isMounted) {
-            return;
-          }
-          setCredentials(sessionFromEnv);
-          window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(sessionFromEnv));
-          writeSessionCookie(true);
-        } else {
-          window.localStorage.removeItem(AUTH_STORAGE_KEY);
-          writeSessionCookie(false);
-        }
-      } catch {
-        window.localStorage.removeItem(AUTH_STORAGE_KEY);
-        writeSessionCookie(false);
-      }
-
-      if (isMounted) {
-        setReady(true);
-      }
+    if (status !== "authenticated") {
+      setPrincipal(null);
+      return;
     }
-
-    void hydrate();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    void refreshPrincipal();
+  }, [credentials, status]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
       credentials,
-      ready,
-      login: async (nextCredentials: AdminLoginInput) => {
-        const session = await authenticateAdmin({
-          apiBaseUrl: DEFAULT_API_BASE_URL,
-          username: nextCredentials.username.trim(),
-          password: nextCredentials.password
+      principal,
+      ready: status !== "loading",
+      needsOnboarding: hasPendingOnboarding(principal),
+      login: async ({ identifier, password }) => {
+        const result = await signIn("credentials", {
+          identifier: identifier.trim(),
+          password,
+          redirect: false
         });
-        await verifyAdminCredentials(session);
-        window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
-        writeSessionCookie(true);
-        setCredentials(session);
+        if (!result || result.error) {
+          throw new Error(result?.error || "Invalid credentials");
+        }
+        const nextSession = await getSession();
+        const nextSessionUser = nextSession?.user as SessionUserShape | undefined;
+        const nextCredentials = nextSessionUser ? { apiBaseUrl: "" } : null;
+        await refreshPrincipal(nextCredentials);
       },
-      logout: () => {
-        window.localStorage.removeItem(AUTH_STORAGE_KEY);
-        writeSessionCookie(false);
-        setCredentials(null);
-      }
+      logout: async () => {
+        setPrincipal(null);
+        await signOut({ redirect: false });
+      },
+      refreshPrincipal
     }),
-    [credentials, ready]
+    [credentials, principal, status]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  return (
+    <SessionProvider>
+      <AuthProviderInner>{children}</AuthProviderInner>
+    </SessionProvider>
+  );
 }
 
 export function useAuth(): AuthContextValue {

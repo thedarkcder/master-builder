@@ -23,9 +23,6 @@ export default async function TenantEditSectionPage({ params }: { params: Promis
   if (section === "webhooks") {
     redirect(`/tenants/${encodeURIComponent(tenantId)}/edit/jira`);
   }
-  if (section === "access") {
-    redirect(`/tenants/${encodeURIComponent(tenantId)}/edit/notifications`);
-  }
   if (section === "projects") {
     redirect(`/tenants/${encodeURIComponent(tenantId)}/projects`);
   }
