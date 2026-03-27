@@ -5,7 +5,6 @@ import logging
 from orchestrator.core.communications import (
     GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
-    GitHubStickyRemediationReviewThreadReplyAction,
     TransportAction,
 )
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
@@ -101,7 +100,6 @@ def build_manual_pr_remediation_completion_actions(
         return ()
 
     status_label = _status_label(terminal_status or getattr(run, "status", None))
-    issue_created = bool(trigger_context.get("issue_created"))
     triggering_comment_url = str(requested_comment.get("url") or "").strip() or None
     requested_by = str(manual_fix_request.get("requested_by") or "").strip() or None
     instruction_text = str(manual_fix_request.get("instruction_text") or "").strip() or None
@@ -128,28 +126,10 @@ def build_manual_pr_remediation_completion_actions(
     )
 
     if requested_comment_type == "review_comment":
-        head_sha = str(trigger_context.get("head_sha") or "").strip() or None
         return (
             GitHubManualFixReviewThreadReplyAction(
                 triggering_comment_id=triggering_comment_id,
                 **common_kwargs,
-            ),
-            GitHubStickyRemediationReviewThreadReplyAction(
-                repo_full_name=repo_full_name,
-                pr_number=pr_number,
-                tenant_id=str(getattr(run, "tenant_id", "") or "").strip(),
-                project_id=str(getattr(project, "project_id", "") or "").strip(),
-                triggering_comment_id=triggering_comment_id,
-                issue_key=str(getattr(run, "issue_key", "") or "").strip() or None,
-                issue_url=issue_url,
-                issue_created=issue_created,
-                enqueued=True,
-                reason=reason,
-                run_id=str(getattr(run, "run_id", "") or "").strip() or None,
-                head_sha=head_sha,
-                event="workflow_run",
-                action_name=status_label.lower(),
-                status_label=status_label,
             ),
         )
 

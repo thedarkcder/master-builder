@@ -27,8 +27,6 @@ from orchestrator.core.communications.contracts import (
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
     GitHubPullRequestReviewCommentReactionAction,
-    GitHubStickyRemediationCommentAction,
-    GitHubStickyRemediationReviewThreadReplyAction,
     GitHubStickyReviewCommentAction,
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
@@ -376,10 +374,6 @@ class CommunicationContractsTests(unittest.TestCase):
         with (
             patch("orchestrator.core.github.transport_executor.upsert_sticky_review_comment") as sticky_review,
             patch("orchestrator.core.github.transport_executor.publish_inline_review_batch") as inline_review,
-            patch("orchestrator.core.github.transport_executor.upsert_sticky_remediation_comment") as sticky_remediation,
-            patch(
-                "orchestrator.core.github.transport_executor.upsert_sticky_remediation_review_thread_reply"
-            ) as sticky_remediation_thread_reply,
             patch("orchestrator.core.github.transport_executor.upsert_manual_fix_issue_comment_reply") as manual_fix_issue_reply,
             patch("orchestrator.core.github.transport_executor.upsert_manual_fix_review_thread_reply") as manual_fix_reply,
         ):
@@ -407,41 +401,6 @@ class CommunicationContractsTests(unittest.TestCase):
                     project_id="project-1",
                     findings=(),
                     changed_paths={"a.py"},
-                )
-            )
-            executor.execute(
-                action=GitHubStickyRemediationCommentAction(
-                    repo_full_name="org/repo",
-                    pr_number=11,
-                    tenant_id="tenant-1",
-                    project_id="project-1",
-                    issue_key="GP-1",
-                    issue_url="https://jira/GP-1",
-                    issue_created=True,
-                    enqueued=True,
-                    reason=None,
-                    run_id="run-1",
-                    head_sha="abc123",
-                    event="pull_request",
-                    action_name="synchronize",
-                )
-            )
-            executor.execute(
-                action=GitHubStickyRemediationReviewThreadReplyAction(
-                    repo_full_name="org/repo",
-                    pr_number=11,
-                    tenant_id="tenant-1",
-                    project_id="project-1",
-                    triggering_comment_id=99,
-                    issue_key="GP-1",
-                    issue_url="https://jira/GP-1",
-                    issue_created=True,
-                    enqueued=True,
-                    reason=None,
-                    run_id="run-1",
-                    head_sha="abc123",
-                    event="pull_request_review_comment",
-                    action_name="created",
                 )
             )
             executor.execute(
@@ -488,8 +447,6 @@ class CommunicationContractsTests(unittest.TestCase):
 
         sticky_review.assert_called_once()
         inline_review.assert_called_once()
-        sticky_remediation.assert_called_once()
-        sticky_remediation_thread_reply.assert_called_once()
         manual_fix_reply.assert_called_once()
         manual_fix_issue_reply.assert_called_once()
 
