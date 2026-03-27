@@ -374,8 +374,8 @@ class OrchestratedRunWorkflowExecutor:
                     review_result=review_result,
                 )
             )
-                if checkpoint_failure is not None:
-                    return checkpoint_failure
+            if checkpoint_failure is not None:
+                return checkpoint_failure
             stage_trace.append(
                 _stage_trace_entry(
                     stage="review",
