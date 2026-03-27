@@ -220,6 +220,19 @@ class JiraOAuthClient:
             issue=issue,
         )
 
+    def list_project_issue_types_for_create(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+    ) -> list[str]:
+        return self._issue_service._list_project_issue_types_for_create(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            project_key=project_key,
+        )
+
     def update_issue_fields(
         self,
         *,
@@ -295,6 +308,21 @@ class JiraOAuthClient:
         labels: list[str],
     ) -> None:
         self._issue_service.add_issue_labels(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            labels=labels,
+        )
+
+    def replace_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        self._issue_service.replace_issue_labels(
             access_token=access_token,
             cloud_id=cloud_id,
             issue_id_or_key=issue_id_or_key,

@@ -61,6 +61,28 @@ def plan_jira_comment_flow(
             removed_history_entries=removed_history_entries,
         )
 
+    comment_clarify_response = jira_webhook_comment_flow.stage_handle_comment_clarify_command(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+    if comment_clarify_response is not None:
+        return JiraCommentPlan(
+            content=comment_clarify_response,
+            removed_history_entries=removed_history_entries,
+        )
+
+    engineering_reply_response = jira_webhook_comment_flow.stage_handle_comment_engineering_clarification_reply(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+    if engineering_reply_response is not None:
+        return JiraCommentPlan(
+            content=engineering_reply_response,
+            removed_history_entries=removed_history_entries,
+        )
+
     comment_reply_response = jira_webhook_comment_flow.stage_handle_comment_decision_reply(
         context=context,
         session=session,

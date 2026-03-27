@@ -14,6 +14,7 @@ from orchestrator.api.webhooks.jira_enqueue_planner import (
     plan_jira_run_flow,
 )
 from orchestrator.api.webhooks.jira_event_classifier import evaluate_jira_trigger_state
+from orchestrator.api.webhooks.jira_parent_child_sync import handle_parent_feature_sync
 from orchestrator.api.webhooks.jira_webhook_types import (
     JiraWebhookContext,
     JiraWebhookContextSnapshot,
@@ -196,6 +197,14 @@ def _process_jira_webhook_context(
                 ),
             ),
         )
+
+    parent_sync_response = handle_parent_feature_sync(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+    if parent_sync_response is not None:
+        return JiraWebhookPlan(content=parent_sync_response)
 
     run_plan = plan_jira_run_flow(
         context=context,

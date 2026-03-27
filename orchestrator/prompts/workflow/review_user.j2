@@ -19,6 +19,8 @@ Dev summary: {{ dev_summary_json }}
 Test passed: {{ test_passed }}
 Test guidance: {{ test_guidance_json }}
 Test feedback: {{ test_feedback }}
+Previous review summary: {{ previous_review_summary_json }}
+Previous review feedback: {{ previous_review_feedback }}
 PR URL: {{ pr_url }}
 Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
@@ -41,6 +43,7 @@ Required actions:
 4. Preserve fail-closed behavior when verification is incomplete.
 5. If a one-time transient human input can unblock the remaining verification, request it with `run.request_human_input` before using outcome="blocked" with blocker_category="awaiting_human_input".
 6. If PR creation required by policy is `true`, you must not approve the run unless a PR exists and `pr_url` is set.
+7. When previous review feedback is present, treat it as the active review context for this resumed review pass.
 
 Output contract:
 - approved: boolean decision.

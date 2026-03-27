@@ -19,6 +19,7 @@ FOLLOWUP_CONTEXT_ASK_THREAD = "ask_thread"
 FOLLOWUP_CONTEXT_SEED_FOLLOWUP = "seed_followup"
 FOLLOWUP_CONTEXT_ROOM_PM = "room_pm"
 FOLLOWUP_CONTEXT_HUMAN_INPUT = "human_input"
+FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION = "engineering_clarification"
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,39 @@ def close_followup_contexts(
         row.closed_at = now
         row.updated_at = now
     return len(rows)
+
+
+def resolve_issue_followup_context(
+    *,
+    session: Session,
+    tenant_id: str,
+    issue_key: str,
+    context_type: str | None = None,
+) -> FollowupContext | None:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    normalized_context_type = str(context_type or "").strip()
+    if not normalized_tenant_id or not normalized_issue_key:
+        return None
+    query = (
+        select(FollowupContext)
+        .where(
+            FollowupContext.tenant_id == normalized_tenant_id,
+            FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
+            FollowupContext.issue_key == normalized_issue_key,
+        )
+        .order_by(FollowupContext.updated_at.desc())
+    )
+    if normalized_context_type:
+        query = query.where(FollowupContext.context_type == normalized_context_type)
+    rows = session.execute(query).scalars().all()
+    if not rows:
+        return None
+    if len(rows) > 1 and normalized_context_type:
+        raise ValueError(
+            f"Multiple active follow-up contexts match tenant={normalized_tenant_id} issue={normalized_issue_key} type={normalized_context_type}"
+        )
+    return rows[0]
 
 
 def resolve_followup_reaction(
