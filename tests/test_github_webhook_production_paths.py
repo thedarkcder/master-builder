@@ -9,6 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
+from orchestrator.core.config import get_settings
+from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from tests.production_path_support import (
     clear_runtime_environment,
     configure_runtime_environment,
@@ -118,6 +120,14 @@ class GitHubWebhookProductionPathTests(unittest.TestCase):
         self.temp_dir.cleanup()
         clear_runtime_environment()
 
+    def _process_one_webhook_job(self):
+        with self.session_factory() as session:
+            return process_next_webhook_job(
+                session=session,
+                settings=get_settings(),
+                owner_id="worker:test",
+            )
+
     def test_ignored_event_runs_through_real_route(self) -> None:
         response = self.client.post(
             "/github/webhook",
@@ -168,14 +178,55 @@ class GitHubWebhookProductionPathTests(unittest.TestCase):
                     "X-GitHub-Delivery": "delivery-2",
                 },
             )
+            processed = self._process_one_webhook_job()
 
         self.assertEqual(response.status_code, 202)
         body = response.json()
         self.assertTrue(body["accepted"])
-        self.assertEqual(body["remediation"][0]["issue_key"], "GP-900")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
         self.assertEqual(fake_client.review_comment_reactions[0]["comment_id"], 901)
         self.assertEqual(fake_client.review_comment_reactions[0]["content"], "eyes")
         self.assertTrue(fake_client.review_thread_replies)
         reply_bodies = [str(reply["body"]) for reply in fake_client.review_thread_replies]
         self.assertTrue(any("Codex Manual Fix" in body for body in reply_bodies))
         self.assertTrue(any("Codex PR Remediation" in body for body in reply_bodies))
+
+    def test_untagged_review_comment_is_ignored_by_real_route(self) -> None:
+        fake_client = _FakeGitHubClient()
+        payload = load_json_fixture("github", "webhooks", "pull_request_review_comment_created.json")
+        payload["comment"]["body"] = "fix this"
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
+                return_value=SimpleNamespace(
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="pending_checks", message="pending")
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
+            ) as enqueue_mock,
+        ):
+            response = self.client.post(
+                "/github/webhook",
+                json=payload,
+                headers={
+                    "X-GitHub-Event": "pull_request_review_comment",
+                    "X-GitHub-Delivery": "delivery-untagged-review",
+                },
+            )
+            processed = self._process_one_webhook_job()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        enqueue_mock.assert_not_called()
+        self.assertFalse(fake_client.review_comment_reactions)
+        self.assertFalse(fake_client.review_thread_replies)

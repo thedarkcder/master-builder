@@ -14,6 +14,12 @@ from orchestrator.storage.models import JiraOAuthConnection
 from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig
 
 
+def _normalize_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def resolve_secret_ref(
     session: Session,
     *,
@@ -71,7 +77,8 @@ def refresh_jira_connection_tokens(
     tenant_id: str | None = None,
 ) -> str:  # noqa: ANN001
     now = datetime.now(timezone.utc)
-    if connection.access_token_expires_at - now > timedelta(seconds=60):
+    expires_at = _normalize_utc_datetime(connection.access_token_expires_at)
+    if expires_at - now > timedelta(seconds=60):
         return decrypt_value(
             ciphertext=connection.access_token_encrypted,
             encryption_key=settings.secrets_encryption_key,
@@ -91,7 +98,7 @@ def refresh_jira_connection_tokens(
         plaintext=token_set.refresh_token,
         encryption_key=settings.secrets_encryption_key,
     )
-    connection.access_token_expires_at = token_set.expires_at
+    connection.access_token_expires_at = _normalize_utc_datetime(token_set.expires_at)
     connection.scopes = token_set.scopes
     connection.updated_at = now
     session.commit()

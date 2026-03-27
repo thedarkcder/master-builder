@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./orchestrator.db"
+    db_pool_size: int = 10
+    db_pool_max_overflow: int = 20
+    db_pool_timeout_seconds: int = 60
+    db_pool_recycle_seconds: int = 1800
+    db_pool_pre_ping: bool = True
     log_level: str = "INFO"
     admin_username: str = "admin"
     admin_password: str = "change-me"
