@@ -61,7 +61,9 @@ type StageProgressStatus = "not_started" | "running" | "completed" | "interrupte
 
 type StageProgressEntry = {
   status: StageProgressStatus;
+  tileDetail: string;
   detail: string;
+  sortKey: number;
 };
 
 type TimelineSegment = {
@@ -1018,10 +1020,10 @@ export default function RunDetailPage() {
   }, [logs]);
   const stageProgress = useMemo(() => {
     const stages: Record<AgentStage, StageProgressEntry> = {
-      pm: { status: "not_started", detail: "not started" },
-      dev: { status: "not_started", detail: "not started" },
-      test: { status: "not_started", detail: "not started" },
-      review: { status: "not_started", detail: "not started" }
+      pm: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
+      dev: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
+      test: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
+      review: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 }
     };
     const timeOf = (value: string | null): number => (value ? new Date(value).getTime() : 0);
     for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
@@ -1032,9 +1034,12 @@ export default function RunDetailPage() {
       const completedLabel = checkpoint.completedAt
         ? `completed · ${new Date(checkpoint.completedAt).toLocaleTimeString()}`
         : "completed";
+      const checkpointStatus = checkpoint.status === "completed" ? "completed" : "interrupted";
       stages[stage] = {
-        status: checkpoint.status === "completed" ? "completed" : "interrupted",
+        status: checkpointStatus,
+        tileDetail: checkpointStatus === "completed" ? "completed" : "interrupted",
         detail: checkpoint.summary ? `${completedLabel} · ${checkpoint.summary}` : completedLabel,
+        sortKey: timeOf(checkpoint.completedAt),
       };
     }
     for (const row of invocationSessionRows) {
@@ -1043,38 +1048,57 @@ export default function RunDetailPage() {
         continue;
       }
       if (stageCheckpoints[stage]?.status === "completed") {
+        if (row.finishedAt && row.durationMs !== null) {
+          stages[stage] = {
+            ...stages[stage],
+            tileDetail: `${formatDuration(row.durationMs)}`,
+            sortKey: Math.max(stages[stage].sortKey, timeOf(row.finishedAt)),
+          };
+        }
         continue;
       }
       const current = stages[stage];
       const rowRank = Math.max(timeOf(row.finishedAt), timeOf(row.startedAt));
-      const currentRank = current.detail === "not started" ? 0 : Number(current.detail.split("::")[0] || 0);
-      if (rowRank < currentRank) {
+      if (rowRank < current.sortKey) {
         continue;
       }
       if (row.finishedAt) {
         if (isActiveRun) {
           const duration = row.durationMs !== null ? `${formatDuration(row.durationMs)}` : "completed";
-          stages[stage] = { status: "completed", detail: `${rowRank}::completed · ${duration}` };
+          stages[stage] = {
+            status: "completed",
+            tileDetail: duration,
+            detail: `completed · ${duration}`,
+            sortKey: rowRank,
+          };
           continue;
         }
         stages[stage] = {
           status: "interrupted",
-          detail: `${rowRank}::agent finished, checkpoint missing`,
+          tileDetail: "interrupted",
+          detail: "agent finished, checkpoint missing",
+          sortKey: rowRank,
         };
       } else if (row.startedAt) {
         if (!isActiveRun) {
-          stages[stage] = { status: "interrupted", detail: `${rowRank}::interrupted before completion` };
+          stages[stage] = {
+            status: "interrupted",
+            tileDetail: "interrupted",
+            detail: "interrupted before completion",
+            sortKey: rowRank,
+          };
           continue;
         }
         const startMs = new Date(row.startedAt).getTime();
         const runningMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
-        stages[stage] = { status: "running", detail: `${rowRank}::running · ${formatDuration(runningMs)}` };
+        const runtimeLabel = `${formatDuration(runningMs)}`;
+        stages[stage] = {
+          status: "running",
+          tileDetail: runtimeLabel,
+          detail: `running · ${runtimeLabel}`,
+          sortKey: rowRank,
+        };
       }
-    }
-    for (const key of Object.keys(stages) as AgentStage[]) {
-      const rawDetail = stages[key].detail;
-      const trimmed = rawDetail.includes("::") ? rawDetail.split("::")[1] : rawDetail;
-      stages[key] = { ...stages[key], detail: trimmed };
     }
     return stages;
   }, [invocationSessionRows, isActiveRun, stageCheckpoints]);
@@ -1489,7 +1513,7 @@ export default function RunDetailPage() {
                         {stage}
                       </span>
                     </div>
-                    <span data-testid={`run-stage-${stage}-detail`} className="text-[10px] text-muted-foreground">{progress.detail}</span>
+                    <span data-testid={`run-stage-${stage}-detail`} className="text-[10px] text-muted-foreground">{progress.tileDetail}</span>
                   </div>
                   {idx < 3 ? <span className="text-muted-foreground/40">→</span> : null}
                 </div>

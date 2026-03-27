@@ -274,7 +274,6 @@ class OrchestratedRunWorkflowExecutor:
             )
             if checkpoint_failure is not None:
                 return checkpoint_failure
-
         if _should_resume_from_review(request):
             source_state = _resume_source_state(request)
             resumed_dev_result = _resume_dev_result(source_state)
