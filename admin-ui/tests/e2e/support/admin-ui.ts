@@ -1,3 +1,4 @@
+import { encode } from "next-auth/jwt";
 import type { Page, Route } from "@playwright/test";
 
 import {
@@ -12,16 +13,39 @@ import type {
   RunLogEventRecord,
   RunRecord,
   RunRerunPayload,
+  AuthenticatedPrincipalRecord,
+  DeliverySummaryRecord,
+  MembershipRecord,
+  TenantDiscordIdentityRecord,
+  TenantInviteRecord,
+  TenantMemberRecord,
   TenantRecord,
+  TenantTeamRecord,
   TokenTimelineRecord,
 } from "../../../lib/api";
 
 export const ADMIN_ACCESS_TOKEN = "playwright-admin-token";
+export const TENANT_ACCESS_TOKEN = "playwright-tenant-token";
+
+const APP_BASE_URL = "http://localhost:4100";
+const BACKEND_BASE_URL = DEFAULT_API_BASE_URL;
+const AUTH_SECRET = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret";
+const AUTH_SESSION_COOKIE_NAME = "authjs.session-token";
+const AUTH_SESSION_COOKIE_SALT = "authjs.session-token";
 
 type AdminRouteHandler = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   pathname: string | RegExp;
   handler: (route: Route, url: URL) => Promise<void> | void;
+};
+
+type AppRouteHandler = AdminRouteHandler;
+
+type TenantSessionSeed = {
+  principal: AuthenticatedPrincipalRecord;
+  accessToken?: string;
+  userName?: string | null;
+  userEmail?: string | null;
 };
 
 export async function seedAdminSession(page: Page, accessToken = ADMIN_ACCESS_TOKEN): Promise<void> {
@@ -83,6 +107,62 @@ export async function installAdminApiMocks(page: Page, handlers: AdminRouteHandl
   });
 }
 
+export async function installBffApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, APP_BASE_URL, handlers);
+}
+
+export async function installBackendApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, BACKEND_BASE_URL, handlers);
+}
+
+export async function seedTenantSession(
+  page: Page,
+  { principal, accessToken = TENANT_ACCESS_TOKEN, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
+  const token = await encode({
+    secret: AUTH_SECRET,
+    salt: AUTH_SESSION_COOKIE_SALT,
+    token: {
+      sub: principal.user_id ?? principal.email ?? principal.username ?? "playwright-user",
+      name: userName ?? principal.full_name ?? principal.username ?? principal.email ?? "Playwright User",
+      email: userEmail ?? principal.email ?? null,
+      accessToken,
+      principal,
+    },
+    maxAge: AUTH_COOKIE_TTL_SECONDS,
+  });
+
+  await page.context().addCookies([
+    {
+      name: AUTH_SESSION_COOKIE_NAME,
+      value: token,
+      url: APP_BASE_URL,
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAuthSessionMock(page, { principal, userEmail, userName });
+}
+
+export async function mockCredentialSignIn(
+  page: Page,
+  seed: TenantSessionSeed,
+): Promise<void> {
+  await page.route(`${APP_BASE_URL}/api/auth/callback/credentials**`, async (route) => {
+    await seedTenantSession(page, seed);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        status: 200,
+        url: `${APP_BASE_URL}/dashboard`,
+      }),
+    });
+  });
+}
+
 export async function fulfillJson(route: Route, body: unknown, status = 200): Promise<void> {
   await route.fulfill({
     status,
@@ -134,6 +214,10 @@ export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord 
       codex_reasoning_effort: "medium",
     },
     discord: null,
+    experience: {
+      default_mode: "technical",
+    },
+    setup_state: {},
     created_at: "2026-03-27T16:00:00Z",
     updated_at: "2026-03-27T16:00:00Z",
     ...overrides,
@@ -219,6 +303,137 @@ export function makeTokenTimeline(run: RunRecord): TokenTimelineRecord {
       p95_runtime_ms: 6_000,
     },
     turns: [],
+  };
+}
+
+export function makeMembership(overrides: Partial<MembershipRecord> = {}): MembershipRecord {
+  return {
+    membership_id: "membership-example",
+    tenant_id: "example",
+    role: "technical_member",
+    permission_keys: ["analytics.business.view", "analytics.technical.view"],
+    effective_mode: "technical",
+    mode_override: null,
+    onboarding_kind: "member_join",
+    first_signed_in_at: "2026-03-27T16:00:00Z",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+    onboarding_version: "v1",
+    team_ids: [],
+    discord_state: {},
+    ...overrides,
+  };
+}
+
+export function makeTenantUserPrincipal(
+  overrides: Partial<AuthenticatedPrincipalRecord> = {},
+): AuthenticatedPrincipalRecord {
+  return {
+    principal_type: "tenant_user",
+    user_id: "user-example",
+    email: "person@example.com",
+    full_name: "Person Example",
+    memberships: [makeMembership()],
+    ...overrides,
+  };
+}
+
+export function makeDiscordIdentity(
+  overrides: Partial<TenantDiscordIdentityRecord> = {},
+): TenantDiscordIdentityRecord {
+  return {
+    linked: false,
+    discord_user_id: null,
+    discord_username: null,
+    discord_global_name: null,
+    discord_avatar_hash: null,
+    linked_at: null,
+    ...overrides,
+  };
+}
+
+export function makeTeam(overrides: Partial<TenantTeamRecord> = {}): TenantTeamRecord {
+  return {
+    team_id: "delivery",
+    tenant_id: "example",
+    name: "Delivery",
+    description: "Delivery team",
+    permission_keys: ["analytics.business.view"],
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeInvite(overrides: Partial<TenantInviteRecord> = {}): TenantInviteRecord {
+  return {
+    invite_id: "invite-example",
+    tenant_id: "example",
+    email: "newperson@example.com",
+    full_name: "New Person",
+    role: "business_member",
+    team_ids: [],
+    mode_override: null,
+    status: "pending",
+    invite_url: "http://localhost:4100/invite/accept?token=invite-token",
+    expires_at: "2026-03-29T16:00:00Z",
+    accepted_at: null,
+    revoked_at: null,
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeMember(overrides: Partial<TenantMemberRecord> = {}): TenantMemberRecord {
+  return {
+    membership_id: "membership-example",
+    tenant_id: "example",
+    user_id: "user-example",
+    email: "person@example.com",
+    full_name: "Person Example",
+    is_active: true,
+    role: "technical_member",
+    permission_keys: ["analytics.business.view", "analytics.technical.view"],
+    effective_mode: "technical",
+    mode_override: null,
+    onboarding_kind: "member_join",
+    first_signed_in_at: "2026-03-27T16:00:00Z",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+    onboarding_version: "v1",
+    team_ids: [],
+    discord_state: {},
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeDeliverySummary(
+  overrides: Partial<DeliverySummaryRecord> = {},
+): DeliverySummaryRecord {
+  return {
+    summary: {
+      completed_count: 4,
+      in_review_count: 1,
+      blocked_count: 1,
+      failed_count: 0,
+      queued_count: 2,
+      median_cycle_time_hours: 6,
+      average_cycle_time_hours: 8,
+    },
+    timeline: [
+      {
+        run_id: "run-1",
+        project_id: "example-default",
+        issue_key: "GP-125",
+        issue_summary: "Ship onboarding checklist",
+        status: "completed",
+        completed_at: "2026-03-27T15:00:00Z",
+        started_at: "2026-03-27T12:00:00Z",
+        pr_url: "https://github.com/thedarkcder/master-builder/pull/173",
+      },
+    ],
+    ...overrides,
   };
 }
 
@@ -369,4 +584,43 @@ export async function mockRunDetailApis(
       },
     },
   ]);
+}
+
+async function installAuthSessionMock(
+  page: Page,
+  { principal, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
+  await page.route(`${APP_BASE_URL}/api/auth/session**`, async (route) => {
+    await fulfillJson(route, {
+      user: {
+        name: userName ?? principal.full_name ?? principal.username ?? principal.email ?? "Playwright User",
+        email: userEmail ?? principal.email ?? null,
+        principal,
+      },
+      expires: "2099-01-01T00:00:00.000Z",
+    });
+  });
+}
+
+async function installApiMocks(page: Page, baseUrl: string, handlers: AppRouteHandler[]): Promise<void> {
+  await page.route(`${baseUrl}/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const method = request.method().toUpperCase();
+    for (const candidate of handlers) {
+      if (candidate.method && candidate.method !== method) {
+        continue;
+      }
+      if (typeof candidate.pathname === "string") {
+        if (candidate.pathname !== url.pathname) {
+          continue;
+        }
+      } else if (!candidate.pathname.test(url.pathname)) {
+        continue;
+      }
+      await candidate.handler(route, url);
+      return;
+    }
+    await route.fallback();
+  });
 }
