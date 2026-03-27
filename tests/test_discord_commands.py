@@ -905,6 +905,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                 return_value=SimpleNamespace(
                     summary="Old summary",
                     description="Objective: old",
+                    labels=["worker:linux"],
                 )
             ),
             update_issue_summary_and_description=unittest.mock.MagicMock(),
@@ -946,6 +947,7 @@ class DiscordCommandApiTests(unittest.TestCase):
                     capture=SimpleNamespace(evidence_id="evidence-4"),
                     decision_result=SimpleNamespace(
                         decision=SimpleNamespace(pre_check=ready_result),
+                        issue_labels=["worker:linux", "agent:ready"],
                         classification="clear",
                         missing_slots=[],
                         auto_resolved_slots=[],
@@ -970,6 +972,13 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.commands.run_controls.enqueue_issue_run_with_precheck",
                 return_value=enqueue_result,
             ) as enqueue_mock,
+            patch(
+                "orchestrator.api.discord.commands.run_controls.evaluate_execution_readiness_only",
+                wraps=__import__(
+                    "orchestrator.api.discord.commands.run_controls",
+                    fromlist=["evaluate_execution_readiness_only"],
+                ).evaluate_execution_readiness_only,
+            ) as readiness_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -987,6 +996,10 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(response.json()["data"]["run_id"], "run-new-1")
         oauth_client.update_issue_summary_and_description.assert_not_called()
         enqueue_mock.assert_called_once()
+        self.assertEqual(
+            readiness_mock.call_args.kwargs["issue_labels"],
+            ["worker:linux", "agent:ready"],
+        )
 
     def test_reply_without_active_decision_cycle_returns_explicit_conflict(self) -> None:
         oauth_client = SimpleNamespace(

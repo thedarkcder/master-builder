@@ -572,7 +572,7 @@ def dispatch_run_control_command(
             issue_key=issue_key,
             issue_summary=issue_preview.summary,
             issue_description=issue_description,
-            issue_labels=issue_labels,
+            issue_labels=decision_result.issue_labels or issue_labels,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",
