@@ -32,6 +32,7 @@ fi
 
 DOCKER_SERVICES=(
   postgres
+  redis
   api
   run-worker
   webhook-worker
@@ -106,7 +107,7 @@ wait_for_docker_services_ready() {
         return 1
       fi
 
-      if [[ "$service_name" == "postgres" || "$service_name" == "api" ]]; then
+      if [[ "$service_name" == "postgres" || "$service_name" == "redis" || "$service_name" == "api" ]]; then
         if [[ "$health_status" != "healthy" ]]; then
           all_ready="false"
         fi
@@ -227,6 +228,7 @@ fi
 
 export ORCHESTRATOR_DATABASE_URL="${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator}"
 export POSTGRES_URL="${POSTGRES_URL:-${ORCHESTRATOR_DATABASE_URL}}"
+export ORCHESTRATOR_REDIS_URL="${ORCHESTRATOR_REDIS_URL:-redis://127.0.0.1:46379/0}"
 export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"
 export ORCHESTRATOR_AGENT_ID="${ORCHESTRATOR_AGENT_ID:-worker-macos-local}"
 export ORCHESTRATOR_CODEX_SANDBOX_MODE="${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}"
