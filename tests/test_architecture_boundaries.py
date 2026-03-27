@@ -63,6 +63,93 @@ def _imported_modules(module_path: Path) -> set[str]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
+    def test_jira_http_ingress_does_not_plan_issue_runs_inline(self) -> None:
+        module_path = ROOT / "orchestrator" / "api" / "webhooks" / "jira_application.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+
+        target_function = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "build_jira_webhook_ingress_result"
+        )
+
+        violations: list[str] = []
+        saw_enqueue_call = False
+        for node in ast.walk(target_function):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "enqueue_webhook_job":
+                saw_enqueue_call = True
+            if isinstance(func, ast.Name) and func.id in {"plan_jira_run_flow", "evaluate_jira_trigger_state"}:
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}")
+
+        self.assertTrue(saw_enqueue_call, msg="Jira HTTP ingress must enqueue issue events for worker reconciliation.")
+        self.assertEqual(
+            violations,
+            [],
+            msg="Jira HTTP ingress must not evaluate or plan issue runs inline.",
+        )
+
+    def test_github_http_ingress_does_not_plan_reviews_inline(self) -> None:
+        module_path = ROOT / "orchestrator" / "api" / "webhooks" / "github_ingress.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+
+        target_function = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "ingest_github_webhook_event"
+        )
+
+        violations: list[str] = []
+        saw_enqueue_call = False
+        for node in ast.walk(target_function):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "enqueue_webhook_job":
+                saw_enqueue_call = True
+            if isinstance(func, ast.Name) and func.id in {
+                "build_github_webhook_ingress_result",
+                "plan_pull_request_targets",
+                "prepare_github_webhook_runtime",
+            }:
+                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}")
+
+        self.assertTrue(saw_enqueue_call, msg="GitHub HTTP ingress must enqueue actionable events.")
+        self.assertEqual(
+            violations,
+            [],
+            msg="GitHub HTTP ingress must not plan reviews or build runtime inline.",
+        )
+
+    def test_discord_webhook_routes_do_not_spawn_route_level_tasks(self) -> None:
+        modules = [
+            ROOT / "orchestrator" / "api" / "routes" / "webhook_discord.py",
+            ROOT / "orchestrator" / "api" / "routes" / "webhook_discord_interactions.py",
+        ]
+        violations: list[str] = []
+        saw_enqueue = {module.name: False for module in modules}
+        for module_path in modules:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr == "create_task":
+                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:create_task")
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "enqueue_webhook_job":
+                    saw_enqueue[module_path.name] = True
+
+        self.assertEqual(
+            violations,
+            [],
+            msg="Webhook routes must not spawn ad hoc route-level tasks once queueing is in place.",
+        )
+        self.assertTrue(
+            all(saw_enqueue.values()),
+            msg=f"Webhook routes must enqueue work instead of spawning tasks: {saw_enqueue}",
+        )
+
     def test_run_controls_do_not_directly_reopen_decision_gate(self) -> None:
         module_path = ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py"
         tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from orchestrator.api.transport_runtime import decode_json_body
 from orchestrator.api.webhooks.github_application import build_github_webhook_ingress_result
+from orchestrator.api.webhooks.github_ingress import ingest_github_webhook_event
 from orchestrator.api.webhooks.github_webhook_context import (
     GitHubWebhookContext,
     GitHubWebhookPreparedRuntime,
@@ -156,3 +157,60 @@ class GitHubIngressContractTests(unittest.IsolatedAsyncioTestCase):
         body = decode_json_body(result.actions[-1])
         self.assertFalse(body["accepted"])
         self.assertEqual(body["reason"], "review_misconfigured")
+
+    async def test_ingest_github_webhook_enqueues_one_job_per_pr_target(self) -> None:
+        request = SimpleNamespace(headers={"X-GitHub-Event": "pull_request", "X-GitHub-Delivery": "delivery-1"})
+        session = MagicMock()
+        context = GitHubWebhookContext(
+            request_id="req-1",
+            delivery_id="delivery-1",
+            github_event="pull_request",
+            payload={"action": "synchronize"},
+            normalized_action="synchronize",
+            installation_id=12345,
+            tenant=SimpleNamespace(tenant_id="route25"),
+            project=SimpleNamespace(project_id="route25-default"),
+            repo_full_name="org/repo",
+            pr_targets=[(11, True), (12, False)],
+        )
+        enqueue_mock = MagicMock(
+            side_effect=[
+                SimpleNamespace(created=True, job=SimpleNamespace(job_id="job-1", dedupe_key="delivery-1:11", subject_key="github_pr:route25:org/repo:11", context_json={"pr_number": 11})),
+                SimpleNamespace(created=True, job=SimpleNamespace(job_id="job-2", dedupe_key="delivery-1:12", subject_key="github_pr:route25:org/repo:12", context_json={"pr_number": 12})),
+            ]
+        )
+
+        with (
+            patch("orchestrator.api.webhooks.github_ingress.resolve_github_webhook_context", AsyncMock(return_value=context)),
+            patch("orchestrator.api.webhooks.github_ingress.enqueue_webhook_job", enqueue_mock),
+            patch("orchestrator.api.webhooks.github_ingress.notify_webhook_job_enqueued"),
+        ):
+            response = await ingest_github_webhook_event(
+                request=request,
+                session=session,
+                settings=SimpleNamespace(),
+                request_id="req-1",
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(enqueue_mock.call_count, 2)
+        session.commit.assert_called_once()
+
+    async def test_ingest_github_ping_returns_immediate_response_without_queue(self) -> None:
+        request = SimpleNamespace(headers={"X-GitHub-Event": "ping"})
+        session = MagicMock()
+        ping_response = JSONResponse(status_code=200, content={"accepted": True, "reason": "ping"})
+
+        with (
+            patch("orchestrator.api.webhooks.github_ingress.resolve_github_webhook_context", AsyncMock(return_value=ping_response)),
+            patch("orchestrator.api.webhooks.github_ingress.enqueue_webhook_job") as enqueue_mock,
+        ):
+            response = await ingest_github_webhook_event(
+                request=request,
+                session=session,
+                settings=SimpleNamespace(),
+                request_id="req-1",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        enqueue_mock.assert_not_called()

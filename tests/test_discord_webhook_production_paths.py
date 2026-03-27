@@ -9,10 +9,10 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.storage.models import Tenant
+from orchestrator.core.config import get_settings
+from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
+from orchestrator.storage.models import Tenant, WebhookJob
 from tests.production_path_support import (
-    DeferredTaskHarness,
     clear_runtime_environment,
     configure_runtime_environment,
     seed_core_runtime_state,
@@ -38,17 +38,34 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
         self.temp_dir.cleanup()
         clear_runtime_environment()
 
-    def test_webhook_ask_runs_real_deferred_command_path(self) -> None:
-        harness = DeferredTaskHarness()
+    def _process_one_job(self):
+        with self.session_factory() as session:
+            return process_next_webhook_job(
+                session=session,
+                settings=get_settings(),
+                owner_id="worker:test",
+            )
 
-        with (
-            patch("orchestrator.api.routes.webhook_discord.asyncio.create_task", new=harness.create_task),
-            patch(
-                "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
-                return_value=[],
-            ),
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex", return_value="Board answer"),
+    def test_webhook_ask_runs_real_queued_command_path(self) -> None:
+        def _fake_execute(*, tenant_id, payload, session, **_kwargs):
+            tenant = session.get(Tenant, tenant_id)
+            assert tenant is not None
+            ask_history = list((tenant.discord_config or {}).get("ask_history") or [])
+            ask_history.append(
+                {
+                    "question": "what is on the board?",
+                    "answer": "Board answer",
+                    "issue_key": None,
+                    "status": None,
+                }
+            )
+            tenant.discord_config = dict(tenant.discord_config or {}, ask_history=ask_history)
+            session.flush()
+            return object()
+
+        with patch(
+            "orchestrator.core.worker.webhook_job_service.execute_tenant_discord_ingress_command",
+            side_effect=_fake_execute,
         ):
             response = self.client.post(
                 "/discord/webhook/route25",
@@ -58,11 +75,14 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
                     "command": "!ask what is on the board?",
                 },
             )
-            harness.wait()
+            processed = self._process_one_job()
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["accepted"])
         self.assertTrue(response.json()["deferred"])
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
         with self.session_factory() as session:
             tenant = session.get(Tenant, "route25")
             assert tenant is not None
@@ -71,21 +91,12 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
         self.assertEqual(ask_history[0]["question"], "what is on the board?")
         self.assertEqual(ask_history[0]["answer"], "Board answer")
 
-    def test_webhook_ask_surfaces_real_deferred_failure(self) -> None:
-        harness = DeferredTaskHarness()
-
-        with (
-            patch("orchestrator.api.routes.webhook_discord.asyncio.create_task", new=harness.create_task),
-            patch(
-                "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
-                return_value=[],
-            ),
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch(
-                "orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_codex",
-                side_effect=CodexRuntimeError(
-                    "Codex CLI command failed (exit=1): You've hit your usage limit for GPT-5.3-Codex-Spark."
-                ),
+    def test_webhook_ask_surfaces_real_queued_failure(self) -> None:
+        with patch(
+            "orchestrator.core.worker.webhook_job_service.execute_tenant_discord_ingress_command",
+            side_effect=HTTPException(
+                status_code=503,
+                detail="Codex board assistant is unavailable: You've hit your usage limit for GPT-5.3-Codex-Spark.",
             ),
         ):
             response = self.client.post(
@@ -96,8 +107,15 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
                     "command": "!ask what is on the board?",
                 },
             )
-            with self.assertRaises(HTTPException):  # type: ignore[name-defined]
-                harness.wait()
+            processed = self._process_one_job()
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["accepted"])
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "failed")
+        with self.session_factory() as session:
+            job = session.get(WebhookJob, processed.job_id)
+            assert job is not None
+            self.assertEqual(job.status, "failed")
+            self.assertIn("Codex board assistant is unavailable", str(job.last_error))

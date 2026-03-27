@@ -44,6 +44,7 @@ class JiraIssueDetail:
     summary: str
     status: str
     description: str
+    status_category_key: str | None = None
     labels: list[str] = field(default_factory=list)
 
 

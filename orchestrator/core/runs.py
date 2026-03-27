@@ -404,3 +404,47 @@ def cancel_run(
     session.commit()
     session.refresh(run)
     return run
+
+
+def cancel_queued_issue_runs(
+    session: Session,
+    *,
+    tenant_id: str,
+    issue_key: str,
+    cancelled_by: str,
+    dedupe_scope: str | None = None,
+) -> list[Run]:
+    normalized_dedupe_scope = normalize_run_dedupe_scope(dedupe_scope)
+    queued_runs = session.execute(
+        select(Run).where(
+            Run.tenant_id == tenant_id,
+            Run.issue_key == issue_key,
+            Run.status == RUN_STATUS_QUEUED,
+            Run.dedupe_scope == normalized_dedupe_scope,
+        )
+    ).scalars().all()
+    if not queued_runs:
+        return []
+
+    now = _now()
+    cancellation_reason = f"Cancelled by {cancelled_by}"
+    cancelled_run_ids = {run.run_id for run in queued_runs}
+    for run in queued_runs:
+        run.status = RUN_STATUS_CANCELLED
+        run.last_error = cancellation_reason
+        if run.started_at is None:
+            run.started_at = now
+        run.finished_at = now
+
+    session.execute(
+        delete(RunLock).where(
+            RunLock.tenant_id == tenant_id,
+            RunLock.issue_key == issue_key,
+            RunLock.dedupe_scope == normalized_dedupe_scope,
+            RunLock.run_id.in_(cancelled_run_ids),
+        )
+    )
+    session.commit()
+    for run in queued_runs:
+        session.refresh(run)
+    return queued_runs

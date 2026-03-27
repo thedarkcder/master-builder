@@ -65,7 +65,15 @@ class DiscordThreadBindingFlowTests(unittest.TestCase):
                 )
             )
 
-        interaction_followup_mock.assert_not_called()
+        interaction_followup_mock.assert_called_once_with(
+            application_id="app-1",
+            interaction_token="token-1",
+            content="Posted response in a follow-up thread.",
+            ephemeral=False,
+            components=None,
+            reply_to_message_id=None,
+            channel_id="channel-1",
+        )
         upsert_context_mock.assert_called_once()
         self.assertEqual(upsert_context_mock.call_args.kwargs["context_type"], "decision_gate")
         self.assertEqual(upsert_context_mock.call_args.kwargs["thread_channel_id"], "thread-gp114")
