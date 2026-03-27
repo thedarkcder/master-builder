@@ -118,6 +118,23 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Do not fall back to intake or scope-triage language", user_prompt_text)
         self.assertNotIn("If the brief is incomplete", user_prompt_text)
 
+    def test_pm_persona_prompts_encode_customer_vision_and_outcome_ownership(self) -> None:
+        discord_prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "discord"
+        workflow_prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+
+        pm_answer_system = (discord_prompts_dir / "pm_answer_system.j2").read_text(encoding="utf-8")
+        voice_room_pm_system = (discord_prompts_dir / "voice_room_pm_system.j2").read_text(encoding="utf-8")
+        workflow_pm_system = (workflow_prompts_dir / "pm_system.j2").read_text(encoding="utf-8")
+
+        for prompt_text in (pm_answer_system, voice_room_pm_system):
+            self.assertIn("Listen deeply to customers and stakeholders", prompt_text)
+            self.assertIn("Hold a clear product vision", prompt_text)
+            self.assertIn("Be decisive but open to evidence and feedback", prompt_text)
+            self.assertIn("Bridge engineering, design, and go-to-market teams", prompt_text)
+            self.assertIn("Own outcomes and value delivery", prompt_text)
+
+        self.assertIn("Ground planning decisions in user value and business outcomes", workflow_pm_system)
+
     def test_decision_planner_prompts_forbid_direct_db_inspection(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "policy"
         system_prompt_text = (prompts_dir / "decision_planner_system.j2").read_text(encoding="utf-8")

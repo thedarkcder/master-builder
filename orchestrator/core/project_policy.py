@@ -4,6 +4,10 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
+from orchestrator.core.agent_execution_profiles import (
+    normalize_execution_profile_routing,
+    normalize_execution_profiles,
+)
 from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
 
 POLICY_OVERRIDE_FIELDS = {
@@ -23,6 +27,8 @@ POLICY_OVERRIDE_FIELDS = {
     "knowledge_auto_answer_mode",
     "codex_model",
     "codex_reasoning_effort",
+    "execution_profiles",
+    "execution_profile_routing",
 }
 
 _BOOLEAN_CAP_FIELDS = {
@@ -90,6 +96,16 @@ def normalize_project_policy_overrides(raw: Mapping[str, Any] | None) -> dict[st
             normalized_value = normalize_codex_reasoning_effort(value)
             if normalized_value is not None:
                 normalized[key] = normalized_value
+            continue
+        if key == "execution_profiles":
+            normalized_profiles = normalize_execution_profiles(value)
+            if normalized_profiles:
+                normalized[key] = normalized_profiles
+            continue
+        if key == "execution_profile_routing":
+            normalized_routing = normalize_execution_profile_routing(value)
+            if normalized_routing:
+                normalized[key] = normalized_routing
             continue
         if key in _NUMERIC_CAP_FIELDS:
             coerced = _coerce_positive_int(value)
@@ -178,5 +194,19 @@ def resolve_effective_policy(
         effective["codex_reasoning_effort"] = tenant_reasoning_effort
     elif default_reasoning_effort is not None:
         effective["codex_reasoning_effort"] = default_reasoning_effort
+
+    tenant_execution_profiles = normalize_execution_profiles(effective.get("execution_profiles"))
+    project_execution_profiles = normalize_execution_profiles(overrides.get("execution_profiles"))
+    if tenant_execution_profiles or project_execution_profiles:
+        merged_profiles = dict(tenant_execution_profiles)
+        merged_profiles.update(project_execution_profiles)
+        effective["execution_profiles"] = merged_profiles
+
+    tenant_execution_profile_routing = normalize_execution_profile_routing(effective.get("execution_profile_routing"))
+    project_execution_profile_routing = normalize_execution_profile_routing(overrides.get("execution_profile_routing"))
+    if tenant_execution_profile_routing or project_execution_profile_routing:
+        merged_routing = dict(tenant_execution_profile_routing)
+        merged_routing.update(project_execution_profile_routing)
+        effective["execution_profile_routing"] = merged_routing
 
     return effective

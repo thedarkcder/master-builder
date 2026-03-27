@@ -4,6 +4,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_serializer
 
+from orchestrator.core.agent_execution_profiles import (
+    normalize_execution_profile_routing,
+    normalize_execution_profiles,
+)
 from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
 from orchestrator.core.guardrails import enforce_safe_command
 
@@ -57,6 +61,8 @@ class PolicyConfig(BaseModel):
     knowledge_auto_answer_mode: str = Field(default="aggressive", pattern="^(safe|balanced|aggressive)$")
     codex_model: str | None = None
     codex_reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    execution_profiles: dict[str, dict[str, object]] = Field(default_factory=dict)
+    execution_profile_routing: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("allowed_commands")
     @classmethod
@@ -77,6 +83,16 @@ class PolicyConfig(BaseModel):
     @classmethod
     def normalize_codex_reasoning_effort(cls, value: str | None) -> str | None:
         return normalize_codex_reasoning_effort(value)
+
+    @field_validator("execution_profiles")
+    @classmethod
+    def normalize_execution_profiles(cls, value: dict[str, dict[str, object]] | None) -> dict[str, dict[str, object]]:
+        return normalize_execution_profiles(value)
+
+    @field_validator("execution_profile_routing")
+    @classmethod
+    def normalize_execution_profile_routing(cls, value: dict[str, str] | None) -> dict[str, str]:
+        return normalize_execution_profile_routing(value)
 
 
 class DiscordConfig(BaseModel):
@@ -561,7 +577,7 @@ class RunRead(BaseModel):
 
 class RunRerunRequest(BaseModel):
     mode: str = Field(default="fresh", pattern="^(fresh|resume)$")
-    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev)$")
+    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev|review)$")
 
     @field_validator("resume_stage")
     @classmethod

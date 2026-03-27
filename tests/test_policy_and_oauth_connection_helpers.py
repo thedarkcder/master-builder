@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 
 from orchestrator.api.jira_oauth.connection_service import resolve_tenant_jira_connection, tenant_jira_oauth_context
+from orchestrator.core.agent_runtime_resolver import resolve_agent_execution_profile
 from orchestrator.core import project_policy
 from orchestrator.core.communications import integration_contracts
 
@@ -46,6 +47,27 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(normalized["require_agents_md"], True)
         self.assertEqual(normalized["codex_model"], "gpt-5.3-codex-spark")
         self.assertEqual(normalized["codex_reasoning_effort"], "high")
+
+    def test_normalize_project_policy_overrides_includes_execution_profiles(self) -> None:
+        normalized = project_policy.normalize_project_policy_overrides(
+            {
+                "execution_profiles": {
+                    "pm_conversation": {
+                        "runtime_kind": "chat_cli",
+                        "cli_command": "chat-cli",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "medium",
+                        "tool_bridge_allowed": False,
+                        "fallback_profile": "general_planning",
+                    }
+                },
+                "execution_profile_routing": {
+                    "discord.pm_answer": "pm_conversation",
+                },
+            }
+        )
+        self.assertEqual(normalized["execution_profiles"]["pm_conversation"]["cli_command"], "chat-cli")
+        self.assertEqual(normalized["execution_profile_routing"]["discord.pm_answer"], "pm_conversation")
 
     def test_resolve_effective_policy_caps_and_intersections(self) -> None:
         effective = project_policy.resolve_effective_policy(
@@ -94,6 +116,73 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(effective["require_agents_md"], True)
         self.assertEqual(effective["codex_model"], "gpt-5.3-codex-spark")
         self.assertEqual(effective["codex_reasoning_effort"], "high")
+
+    def test_resolve_agent_execution_profile_prefers_selector_specific_profile(self) -> None:
+        settings = SimpleNamespace(
+            codex_cli_command="codex",
+            codex_model="gpt-5.3-codex",
+            codex_reasoning_effort="high",
+            chat_cli_command="chat-cli",
+            chat_model="gpt-5.4",
+            chat_reasoning_effort="medium",
+        )
+        profile = resolve_agent_execution_profile(
+            settings=settings,
+            tenant_policy={
+                "execution_profiles": {
+                    "pm_conversation": {
+                        "runtime_kind": "chat_cli",
+                        "cli_command": "chat-cli",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "medium",
+                        "tool_bridge_allowed": False,
+                        "fallback_profile": "general_planning",
+                    }
+                },
+                "execution_profile_routing": {
+                    "discord.pm_answer": "pm_conversation",
+                },
+            },
+            project_overrides=None,
+            selector="discord.pm_answer",
+        )
+        self.assertEqual(profile.profile_name, "pm_conversation")
+        self.assertEqual(profile.runtime_kind, "chat_cli")
+        self.assertEqual(profile.cli_command, "chat-cli")
+        self.assertEqual(profile.model, "gpt-5.4")
+        self.assertFalse(profile.tool_bridge_allowed)
+
+    def test_resolve_agent_execution_profile_preserves_explicit_engineering_profile(self) -> None:
+        settings = SimpleNamespace(
+            codex_cli_command="codex",
+            codex_model="gpt-5.3-codex",
+            codex_reasoning_effort="high",
+            chat_cli_command="chat-cli",
+            chat_model="gpt-5.4",
+            chat_reasoning_effort="medium",
+        )
+        profile = resolve_agent_execution_profile(
+            settings=settings,
+            tenant_policy={
+                "codex_model": "gpt-5.4",
+                "codex_reasoning_effort": "medium",
+                "execution_profiles": {
+                    "engineering_execution": {
+                        "runtime_kind": "codex_cli",
+                        "cli_command": "codex-alt",
+                        "model": "gpt-5.3-codex-spark",
+                        "reasoning_effort": "low",
+                        "tool_bridge_allowed": True,
+                    }
+                },
+            },
+            project_overrides=None,
+            selector="workflow.dev",
+        )
+        self.assertEqual(profile.profile_name, "engineering_execution")
+        self.assertEqual(profile.cli_command, "codex-alt")
+        self.assertEqual(profile.model, "gpt-5.3-codex-spark")
+        self.assertEqual(profile.reasoning_effort, "low")
 
 
 class JiraConnectionServiceTests(unittest.TestCase):

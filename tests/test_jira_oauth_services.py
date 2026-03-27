@@ -533,6 +533,65 @@ class JiraOAuthIssueServiceCoverageEdgesTests(unittest.TestCase):
         self.assertEqual(_select_issue_type_name(requested_issue_type="", available_issue_types=["Task"]), "Task")
         self.assertEqual(_select_issue_type_name(requested_issue_type="story", available_issue_types=["Chore"]), "Chore")
 
+    def test_create_issue_and_link_support_parent_hierarchy(self) -> None:
+        captured: list[dict] = []
+
+        def _request_json(**kwargs):  # noqa: ANN003
+            captured.append(kwargs)
+            if kwargs["url"].endswith("/issueLink"):
+                return {}
+            return {"key": "MAB-2", "id": "1002"}
+
+        service = JiraOAuthIssueService(
+            get_json=lambda **_kwargs: {"issueTypes": [{"name": "Sub-task"}, {"name": "Task"}]},
+            request_json=_request_json,
+        )
+        created = service.create_issue(
+            access_token="tok",
+            cloud_id="cloud",
+            project_key="MAB",
+            issue=JiraIssueCreateInput(
+                summary="Child task",
+                description="Desc",
+                labels=["engineering-child"],
+                issue_type="Sub-task",
+                parent_issue_key="MAB-1",
+            ),
+        )
+        self.assertEqual(created.key, "MAB-2")
+        self.assertEqual(
+            captured[0]["payload"]["fields"]["parent"]["key"],
+            "MAB-1",
+        )
+
+        service.add_issue_link(
+            access_token="tok",
+            cloud_id="cloud",
+            inward_issue_key="MAB-2",
+            outward_issue_key="MAB-1",
+        )
+        self.assertEqual(captured[1]["payload"]["inwardIssue"]["key"], "MAB-2")
+        self.assertEqual(captured[1]["payload"]["outwardIssue"]["key"], "MAB-1")
+
+    def test_create_issue_raises_when_subtask_type_missing(self) -> None:
+        service = JiraOAuthIssueService(
+            get_json=lambda **_kwargs: {"issueTypes": [{"name": "Task"}]},
+            request_json=lambda **_kwargs: {},
+        )
+        with self.assertRaisesRegex(JiraOAuthError, "Subtask issue type is not available"):
+            service.create_issue(
+                access_token="tok",
+                cloud_id="cloud",
+                project_key="MAB",
+                issue=JiraIssueCreateInput(
+                    summary="Child task",
+                    description="Desc",
+                    labels=["engineering-child"],
+                    issue_type="Sub-task",
+                    parent_issue_key="MAB-1",
+                ),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

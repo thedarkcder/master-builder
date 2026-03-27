@@ -10,11 +10,13 @@ from orchestrator.api.discord.seed.issue_service import (
 )
 from orchestrator.api.discord.seed.matching import select_seed_match
 from orchestrator.api.discord.ask.context import tenant_project_keys
+from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.codex_agents import plan_seed_issues_with_codex
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime as _legacy_build_codex_runtime
 from orchestrator.core.config import get_settings
 
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
+build_codex_runtime = _legacy_build_codex_runtime
 
 
 def seed_issues_with_codex(
@@ -39,7 +41,13 @@ def seed_issues_with_codex(
         codex_working_dir=codex_working_dir,
         tenant_project_keys_fn=tenant_project_keys,
         get_settings_fn=get_settings,
-        build_codex_runtime_fn=build_codex_runtime,
+        build_codex_runtime_fn=lambda **kwargs: build_runtime_for_selector(
+            session=kwargs.get("session"),
+            settings=kwargs["settings"],
+            tenant_id=getattr(tenant, "tenant_id", None),
+            project_id=scoped_project_id,
+            selector="discord.issue_seed",
+        ),
         plan_seed_issues_with_codex_fn=plan_seed_issues_with_codex,
         codex_runtime_error_type=CodexRuntimeError,
         build_seed_issue_description_fn=build_seed_issue_description,

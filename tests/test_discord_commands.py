@@ -17,6 +17,7 @@ from orchestrator.api.discord.ingress.ask_runtime import ask_board_message, coll
 from orchestrator.api.discord.ingress.bug_runtime import create_discord_bug_issue
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_codex
+from orchestrator.api.discord.shared.state import store_seed_followup_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
@@ -2357,20 +2358,20 @@ class DiscordCommandApiTests(unittest.TestCase):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
             discord_config = dict(tenant.discord_config or {})
-            discord_config["seed_followups"] = [
-                {
-                    "request_id": "followup-1",
-                    "user_id": "u-viewer",
-                    "channel_ids": ["discord-channel-1"],
-                    "project_key": "TP",
-                    "issue_keys": ["TP-11"],
-                    "questions": ["What is the rollout plan?"],
-                    "prompt_markdown": "Original seed prompt",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ]
             discord_config["allowed_user_ids"] = ["u-viewer"]
             tenant.discord_config = discord_config
+            store_seed_followup_context(
+                session=session,
+                tenant=tenant,
+                request_id="followup-1",
+                user_id="u-viewer",
+                channel_ids=["discord-channel-1"],
+                project_id=self.default_project_id,
+                project_key="TP",
+                issue_keys=["TP-11"],
+                questions=["What is the rollout plan?"],
+                prompt_markdown="Original seed prompt",
+            )
             session.commit()
 
         with (
@@ -2407,6 +2408,54 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(kwargs["allow_create"], False)
         self.assertEqual(kwargs["force_issue_keys"], ["TP-11"])
         self.assertIn("Here are the missing rollout details", kwargs["prompt_markdown"])
+
+    def test_plain_text_in_seed_followup_thread_beats_plain_ask_routing(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            store_seed_followup_context(
+                session=session,
+                tenant=tenant,
+                request_id="followup-plain-1",
+                user_id="u-viewer",
+                channel_ids=["discord-channel-1"],
+                project_id=self.default_project_id,
+                project_key="TP",
+                issue_keys=["TP-11"],
+                questions=["What is the rollout plan?"],
+                prompt_markdown="Original seed prompt",
+            )
+            session.commit()
+
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                return_value=(
+                    "Issue upsert complete. Updated 1: TP-11. Created 0: none.",
+                    {
+                        "requires_input": False,
+                        "project_key": "TP",
+                        "questions": [],
+                        "all_issue_keys": ["TP-11"],
+                    },
+                ),
+            ) as seed_mock,
+        ):
+            response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="More rollout details",
+                ),
+                session=session,
+                allow_plain_ask=True,
+            )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(response.command, "issues")
+        seed_mock.assert_called_once()
 
     def test_execute_discord_command_rejects_unknown_ingress_source(self) -> None:
         with self.session_factory() as session:
@@ -2506,19 +2555,34 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
                     "project_key": "TP",
-                    "issues": [
+                    "parent_issue": {
+                        "summary": "Build API and webhook reliability feature",
+                        "issue_type": "Story",
+                        "objective": "Improve reliability",
+                        "user_value": "Customers see fewer delivery failures",
+                        "recommendation": "Ship API validation plus webhook retries",
+                        "scope_in": ["API changes"],
+                        "scope_out": [],
+                        "acceptance_criteria": ["Validation passes"],
+                        "ui_references": [],
+                        "dependencies": [],
+                        "risks": [],
+                        "open_questions": [],
+                        "success_outcomes": ["Lower webhook failure rate"],
+                        "labels": [],
+                    },
+                    "engineering_children": [
                         {
                             "summary": "Build API and webhook tasks",
-                            "objective": "Improve reliability",
-                            "scope_in": ["API changes"],
-                            "scope_out": [],
-                            "acceptance_criteria": ["Validation passes"],
-                            "how_to_test": ["Run targeted API tests"],
-                            "nfr_intent": "MVP",
-                            "dependencies": [],
+                            "issue_type": "Sub-task",
+                            "behavior_slice": "Handle retryable webhook failures.",
+                            "technical_objective": "Add validation and retry handling.",
+                            "implementation_plan": ["API changes"],
+                            "technical_dependencies": [],
                             "risks": [],
+                            "how_to_test": ["Run targeted API tests"],
+                            "done_criteria": ["Validation passes"],
                             "labels": [],
-                            "issue_type": "Task",
                         }
                     ],
                 },
@@ -2572,11 +2636,17 @@ class DiscordCommandApiTests(unittest.TestCase):
             def search_issues_by_jql(self, **_: object) -> list[JiraIssuePreview]:  # noqa: ANN003
                 return []
 
-            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
-                return JiraIssueBulkCreateResult(
-                    created=[JiraIssueCreateResult(key="TP-301", issue_id="301")],
-                    errors=[],
-                )
+            def create_issue(self, **kwargs: object) -> JiraIssueCreateResult:  # noqa: ANN003
+                issue = kwargs["issue"]
+                if getattr(issue, "parent_issue_key", None):
+                    return JiraIssueCreateResult(key="TP-301", issue_id="301")
+                return JiraIssueCreateResult(key="TP-300", issue_id="300")
+
+            def update_issue_fields(self, **_: object) -> None:  # noqa: ANN003
+                return None
+
+            def add_issue_link(self, **_: object) -> dict:  # noqa: ANN003
+                return {}
 
         with (
             self.session_factory() as session,
@@ -2585,16 +2655,35 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
                     "project_key": "TP",
+                    "parent_issue": {
+                        "summary": "Improve worker retry reliability",
+                        "issue_type": "Story",
+                        "objective": "Improve reliability",
+                        "user_value": "Operators see fewer worker failures",
+                        "recommendation": "Ship bounded retries first",
+                        "scope_in": ["Worker retry strategy"],
+                        "scope_out": ["UI changes"],
+                        "acceptance_criteria": ["Retries are bounded and observable"],
+                        "ui_references": [],
+                        "dependencies": [],
+                        "risks": [],
+                        "open_questions": [],
+                        "success_outcomes": ["Lower worker retry failures"],
+                        "labels": ["seeded"],
+                    },
                     "questions": ["What is the rollout plan?"],
-                    "issues": [
+                    "engineering_children": [
                         {
                             "summary": "Create worker retries",
-                            "objective": "TBD",
-                            "scope_in": [],
-                            "scope_out": [],
-                            "acceptance_criteria": [],
+                            "issue_type": "Sub-task",
+                            "behavior_slice": "Retry failed worker jobs safely.",
+                            "technical_objective": "Add bounded worker retries.",
+                            "implementation_plan": [],
+                            "technical_dependencies": [],
+                            "risks": [],
+                            "how_to_test": [],
+                            "done_criteria": [],
                             "labels": ["seeded"],
-                            "issue_type": "Task",
                         }
                     ],
                 },
@@ -2613,9 +2702,10 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         self.assertIn("need more detail", message.lower())
         self.assertTrue(data["requires_input"])
-        self.assertEqual(data["created_issue_keys"], ["TP-301"])
+        self.assertEqual(data["created_issue_keys"], ["TP-300", "TP-301"])
         self.assertIn("What is the rollout plan?", data["questions"])
         self.assertEqual(data["questions"], ["What is the rollout plan?"])
+        self.assertEqual(data["children_sync_status"], "sync_blocked")
 
     def test_seed_issues_updates_matching_existing_issue(self) -> None:
         now = datetime.now(timezone.utc)
@@ -2648,14 +2738,20 @@ class DiscordCommandApiTests(unittest.TestCase):
                 self.create_called = False
 
             def search_issues_by_jql(self, **_: object) -> list[JiraIssuePreview]:  # noqa: ANN003
-                return [JiraIssuePreview(key="TP-111", summary="Create worker retries", status="To Do")]
+                return [
+                    JiraIssuePreview(key="TP-110", summary="Improve worker retry reliability", status="To Do"),
+                    JiraIssuePreview(key="TP-111", summary="Create worker retries", status="To Do"),
+                ]
 
             def update_issue_fields(self, **kwargs: object) -> None:  # noqa: ANN003
                 self.updated_issue_keys.append(str(kwargs["issue_id_or_key"]))
 
-            def create_issues_bulk(self, **_: object) -> JiraIssueBulkCreateResult:  # noqa: ANN003
+            def create_issue(self, **_: object) -> JiraIssueCreateResult:  # noqa: ANN003
                 self.create_called = True
-                return JiraIssueBulkCreateResult(created=[], errors=[])
+                return JiraIssueCreateResult(key="TP-999", issue_id="999")
+
+            def add_issue_link(self, **_: object) -> dict:  # noqa: ANN003
+                return {}
 
         fake_client = _FakeClient()
         with (
@@ -2665,15 +2761,34 @@ class DiscordCommandApiTests(unittest.TestCase):
                 "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
                 return_value={
                     "project_key": "TP",
-                    "issues": [
+                    "parent_issue": {
+                        "summary": "Improve worker retry reliability",
+                        "issue_type": "Story",
+                        "objective": "Improve reliability",
+                        "user_value": "Operators see fewer worker failures",
+                        "recommendation": "Ship bounded retries first",
+                        "scope_in": ["Worker retry strategy"],
+                        "scope_out": ["UI changes"],
+                        "acceptance_criteria": ["Retries are bounded and observable"],
+                        "ui_references": [],
+                        "dependencies": [],
+                        "risks": [],
+                        "open_questions": [],
+                        "success_outcomes": ["Lower worker retry failures"],
+                        "labels": ["seeded"],
+                    },
+                    "engineering_children": [
                         {
                             "summary": "Create worker retries",
-                            "objective": "Improve reliability",
-                            "scope_in": ["Worker retry strategy"],
-                            "scope_out": ["UI changes"],
-                            "acceptance_criteria": ["Retries are bounded and observable"],
+                            "issue_type": "Sub-task",
+                            "behavior_slice": "Retry failed worker jobs safely.",
+                            "technical_objective": "Add bounded worker retries.",
+                            "implementation_plan": ["Worker retry strategy"],
+                            "technical_dependencies": [],
+                            "risks": [],
+                            "how_to_test": [],
+                            "done_criteria": ["Retries are bounded and observable"],
                             "labels": ["seeded"],
-                            "issue_type": "Task",
                         }
                     ],
                 },
@@ -2690,10 +2805,10 @@ class DiscordCommandApiTests(unittest.TestCase):
                 scoped_project_id=self.default_project_id,
             )
 
-        self.assertIn("Updated 1", message)
-        self.assertEqual(data["updated_issue_keys"], ["TP-111"])
+        self.assertIn("Updated 2", message)
+        self.assertEqual(data["updated_issue_keys"], ["TP-110", "TP-111"])
         self.assertEqual(data["created_issue_keys"], [])
-        self.assertEqual(fake_client.updated_issue_keys, ["TP-111"])
+        self.assertEqual(fake_client.updated_issue_keys, ["TP-110", "TP-111", "TP-110"])
         self.assertFalse(fake_client.create_called)
 
     def test_seed_issue_description_is_native_jira_adf(self) -> None:
@@ -2710,13 +2825,13 @@ class DiscordCommandApiTests(unittest.TestCase):
         content = description.get("content", [])
         self.assertIsInstance(content, list)
         self.assertEqual(content[0]["type"], "heading")
-        self.assertEqual(content[0]["content"][0]["text"], "Objective")
+        self.assertEqual(content[0]["content"][0]["text"], "Technical Objective")
         self.assertEqual(content[1]["type"], "bulletList")
         first_bullet = content[1]["content"][0]["content"][0]["content"][0]["text"]
         self.assertEqual(first_bullet, "Ship feature")
         heading_texts = [node["content"][0]["text"] for node in content if node.get("type") == "heading"]
-        self.assertIn("How to test", heading_texts)
-        self.assertIn("NFR intent (MVP vs scale-ready)", heading_texts)
+        self.assertIn("How to Test", heading_texts)
+        self.assertIn("Synced From Parent Revision", heading_texts)
 
     def test_bug_creation_uploads_discord_attachments_to_jira_issue(self) -> None:
         now = datetime.now(timezone.utc)

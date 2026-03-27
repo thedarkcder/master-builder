@@ -29,12 +29,19 @@ class CodexWorkflowAgents:
         self,
         *,
         runtime: CodexRuntime,
+        runtime_resolver: Callable[[str, WorkflowRequest], CodexRuntime] | None = None,
         log_sink: Callable[[dict], None] | None = None,
         execute_tool: Callable[[CodexInvocationContext, str, dict[str, object]], dict[str, object]] | None = None,
     ):
         self._runtime = runtime
+        self._runtime_resolver = runtime_resolver
         self._log_sink = log_sink
         self._execute_tool = execute_tool
+
+    def _runtime_for_stage(self, *, stage: str, request: WorkflowRequest) -> CodexRuntime:
+        if self._runtime_resolver is None:
+            return self._runtime
+        return self._runtime_resolver(stage, request)
 
     def _stage_log_sink(
         self,
@@ -75,6 +82,11 @@ class CodexWorkflowAgents:
             return session_id
         return None
 
+    def _resume_source_state(self, *, request: WorkflowRequest) -> dict[str, Any]:
+        trigger_context = request.trigger_context if isinstance(request.trigger_context, dict) else {}
+        payload = trigger_context.get("resume_source_state")
+        return dict(payload) if isinstance(payload, dict) else {}
+
     def _invoke_stage_payload(
         self,
         *,
@@ -101,7 +113,7 @@ class CodexWorkflowAgents:
         )
         allowed_tools = sorted(allowed_tools_for_stage(stage))
         return invoke_codex_json_with_tools(
-            runtime=self._runtime,
+            runtime=self._runtime_for_stage(stage=stage, request=request),
             context=context,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -394,6 +406,7 @@ class CodexWorkflowAgents:
         test_result: TestResult,
         attempt: int,
     ) -> ReviewResult:
+        resume_source_state = self._resume_source_state(request=request)
         payload = self._invoke_stage_payload(
             request=request,
             stage="review",
@@ -427,6 +440,8 @@ class CodexWorkflowAgents:
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
+                previous_review_summary_json=json.dumps(resume_source_state.get("review_summary") or []),
+                previous_review_feedback=str(resume_source_state.get("review_feedback") or "").strip() or "none",
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
             ),
         )

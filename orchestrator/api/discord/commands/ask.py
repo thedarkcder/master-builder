@@ -16,13 +16,15 @@ from orchestrator.core.codex_agents import (
     plan_discord_ask_intent_with_codex,
 )
 from orchestrator.core.codex_invocation import CodexInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime as _legacy_build_codex_runtime
+from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.persona_room import answer_voice_room_turn
 from orchestrator.storage.models import Project, Tenant
 
 
 _room_history_service = DiscordRoomHistoryService()
+build_codex_runtime = _legacy_build_codex_runtime
 
 
 def _normalized_project_keys(project_keys: list[str]) -> list[str]:
@@ -42,11 +44,14 @@ def _pm_brief_markdown(
 
     objective = str(brief.get("objective") or "").strip() or "Objective not provided."
     recommendation = str(brief.get("recommendation") or "").strip() or "Recommendation not provided."
+    acceptance_criteria = _line_list(brief.get("acceptance_criteria"))
+    ui_references = _line_list(brief.get("ui_references"))
     scope_in = _line_list(brief.get("scope_in"))
     scope_out = _line_list(brief.get("scope_out"))
     risks = _line_list(brief.get("risks"))
     open_questions = _line_list(brief.get("open_questions"))
     next_steps = _line_list(brief.get("next_steps"))
+    success_outcomes = _line_list(brief.get("success_outcomes"))
 
     def _section(title: str, lines: list[str]) -> str:
         if not lines:
@@ -68,15 +73,22 @@ def _pm_brief_markdown(
         "",
         _section("Scope Out", scope_out),
         "",
+        _section("Acceptance Criteria", acceptance_criteria),
+        "",
+        _section("UI / Design / References", ui_references),
+        "",
         _section("Risks", risks),
         "",
         _section("Open Questions", open_questions),
         "",
         _section("Next Steps", next_steps),
         "",
+        _section("Success Outcomes", success_outcomes),
+        "",
         (
             "## Engineering Task Generation Instruction\n"
-            "- Convert this approved product brief into concrete implementation Jira tasks.\n"
+            "- Upsert a PM-owned parent Jira issue from this brief.\n"
+            "- Then derive engineering child tickets from the parent issue.\n"
             "- Keep technical details in child/linked engineering tasks while preserving this product narrative."
         ),
     ]
@@ -125,6 +137,8 @@ def dispatch_ask_command(
     normalized_channel_id: str,
     require_ask_confirmation: bool,
     issue_key_pattern: Pattern[str],
+    prune_missing_issue_keys_from_ask_history: Callable[..., Any],
+    recent_ask_history: Callable[..., Any],
     collect_ask_context_with_history_context: Callable[..., Any],
     collect_github_ask_context: Callable[..., Any],
     store_pending_ask_action: Callable[..., Any],
@@ -176,7 +190,13 @@ def dispatch_ask_command(
             )
         )
         settings = get_settings()
-        runtime = build_codex_runtime(session=session, settings=settings)
+        runtime = build_runtime_for_selector(
+            session=session,
+            settings=settings,
+            tenant_id=tenant.tenant_id,
+            project_id=scoped_project_id,
+            selector="discord.pm_answer",
+        )
         github_context = collect_github_ask_context(
             session=session,
             tenant=tenant,
@@ -208,6 +228,13 @@ def dispatch_ask_command(
             try:
                 voice_room_result = answer_voice_room_turn(
                     runtime=runtime,
+                    runtime_for_selector=lambda selector: build_runtime_for_selector(
+                        session=session,
+                        settings=settings,
+                        tenant_id=tenant.tenant_id,
+                        project_id=scoped_project_id,
+                        selector=selector,
+                    ),
                     transcript=question,
                     project_keys=normalized_project_keys,
                     issues=issues,
@@ -363,6 +390,7 @@ def dispatch_ask_command(
                 message=message,
                 brief=brief,
             )
+            response_data["product_brief_markdown"] = handoff_markdown
             response_data["technical_handoff_markdown"] = handoff_markdown
             response_data["jira_write_hook"] = {
                 "enabled": bool(seed_issues_with_codex is not None),
@@ -434,12 +462,29 @@ def dispatch_ask_command(
         )
 
     if require_ask_confirmation:
+        prune_missing_issue_keys_from_ask_history(
+            session=session,
+            tenant=tenant,
+            user_id=normalized_user_id,
+            channel_id=normalized_channel_id,
+        )
+        history_context = recent_ask_history(
+            tenant=tenant,
+            user_id=normalized_user_id,
+            channel_id=normalized_channel_id,
+        )
+        if not scoped_issue_key:
+            for entry in reversed(history_context):
+                candidate_issue_key = str(entry.get("issue_key") or "").strip().upper()
+                if candidate_issue_key:
+                    scoped_issue_key = candidate_issue_key
+                    break
         (
             normalized_issue_key,
             requested_status,
             issues,
             status_counts,
-            history_context,
+            collected_history_context,
         ) = collect_ask_context_with_history_context(
             session=session,
             tenant=tenant,
@@ -448,8 +493,16 @@ def dispatch_ask_command(
             question=question,
             scoped_issue_key=scoped_issue_key,
         )
+        if collected_history_context:
+            history_context = collected_history_context
         settings = get_settings()
-        runtime = build_codex_runtime(session=session, settings=settings)
+        runtime = build_runtime_for_selector(
+            session=session,
+            settings=settings,
+            tenant_id=tenant.tenant_id,
+            project_id=scoped_project_id,
+            selector="discord.ask_intent",
+        )
         invocation_context = CodexInvocationContext(
             channel="discord",
             tenant_id=tenant.tenant_id,
@@ -508,7 +561,13 @@ def dispatch_ask_command(
             )
 
         message = answer_board_question_with_codex(
-            runtime=runtime,
+            runtime=build_runtime_for_selector(
+                session=session,
+                settings=settings,
+                tenant_id=tenant.tenant_id,
+                project_id=scoped_project_id,
+                selector="discord.ask_answer",
+            ),
             question=question,
             project_keys=normalized_project_keys,
             issues=issues,

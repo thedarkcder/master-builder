@@ -6,7 +6,44 @@ from unittest.mock import MagicMock
 from fastapi import HTTPException
 
 from orchestrator.api.discord.seed.issue_service import seed_issues_with_codex
-from orchestrator.tools.jira_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult
+from orchestrator.tools.jira_oauth import JiraIssueCreateResult, JiraOAuthError
+
+
+def _seed_payload(*, project_key: str = "GP") -> dict:
+    return {
+        "project_key": project_key,
+        "parent_issue": {
+            "summary": "Improve checkout recovery",
+            "issue_type": "Story",
+            "objective": "Reduce failed checkouts from transient errors.",
+            "user_value": "Customers can complete checkout after a recoverable failure.",
+            "recommendation": "Ship a tighter retry and fallback experience.",
+            "scope_in": ["Retry UX", "Checkout telemetry"],
+            "scope_out": ["Payments provider migration"],
+            "acceptance_criteria": ["Customers can retry without losing cart state"],
+            "ui_references": ["Figma: checkout-recovery-v2"],
+            "risks": ["Telemetry coverage is incomplete"],
+            "dependencies": ["Design copy approval"],
+            "open_questions": [],
+            "success_outcomes": ["Reduce recoverable checkout drop-off"],
+            "labels": ["product"],
+        },
+        "engineering_children": [
+            {
+                "summary": "Instrument checkout retry telemetry",
+                "issue_type": "Sub-task",
+                "behavior_slice": "Track retry attempts and recovery outcomes.",
+                "technical_objective": "Emit bounded retry telemetry from checkout recovery flow.",
+                "implementation_plan": ["Add retry attempt events", "Capture terminal recovery outcome"],
+                "technical_dependencies": ["Telemetry schema review"],
+                "risks": ["Event volume could be noisy"],
+                "how_to_test": ["Run checkout retry integration test"],
+                "done_criteria": ["Retry metrics appear in analytics dashboard"],
+                "labels": ["engineering"],
+            }
+        ],
+        "questions": [],
+    }
 
 
 def test_seed_issues_scopes_allowed_project_keys() -> None:
@@ -24,10 +61,7 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
             tenant_project_keys_fn=lambda **_kwargs: ["GP", "example"],
             get_settings_fn=lambda: SimpleNamespace(),
             build_codex_runtime_fn=lambda **_kwargs: object(),
-            plan_seed_issues_with_codex_fn=lambda **_kwargs: {
-                "project_key": "example",
-                "issues": [],
-            },
+            plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(project_key="example"),
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: "",
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -38,17 +72,26 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
     assert "unsupported Jira project key 'example'" in str(exc_ctx.value.detail)
 
 
-def test_seed_issues_preserves_skill_output_without_mutation() -> None:
+def test_seed_issues_creates_parent_and_engineering_child() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
-    captured_issues: list = []
+    created: list = []
 
     class _FakeClient:
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
 
-        def create_issues_bulk(self, **kwargs):  # type: ignore[no-untyped-def]
-            captured_issues.extend(kwargs["issues"])
-            return JiraIssueBulkCreateResult(created=[JiraIssueCreateResult(key="GP-1", issue_id="1")], errors=[])
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            created.append(kwargs["issue"])
+            issue = kwargs["issue"]
+            if issue.parent_issue_key:
+                return JiraIssueCreateResult(key="GP-2", issue_id="2")
+            return JiraIssueCreateResult(key="GP-1", issue_id="1")
+
+        def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return {}
 
     message, data = seed_issues_with_codex(
         session=MagicMock(),
@@ -62,24 +105,7 @@ def test_seed_issues_preserves_skill_output_without_mutation() -> None:
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
         build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: {
-            "project_key": "GP",
-            "issues": [
-                {
-                    "summary": "Build iOS app shell",
-                    "objective": "Build iOS app shell and nav",
-                    "scope_in": ["iOS launch flow"],
-                    "scope_out": ["Android"],
-                    "acceptance_criteria": ["Launch works"],
-                    "how_to_test": ["Run xcodebuild"],
-                    "nfr_intent": "MVP",
-                    "dependencies": [],
-                    "risks": [],
-                    "labels": ["Mobile", "iOS-App"],
-                    "issue_type": "Task",
-                }
-            ],
-        },
+        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -92,23 +118,40 @@ def test_seed_issues_preserves_skill_output_without_mutation() -> None:
     )
 
     assert "Issue upsert complete." in message
-    assert data["created_issue_keys"] == ["GP-1"]
-    assert captured_issues[0].summary == "Build iOS app shell"
-    assert captured_issues[0].labels == ["Mobile", "iOS-App"]
-    assert captured_issues[0].issue_type == "Task"
+    assert data["parent_issue_key"] == "GP-1"
+    assert data["created_parent"] == "GP-1"
+    assert data["created_children"] == ["GP-2"]
+    assert data["created_issue_keys"] == ["GP-1", "GP-2"]
+    assert data["children_sync_status"] == "children_current"
+    assert created[0].issue_type == "Story"
+    assert created[1].issue_type == "Sub-task"
+    assert created[1].parent_issue_key == "GP-1"
 
 
-def test_seed_issues_allows_noncanonical_issue_type_passthrough() -> None:
+def test_seed_issues_falls_back_to_linked_task_when_subtasks_unavailable() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
-    captured_issues: list = []
+    created: list = []
+    linked: list[tuple[str, str]] = []
 
     class _FakeClient:
         def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
             return []
 
-        def create_issues_bulk(self, **kwargs):  # type: ignore[no-untyped-def]
-            captured_issues.extend(kwargs["issues"])
-            return JiraIssueBulkCreateResult(created=[JiraIssueCreateResult(key="GP-2", issue_id="2")], errors=[])
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            issue = kwargs["issue"]
+            created.append(issue)
+            if issue.summary == "Improve checkout recovery":
+                return JiraIssueCreateResult(key="GP-10", issue_id="10")
+            if issue.parent_issue_key:
+                raise JiraOAuthError("Subtask issue type is not available for project GP")
+            return JiraIssueCreateResult(key="GP-11", issue_id="11")
+
+        def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        def add_issue_link(self, **kwargs):  # type: ignore[no-untyped-def]
+            linked.append((kwargs["inward_issue_key"], kwargs["outward_issue_key"]))
+            return {}
 
     message, data = seed_issues_with_codex(
         session=MagicMock(),
@@ -122,24 +165,7 @@ def test_seed_issues_allows_noncanonical_issue_type_passthrough() -> None:
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
         build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: {
-            "project_key": "GP",
-            "issues": [
-                {
-                    "summary": "Build iOS app shell",
-                    "objective": "Build iOS app shell and nav",
-                    "scope_in": [],
-                    "scope_out": [],
-                    "acceptance_criteria": [],
-                    "how_to_test": [],
-                    "nfr_intent": "MVP",
-                    "dependencies": [],
-                    "risks": [],
-                    "labels": [],
-                    "issue_type": "task",
-                }
-            ],
-        },
+        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
@@ -150,9 +176,12 @@ def test_seed_issues_allows_noncanonical_issue_type_passthrough() -> None:
         },
         select_seed_match_fn=lambda **_kwargs: None,
     )
+
     assert "Issue upsert complete." in message
-    assert data["created_issue_keys"] == ["GP-2"]
-    assert captured_issues[0].issue_type == "task"
+    assert data["created_children"] == ["GP-11"]
+    assert created[1].issue_type == "Sub-task"
+    assert created[2].issue_type == "Task"
+    assert linked == [("GP-11", "GP-10")]
 
 
 def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> None:
@@ -170,24 +199,7 @@ def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> N
             tenant_project_keys_fn=lambda **_kwargs: ["GP"],
             get_settings_fn=lambda: SimpleNamespace(),
             build_codex_runtime_fn=lambda **_kwargs: object(),
-            plan_seed_issues_with_codex_fn=lambda **_kwargs: {
-                "project_key": "GP",
-                "issues": [
-                    {
-                        "summary": "Build iOS app shell",
-                        "objective": "Build iOS app shell and nav",
-                        "scope_in": [],
-                        "scope_out": [],
-                        "acceptance_criteria": [],
-                        "how_to_test": [],
-                        "nfr_intent": "MVP",
-                        "dependencies": [],
-                        "risks": [],
-                        "labels": [],
-                        "issue_type": "Task",
-                    }
-                ],
-            },
+            plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: {},
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
