@@ -238,45 +238,6 @@ class GitHubInlineReviewBatchAction(TransportAction):
 
 
 @dataclass(frozen=True)
-class GitHubStickyRemediationCommentAction(TransportAction):
-    kind: ClassVar[str] = "github_sticky_remediation_comment"
-    repo_full_name: str
-    pr_number: int
-    tenant_id: str
-    project_id: str
-    issue_key: str | None
-    issue_url: str | None
-    issue_created: bool
-    enqueued: bool
-    reason: str | None
-    run_id: str | None
-    head_sha: str | None
-    event: str
-    action_name: str | None
-    status_label: str | None = None
-
-
-@dataclass(frozen=True)
-class GitHubStickyRemediationReviewThreadReplyAction(TransportAction):
-    kind: ClassVar[str] = "github_sticky_remediation_review_thread_reply"
-    repo_full_name: str
-    pr_number: int
-    tenant_id: str
-    project_id: str
-    triggering_comment_id: int
-    issue_key: str | None
-    issue_url: str | None
-    issue_created: bool
-    enqueued: bool
-    reason: str | None
-    run_id: str | None
-    head_sha: str | None
-    event: str
-    action_name: str | None
-    status_label: str | None = None
-
-
-@dataclass(frozen=True)
 class GitHubManualFixReviewThreadReplyAction(TransportAction):
     kind: ClassVar[str] = "github_manual_fix_review_thread_reply"
     repo_full_name: str

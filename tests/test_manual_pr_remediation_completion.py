@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from orchestrator.core.communications import (
     GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
-    GitHubStickyRemediationReviewThreadReplyAction,
 )
 from orchestrator.core.worker.manual_pr_remediation_completion import (
     build_manual_pr_remediation_completion_actions,
@@ -60,12 +59,10 @@ def test_build_manual_completion_actions_for_review_comment() -> None:
         issue_url="https://jira.example.com/browse/GP-10",
     )
 
-    assert len(actions) == 2
+    assert len(actions) == 1
     assert isinstance(actions[0], GitHubManualFixReviewThreadReplyAction)
-    assert isinstance(actions[1], GitHubStickyRemediationReviewThreadReplyAction)
     assert actions[0].status_label == "SUCCEEDED"
     assert actions[0].change_summary == ("Moved profile sync off the auth path.",)
-    assert actions[1].status_label == "SUCCEEDED"
 
 
 def test_build_manual_completion_actions_for_issue_comment() -> None:

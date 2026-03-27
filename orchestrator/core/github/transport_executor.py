@@ -8,8 +8,6 @@ from orchestrator.api.webhooks.pr_review_comment_service import (
     publish_inline_review_batch,
     upsert_manual_fix_issue_comment_reply,
     upsert_manual_fix_review_thread_reply,
-    upsert_sticky_remediation_comment,
-    upsert_sticky_remediation_review_thread_reply,
     upsert_sticky_review_comment,
 )
 from orchestrator.core.communications import (
@@ -19,8 +17,6 @@ from orchestrator.core.communications import (
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
     GitHubPullRequestReviewCommentReactionAction,
-    GitHubStickyRemediationCommentAction,
-    GitHubStickyRemediationReviewThreadReplyAction,
     GitHubStickyReviewCommentAction,
     TransportAction,
 )
@@ -54,12 +50,6 @@ class GitHubTransportExecutor:
             return
         if isinstance(action, GitHubInlineReviewBatchAction):
             self._execute_inline_review_batch(action=action)
-            return
-        if isinstance(action, GitHubStickyRemediationCommentAction):
-            self._execute_sticky_remediation_comment(action=action)
-            return
-        if isinstance(action, GitHubStickyRemediationReviewThreadReplyAction):
-            self._execute_sticky_remediation_review_thread_reply(action=action)
             return
         if isinstance(action, GitHubManualFixReviewThreadReplyAction):
             self._execute_manual_fix_review_thread_reply(action=action)
@@ -115,65 +105,6 @@ class GitHubTransportExecutor:
         except Exception as exc:  # noqa: BLE001
             self._logger.warning(
                 "github_transport_action_failed kind=inline_review repo=%s pr_number=%s error=%s",
-                action.repo_full_name,
-                action.pr_number,
-                exc,
-            )
-
-    def _execute_sticky_remediation_comment(self, *, action: GitHubStickyRemediationCommentAction) -> None:
-        try:
-            upsert_sticky_remediation_comment(
-                github_client=self._github_client,
-                repo_full_name=action.repo_full_name,
-                pr_number=action.pr_number,
-                tenant_id=action.tenant_id,
-                project_id=action.project_id,
-                issue_key=action.issue_key,
-                issue_url=action.issue_url,
-                issue_created=action.issue_created,
-                enqueued=action.enqueued,
-                reason=action.reason,
-                run_id=action.run_id,
-                head_sha=action.head_sha,
-                event=action.event,
-                action=action.action_name,
-                status_label=action.status_label,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "github_transport_action_failed kind=sticky_remediation repo=%s pr_number=%s error=%s",
-                action.repo_full_name,
-                action.pr_number,
-                exc,
-            )
-
-    def _execute_sticky_remediation_review_thread_reply(
-        self,
-        *,
-        action: GitHubStickyRemediationReviewThreadReplyAction,
-    ) -> None:
-        try:
-            upsert_sticky_remediation_review_thread_reply(
-                github_client=self._github_client,
-                repo_full_name=action.repo_full_name,
-                pr_number=action.pr_number,
-                tenant_id=action.tenant_id,
-                project_id=action.project_id,
-                triggering_comment_id=action.triggering_comment_id,
-                issue_key=action.issue_key,
-                issue_url=action.issue_url,
-                issue_created=action.issue_created,
-                enqueued=action.enqueued,
-                reason=action.reason,
-                run_id=action.run_id,
-                head_sha=action.head_sha,
-                event=action.event,
-                action=action.action_name,
-                status_label=action.status_label,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(
-                "github_transport_action_failed kind=sticky_remediation_review_thread_reply repo=%s pr_number=%s error=%s",
                 action.repo_full_name,
                 action.pr_number,
                 exc,

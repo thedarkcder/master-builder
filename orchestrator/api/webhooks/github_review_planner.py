@@ -7,8 +7,6 @@ from orchestrator.core.communications import (
     GitHubInlineReviewBatchAction,
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
-    GitHubStickyRemediationCommentAction,
-    GitHubStickyRemediationReviewThreadReplyAction,
     GitHubStickyReviewCommentAction,
     TransportAction,
 )
@@ -375,82 +373,6 @@ def plan_pull_request_targets(
                         "kind": "manual_fix_review_thread_reply",
                     }
                 )
-                planned_actions.append(
-                    GitHubStickyRemediationReviewThreadReplyAction(
-                        repo_full_name=repo_full_name,
-                        pr_number=pr_number,
-                        tenant_id=tenant.tenant_id,
-                        project_id=project.project_id,
-                        triggering_comment_id=comment_id,
-                        issue_key=remediation_result.issue_key,
-                        issue_url=issue_url,
-                        issue_created=remediation_result.issue_created,
-                        enqueued=remediation_result.enqueued,
-                        reason=remediation_result.reason,
-                        run_id=remediation_run_id,
-                        head_sha=remediation_result.head_sha,
-                        event=github_event,
-                        action_name=normalized_action,
-                    )
-                )
-                remediation_comments.append(
-                    {
-                        "pr_number": pr_number,
-                        "action": "planned",
-                        "comment_id": None,
-                        "kind": "sticky_remediation_review_thread_reply",
-                    }
-                )
-            elif effective_comment_type != "issue_comment":
-                planned_actions.append(
-                    GitHubStickyRemediationCommentAction(
-                        repo_full_name=repo_full_name,
-                        pr_number=pr_number,
-                        tenant_id=tenant.tenant_id,
-                        project_id=project.project_id,
-                        issue_key=remediation_result.issue_key,
-                        issue_url=issue_url,
-                        issue_created=remediation_result.issue_created,
-                        enqueued=remediation_result.enqueued,
-                        reason=remediation_result.reason,
-                        run_id=remediation_run_id,
-                        head_sha=remediation_result.head_sha,
-                        event=github_event,
-                        action_name=normalized_action,
-                    )
-                )
-                remediation_comments.append(
-                    {
-                        "pr_number": pr_number,
-                        "action": "planned",
-                        "comment_id": None,
-                    }
-                )
-        else:
-            planned_actions.append(
-                GitHubStickyRemediationCommentAction(
-                    repo_full_name=repo_full_name,
-                    pr_number=pr_number,
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                    issue_key=remediation_result.issue_key,
-                    issue_url=issue_url,
-                    issue_created=remediation_result.issue_created,
-                    enqueued=remediation_result.enqueued,
-                    reason=remediation_result.reason,
-                    run_id=remediation_run_id,
-                    head_sha=remediation_result.head_sha,
-                    event=github_event,
-                    action_name=normalized_action,
-                )
-            )
-            remediation_comments.append(
-                {
-                    "pr_number": pr_number,
-                    "action": "planned",
-                    "comment_id": None,
-                }
-            )
         remediation.append(
             {
                 "pr_number": pr_number,

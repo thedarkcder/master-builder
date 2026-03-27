@@ -191,7 +191,7 @@ class GitHubWebhookProductionPathTests(unittest.TestCase):
         self.assertTrue(fake_client.review_thread_replies)
         reply_bodies = [str(reply["body"]) for reply in fake_client.review_thread_replies]
         self.assertTrue(any("Codex Manual Fix" in body for body in reply_bodies))
-        self.assertTrue(any("Codex PR Remediation" in body for body in reply_bodies))
+        self.assertFalse(any("Codex PR Remediation" in body for body in reply_bodies))
 
     def test_untagged_review_comment_is_ignored_by_real_route(self) -> None:
         fake_client = _FakeGitHubClient()
