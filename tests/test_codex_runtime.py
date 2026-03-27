@@ -13,6 +13,7 @@ from orchestrator.core.codex_runtime import (
     _extract_session_id_from_json_line,
     _extract_usage_from_json_stdout,
     build_codex_runtime,
+    build_runtime_with_fallback,
 )
 
 
@@ -141,6 +142,28 @@ class CodexRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(captured_usage, {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17})
+
+    def test_runtime_with_fallback_uses_secondary_runtime_after_primary_failure(self) -> None:
+        primary_runtime = CodexRuntime(
+            model="primary",
+            max_output_tokens=1000,
+            command="primary",
+            _request=lambda *_args, **_kwargs: (_ for _ in ()).throw(CodexRuntimeError("primary failed")),
+        )
+        fallback_runtime = CodexRuntime(
+            model="fallback",
+            max_output_tokens=1000,
+            command="fallback",
+            _request=lambda *_args, **_kwargs: '{"ok": true, "source": "fallback"}',
+        )
+        runtime = build_runtime_with_fallback(
+            primary_runtime=primary_runtime,
+            fallback_runtime=fallback_runtime,
+        )
+        self.assertEqual(
+            runtime.run_json(system_prompt="sys", user_prompt="usr"),
+            {"ok": True, "source": "fallback"},
+        )
 
 
 class BuildCodexRuntimeTests(unittest.TestCase):

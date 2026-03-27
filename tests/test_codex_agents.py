@@ -10,7 +10,7 @@ from orchestrator.core.codex_agents import (
 )
 from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime
-from orchestrator.core.workflow.runner import WorkflowRequest
+from orchestrator.core.workflow.runner import DevResult, PmPlan, TestResult, WorkflowRequest
 
 
 class _RuntimeQueue:
@@ -304,6 +304,59 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertIsNone(captured_contexts[0].codex_session_id)
         self.assertEqual(captured_contexts[1].stage, "dev")
         self.assertEqual(captured_contexts[1].codex_session_id, "dev-session-123")
+
+    def test_review_resume_includes_previous_review_feedback_in_prompt(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue([]),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = WorkflowRequest(
+            tenant_id="tenant-1",
+            run_id="run-1",
+            issue_key="MAB-54",
+            issue_summary="Integrate Codex runtime",
+            issue_description="Objective and acceptance criteria",
+            max_dev_test_review_loops=1,
+            suggested_test_commands=["python -m unittest"],
+            execution_repo_dir="/tmp/test-repo",
+            execution_branch="run/MAB-54/run-1",
+            base_branch="main",
+            integration_branch="feature/MAB-54",
+            pr_target_branch="main",
+            resume_mode="resume",
+            resume_stage="review",
+            resume_session_id="dev-session-123",
+            trigger_context={
+                "resume_source_state": {
+                    "review_summary": ["Needs nonce verification"],
+                    "review_feedback": "Verify the nonce flow with the QA account",
+                }
+            },
+        )
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/review_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with (
+            patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.codex_agents.invoke_codex_json_with_tools", return_value={"approved": True, "outcome": "approved", "summary": ["ok"], "feedback": None, "pr_url": None}),
+        ):
+            agents.review(
+                request,
+                PmPlan(plan_steps=["step"], acceptance_criteria=["ac"], risks=[]),
+                DevResult(change_summary=["implemented"], pr_url=None),
+                TestResult(passed=True, guidance=["python -m unittest"]),
+                1,
+            )
+
+        self.assertEqual(captured["previous_review_summary_json"], "[\"Needs nonce verification\"]")
+        self.assertEqual(captured["previous_review_feedback"], "Verify the nonce flow with the QA account")
 
     def test_dev_test_and_review_map_structured_blockers(self) -> None:
         runtime = CodexRuntime(

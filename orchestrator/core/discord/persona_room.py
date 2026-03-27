@@ -33,6 +33,7 @@ class VoiceRoomTurnResult:
 def answer_voice_room_turn(
     *,
     runtime: CodexRuntime,
+    runtime_for_selector: Any | None = None,
     transcript: str,
     project_keys: list[str],
     issues: list[dict],
@@ -43,9 +44,16 @@ def answer_voice_room_turn(
     tenant_discord_config: dict | None = None,
     project_discord_config: dict | None = None,
 ) -> VoiceRoomTurnResult:
+    def _runtime(selector: str) -> CodexRuntime:
+        if callable(runtime_for_selector):
+            resolved = runtime_for_selector(selector)
+            if isinstance(resolved, CodexRuntime):
+                return resolved
+        return runtime
+
     room_config = build_voice_room_config(tenant_discord_config, project_discord_config)
     router_payload = route_voice_room_persona_with_codex(
-        runtime=runtime,
+        runtime=_runtime("discord.voice_room_router"),
         transcript=transcript,
         available_personas=list_voice_room_personas(),
         invocation_context=replace(invocation_context, stage="voice-room-router"),
@@ -65,7 +73,7 @@ def answer_voice_room_turn(
         project_discord_config=project_discord_config,
     )
     answer_payload = answer_voice_room_persona_with_codex(
-        runtime=runtime,
+        runtime=_runtime(f"discord.voice_room_{persona.persona_id}"),
         persona_id=persona.persona_id,
         transcript=transcript,
         project_keys=project_keys,

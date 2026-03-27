@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./orchestrator.db"
+    db_pool_size: int = 10
+    db_pool_max_overflow: int = 20
+    db_pool_timeout_seconds: int = 60
+    db_pool_recycle_seconds: int = 1800
+    db_pool_pre_ping: bool = True
     log_level: str = "INFO"
     admin_username: str = "admin"
     admin_password: str = "change-me"
@@ -40,6 +45,9 @@ class Settings(BaseSettings):
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5.4"
     codex_supported_models: str = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    chat_cli_command: str = ""
+    chat_model: str = "gpt-5.4"
+    chat_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_tool_database_url: str = ""
     codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "errors_only"

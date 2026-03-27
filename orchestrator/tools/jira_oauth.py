@@ -205,6 +205,21 @@ class JiraOAuthClient:
             issues=issues,
         )
 
+    def create_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+        issue: JiraIssueCreateInput,
+    ) -> JiraIssueCreateResult:
+        return self._issue_service.create_issue(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            project_key=project_key,
+            issue=issue,
+        )
+
     def update_issue_fields(
         self,
         *,
@@ -237,6 +252,23 @@ class JiraOAuthClient:
             cloud_id=cloud_id,
             issue_id_or_key=issue_id_or_key,
             comment=comment,
+        )
+
+    def add_issue_link(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        inward_issue_key: str,
+        outward_issue_key: str,
+        link_type: str = "Relates",
+    ) -> dict:
+        return self._issue_service.add_issue_link(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            inward_issue_key=inward_issue_key,
+            outward_issue_key=outward_issue_key,
+            link_type=link_type,
         )
 
     def transition_issue(

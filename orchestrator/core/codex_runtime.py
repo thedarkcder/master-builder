@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from orchestrator.core.agent_execution_profiles import AgentExecutionProfile
 from orchestrator.core.config import Settings
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -487,6 +488,97 @@ def build_codex_runtime(
     settings: Settings,
     request_override: Callable[[str, str, str | None], str] | None = None,
 ) -> CodexRuntime:
+    return build_cli_runtime(
+        session=session,
+        settings=settings,
+        request_override=request_override,
+        cli_command_override=settings.codex_cli_command,
+        default_model_override=settings.codex_model,
+        default_reasoning_effort_override=settings.codex_reasoning_effort,
+    )
+
+
+def build_runtime_for_execution_profile(
+    *,
+    session: Session | None = None,
+    settings: Settings,
+    profile: AgentExecutionProfile,
+    request_override: Callable[[str, str, str | None], str] | None = None,
+) -> CodexRuntime:
+    normalized_cli_command = str(profile.cli_command or "").strip() or settings.codex_cli_command
+    normalized_model = str(profile.model or "").strip() or settings.codex_model
+    normalized_reasoning_effort = (
+        str(profile.reasoning_effort or "").strip().lower()
+        or settings.codex_reasoning_effort
+    )
+    return build_cli_runtime(
+        session=session,
+        settings=settings,
+        request_override=request_override,
+        cli_command_override=normalized_cli_command,
+        default_model_override=normalized_model,
+        default_reasoning_effort_override=normalized_reasoning_effort,
+    )
+
+
+def build_runtime_with_fallback(
+    *,
+    primary_runtime: CodexRuntime,
+    fallback_runtime: CodexRuntime,
+) -> CodexRuntime:
+    def _request_with_fallback(
+        system_prompt: str,
+        user_prompt: str,
+        working_dir: str | None,
+        on_log_line: Callable[[str, str], None] | None,
+        reasoning_effort: str | None,
+        resume_session_id: str | None,
+        on_session_id: Callable[[str], None] | None,
+        on_usage: Callable[[dict[str, int]], None] | None,
+        model_override: str | None,
+    ) -> str:
+        try:
+            return primary_runtime._request(
+                system_prompt,
+                user_prompt,
+                working_dir,
+                on_log_line,
+                reasoning_effort,
+                resume_session_id,
+                on_session_id,
+                on_usage,
+                model_override,
+            )
+        except CodexRuntimeError:
+            return fallback_runtime._request(
+                system_prompt,
+                user_prompt,
+                working_dir,
+                on_log_line,
+                reasoning_effort,
+                resume_session_id,
+                on_session_id,
+                on_usage,
+                model_override,
+            )
+
+    return CodexRuntime(
+        model=primary_runtime.model,
+        max_output_tokens=primary_runtime.max_output_tokens,
+        command=f"{primary_runtime.command}||{fallback_runtime.command}",
+        _request=_request_with_fallback,
+    )
+
+
+def build_cli_runtime(
+    *,
+    session: Session | None = None,
+    settings: Settings,
+    request_override: Callable[[str, str, str | None], str] | None = None,
+    cli_command_override: str | None = None,
+    default_model_override: str | None = None,
+    default_reasoning_effort_override: str | None = None,
+) -> CodexRuntime:
     if request_override is not None:
         def _request_with_override(
             system_prompt: str,
@@ -512,13 +604,13 @@ def build_codex_runtime(
                 return request_override(system_prompt, user_prompt)  # type: ignore[misc]
 
         return CodexRuntime(
-            model=settings.codex_model,
+            model=str(default_model_override or settings.codex_model or "").strip() or settings.codex_model,
             max_output_tokens=settings.codex_max_output_tokens,
             command="override",
             _request=_request_with_override,
         )
 
-    codex_command = (settings.codex_cli_command or "").strip()
+    codex_command = str(cli_command_override or settings.codex_cli_command or "").strip()
     if not codex_command:
         raise CodexRuntimeError("Codex CLI command is not configured")
     if shutil.which(codex_command) is None:
@@ -549,9 +641,13 @@ def build_codex_runtime(
         stderr_log_mode = _normalize_stderr_log_mode(getattr(settings, "codex_stderr_log_mode", "all"))
         normalized_reasoning_effort = str(reasoning_effort or settings.codex_reasoning_effort).strip().lower()
         if normalized_reasoning_effort not in {"low", "medium", "high"}:
-            normalized_reasoning_effort = settings.codex_reasoning_effort
+            normalized_reasoning_effort = (
+                str(default_reasoning_effort_override or settings.codex_reasoning_effort).strip().lower()
+                or settings.codex_reasoning_effort
+            )
         normalized_resume_session_id = str(resume_session_id or "").strip()
-        resolved_model = str(model_override or settings.codex_model).strip() or settings.codex_model
+        default_model = str(default_model_override or settings.codex_model).strip() or settings.codex_model
+        resolved_model = str(model_override or default_model).strip() or default_model
         session_callback_invoked = False
         command: list[str]
         normalized_sandbox_mode = str(settings.codex_sandbox_mode or "").strip().lower()
@@ -739,7 +835,7 @@ def build_codex_runtime(
             raise CodexRuntimeError("Codex CLI returned empty output")
 
     return CodexRuntime(
-        model=settings.codex_model,
+        model=str(default_model_override or settings.codex_model or "").strip() or settings.codex_model,
         max_output_tokens=settings.codex_max_output_tokens,
         command=codex_command,
         _request=_request,

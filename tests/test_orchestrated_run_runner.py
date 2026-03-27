@@ -435,6 +435,51 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertIn("Apple developer access is not approved for staging", result.diagnostics.message)
         self.assertEqual(stage_agents.dev_calls, 0)
 
+    def test_review_resume_skips_pm_dev_and_test(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+            dev_results=[],
+            test_results=[],
+            review_results=[
+                ReviewResult(
+                    approved=True,
+                    outcome="approved",
+                    summary=["Looks good after clarification"],
+                    feedback=None,
+                    pr_url="https://example/pull/1",
+                )
+            ],
+        )
+
+        result = self._executor(stage_agents).execute(
+            replace(
+                self._request(),
+                resume_mode="resume",
+                resume_stage="review",
+                resume_session_id="dev-session-123",
+                resume_source_plan={
+                    "plan_steps": ["plan"],
+                    "acceptance_criteria": ["ac1"],
+                    "risks": [],
+                },
+                trigger_context={
+                    "resume_source_state": {
+                        "dev_rationale": ["Implemented onboarding flow"],
+                        "test_guidance": ["pytest -q"],
+                        "review_summary": ["Needs nonce verification"],
+                        "review_feedback": "Verify nonce handling with the QA account",
+                        "pr_url": "https://example/pull/1",
+                    }
+                },
+            )
+        )
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(stage_agents.pm_calls, 0)
+        self.assertEqual(stage_agents.dev_calls, 0)
+        self.assertEqual(stage_agents.test_calls, 0)
+        self.assertEqual(stage_agents.review_calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
