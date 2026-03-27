@@ -14,8 +14,52 @@ These are non-negotiable standards for agent and human changes in this repo. If 
 - Don’t upgrade dependencies unless required by the ticket.
 
 ### Testable by default
+- Every behavior change must include automated tests.
+- Automated tests must prove the behavior a QA engineer would otherwise need to verify manually.
+- For user-facing changes, the critical acceptance path must be covered by automated UI tests.
+- Any omission requires explicit justification in the PR and is subject to review blocking.
+- Use platform-standard UI automation:
+  - Web: Playwright
+  - Apple platforms: XCTest / XCUITest
+  - Other platforms: equivalent standard automation tooling
+- Tests must cover the appropriate layers:
+  - unit tests for isolated logic
+  - integration tests for boundaries and wiring
+  - behavior / end-to-end tests for real workflows
+  - UI automation for user-visible journeys
 - Core logic must be testable without external services.
-- Keep side effects at the edges (DB/HTTP/queues/etc.).
+- Keep side effects at the edges (DB / HTTP / queues / browser / filesystem / third-party APIs).
+- For bug fixes, add a regression test that fails before the fix and passes after it.
+- Implementation is not complete until the relevant automated tests are written and passing.
+
+
+## UI automation standard
+
+For any change that affects user-visible behavior, evaluate whether the acceptance criteria should be proven through UI automation.
+
+UI automation is required when:
+- the feature is verified through screens, forms, navigation, or visible state changes
+- the workflow is one a QA engineer would normally execute manually
+- the change affects a critical user journey
+- the bug being fixed was observed at the UI level
+- the integration between frontend and backend is part of the value
+
+Preferred frameworks:
+- Web: Playwright
+- Apple platforms: XCTest / XCUITest
+- Other platforms: standard platform automation tooling
+
+Minimum expectation:
+- coverage of the main success path
+- coverage of at least one meaningful failure or validation path
+- tests must assert visible user outcomes, not internal implementation details
+
+Do not rely only on:
+- shallow component/unit tests
+- snapshots without behavioral assertions
+- mocked UI assertions that do not prove real outcomes
+
+If UI automation is not added for a user-facing change, the PR must explicitly justify why.
 
 ## 2) Execution gate: “Good To Do” requirement
 
@@ -23,7 +67,7 @@ Agents must only work on items that are “Good To Do”. Before coding, confirm
 - Objective is clear in 1–2 sentences.
 - Acceptance criteria exists (or is proposed and confirmed).
 - Component/repo is clear.
-- “How to test” is clear or proposed.
+- “How to automate test” is clear or proposed.
 - Non-functional intent is explicit: **MVP quick test** vs **scale-ready**.
 - Risks/dependencies identified.
 
@@ -108,6 +152,9 @@ A PR should be blocked if it contains:
 - placeholders without linked follow-up issue
 - unclear “how to test”
 - changes that imply major NFR impact without Decision Gate discussion
+- missing UI automation for user-facing changes without justification
+- missing demo evidence for UI-visible changes
+- "how to test" steps that depend on manual exploration when the workflow is automatable
 
 ## 7.1) Mandatory test execution gate (pre-commit and pre-PR)
 
