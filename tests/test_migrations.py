@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
@@ -15,6 +16,17 @@ from orchestrator.storage.migrations import run_migrations
 
 
 class MigrationTests(unittest.TestCase):
+    def _alembic_upgrade(self, database_url: str, revision: str) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = Config(str(root / "alembic.ini"))
+        config.attributes["configure_logger"] = False
+        config.set_main_option(
+            "script_location",
+            str(root / "orchestrator" / "storage" / "migrations"),
+        )
+        config.set_main_option("sqlalchemy.url", database_url)
+        command.upgrade(config, revision)
+
     def test_revision_graph_has_single_unique_head(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = Config(str(root / "alembic.ini"))
@@ -37,15 +49,121 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(duplicates, {})
         self.assertEqual(script.get_heads(), ["20260327_0043"])
 
+    def test_run_migrations_repairs_legacy_stream_only_0040_head(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            self._alembic_upgrade(database_url, "20260323_0038")
+
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM alembic_version"))
+                connection.execute(text("INSERT INTO alembic_version(version_num) VALUES ('20260327_0040')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE run_stream_events (
+                            stream_offset INTEGER PRIMARY KEY,
+                            event_kind VARCHAR(32) NOT NULL,
+                            tenant_id VARCHAR(128) NOT NULL,
+                            project_id VARCHAR(128),
+                            run_id VARCHAR(64),
+                            issue_key VARCHAR(64),
+                            agent_id VARCHAR(128),
+                            event_type VARCHAR(64),
+                            invocation_id VARCHAR(64),
+                            channel VARCHAR(64),
+                            command VARCHAR(128),
+                            working_dir VARCHAR(1024),
+                            stage VARCHAR(64),
+                            attempt INTEGER,
+                            stream VARCHAR(16),
+                            message TEXT,
+                            recorded_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                for ddl in (
+                    "CREATE INDEX ix_run_stream_events_event_kind ON run_stream_events (event_kind)",
+                    "CREATE INDEX ix_run_stream_events_tenant_id ON run_stream_events (tenant_id)",
+                    "CREATE INDEX ix_run_stream_events_project_id ON run_stream_events (project_id)",
+                    "CREATE INDEX ix_run_stream_events_run_id ON run_stream_events (run_id)",
+                    "CREATE INDEX ix_run_stream_events_agent_id ON run_stream_events (agent_id)",
+                    "CREATE INDEX ix_run_stream_events_event_type ON run_stream_events (event_type)",
+                    "CREATE INDEX ix_run_stream_events_invocation_id ON run_stream_events (invocation_id)",
+                    "CREATE INDEX ix_run_stream_events_channel ON run_stream_events (channel)",
+                    "CREATE INDEX ix_run_stream_events_command ON run_stream_events (command)",
+                    "CREATE INDEX ix_run_stream_events_stage ON run_stream_events (stage)",
+                    "CREATE INDEX ix_run_stream_events_recorded_at ON run_stream_events (recorded_at)",
+                    "CREATE INDEX ix_run_stream_events_run_id_stream_offset ON run_stream_events (run_id, stream_offset)",
+                    "CREATE INDEX ix_run_stream_events_tenant_id_stream_offset ON run_stream_events (tenant_id, stream_offset)",
+                ):
+                    connection.execute(text(ddl))
+
+            run_migrations(database_url=database_url)
+
+            inspector = inspect(engine)
+            self.assertIn("tenant_users", inspector.get_table_names())
+            self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
+            with engine.begin() as connection:
+                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+            self.assertEqual(versions, ["20260327_0043"])
+
+    def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            self._alembic_upgrade(database_url, "20260323_0038")
+
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM alembic_version"))
+                connection.execute(text("INSERT INTO alembic_version(version_num) VALUES ('20260327_0039')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE run_stream_events (
+                            stream_offset INTEGER PRIMARY KEY,
+                            event_kind VARCHAR(32) NOT NULL,
+                            tenant_id VARCHAR(128) NOT NULL,
+                            project_id VARCHAR(128),
+                            run_id VARCHAR(64),
+                            issue_key VARCHAR(64),
+                            agent_id VARCHAR(128),
+                            event_type VARCHAR(64),
+                            invocation_id VARCHAR(64),
+                            channel VARCHAR(64),
+                            command VARCHAR(128),
+                            working_dir VARCHAR(1024),
+                            stage VARCHAR(64),
+                            attempt INTEGER,
+                            stream VARCHAR(16),
+                            message TEXT,
+                            recorded_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+
+            run_migrations(database_url=database_url)
+
+            inspector = inspect(engine)
+            self.assertIn("tenant_users", inspector.get_table_names())
+            self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
+            with engine.begin() as connection:
+                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+            self.assertEqual(versions, ["20260327_0043"])
+
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
         fake_config.attributes = {}
         with (
+            patch("orchestrator.storage.migrations._normalize_repaired_top_revisions") as normalize_mock,
             patch("orchestrator.storage.migrations.Config", return_value=fake_config),
             patch("orchestrator.storage.migrations.command.upgrade") as upgrade_mock,
         ):
             run_migrations(database_url="sqlite:///tmp/test.db")
 
+        normalize_mock.assert_called_once_with("sqlite:///tmp/test.db")
         self.assertEqual(fake_config.attributes.get("configure_logger"), False)
         upgrade_mock.assert_called_once_with(fake_config, "head")
 
@@ -86,6 +204,28 @@ class MigrationTests(unittest.TestCase):
             contents,
         )
         self.assertNotIn('server_default=sa.text("1")', contents)
+
+    def test_tenant_identity_migration_uses_boolean_defaults_for_postgres(self) -> None:
+        migration_file = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "storage"
+            / "migrations"
+            / "versions"
+            / "20260327_0039_tenant_identity_and_invites.py"
+        )
+        contents = migration_file.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true())',
+            contents,
+        )
+        self.assertIn(
+            'sa.Column("must_change_password", sa.Boolean(), nullable=False, server_default=sa.false())',
+            contents,
+        )
+        self.assertNotIn('server_default=sa.text("1")', contents)
+        self.assertNotIn('server_default=sa.text("0")', contents)
 
     def test_decision_state_migration_is_idempotent_when_tables_already_exist(self) -> None:
         with TemporaryDirectory() as tmp_dir:

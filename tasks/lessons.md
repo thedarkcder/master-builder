@@ -34,3 +34,4 @@
 - Auth.js, onboarding, registration, and tenant-settings UI changes need executable browser coverage before PR creation. Do not treat lint/type checks or backend tests as substitutes for user-flow verification.
 - Do not leave `ANN001` or `ARG001` debt in touched files. Add the missing types or rename/remove intentionally unused arguments before calling the work done.
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.
+- Migration fixes are not verified by SQLite-only Alembic tests alone. If the runtime path is Postgres via Docker startup, add regression checks for legacy version-table normalization and boolean/default DDL compatibility, then prove the real startup script reaches service readiness and `worker_started`.
