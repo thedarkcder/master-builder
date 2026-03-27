@@ -1,7 +1,7 @@
 """add platform settings table
 
-Revision ID: 20260327_0039
-Revises: 20260323_0038
+Revision ID: 20260327_0041
+Revises: 20260327_0040
 Create Date: 2026-03-27
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260327_0039"
-down_revision = "20260323_0038"
+revision = "20260327_0041"
+down_revision = "20260327_0040"
 branch_labels = None
 depends_on = None
 

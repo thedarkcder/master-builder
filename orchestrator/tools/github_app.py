@@ -103,6 +103,13 @@ class CommentReactionResult:
 
 
 @dataclass(frozen=True)
+class ReactionSummary:
+    reaction_id: int
+    content: str | None
+    user_login: str | None
+
+
+@dataclass(frozen=True)
 class PullRequestInlineCommentDraft:
     path: str
     line: int
@@ -204,6 +211,7 @@ class GitHubAppClient:
     def __init__(self, config: GitHubAppConfig):
         self._config = config
         self._cached_installation_token: _InstallationToken | None = None
+        self._cached_actor_login: str | None = None
 
     def create_app_jwt(self) -> str:
         private_key_pem = self._normalize_private_key(self._config.private_key_pem)
@@ -302,6 +310,21 @@ class GitHubAppClient:
         expires_at = _parse_github_datetime(expires_at_raw)
         self._cached_installation_token = _InstallationToken(token=token, expires_at=expires_at)
         return token
+
+    def get_actor_login(self) -> str:
+        if self._cached_actor_login is not None:
+            return self._cached_actor_login
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path="/user",
+            bearer_token=installation_token,
+        )
+        login = response.get("login")
+        if not isinstance(login, str) or not login.strip():
+            raise GitHubApiError("GitHub authenticated user response did not include login")
+        self._cached_actor_login = login.strip()
+        return self._cached_actor_login
 
     def create_pull_request(
         self,
@@ -779,6 +802,110 @@ class GitHubAppClient:
         return CommentReactionResult(
             reaction_id=reaction_id if isinstance(reaction_id, int) else None,
             content=reaction_content if isinstance(reaction_content, str) else None,
+        )
+
+    def add_pull_request_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        pr_number: int,
+        content: str = "eyes",
+    ) -> CommentReactionResult:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/issues/{pr_number}/reactions",
+            bearer_token=installation_token,
+            payload={"content": content},
+        )
+        reaction_id = response.get("id")
+        reaction_content = response.get("content")
+        return CommentReactionResult(
+            reaction_id=reaction_id if isinstance(reaction_id, int) else None,
+            content=reaction_content if isinstance(reaction_content, str) else None,
+        )
+
+    def list_pull_request_reactions(
+        self,
+        *,
+        repo_full_name: str,
+        pr_number: int,
+    ) -> list[ReactionSummary]:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/issues/{pr_number}/reactions?per_page=100",
+            bearer_token=installation_token,
+        )
+        if not isinstance(response, list):
+            raise GitHubApiError("GitHub pull request reactions response was not a list")
+        reactions: list[ReactionSummary] = []
+        for item in response:
+            if not isinstance(item, dict):
+                continue
+            reaction_id = item.get("id")
+            if not isinstance(reaction_id, int) or reaction_id <= 0:
+                continue
+            content = item.get("content")
+            if content is not None and not isinstance(content, str):
+                content = None
+            user = item.get("user")
+            login = user.get("login") if isinstance(user, dict) else None
+            reactions.append(
+                ReactionSummary(
+                    reaction_id=reaction_id,
+                    content=content.strip() if isinstance(content, str) and content.strip() else None,
+                    user_login=login.strip() if isinstance(login, str) and login.strip() else None,
+                )
+            )
+        return reactions
+
+    def delete_issue_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        reaction_id: int,
+    ) -> None:
+        installation_token = self.get_installation_token()
+        self._request_json(
+            method="DELETE",
+            path=f"/repos/{repo_full_name}/issues/reactions/{reaction_id}",
+            bearer_token=installation_token,
+        )
+
+    def sync_pull_request_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        pr_number: int,
+        content: str,
+    ) -> CommentReactionResult:
+        actor_login = self.get_actor_login()
+        existing = self.list_pull_request_reactions(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+        )
+        matching = [
+            reaction
+            for reaction in existing
+            if reaction.user_login == actor_login
+        ]
+        for reaction in matching:
+            if reaction.content != content:
+                self.delete_issue_reaction(
+                    repo_full_name=repo_full_name,
+                    reaction_id=reaction.reaction_id,
+                )
+        existing_desired = next((reaction for reaction in matching if reaction.content == content), None)
+        if existing_desired is not None:
+            return CommentReactionResult(
+                reaction_id=existing_desired.reaction_id,
+                content=existing_desired.content,
+            )
+        return self.add_pull_request_reaction(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            content=content,
         )
 
     def submit_pull_request_review(

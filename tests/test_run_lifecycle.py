@@ -2,6 +2,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs import (
@@ -9,6 +10,7 @@ from orchestrator.core.runs import (
     RUN_DEDUPE_SCOPE_PR_REMEDIATION,
     RUN_STATUS_BLOCKED,
     RUN_STATUS_SUCCEEDED,
+    RunBootstrap,
     RunStateTransitionError,
     enqueue_run,
     mark_run_running,
@@ -16,7 +18,7 @@ from orchestrator.core.runs import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import RunLock, Tenant
+from orchestrator.storage.models import Run, RunLock, Tenant
 
 
 class RunLifecycleTests(unittest.TestCase):
@@ -249,3 +251,59 @@ class RunLifecycleTests(unittest.TestCase):
             second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
             self.assertTrue(second.enqueued)
             self.assertNotEqual(second.run.run_id, first.run.run_id)
+
+    def test_enqueue_applies_bootstrap_before_queue_notification(self) -> None:
+        observed: dict[str, object] = {}
+
+        def capture_notification(session, *, tenant_id: str, project_id: str | None, run_id: str, issue_key: str):  # noqa: ANN001
+            observed["tenant_id"] = tenant_id
+            observed["project_id"] = project_id
+            observed["run_id"] = run_id
+            observed["issue_key"] = issue_key
+            staged_run = next(item for item in session.new if isinstance(item, Run))
+            observed["plan"] = dict(staged_run.plan or {})
+            observed["branch"] = staged_run.branch
+            observed["pr_url"] = staged_run.pr_url
+            observed["dev_session_id"] = staged_run.dev_session_id
+
+        with self.session_factory() as session:
+            with patch("orchestrator.core.runs.notify_run_enqueued", side_effect=capture_notification):
+                result = enqueue_run(
+                    session,
+                    tenant_id="tenant-runs",
+                    project_id="tenant-runs-default",
+                    issue_key="TP-912",
+                    precheck_outcome="ready_for_agent",
+                    bootstrap=RunBootstrap(
+                        branch="feature/TP-912",
+                        pr_url="https://github.com/example/repo/pull/12",
+                        dev_session_id="dev-session-123",
+                        plan={
+                            "trigger_context": {
+                                "rerun_mode": "resume",
+                                "resume_stage": "dev",
+                                "resume_session_id": "dev-session-123",
+                            }
+                        },
+                    ),
+                )
+
+        self.assertTrue(result.enqueued)
+        self.assertEqual(observed["tenant_id"], "tenant-runs")
+        self.assertEqual(observed["project_id"], "tenant-runs-default")
+        self.assertEqual(observed["issue_key"], "TP-912")
+        self.assertEqual(observed["run_id"], result.run.run_id)
+        self.assertEqual(observed["branch"], "feature/TP-912")
+        self.assertEqual(observed["pr_url"], "https://github.com/example/repo/pull/12")
+        self.assertEqual(observed["dev_session_id"], "dev-session-123")
+        self.assertEqual(
+            observed["plan"],
+            {
+                "pre_check": {"outcome": "ready_for_agent"},
+                "trigger_context": {
+                    "rerun_mode": "resume",
+                    "resume_stage": "dev",
+                    "resume_session_id": "dev-session-123",
+                },
+            },
+        )

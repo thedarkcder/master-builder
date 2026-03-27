@@ -38,7 +38,6 @@ def execute_tenant_command(
     session: Session,
     defer_seed_issues: bool,
     require_ask_confirmation: bool,
-    allow_plain_ask: bool,
     ingress_source: str,
     deps: CommandExecutionDependencies,
 ) -> DiscordCommandResponse:

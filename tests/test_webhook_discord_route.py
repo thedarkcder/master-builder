@@ -23,7 +23,7 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
             "_read_json_payload": AsyncMock(return_value=(payload, b"{}")),
             "_extract_webhook_token": MagicMock(return_value="token"),
             "resolve_scoped_secret_ref": MagicMock(return_value="token"),
-            "resolve_followup_context": MagicMock(return_value=None),
+            "_resolve_discord_command_subject_key": MagicMock(return_value="discord_channel:route25:c1"),
             "enqueue_webhook_job": MagicMock(
                 return_value=SimpleNamespace(
                     created=True,
@@ -94,24 +94,16 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.payload_json["command"], "!ask status")
         self.assertEqual(request.payload_json["channel_id"], "c1")
         self.assertEqual(request.payload_json["user_id"], "user1")
+        self.assertEqual(request.context_json, {})
         patched["notify_webhook_job_enqueued"].assert_called_once()
         session.commit.assert_called_once()
-
-    async def test_seed_command_sets_seed_flag_in_context(self) -> None:
-        tenant = SimpleNamespace(is_enabled=True, discord_config={})
-        _, _, patched = await self._call(
-            payload={"user_id": "user1", "command": "!issues   seed   build stories", "channel_id": "c1"},
-            tenant=tenant,
-        )
-        request = patched["enqueue_webhook_job"].call_args.kwargs["request"]
-        self.assertTrue(request.context_json["defer_seed_issues"])
 
     async def test_followup_context_subject_takes_precedence(self) -> None:
         tenant = SimpleNamespace(is_enabled=True, discord_config={})
         _, _, patched = await self._call(
             payload={"user_id": "user1", "command": "!reply", "channel_id": "c1"},
             tenant=tenant,
-            resolve_followup_context=MagicMock(return_value=SimpleNamespace(context_id="ctx-1")),
+            _resolve_discord_command_subject_key=MagicMock(return_value="discord_followup:ctx-1"),
         )
         request = patched["enqueue_webhook_job"].call_args.kwargs["request"]
         self.assertEqual(request.subject_key, "discord_followup:ctx-1")

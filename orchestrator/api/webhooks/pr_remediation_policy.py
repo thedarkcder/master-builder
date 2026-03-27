@@ -45,7 +45,7 @@ def is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
         state = str(review.get("state") or "").strip().lower() if isinstance(review, dict) else ""
         return state == "changes_requested"
     if event == "pull_request_review_comment" and action in {"created", "edited"}:
-        return True
+        return parse_manual_pr_fix_request(payload=payload) is not None
     if event == "issue_comment" and action in {"created", "edited"}:
         return parse_manual_pr_fix_request(payload=payload) is not None
     if event == "check_run" and action in {"created", "completed", "rerequested"}:

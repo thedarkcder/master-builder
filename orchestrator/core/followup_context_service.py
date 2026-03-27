@@ -172,6 +172,80 @@ def resolve_followup_context(
     return None
 
 
+def resolve_discord_command_subject_key(
+    *,
+    session: Session,
+    tenant_id: str,
+    channel_id: str | None,
+    user_id: str,
+) -> str:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_channel_id = str(channel_id or "").strip() or None
+    normalized_user_id = str(user_id or "").strip()
+    if normalized_channel_id:
+        context = resolve_followup_context(
+            session=session,
+            tenant_id=normalized_tenant_id,
+            channel_id=normalized_channel_id,
+        )
+        if context is not None:
+            context_id = str(getattr(context, "context_id", "") or "").strip()
+            if context_id:
+                return f"discord_followup:{context_id}"
+        return f"discord_channel:{normalized_tenant_id}:{normalized_channel_id}"
+    return f"discord_user:{normalized_tenant_id}:{normalized_user_id}"
+
+
+def resolve_discord_interaction_subject_scope(
+    *,
+    session: Session,
+    payload: dict,
+    find_tenant_for_discord_channel,
+) -> tuple[str | None, str | None, str]:  # noqa: ANN001
+    channel_id = str(payload.get("channel_id") or "").strip()
+    user_id = str(((payload.get("member") or {}).get("user") or {}).get("id") or "").strip()
+    if not user_id:
+        user_id = str((payload.get("user") or {}).get("id") or "").strip()
+
+    tenant_id: str | None = None
+    project_id: str | None = None
+    if channel_id:
+        tenant = find_tenant_for_discord_channel(session=session, channel_id=channel_id)
+        if tenant is not None:
+            tenant_id = str(getattr(tenant, "tenant_id", "") or "").strip() or None
+
+    root_message_id = None
+    data = payload.get("data")
+    if isinstance(data, dict) and data.get("type") == 3:
+        root_message_id = str(data.get("target_id") or "").strip() or None
+    if root_message_id is None:
+        message = payload.get("message")
+        if isinstance(message, dict):
+            root_message_id = str(message.get("id") or "").strip() or None
+
+    if tenant_id and channel_id:
+        context = resolve_followup_context(
+            session=session,
+            tenant_id=tenant_id,
+            channel_id=channel_id,
+            root_message_id=root_message_id,
+        )
+        if context is not None:
+            project_id = str(getattr(context, "project_id", "") or "").strip() or None
+            context_id = str(getattr(context, "context_id", "") or "").strip()
+            if context_id:
+                return tenant_id, project_id, f"discord_followup:{context_id}"
+    if tenant_id and channel_id:
+        return tenant_id, project_id, f"discord_channel:{tenant_id}:{channel_id}"
+    if tenant_id and user_id:
+        return tenant_id, project_id, f"discord_user:{tenant_id}:{user_id}"
+    if channel_id:
+        return None, None, f"discord_channel::{channel_id}"
+    if user_id:
+        return None, None, f"discord_user::{user_id}"
+    return None, None, "discord_interaction:unknown"
+
+
 def close_followup_contexts(
     *,
     session: Session,

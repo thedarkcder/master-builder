@@ -35,6 +35,7 @@ class RunStageNotifier:
 
     def append(self, stage_update: dict[str, str]) -> None:
         self.stage_updates.append(stage_update)
+        self._session.refresh(self._run, attribute_names=["plan"])
         existing_plan = dict(self._run.plan or {})
         live_updates_raw = existing_plan.get("live_stage_updates")
         live_updates: list[dict[str, str]] = []

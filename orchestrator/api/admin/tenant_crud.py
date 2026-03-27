@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Response, status
 from sqlalchemy import delete
 
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Run, Tenant, TenantRunClaim
 
 
 def create_tenant(
@@ -41,6 +41,12 @@ def create_tenant(
         updated_at=now,
     )
     session.add(tenant)
+    session.add(
+        TenantRunClaim(
+            tenant_id=tenant_id,
+            updated_at=now,
+        )
+    )
     ensure_default_project_for_tenant_fn(session, tenant=tenant)
     sync_tenant_jira_project_keys_fn(session, tenant=tenant)
     session.commit()

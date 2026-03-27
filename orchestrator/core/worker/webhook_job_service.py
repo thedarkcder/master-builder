@@ -4,10 +4,12 @@ import asyncio
 import logging
 
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.interactions.application import build_default_discord_interaction_dispatch_deps
 from orchestrator.api.discord.interactions.dispatcher import dispatch_discord_interaction
+from orchestrator.api.discord.shared.state import command_matches
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.transport_runtime import (
@@ -41,10 +43,12 @@ from orchestrator.core.webhook_job_queue import (
     WebhookJob,
     claim_next_webhook_job,
     claim_pending_jobs_for_subject,
+    mark_webhook_job_ids_failed,
     mark_webhook_jobs_done,
     mark_webhook_jobs_failed,
 )
 from orchestrator.core.runs import cancel_queued_issue_runs
+from orchestrator.core.config import Settings
 from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
@@ -57,6 +61,28 @@ _STALE_QUEUE_BLOCKING_REASONS = {
     "issue_in_backlog",
     "ready_for_agent_backlog",
 }
+
+
+def _rollback_job_session(
+    session: Session,
+    *,
+    job_transport: str,
+    job_tenant_id: str,
+    job_subject_key: str,
+    job_id: str,
+) -> None:
+    try:
+        session.rollback()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "webhook_job_rollback_failed transport=%s tenant_id=%s subject_key=%s job_id=%s error=%s",
+            job_transport,
+            job_tenant_id,
+            job_subject_key,
+            job_id,
+            exc,
+        )
+        raise
 
 
 def _non_http_ingress_result(result: IngressResult) -> IngressResult:
@@ -125,8 +151,8 @@ def _jira_snapshot_from_job(job: WebhookJob) -> JiraWebhookContextSnapshot:
 
 def _process_jira_subject_jobs(
     *,
-    session,
-    settings,  # noqa: ANN001
+    session: Session,
+    settings: Settings,
     owner_id: str,
     claimed_job: WebhookJob,
     related_jobs: tuple[WebhookJob, ...],
@@ -222,8 +248,8 @@ def _process_jira_subject_jobs(
 
 def _process_github_job(
     *,
-    session,
-    settings,  # noqa: ANN001
+    session: Session,
+    settings: Settings,
     owner_id: str,
     claimed_job: WebhookJob,
 ) -> tuple[WebhookJob, ...]:
@@ -300,7 +326,7 @@ def _process_github_job(
 
 def _process_discord_command_job(
     *,
-    session,
+    session: Session,
     owner_id: str,
     claimed_job: WebhookJob,
 ) -> tuple[WebhookJob, ...]:
@@ -316,15 +342,19 @@ def _process_discord_command_job(
         tenant_id=claimed_job.tenant_id,
         payload=payload,
         session=session,
-        defer_seed_issues=bool((claimed_job.context_json or {}).get("defer_seed_issues")),
+        defer_seed_issues=command_matches(
+            payload.command,
+            command_name="issues",
+            subcommand="seed",
+        ),
     )
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
 
-async def _run_discord_interaction_job_async(*, session, claimed_job: WebhookJob) -> None:  # noqa: ANN001
+async def _run_discord_interaction_job_async(*, session: Session, claimed_job: WebhookJob) -> None:
     queued: list[object] = []
 
-    def _capture(awaitable) -> object:  # noqa: ANN001
+    def _capture(awaitable: object) -> object:
         queued.append(awaitable)
         return awaitable
 
@@ -343,7 +373,7 @@ async def _run_discord_interaction_job_async(*, session, claimed_job: WebhookJob
 
 def _process_discord_interaction_job(
     *,
-    session,
+    session: Session,
     owner_id: str,
     claimed_job: WebhookJob,
 ) -> tuple[WebhookJob, ...]:
@@ -353,8 +383,8 @@ def _process_discord_interaction_job(
 
 def process_next_webhook_job(
     *,
-    session,
-    settings,  # noqa: ANN001
+    session: Session,
+    settings: Settings,
     owner_id: str,
 ) -> WebhookJob | None:
     claim = claim_next_webhook_job(
@@ -365,6 +395,11 @@ def process_next_webhook_job(
         return None
 
     job = claim.job
+    job_transport = str(job.transport)
+    job_tenant_id = str(job.tenant_id)
+    job_subject_key = str(job.subject_key)
+    job_id = str(job.job_id)
+    failed_job_ids: tuple[str, ...] = (job_id,)
     additional_jobs: tuple[WebhookJob, ...] = ()
     try:
         if job.transport == WEBHOOK_TRANSPORT_JIRA:
@@ -375,6 +410,7 @@ def process_next_webhook_job(
                 owner_id=owner_id,
                 exclude_job_id=job.job_id,
             )
+            failed_job_ids = (job_id, *(str(item.job_id) for item in additional_jobs))
             processed = _process_jira_subject_jobs(
                 session=session,
                 settings=settings,
@@ -410,34 +446,48 @@ def process_next_webhook_job(
             )
         return processed[0] if processed else job
     except HTTPException as exc:
+        _rollback_job_session(
+            session,
+            job_transport=job_transport,
+            job_tenant_id=job_tenant_id,
+            job_subject_key=job_subject_key,
+            job_id=job_id,
+        )
         logger.warning(
             "webhook_job_failed_http transport=%s tenant_id=%s subject_key=%s job_id=%s detail=%s",
-            job.transport,
-            job.tenant_id,
-            job.subject_key,
-            job.job_id,
+            job_transport,
+            job_tenant_id,
+            job_subject_key,
+            job_id,
             exc.detail,
         )
-        failed_jobs = (job, *additional_jobs)
-        return mark_webhook_jobs_failed(
+        failed_jobs = mark_webhook_job_ids_failed(
             session,
-            jobs=failed_jobs,
+            job_ids=failed_job_ids,
             owner_id=owner_id,
             error=str(exc.detail),
-        )[0]
+        )
+        return failed_jobs[0] if failed_jobs else None
     except Exception as exc:  # noqa: BLE001
+        _rollback_job_session(
+            session,
+            job_transport=job_transport,
+            job_tenant_id=job_tenant_id,
+            job_subject_key=job_subject_key,
+            job_id=job_id,
+        )
         logger.exception(
             "webhook_job_failed transport=%s tenant_id=%s subject_key=%s job_id=%s error=%s",
-            job.transport,
-            job.tenant_id,
-            job.subject_key,
-            job.job_id,
+            job_transport,
+            job_tenant_id,
+            job_subject_key,
+            job_id,
             exc,
         )
-        failed_jobs = (job, *additional_jobs)
-        return mark_webhook_jobs_failed(
+        failed_jobs = mark_webhook_job_ids_failed(
             session,
-            jobs=failed_jobs,
+            job_ids=failed_job_ids,
             owner_id=owner_id,
             error=str(exc),
-        )[0]
+        )
+        return failed_jobs[0] if failed_jobs else None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.followup_context_service import upsert_followup_context
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
-from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvidence, FollowupContext, Tenant
+from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvidence, FollowupContext, Run, Tenant
 from tests.production_path_support import (
     clear_runtime_environment,
     configure_runtime_environment,
@@ -70,15 +71,40 @@ class JiraWebhookProductionPathTests(unittest.TestCase):
         payload = load_json_fixture("jira", "webhooks", "issue_updated.json")
         payload["issue"]["fields"]["labels"] = ["ready_for_agent"]
 
-        response = self.client.post("/jira/webhook/route25", json=payload)
+        fake_oauth = SimpleNamespace(
+            access_token="access-token",
+            connection=SimpleNamespace(cloud_id="cloud-1"),
+            client=SimpleNamespace(
+                get_issue_detail=lambda **_kwargs: SimpleNamespace(
+                    summary="Webhook ticket",
+                    description="desc",
+                    status="To Do",
+                    status_category_key="new",
+                    labels=["ready_for_agent"],
+                )
+            ),
+        )
+
+        with patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=fake_oauth):
+            response = self.client.post("/jira/webhook/route25", json=payload)
+            processed = self._process_one_webhook_job()
 
         self.assertEqual(response.status_code, 202)
         body = response.json()
         self.assertTrue(body["accepted"])
         self.assertFalse(body["enqueued"])
         self.assertTrue(body["queued"])
-        self.assertEqual(body["issue_key"], "TP-42")
         self.assertEqual(body["reason"], "queued_for_reconciliation")
+        self.assertEqual(body["issue_key"], "TP-42")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+
+        with self.session_factory() as session:
+            tenant_runs = session.execute(
+                select(Run).where(Run.tenant_id == "route25", Run.issue_key == "TP-42")
+            ).scalars().all()
+            self.assertTrue(tenant_runs)
 
     def test_comment_reply_records_decision_evidence_through_real_route(self) -> None:
         now = datetime.now(timezone.utc)

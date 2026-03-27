@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from orchestrator.storage.models import RunLogEvent, RunTokenUsage
-from orchestrator.storage.run_event_stream import notify_run_log_event
+from orchestrator.core.log_event_bus import EVENT_KIND_CODEX_LOG, register_stream_offsets
+from orchestrator.storage.models import RunLogEvent, RunStreamEvent, RunTokenUsage
 
 MAX_PERSISTED_LOG_EVENTS_PER_RUN = 5000
 MAX_LOG_MESSAGE_CHARS = 2000
@@ -395,31 +395,15 @@ def _build_run_log_model(event: NormalizedRunLogEvent) -> RunLogEvent:
     )
 
 
-def _prune_invocation_events(
-    *,
-    session: Session,
-    invocation_id: str,
-    max_events_per_run: int,
-) -> None:
-    cutoff_query = (
-        select(RunLogEvent.event_id)
-        .where(RunLogEvent.invocation_id == invocation_id)
-        .order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id))
-        .offset(max(0, max_events_per_run))
-    )
-    cutoff_ids = session.execute(cutoff_query).scalars().all()
-    if cutoff_ids:
-        session.execute(delete(RunLogEvent).where(RunLogEvent.event_id.in_(cutoff_ids)))
-
-
-def _notify_normalized_run_log_event(*, session: Session, event: NormalizedRunLogEvent) -> None:
-    notify_run_log_event(
-        session,
+def _build_run_stream_model(event: NormalizedRunLogEvent) -> RunStreamEvent:
+    return RunStreamEvent(
+        event_kind=EVENT_KIND_CODEX_LOG,
         tenant_id=event.tenant_id,
         run_id=event.run_id,
         issue_key=event.issue_key,
         project_id=event.project_id,
         agent_id=event.agent_id,
+        event_type=None,
         invocation_id=event.invocation_id,
         channel=event.channel,
         command=event.command,
@@ -428,7 +412,7 @@ def _notify_normalized_run_log_event(*, session: Session, event: NormalizedRunLo
         attempt=event.attempt,
         stream=event.stream,
         message=event.message,
-        recorded_at=event.recorded_at.isoformat(),
+        recorded_at=event.recorded_at,
     )
 
 
@@ -469,15 +453,13 @@ def record_run_log_event(
     )
     if normalized_event is None:
         return
-    session.add(_build_run_log_model(normalized_event))
+    legacy_row = _build_run_log_model(normalized_event)
+    stream_row = _build_run_stream_model(normalized_event)
+    session.add(legacy_row)
+    session.add(stream_row)
     materialize_token_usage_from_log_message(session=session, run_log_row=normalized_event)
     session.flush()
-    _prune_invocation_events(
-        session=session,
-        invocation_id=normalized_event.invocation_id,
-        max_events_per_run=max_events_per_run,
-    )
-    _notify_normalized_run_log_event(session=session, event=normalized_event)
+    register_stream_offsets(session=session, rows=[stream_row])
 
 
 def record_run_log_events_batch(
@@ -509,17 +491,70 @@ def record_run_log_events_batch(
     if not normalized_events:
         return 0
 
+    stream_rows: list[RunStreamEvent] = []
     for normalized_event in normalized_events:
         session.add(_build_run_log_model(normalized_event))
+        stream_row = _build_run_stream_model(normalized_event)
+        stream_rows.append(stream_row)
+        session.add(stream_row)
         materialize_token_usage_from_log_message(session=session, run_log_row=normalized_event)
     session.flush()
-
-    for invocation_id in {event.invocation_id for event in normalized_events}:
-        _prune_invocation_events(
-            session=session,
-            invocation_id=invocation_id,
-            max_events_per_run=max_events_per_run,
-        )
-    for normalized_event in normalized_events:
-        _notify_normalized_run_log_event(session=session, event=normalized_event)
+    register_stream_offsets(session=session, rows=stream_rows)
     return len(normalized_events)
+
+
+def prune_run_log_events(
+    *,
+    session: Session,
+    max_events_per_run: int = MAX_PERSISTED_LOG_EVENTS_PER_RUN,
+) -> int:
+    ranked = (
+        select(
+            RunLogEvent.event_id,
+            func.row_number()
+            .over(
+                partition_by=RunLogEvent.invocation_id,
+                order_by=(RunLogEvent.recorded_at.desc(), RunLogEvent.event_id.desc()),
+            )
+            .label("row_number"),
+        )
+        .where(RunLogEvent.invocation_id.is_not(None))
+        .subquery()
+    )
+    cutoff_ids = session.execute(
+        select(ranked.c.event_id).where(ranked.c.row_number > max(0, int(max_events_per_run)))
+    ).scalars().all()
+    if not cutoff_ids:
+        return 0
+    result = session.execute(delete(RunLogEvent).where(RunLogEvent.event_id.in_(cutoff_ids)))
+    return int(result.rowcount or 0)
+
+
+def prune_run_stream_events(
+    *,
+    session: Session,
+    max_events_per_run: int = MAX_PERSISTED_LOG_EVENTS_PER_RUN,
+) -> int:
+    ranked_logs = (
+        select(
+            RunStreamEvent.stream_offset,
+            func.row_number()
+            .over(
+                partition_by=RunStreamEvent.invocation_id,
+                order_by=RunStreamEvent.stream_offset.desc(),
+            )
+            .label("row_number"),
+        )
+        .where(
+            RunStreamEvent.event_kind == EVENT_KIND_CODEX_LOG,
+            RunStreamEvent.invocation_id.is_not(None),
+        )
+        .subquery()
+    )
+    cutoff_ids = session.execute(
+        select(ranked_logs.c.stream_offset).where(ranked_logs.c.row_number > max(0, int(max_events_per_run)))
+    ).scalars().all()
+    if not cutoff_ids:
+        return 0
+    result = session.execute(delete(RunStreamEvent).where(RunStreamEvent.stream_offset.in_(cutoff_ids)))
+    return int(result.rowcount or 0)

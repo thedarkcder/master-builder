@@ -99,6 +99,23 @@ class JiraOauthServiceModuleTests(unittest.TestCase):
         self.assertEqual(expired_connection.scopes, ["scope-1"])
         session.commit.assert_called_once()
 
+    def test_refresh_jira_connection_tokens_normalizes_naive_expiry(self) -> None:
+        session = MagicMock()
+        settings = SimpleNamespace(secrets_encryption_key="enc")
+        future_expiry = datetime.now() + timedelta(minutes=10)
+        connection = SimpleNamespace(
+            access_token_expires_at=future_expiry,
+            access_token_encrypted="enc-access",
+            refresh_token_encrypted="enc-refresh",
+            scopes=["read:jira-work"],
+            updated_at=None,
+        )
+
+        with patch("orchestrator.api.jira_oauth.service.decrypt_value", return_value="cached-token"):
+            token = refresh_jira_connection_tokens(session, connection=connection, settings=settings, tenant_id="t1")
+
+        self.assertEqual(token, "cached-token")
+
 
 if __name__ == "__main__":
     unittest.main()

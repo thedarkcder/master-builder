@@ -37,7 +37,6 @@ class CommandEntrypointTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=True,
             require_ask_confirmation=True,
-            allow_plain_ask=True,
             ingress_source="discord",
         )
 
@@ -47,7 +46,6 @@ class CommandEntrypointTests(unittest.TestCase):
         self.assertEqual(kwargs["tenant_id"], "tenant-a")
         self.assertTrue(kwargs["defer_seed_issues"])
         self.assertTrue(kwargs["require_ask_confirmation"])
-        self.assertTrue(kwargs["allow_plain_ask"])
         self.assertEqual(kwargs["ingress_source"], "discord")
 
     def test_execute_tenant_discord_ingress_command_forces_discord_source(self) -> None:

@@ -71,8 +71,26 @@ class _AsyncCodexLogWriter:
         self._worker.start()
         self._dropped = 0
         settings = get_settings()
-        self._batch_size = max(1, int(getattr(settings, "codex_log_batch_size", 50)))
-        self._batch_flush_ms = max(1, int(getattr(settings, "codex_log_batch_flush_ms", 50)))
+        self._batch_size = max(
+            1,
+            int(
+                getattr(
+                    settings,
+                    "log_db_batch_size",
+                    getattr(settings, "codex_log_batch_size", 50),
+                )
+            ),
+        )
+        self._batch_flush_ms = max(
+            1,
+            int(
+                getattr(
+                    settings,
+                    "log_db_batch_flush_ms",
+                    getattr(settings, "codex_log_batch_flush_ms", 50),
+                )
+            ),
+        )
 
     def enqueue(self, *, context: CodexInvocationContext, stream: str, message: str) -> bool:
         invocation_id = str(context.invocation_id or "").strip()

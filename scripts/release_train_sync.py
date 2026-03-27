@@ -198,8 +198,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Assign and close Jira release-train issues.")
     parser.add_argument(
         "mode",
-        choices=["assign", "close", "keys", "release"],
-        help="assign: label Ready to Release issues; close: transition release issues to Done; keys: print issue keys for release label; release: ensure Jira release version exists and is released.",
+        choices=["assign", "close", "keys", "release", "count-ready"],
+        help="assign: label Ready to Release issues; close: transition release issues to Done; keys: print issue keys for release label; release: ensure Jira release version exists and is released; count-ready: print READY TO RELEASE issue count.",
     )
     parser.add_argument("--jira-base-url", required=True)
     parser.add_argument("--jira-cloud-id", default="")
@@ -264,6 +264,23 @@ def assign_release_label(
                 comment=f"Automatically assigned to release train {release_version}.",
             )
     print(f"assign summary: scanned={len(issues)} updated={updated_count} release={release_version}")
+    return 0
+
+
+def count_ready_issues(
+    *,
+    client: JiraClient,
+    project_key: str,
+    ready_status: str,
+) -> int:
+    jql = f'project = "{project_key}" AND status = "{ready_status}"'
+    issues = client.search_issues(jql=jql)
+    ready_count = sum(1 for issue in issues if issue.key)
+    print(
+        f"[count-ready] base_url={client.base_url} project={project_key} ready_status={ready_status} count={ready_count}",
+        file=sys.stderr,
+    )
+    print(str(ready_count))
     return 0
 
 
@@ -388,6 +405,12 @@ def main() -> int:
             release_version=release_version,
             dry_run=args.dry_run,
             comment=args.comment,
+        )
+    if args.mode == "count-ready":
+        return count_ready_issues(
+            client=client,
+            project_key=args.project_key,
+            ready_status=args.ready_status,
         )
     if args.mode == "keys":
         return print_release_issue_keys(
