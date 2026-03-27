@@ -1,5 +1,7 @@
 2026-03-23
 
+- When the user explicitly switches from planning to implementation, verify the active collaboration mode first and move into execution if it is allowed. Do not repeat stale mode blockers after the mode has already changed.
+
 - When investigating config regressions, do not keep pushing environment-variable explanations after the user says the value is stored in the UI/secret manager. Verify the exact read path against the exact write path first.
 - For Discord config specifically, distinguish platform-scoped secrets from tenant-scoped secrets and tenant `discord_config`. A value existing in `tenant/<tenant_id>/DISCORD_GUILD_ID` or `tenant.discord_config.guild_id` does not help if runtime code only reads `platform/DISCORD_GUILD_ID`.
 - Decision Gate lifecycle rule: once a gate has been answered and cleared, it must never reopen for that issue. Do not reintroduce fingerprint-based reopening logic just because Jira summary/description/labels changed.
@@ -19,3 +21,15 @@
 - Do not downgrade Jira reporting, cleanup, or follow-on reporting to optional side effects once the user says they are part of the run contract. If a step is mandatory, keep it on the critical path, log it explicitly, and make terminal status depend on it.
 - Keep transport layers thin. Do not put business logic like follow-up scope recovery, ask-history pruning, or decision behavior into transport/runtime wrappers; keep that logic in the brain/application layer and pass transports only simple wiring.
 - Do not tell the user a large implementation plan is complete until you have checked each original plan section against the code and called out any remaining unverified or unimplemented items explicitly.
+- When queueing webhook work, do not smuggle command-routing policy through transport-specific context flags. Queue the raw payload and let the worker/application layer derive behaviors like `issues seed` deferral from the canonical command parser.
+- Do not restore legacy config-backed runtime state just to make a failing flow pass. If the canonical store is `FollowupContext`, finish the cutover there and migrate the tests/runtime to that model instead of reintroducing `tenant.discord_config` fallback reads.
+- GitHub PR remediation must have one explicit command path. Do not let generic `pull_request_review_comment` events auto-trigger remediation in parallel with manual-fix parsing; require the same explicit manual-fix command parse for review comments and issue comments, and keep that decision in the shared policy layer.
+- When removing a product behavior, delete the now-unreachable transport actions, helpers, and tests in the same change. Do not stop after removing the production caller and leave dead code behind.
+- When the bug is caused by a shared lifecycle pattern like "enqueue then patch", do not band-aid one caller. Rewrite the shared creation contract so the row is fully initialized before visibility, then migrate every caller off the unsafe pattern in the same change.
+- Do not defer critical stage artifacts like PM plans, dev results, test feedback, or review output to end-of-run finalization. Persist each stage checkpoint as soon as that stage completes so reruns and diagnostics survive later completion/finalization failures.
+- If a scheduled automation is intended to run only when work exists, enforce that contract explicitly with a fast precheck before it takes a constrained runner. Do not rely on the main job to no-op after it has already been queued.
+- When replacing a status surface like a GitHub comment with reactions, verify the replacement exists end-to-end for the exact target object. Do not remove the old path until the new PR/comment reaction path is implemented, ordered correctly, and covered by production-path tests.
+- When a user says the problem is stage handoff, do not jump to tool restriction theories. Trace the orchestrator boundary first: confirm whether the parent worker stayed alive long enough to persist the stage result and launch the next stage.
+- Admin UI changes need a real behavior test harness, not just lint/type checks. If run-state rendering or stage telemetry behavior is in scope, add executable UI behavior coverage before claiming the fix is complete.
+- Do not leave `ANN001` or `ARG001` debt in touched files. Add the missing types or rename/remove intentionally unused arguments before calling the work done.
+- If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -163,15 +163,26 @@ def _acquire_subject_claim(
     owner_id: str,
     now: datetime,
 ) -> bool:
-    claim = _find_or_create_subject_claim(session, subject_key=subject_key, now=now)
-    lease_expires_at = _coerce_utc(claim.lease_expires_at)
-    if claim.owner_id and claim.owner_id != owner_id and lease_expires_at and lease_expires_at > now:
-        return False
-    claim.owner_id = owner_id
-    claim.lease_expires_at = now + _LEASE_DURATION
-    claim.updated_at = now
+    _find_or_create_subject_claim(session, subject_key=subject_key, now=now)
+    result = session.execute(
+        update(WebhookSubjectClaim)
+        .where(WebhookSubjectClaim.subject_key == subject_key)
+        .where(
+            or_(
+                WebhookSubjectClaim.owner_id == owner_id,
+                WebhookSubjectClaim.owner_id.is_(None),
+                WebhookSubjectClaim.lease_expires_at.is_(None),
+                WebhookSubjectClaim.lease_expires_at <= now,
+            )
+        )
+        .values(
+            owner_id=owner_id,
+            lease_expires_at=now + _LEASE_DURATION,
+            updated_at=now,
+        )
+    )
     session.flush()
-    return True
+    return int(result.rowcount or 0) == 1
 
 
 def _release_subject_claim(
@@ -312,12 +323,32 @@ def _finalize_jobs(
     error: str | None = None,
     now: datetime | None = None,
 ) -> tuple[WebhookJob, ...]:
-    if not jobs:
+    job_ids = tuple(str(job.job_id) for job in jobs)
+    return _finalize_job_ids(
+        session,
+        job_ids=job_ids,
+        owner_id=owner_id,
+        status=status,
+        error=error,
+        now=now,
+    )
+
+
+def _finalize_job_ids(
+    session: Session,
+    *,
+    job_ids: tuple[str, ...],
+    owner_id: str,
+    status: str,
+    error: str | None = None,
+    now: datetime | None = None,
+) -> tuple[WebhookJob, ...]:
+    if not job_ids:
         return ()
     timestamp = now or _now()
     refreshed: list[WebhookJob] = []
-    for job in jobs:
-        persisted = session.get(WebhookJob, job.job_id)
+    for job_id in job_ids:
+        persisted = session.get(WebhookJob, job_id)
         if persisted is None:
             continue
         if persisted.owner_id != owner_id:
@@ -348,6 +379,40 @@ def _finalize_jobs(
     for job in refreshed:
         session.refresh(job)
     return tuple(refreshed)
+
+
+def mark_webhook_job_ids_done(
+    session: Session,
+    *,
+    job_ids: tuple[str, ...],
+    owner_id: str,
+    now: datetime | None = None,
+) -> tuple[WebhookJob, ...]:
+    return _finalize_job_ids(
+        session,
+        job_ids=job_ids,
+        owner_id=owner_id,
+        status=WEBHOOK_JOB_STATUS_DONE,
+        now=now,
+    )
+
+
+def mark_webhook_job_ids_failed(
+    session: Session,
+    *,
+    job_ids: tuple[str, ...],
+    owner_id: str,
+    error: str,
+    now: datetime | None = None,
+) -> tuple[WebhookJob, ...]:
+    return _finalize_job_ids(
+        session,
+        job_ids=job_ids,
+        owner_id=owner_id,
+        status=WEBHOOK_JOB_STATUS_FAILED,
+        error=error,
+        now=now,
+    )
 
 
 def mark_webhook_jobs_done(

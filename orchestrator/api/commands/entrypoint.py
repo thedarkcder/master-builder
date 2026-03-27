@@ -14,7 +14,6 @@ def _execute_registered_command(
     session: Session,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: str = "discord",
 ) -> DiscordCommandResponse:
     executor = get_tenant_command_executor()
@@ -29,7 +28,6 @@ def _execute_registered_command(
         session=session,
         defer_seed_issues=defer_seed_issues,
         require_ask_confirmation=require_ask_confirmation,
-        allow_plain_ask=allow_plain_ask,
         ingress_source=ingress_source,
     )
 
@@ -41,7 +39,6 @@ def execute_tenant_discord_command(
     session: Session,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: str = "discord",
 ) -> DiscordCommandResponse:
     return _execute_registered_command(
@@ -50,7 +47,6 @@ def execute_tenant_discord_command(
         session=session,
         defer_seed_issues=defer_seed_issues,
         require_ask_confirmation=require_ask_confirmation,
-        allow_plain_ask=allow_plain_ask,
         ingress_source=ingress_source,
     )
 
@@ -62,7 +58,6 @@ def execute_tenant_discord_ingress_command(
     session: Session,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: str = "discord",
 ) -> DiscordCommandResponse:
     if ingress_source != "discord":
@@ -76,7 +71,6 @@ def execute_tenant_discord_ingress_command(
         session=session,
         defer_seed_issues=defer_seed_issues,
         require_ask_confirmation=require_ask_confirmation,
-        allow_plain_ask=allow_plain_ask,
         ingress_source="discord",
     )
 
@@ -88,7 +82,6 @@ def execute_tenant_jira_comment_command(
     session: Session,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: str = "jira_comment",
 ) -> DiscordCommandResponse:
     if ingress_source != "jira_comment":
@@ -102,6 +95,5 @@ def execute_tenant_jira_comment_command(
         session=session,
         defer_seed_issues=defer_seed_issues,
         require_ask_confirmation=require_ask_confirmation,
-        allow_plain_ask=allow_plain_ask,
         ingress_source="jira_comment",
     )

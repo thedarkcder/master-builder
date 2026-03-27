@@ -6,6 +6,8 @@ from orchestrator.api.discord.commands.issues import dispatch_issues_command
 from orchestrator.api.discord.commands.parser import resolve_discord_command
 from orchestrator.api.discord.commands.run_controls import dispatch_run_control_command
 from orchestrator.api.discord.commands.dispatcher import dispatch_simple_discord_command
+from orchestrator.api.discord.shared.command_authorization import allow_sensitive_command_bypass
+from orchestrator.api.discord.shared.plain_text_routing import rewrite_plain_text_command
 from orchestrator.api.discord.shared.followup_format import resolve_tenant_jira_browse_base_url
 from orchestrator.api.discord.ingress.service import DiscordIngressDependencies, DiscordIngressHandlers
 
@@ -169,6 +171,21 @@ def build_discord_ingress_dependencies(
             arguments,
             payload,
             current_scope,
+        ),
+        rewrite_raw_command=lambda db, current_tenant, payload, policy: rewrite_plain_text_command(
+            session=db,
+            tenant=current_tenant,
+            payload=payload,
+            allow_plain_ask=bool(getattr(policy, "allow_plain_ask", False)),
+            find_seed_followup_context_fn=find_seed_followup_context_fn,
+        ),
+        allow_sensitive_command_bypass=lambda db, current_tenant, command_name, arguments, payload: allow_sensitive_command_bypass(
+            session=db,
+            tenant=current_tenant,
+            command_name=command_name,
+            arguments=arguments,
+            payload=payload,
+            find_seed_followup_context_fn=find_seed_followup_context_fn,
         ),
         handlers=handlers,
     )

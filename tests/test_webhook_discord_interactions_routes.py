@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orchestrator.api.routes.webhook_discord_interactions import ingest_discord_interaction
+from orchestrator.api.routes.webhook_discord_interactions import (
+    _resolve_interaction_subject_scope,
+    ingest_discord_interaction,
+)
 from orchestrator.core.communications import (
     DeferredTransportWork,
     HttpJsonResponseBytesAction,
@@ -58,7 +61,6 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
                 )
             ),
             "notify_webhook_job_enqueued": MagicMock(),
-            "resolve_followup_context": MagicMock(return_value=None),
             "_resolve_interaction_subject_scope": MagicMock(return_value=("example", None, "discord_channel:example:c1")),
             "_close_deferred_interaction_work": MagicMock(),
             "build_discord_interaction_ingress_result": AsyncMock(
@@ -158,6 +160,25 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 200)
         patched["enqueue_webhook_job"].assert_not_called()
+
+    def test_resolve_interaction_subject_scope_uses_top_level_user_for_dm_payloads(self) -> None:
+        deps = SimpleNamespace(find_tenant_for_discord_channel=MagicMock(return_value=None))
+        with patch(
+            "orchestrator.api.routes.webhook_discord_interactions.build_default_discord_interaction_dispatch_deps",
+            return_value=deps,
+        ):
+            tenant_id, project_id, subject_key = _resolve_interaction_subject_scope(
+                session=MagicMock(),
+                payload={
+                    "type": 5,
+                    "user": {"id": "u-1"},
+                },
+                find_tenant_for_discord_channel=deps.find_tenant_for_discord_channel,
+            )
+
+        self.assertIsNone(tenant_id)
+        self.assertIsNone(project_id)
+        self.assertEqual(subject_key, "discord_user::u-1")
 
 
 if __name__ == "__main__":

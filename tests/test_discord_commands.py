@@ -17,6 +17,7 @@ from orchestrator.api.discord.ingress.ask_runtime import ask_board_message, coll
 from orchestrator.api.discord.ingress.bug_runtime import create_discord_bug_issue
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.discord.ingress.seed_runtime import build_seed_issue_description, seed_issues_with_codex
+from orchestrator.api.discord.shared.state import store_seed_followup_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
@@ -2309,7 +2310,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                     command="what is blocked on this board?",
                 ),
                 session=session,
-                allow_plain_ask=True,
             )
 
         self.assertTrue(response.ok)
@@ -2357,20 +2357,20 @@ class DiscordCommandApiTests(unittest.TestCase):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
             discord_config = dict(tenant.discord_config or {})
-            discord_config["seed_followups"] = [
-                {
-                    "request_id": "followup-1",
-                    "user_id": "u-viewer",
-                    "channel_ids": ["discord-channel-1"],
-                    "project_key": "TP",
-                    "issue_keys": ["TP-11"],
-                    "questions": ["What is the rollout plan?"],
-                    "prompt_markdown": "Original seed prompt",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ]
             discord_config["allowed_user_ids"] = ["u-viewer"]
             tenant.discord_config = discord_config
+            store_seed_followup_context(
+                session=session,
+                tenant=tenant,
+                request_id="followup-1",
+                user_id="u-viewer",
+                channel_ids=["discord-channel-1"],
+                project_id=self.default_project_id,
+                project_key="TP",
+                issue_keys=["TP-11"],
+                questions=["What is the rollout plan?"],
+                prompt_markdown="Original seed prompt",
+            )
             session.commit()
 
         with (
@@ -2396,7 +2396,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                     command="Here are the missing rollout details",
                 ),
                 session=session,
-                allow_plain_ask=True,
             )
 
         self.assertTrue(response.ok)
@@ -2407,6 +2406,53 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(kwargs["allow_create"], False)
         self.assertEqual(kwargs["force_issue_keys"], ["TP-11"])
         self.assertIn("Here are the missing rollout details", kwargs["prompt_markdown"])
+
+    def test_plain_text_in_seed_followup_thread_beats_plain_ask_routing(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, self.tenant_id)
+            self.assertIsNotNone(tenant)
+            store_seed_followup_context(
+                session=session,
+                tenant=tenant,
+                request_id="followup-plain-1",
+                user_id="u-viewer",
+                channel_ids=["discord-channel-1"],
+                project_id=self.default_project_id,
+                project_key="TP",
+                issue_keys=["TP-11"],
+                questions=["What is the rollout plan?"],
+                prompt_markdown="Original seed prompt",
+            )
+            session.commit()
+
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                return_value=(
+                    "Issue upsert complete. Updated 1: TP-11. Created 0: none.",
+                    {
+                        "requires_input": False,
+                        "project_key": "TP",
+                        "questions": [],
+                        "all_issue_keys": ["TP-11"],
+                    },
+                ),
+            ) as seed_mock,
+        ):
+            response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="More rollout details",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(response.command, "issues")
+        seed_mock.assert_called_once()
 
     def test_execute_discord_command_rejects_unknown_ingress_source(self) -> None:
         with self.session_factory() as session:

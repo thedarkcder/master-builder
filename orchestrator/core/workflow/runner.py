@@ -94,6 +94,29 @@ class WorkflowDiagnostics:
 
 
 @dataclass(frozen=True)
+class WorkflowStageCheckpoint:
+    stage: str
+    attempt: int
+    status: str
+    summary: str
+    plan: PmPlan | None = None
+    dev_result: DevResult | None = None
+    test_result: TestResult | None = None
+    review_result: ReviewResult | None = None
+
+    def artifact_payload(self) -> dict | None:
+        if self.plan is not None:
+            return asdict(self.plan)
+        if self.dev_result is not None:
+            return asdict(self.dev_result)
+        if self.test_result is not None:
+            return asdict(self.test_result)
+        if self.review_result is not None:
+            return asdict(self.review_result)
+        return None
+
+
+@dataclass(frozen=True)
 class WorkflowResult:
     succeeded: bool
     plan: PmPlan | None
@@ -141,6 +164,7 @@ class WorkflowAgents(Protocol):
         request: WorkflowRequest,
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
+        stage_checkpoint_hook: Callable[[WorkflowStageCheckpoint], None] | None = None,
     ) -> WorkflowResult:
         ...
 
@@ -157,9 +181,14 @@ class WorkflowRunner:
         request: WorkflowRequest,
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
+        stage_checkpoint_hook: Callable[[WorkflowStageCheckpoint], None] | None = None,
     ) -> WorkflowResult:
         try:
-            return self._agents.execute(request, test_feedback_hook=test_feedback_hook)
+            return self._agents.execute(
+                request,
+                test_feedback_hook=test_feedback_hook,
+                stage_checkpoint_hook=stage_checkpoint_hook,
+            )
         except Exception as exc:  # pragma: no cover - exercised via tests
             return self._failure(
                 plan=None,

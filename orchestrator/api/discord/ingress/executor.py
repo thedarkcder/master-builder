@@ -210,7 +210,6 @@ def execute_tenant_command_ingress(
     *,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: Literal["discord", "jira_comment"] = "discord",
 ) -> DiscordCommandResponse:
     return _execute_tenant_command_ingress(
@@ -219,7 +218,6 @@ def execute_tenant_command_ingress(
         session=session,
         defer_seed_issues=defer_seed_issues,
         require_ask_confirmation=require_ask_confirmation,
-        allow_plain_ask=allow_plain_ask,
         ingress_source=ingress_source,
         deps=_build_ingress_dependencies(),
     )
@@ -233,7 +231,6 @@ def execute_discord_command(
     *,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: Literal["discord", "jira_comment"] = "discord",
 ) -> DiscordCommandResponse:
     return execute_tenant_command_ingress(
@@ -242,7 +239,6 @@ def execute_discord_command(
         session=session,
         defer_seed_issues=defer_seed_issues,
         require_ask_confirmation=require_ask_confirmation,
-        allow_plain_ask=allow_plain_ask,
         ingress_source=ingress_source,
     )
 
