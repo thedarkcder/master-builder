@@ -885,6 +885,19 @@ export type DiscordInstallStartRecord = {
   expires_at: string;
 };
 
+export type TenantUserSettingsUpdatePayload = {
+  mode_override: "technical" | "non_technical" | null;
+};
+
+export type TenantUserPasswordChangePayload = {
+  current_password: string;
+  new_password: string;
+};
+
+export type TenantUserProfileUpdatePayload = {
+  full_name: string;
+};
+
 function parseResponseBody(text: string): unknown {
   if (!text) {
     return null;
@@ -967,7 +980,7 @@ export async function authenticateAdmin(input: AdminLoginInput): Promise<Credent
 
 export async function registerTenantAdministrator(
   input: RegistrationInput,
-  apiBaseUrl = DEFAULT_API_BASE_URL
+  apiBaseUrl = ""
 ): Promise<RegistrationResponse> {
   const base = apiBaseUrl.replace(/\/$/, "");
   const response = await fetch(`${base}/api/public/register`, {
@@ -991,7 +1004,7 @@ export async function registerTenantAdministrator(
 
 export async function acceptPublicInvite(
   input: InviteAcceptInput,
-  apiBaseUrl = DEFAULT_API_BASE_URL
+  apiBaseUrl = ""
 ): Promise<{
   access_token: string;
   token_type: string;
@@ -1030,6 +1043,41 @@ export async function completeOnboarding(
     `/api/app/onboarding/${encodeURIComponent(tenantId)}/complete`,
     { method: "POST" }
   );
+}
+
+export async function updateTenantUserSettings(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantUserSettingsUpdatePayload,
+): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(
+    credentials,
+    `/api/app/tenants/${encodeURIComponent(tenantId)}/me/settings`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function updateAuthenticatedUserProfile(
+  credentials: Credentials,
+  payload: TenantUserProfileUpdatePayload,
+): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(credentials, "/api/app/me/profile", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function changeTenantUserPassword(
+  credentials: Credentials,
+  payload: TenantUserPasswordChangePayload,
+): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(credentials, "/api/app/me/password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function getTenantDeliverySummary(

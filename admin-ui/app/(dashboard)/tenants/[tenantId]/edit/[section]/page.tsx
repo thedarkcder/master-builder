@@ -29,6 +29,9 @@ export default async function TenantEditSectionPage({ params }: { params: Promis
   if (section === "secrets") {
     redirect(`/tenants/${encodeURIComponent(tenantId)}/secrets`);
   }
+  if (section === "access") {
+    redirect(`/tenants/${encodeURIComponent(tenantId)}/team/members`);
+  }
   if (!ALLOWED.includes(section as Section)) {
     notFound();
   }

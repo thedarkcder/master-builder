@@ -4,16 +4,12 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 
 const tabs = [
-  { label: "Integrations", section: "integrations" },
-  { label: "Jira", section: "jira" },
-  { label: "GitHub", section: "github" },
-  { label: "Discord", section: "discord" },
-  { label: "Configuration", section: "config" },
-  { label: "Health", section: "health" },
-  { label: "Notifications", section: "notifications" }
+  { label: "Members", section: "members" },
+  { label: "Teams", section: "teams" },
+  { label: "Invites", section: "invites" },
 ];
 
-export default function SettingsLayout({ children }: { children: React.ReactNode }) {
+export default function TeamLayout({ children }: { children: React.ReactNode }) {
   const params = useParams<{ tenantId: string }>();
   const pathname = usePathname();
   const tenantId = decodeURIComponent(params.tenantId);
@@ -21,13 +17,13 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   return (
     <div className="space-y-0">
       <div className="mb-1">
-        <h1 className="text-xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Configure integrations, policies, and workspace options.</p>
+        <h1 className="text-xl font-semibold">Team</h1>
+        <p className="text-sm text-muted-foreground">Manage members, teams, invites, and onboarding.</p>
       </div>
-      <div className="border-b overflow-x-auto">
-        <nav className="-mb-px flex gap-0 min-w-max" aria-label="Settings tabs">
+      <div className="overflow-x-auto border-b">
+        <nav className="-mb-px flex min-w-max gap-0" aria-label="Team tabs">
           {tabs.map((tab) => {
-            const href = `/tenants/${tenantId}/edit/${tab.section}`;
+            const href = `/tenants/${tenantId}/team/${tab.section}`;
             const active = pathname === href || pathname.startsWith(`${href}/`);
             return (
               <Link
@@ -37,7 +33,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                   "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors",
                   active
                     ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
                 ].join(" ")}
               >
                 {tab.label}

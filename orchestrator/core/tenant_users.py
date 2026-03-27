@@ -13,8 +13,11 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.passwords import hash_password, verify_password
 from orchestrator.core.tenant_access import (
+    PERMISSION_ANALYTICS_TECHNICAL_VIEW,
+    PERMISSION_RUNS_TECHNICAL_VIEW,
     MODE_NON_TECHNICAL,
     MODE_TECHNICAL,
+    ROLE_BUSINESS_MEMBER,
     ROLE_TENANT_ADMIN,
     VALID_MODE_KEYS,
     VALID_ONBOARDING_KINDS,
@@ -151,6 +154,9 @@ def create_tenant_user(
             updated_at=now,
         )
     )
+    # Postgres enforces FKs during the same transaction. Flush the new user row before
+    # any caller creates memberships or invite references that point at this user.
+    session.flush()
     return tenant_user
 
 
@@ -460,6 +466,10 @@ def accept_invite(
         missing_team_ids = [team_id for team_id in list(invite.team_ids or []) if team_id not in existing_team_ids]
         add_membership_teams(session=session, membership_id=existing_membership.membership_id, team_ids=missing_team_ids)
 
+    # Persist the user row before recording it as the invite acceptor. Postgres enforces
+    # the FK on tenant_invites.accepted_by_user_id immediately during the same flush.
+    session.flush()
+
     invite.status = "accepted"
     invite.accepted_by_user_id = tenant_user.user_id
     invite.accepted_at = now
@@ -528,6 +538,65 @@ def update_membership(
     tenant_user.updated_at = membership.updated_at
     replace_membership_teams(session=session, membership_id=membership_id, team_ids=team_ids)
     return membership
+
+
+def update_user_profile(
+    *,
+    session: Session,
+    user_id: str,
+    full_name: str,
+) -> TenantUser:
+    tenant_user = session.get(TenantUser, user_id)
+    if tenant_user is None:
+        raise ValueError("User not found")
+    tenant_user.full_name = full_name.strip()
+    tenant_user.updated_at = utcnow()
+    return tenant_user
+
+
+def update_membership_mode_override(
+    *,
+    session: Session,
+    membership_id: str,
+    role: str,
+    permission_keys: list[str],
+    mode_override: str | None,
+) -> TenantMembership:
+    membership = session.get(TenantMembership, membership_id)
+    if membership is None:
+        raise ValueError("Membership not found")
+    if mode_override is not None and mode_override not in VALID_MODE_KEYS:
+        raise ValueError("Invalid tenant mode override")
+    normalized_mode_override = mode_override
+    if mode_override == MODE_TECHNICAL and (
+        PERMISSION_ANALYTICS_TECHNICAL_VIEW not in permission_keys
+        and PERMISSION_RUNS_TECHNICAL_VIEW not in permission_keys
+        and role == ROLE_BUSINESS_MEMBER
+    ):
+        normalized_mode_override = None
+    membership.mode_override = normalized_mode_override
+    membership.updated_at = utcnow()
+    return membership
+
+
+def change_user_password(
+    *,
+    session: Session,
+    user_id: str,
+    current_password: str,
+    new_password: str,
+) -> TenantUserCredential:
+    credential = session.get(TenantUserCredential, user_id)
+    if credential is None:
+        raise ValueError("Credential not found")
+    if not verify_password(password=current_password, password_hash=credential.password_hash):
+        raise PermissionError("Current password is incorrect")
+    now = utcnow()
+    credential.password_hash = hash_password(new_password)
+    credential.password_updated_at = now
+    credential.must_change_password = False
+    credential.updated_at = now
+    return credential
 
 
 def get_discord_identity(*, session: Session, user_id: str) -> TenantUserDiscordIdentity | None:

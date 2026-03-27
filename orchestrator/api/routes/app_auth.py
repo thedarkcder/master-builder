@@ -42,6 +42,7 @@ from orchestrator.core.security import (
 from orchestrator.core.tenant_users import (
     accept_invite,
     authenticate_tenant_user,
+    change_user_password,
     create_membership,
     create_tenant_record,
     create_tenant_user,
@@ -50,7 +51,9 @@ from orchestrator.core.tenant_users import (
     normalize_email,
     resolve_invite,
     utcnow,
+    update_membership_mode_override,
     update_membership_discord_state,
+    update_user_profile,
 )
 from orchestrator.storage.models import Tenant, TenantMembership, TenantUser
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
@@ -171,6 +174,89 @@ def tenant_user_me(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
 ) -> AuthenticatedPrincipalRead:
     return _principal_to_schema(principal)
+
+
+class TenantUserProfileUpdateRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=255)
+
+
+@router.put("/api/app/me/profile", response_model=AuthenticatedPrincipalRead)
+def update_authenticated_user_profile(
+    payload: TenantUserProfileUpdateRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> AuthenticatedPrincipalRead:
+    if principal.user_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    try:
+        update_user_profile(session=session, user_id=principal.user_id, full_name=payload.full_name)
+        session.commit()
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    refreshed = load_tenant_user_principal(session=session, user_id=principal.user_id)
+    return _principal_to_schema(refreshed)
+
+
+class TenantUserSettingsUpdateRequest(BaseModel):
+    mode_override: str | None = Field(default=None, pattern="^(technical|non_technical)$")
+
+
+@router.put("/api/app/tenants/{tenant_id}/me/settings", response_model=AuthenticatedPrincipalRead)
+def update_tenant_user_settings(
+    tenant_id: str,
+    payload: TenantUserSettingsUpdateRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> AuthenticatedPrincipalRead:
+    membership = require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    if membership is None or principal.user_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant membership not found")
+    try:
+        update_membership_mode_override(
+            session=session,
+            membership_id=membership.membership_id,
+            role=membership.role,
+            permission_keys=list(membership.permission_keys),
+            mode_override=payload.mode_override,
+        )
+        session.commit()
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    refreshed = load_tenant_user_principal(session=session, user_id=principal.user_id)
+    return _principal_to_schema(refreshed)
+
+
+class TenantUserPasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+@router.post("/api/app/me/password", response_model=AuthenticatedPrincipalRead)
+def change_tenant_user_password(
+    payload: TenantUserPasswordChangeRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> AuthenticatedPrincipalRead:
+    if principal.user_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    try:
+        change_user_password(
+            session=session,
+            user_id=principal.user_id,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+        )
+        session.commit()
+    except PermissionError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    refreshed = load_tenant_user_principal(session=session, user_id=principal.user_id)
+    return _principal_to_schema(refreshed)
 
 
 class InviteAcceptRequest(BaseModel):

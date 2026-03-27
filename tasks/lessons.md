@@ -35,3 +35,9 @@
 - Do not leave `ANN001` or `ARG001` debt in touched files. Add the missing types or rename/remove intentionally unused arguments before calling the work done.
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.
 - Migration fixes are not verified by SQLite-only Alembic tests alone. If the runtime path is Postgres via Docker startup, add regression checks for legacy version-table normalization and boolean/default DDL compatibility, then prove the real startup script reaches service readiness and `worker_started`.
+- When restructuring an admin access surface, verify all critical account-lifecycle actions remain available: invite, deactivate, role change, and password reset. Do not call the UI complete until those operator actions are present or explicitly deferred.
+- Do not surface raw permission keys, enum values, or internal identifiers in enterprise UI. Translate access models into plain-language labels and use real selectors for team assignment instead of asking users for IDs.
+- Do not duplicate personal preference controls inside admin management flows. If a setting belongs to a user profile, keep it there instead of surfacing a second copy in invite or member-management forms.
+- Do not treat mocked UI success as proof that an auth or invite flow works. Exercise the real backend persistence path for registration, invite acceptance, and login before calling the flow done.
+- When a browser flow reports `Failed to fetch`, verify the real browser network path and prefer same-origin app proxies for public flows like registration and invite acceptance instead of relying on cross-origin direct fetches.
+- Do not treat mocked Playwright routes as sufficient proof for registration, invite acceptance, or login. Critical UI workflows must also have real-backend browser tests, including at least one visible failure path.
