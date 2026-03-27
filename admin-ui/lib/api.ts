@@ -691,6 +691,30 @@ export type ManagedSecretResolveResult = {
   resolved: boolean;
 };
 
+export type AgentExecutionProfileRecord = {
+  profile_name: string;
+  runtime_kind: string;
+  cli_command: string;
+  model: string;
+  reasoning_effort: "low" | "medium" | "high" | null;
+  tool_bridge_allowed: boolean;
+  fallback_profile: string | null;
+};
+
+export type AgentRuntimeRoutingDefaultsRecord = {
+  role_routing: Record<string, string>;
+  name_routing: Record<string, string>;
+};
+
+export type AgentRuntimeRoutingRecord = {
+  role_routing: Record<string, string>;
+  name_routing: Record<string, string>;
+  available_roles: string[];
+  available_named_agents: string[];
+  available_profiles: Record<string, AgentExecutionProfileRecord>;
+  effective_defaults: AgentRuntimeRoutingDefaultsRecord;
+};
+
 export type DiscordAllowlistRequestRecord = {
   project_id: string | null;
   user_id: string;
@@ -1710,6 +1734,26 @@ export function resolveManagedSecret(
   return request<ManagedSecretResolveResult>(credentials, "/api/admin/secrets/resolve", {
     method: "POST",
     body: JSON.stringify({ secret_ref: secretRef })
+  });
+}
+
+export function getAgentRuntimeRouting(credentials: Credentials): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes");
+}
+
+export function updateAgentRuntimeRouting(
+  credentials: Credentials,
+  payload: Pick<AgentRuntimeRoutingRecord, "role_routing" | "name_routing">
+): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function resetAgentRuntimeRouting(credentials: Credentials): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes/reset", {
+    method: "POST"
   });
 }
 
