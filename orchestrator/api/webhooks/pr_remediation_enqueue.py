@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_PR_REMEDIATION, enqueue_run
+from orchestrator.core.runs import RUN_DEDUPE_SCOPE_PR_REMEDIATION, RunBootstrap, enqueue_run
 
 
 def _build_manual_fix_trigger_context(
@@ -154,21 +154,13 @@ def enqueue_pr_remediation_run(
         precheck_outcome=resolve_enqueue_precheck_outcome(source="github_pr_remediation"),
         max_concurrent_runs=max_concurrent_runs,
         dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+        bootstrap=RunBootstrap(
+            branch=str(details.head_ref or "").strip() or None,
+            pr_url=str(details.html_url or "").strip() or None,
+            plan={
+                "trigger_context": trigger_context,
+                "orchestration_mode": "orchestrated_subagents",
+            },
+        ),
     )
-    run = enqueue_result.run
-    if enqueue_result.enqueued:
-        existing_plan = run.plan if isinstance(run.plan, dict) else {}
-        normalized_head_ref = str(details.head_ref or "").strip()
-        normalized_pr_url = str(details.html_url or "").strip()
-        if normalized_head_ref:
-            run.branch = normalized_head_ref
-        if normalized_pr_url:
-            run.pr_url = normalized_pr_url
-        run.plan = {
-            **existing_plan,
-            "trigger_context": trigger_context,
-            "orchestration_mode": "orchestrated_subagents",
-        }
-        session.commit()
-        session.refresh(run)
     return enqueue_result

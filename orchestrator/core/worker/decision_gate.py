@@ -102,6 +102,7 @@ def apply_decision_gate(
         reason=reason,
         next_steps=next_steps,
     )
+    session.refresh(run, attribute_names=["plan"])
     previous_plan = run.plan if isinstance(run.plan, dict) else {}
     previous_trigger_context = (
         dict(previous_plan.get("trigger_context"))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from io import BytesIO
+from types import SimpleNamespace
 from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,7 @@ from orchestrator.tools.github_app import (
     GitHubApiError,
     GitHubAppClient,
     GitHubAppConfig,
+    CommentReactionResult,
     InstallationRepository,
     PullRequestDetails,
     PullRequestFileChange,
@@ -957,6 +959,44 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(review_reaction.reaction_id, 902)
         self.assertEqual(review_reaction.content, "eyes")
         self.assertEqual(request_json.call_count, 2)
+
+    def test_sync_pull_request_reaction_replaces_previous_actor_reaction(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with (
+            patch.object(client, "get_actor_login", return_value="master-builder[bot]"),
+            patch.object(
+                client,
+                "list_pull_request_reactions",
+                return_value=[
+                    SimpleNamespace(reaction_id=301, content="eyes", user_login="master-builder[bot]"),
+                    SimpleNamespace(reaction_id=302, content="heart", user_login="someone-else"),
+                ],
+            ),
+            patch.object(client, "delete_issue_reaction") as delete_reaction,
+            patch.object(
+                client,
+                "add_pull_request_reaction",
+                return_value=CommentReactionResult(reaction_id=401, content="+1"),
+            ) as add_reaction,
+        ):
+            result = client.sync_pull_request_reaction(
+                repo_full_name="example/repo",
+                pr_number=10,
+                content="+1",
+            )
+
+        delete_reaction.assert_called_once_with(
+            repo_full_name="example/repo",
+            reaction_id=301,
+        )
+        add_reaction.assert_called_once_with(
+            repo_full_name="example/repo",
+            pr_number=10,
+            content="+1",
+        )
+        self.assertEqual(result.reaction_id, 401)
+        self.assertEqual(result.content, "+1")
 
     def test_submit_pull_request_review_and_merge(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.project_routing import find_active_project_for_issue_key
 from orchestrator.core.runs import mark_run_terminal
-from orchestrator.core.workflow.runner import WorkflowResult
+from orchestrator.core.workflow.runner import WorkflowResult, WorkflowStageCheckpoint
 from orchestrator.storage.models import Project, Run, RunLock
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
@@ -28,6 +28,55 @@ def _with_preserved_trigger_context(*, current_plan: object | None, next_plan: d
         return next_plan
     merged = dict(next_plan)
     merged["trigger_context"] = dict(trigger_context)
+    return merged
+
+
+def _merge_run_plan(*, current_plan: object | None, next_plan: dict) -> dict:
+    if isinstance(current_plan, dict):
+        merged = dict(current_plan)
+        merged.update(next_plan)
+        return _with_preserved_trigger_context(current_plan=current_plan, next_plan=merged)
+    return dict(next_plan)
+
+
+def _apply_stage_checkpoint(plan_payload: dict, checkpoint: WorkflowStageCheckpoint, *, completed_at: str) -> dict:
+    merged = dict(plan_payload)
+    existing_stage_checkpoints = merged.get("stage_checkpoints")
+    stage_checkpoints = dict(existing_stage_checkpoints) if isinstance(existing_stage_checkpoints, dict) else {}
+    stage_entry = {
+        "attempt": checkpoint.attempt,
+        "status": checkpoint.status,
+        "completed_at": completed_at,
+        "summary": checkpoint.summary,
+    }
+    artifact = checkpoint.artifact_payload()
+    if artifact is not None:
+        stage_entry["artifact"] = artifact
+    stage_checkpoints[checkpoint.stage] = stage_entry
+    merged["stage_checkpoints"] = stage_checkpoints
+    merged["latest_completed_stage"] = checkpoint.stage
+    merged["latest_stage_attempt"] = checkpoint.attempt
+    merged["latest_stage_status"] = checkpoint.status
+    if checkpoint.stage == "pm" and checkpoint.plan is not None:
+        merged["plan"] = artifact
+    elif checkpoint.stage == "dev" and checkpoint.dev_result is not None:
+        merged["dev_rationale"] = list(checkpoint.dev_result.change_summary)
+        if checkpoint.dev_result.pr_url is not None:
+            merged["pr_url"] = checkpoint.dev_result.pr_url
+    elif checkpoint.stage == "test" and checkpoint.test_result is not None:
+        merged["test_guidance"] = list(checkpoint.test_result.guidance)
+        if checkpoint.test_result.feedback:
+            merged["test_feedback"] = checkpoint.test_result.feedback
+        else:
+            merged.pop("test_feedback", None)
+    elif checkpoint.stage == "review" and checkpoint.review_result is not None:
+        merged["review_summary"] = list(checkpoint.review_result.summary)
+        if checkpoint.review_result.feedback:
+            merged["review_feedback"] = checkpoint.review_result.feedback
+        else:
+            merged.pop("review_feedback", None)
+        if checkpoint.review_result.pr_url is not None:
+            merged["pr_url"] = checkpoint.review_result.pr_url
     return merged
 
 
@@ -197,7 +246,7 @@ def finalize_cancelled_run(
         allow_statuses={run.status},
     ):
         return run
-    run.plan = _with_preserved_trigger_context(
+    run.plan = _merge_run_plan(
         current_plan=run.plan,
         next_plan={
         "succeeded": False,
@@ -241,7 +290,7 @@ def finalize_workflow_result(
     plan_payload["stage_updates"] = stage_updates
     if execution_context:
         plan_payload["execution_context"] = execution_context
-    run.plan = _with_preserved_trigger_context(current_plan=run.plan, next_plan=plan_payload)
+    run.plan = _merge_run_plan(current_plan=run.plan, next_plan=plan_payload)
     run.pr_url = workflow_result.pr_url
     run.finished_at = datetime.now(timezone.utc)
     if workflow_result.succeeded:
@@ -290,7 +339,7 @@ def requeue_workflow_result_for_capability(
     plan_payload["required_worker_capability"] = required_worker_capability
     plan_payload["required_worker_label"] = required_worker_label
     plan_payload["requeued"] = True
-    run.plan = _with_preserved_trigger_context(current_plan=run.plan, next_plan=plan_payload)
+    run.plan = _merge_run_plan(current_plan=run.plan, next_plan=plan_payload)
     run.status = "queued"
     run.last_error = None
     run.started_at = None
@@ -339,7 +388,7 @@ def requeue_workflow_result_for_stale_snapshot(
     plan_payload["requeued"] = True
     plan_payload["stale_branch_snapshot"] = True
     plan_payload["requeue_reason"] = error
-    run.plan = _with_preserved_trigger_context(current_plan=run.plan, next_plan=plan_payload)
+    run.plan = _merge_run_plan(current_plan=run.plan, next_plan=plan_payload)
     run.pr_url = None
     run.status = "queued"
     run.last_error = None
@@ -355,6 +404,44 @@ def requeue_workflow_result_for_stale_snapshot(
         issue_key=run.issue_key,
     )
     _release_run_lock(session, run=run)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def persist_stage_checkpoint(
+    session: Session,
+    *,
+    run: Run,
+    checkpoint: WorkflowStageCheckpoint,
+    execution_context: dict[str, str] | None = None,
+    expected_worker_service_instance_id: str | None = None,
+) -> Run:
+    run = _refresh_owned_run(
+        session,
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    )
+    if not _run_is_owned_by(
+        run=run,
+        expected_worker_service_instance_id=expected_worker_service_instance_id,
+        allow_statuses={RUN_STATUS_RUNNING},
+    ):
+        raise RuntimeError("Run ownership lost while persisting stage checkpoint")
+    current_plan = dict(run.plan) if isinstance(run.plan, dict) else {}
+    next_plan = _apply_stage_checkpoint(
+        current_plan,
+        checkpoint,
+        completed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    if execution_context:
+        next_plan["execution_context"] = execution_context
+    run.plan = next_plan
+    if checkpoint.stage == "dev" and checkpoint.dev_result is not None:
+        run.pr_url = checkpoint.dev_result.pr_url
+    elif checkpoint.stage == "review" and checkpoint.review_result is not None:
+        run.pr_url = checkpoint.review_result.pr_url or run.pr_url
     session.commit()
     session.refresh(run)
     return run

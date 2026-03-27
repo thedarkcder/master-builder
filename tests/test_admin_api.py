@@ -22,7 +22,20 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeChunk, KnowledgeFact, KnowledgeSource, ManagedSecret, PlatformSetting, Project, Run, RunLock, Tenant
+from orchestrator.storage.models import (
+    JiraOAuthConnection,
+    KnowledgeAsset,
+    KnowledgeChunk,
+    KnowledgeFact,
+    KnowledgeSource,
+    ManagedSecret,
+    PlatformSetting,
+    Project,
+    Run,
+    RunLock,
+    Tenant,
+    TenantRunClaim,
+)
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -454,6 +467,9 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(projects[0].project_id, "tenant-a-default")
             self.assertEqual(projects[0].github_repository, "https://github.com/example/repo")
             self.assertEqual(projects[0].jira_project_key, "TP")
+            claim_row = session.get(TenantRunClaim, "tenant-a")
+            self.assertIsNotNone(claim_row)
+            self.assertEqual(claim_row.tenant_id, "tenant-a")
 
         list_response = self.client.get("/api/admin/tenants", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)
@@ -1156,7 +1172,7 @@ class AdminApiTests(unittest.TestCase):
                     issue_summary="failed run",
                     issue_description="Objective: rerun from admin.",
                     repo_url="https://github.com/example/repo",
-                    branch=None,
+                    branch="feature/TP-999",
                     pr_url=None,
                     dev_session_id="dev-session-123",
                     pm_session_id="pm-session-456",
@@ -1182,6 +1198,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["issue_key"], "TP-999")
         self.assertEqual(body["status"], "queued")
         self.assertNotEqual(body["run_id"], "run-failed-rerun")
+        self.assertEqual(body["branch"], "feature/TP-999")
         self.assertIsNone(body["dev_session_id"])
         self.assertIsNone(body["pm_session_id"])
         self.assertIsNone(body["orchestrated_session_id"])
@@ -1276,7 +1293,7 @@ class AdminApiTests(unittest.TestCase):
                     issue_summary="failed run",
                     issue_description="Objective: resume from dev.",
                     repo_url="https://github.com/example/repo",
-                    branch=None,
+                    branch="feature/TP-1000",
                     pr_url=None,
                     dev_session_id="dev-session-123",
                     pm_session_id="pm-session-456",
@@ -1306,6 +1323,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["branch"], "feature/TP-1000")
         self.assertEqual(body["dev_session_id"], "dev-session-123")
         self.assertIsNone(body["pm_session_id"])
         self.assertIsNone(body["orchestrated_session_id"])
@@ -1394,7 +1412,7 @@ class AdminApiTests(unittest.TestCase):
                     issue_summary="failed review run",
                     issue_description="Objective: resume from review.",
                     repo_url="https://github.com/example/repo",
-                    branch=None,
+                    branch="feature/TP-1001",
                     pr_url="https://github.com/example/repo/pull/12",
                     dev_session_id="dev-session-123",
                     pm_session_id="pm-session-456",
@@ -1425,6 +1443,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["branch"], "feature/TP-1001")
         self.assertEqual(body["dev_session_id"], "dev-session-123")
         trigger = body["plan"]["trigger_context"]
         self.assertEqual(trigger["rerun_mode"], "resume")
