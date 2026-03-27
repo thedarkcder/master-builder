@@ -27,6 +27,9 @@ class DiscordIngressDependencies:
     assert_channel_scope: Callable
     assert_sensitive_command_permission: Callable
     resolve_scope: Callable
+    enrich_scope: Callable
+    rewrite_raw_command: Callable
+    allow_sensitive_command_bypass: Callable
     handlers: DiscordIngressHandlers
 
 
@@ -69,6 +72,9 @@ def execute_tenant_command_ingress(
         assert_channel_scope=deps.assert_channel_scope,
         assert_sensitive_command_permission=deps.assert_sensitive_command_permission,
         resolve_scope=deps.resolve_scope,
+        enrich_scope=deps.enrich_scope,
+        rewrite_raw_command=deps.rewrite_raw_command,
+        allow_sensitive_command_bypass=deps.allow_sensitive_command_bypass,
         build_handler_registry=_build_handler_registry,
     )
     try:

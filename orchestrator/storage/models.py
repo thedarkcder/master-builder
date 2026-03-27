@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     LargeBinary,
@@ -175,6 +176,48 @@ class RunHumanInputRequest(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class FollowupContext(Base):
+    __tablename__ = "followup_contexts"
+    __table_args__ = (
+        Index("ix_followup_contexts_tenant_status_thread", "tenant_id", "status", "thread_channel_id"),
+        Index("ix_followup_contexts_tenant_status_channel", "tenant_id", "status", "channel_id"),
+        Index("ix_followup_contexts_tenant_status_root_message", "tenant_id", "status", "root_message_id"),
+        Index("ix_followup_contexts_tenant_status_request", "tenant_id", "status", "request_id"),
+        Index("ix_followup_contexts_tenant_type_issue", "tenant_id", "context_type", "issue_key"),
+    )
+
+    context_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    context_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    thread_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    root_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
 class RunLock(Base):
     __tablename__ = "run_locks"
 
@@ -195,6 +238,17 @@ class RunLock(Base):
     locked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class TenantRunClaim(Base):
+    __tablename__ = "tenant_run_claims"
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class WebhookDelivery(Base):
     __tablename__ = "webhook_deliveries"
 
@@ -211,6 +265,55 @@ class WebhookDelivery(Base):
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WebhookJob(Base):
+    __tablename__ = "webhook_jobs"
+    __table_args__ = (
+        UniqueConstraint("transport", "tenant_id", "dedupe_key", name="uq_webhook_jobs_transport_tenant_dedupe"),
+        Index("ix_webhook_jobs_status_available_created", "status", "available_at", "created_at"),
+        Index("ix_webhook_jobs_transport_subject_status_created", "transport", "subject_key", "status", "created_at"),
+    )
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    transport: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    subject_key: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_type: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    owner_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    context_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class WebhookSubjectClaim(Base):
+    __tablename__ = "webhook_subject_claims"
+
+    subject_key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    owner_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class PrReviewPublication(Base):
@@ -328,6 +431,47 @@ class RunLogEvent(Base):
     attempt: Mapped[int | None] = mapped_column(nullable=True)
     stream: Mapped[str] = mapped_column(String(16), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class RunStreamEvent(Base):
+    __tablename__ = "run_stream_events"
+    __table_args__ = (
+        Index("ix_run_stream_events_run_id_stream_offset", "run_id", "stream_offset"),
+        Index("ix_run_stream_events_tenant_id_stream_offset", "tenant_id", "stream_offset"),
+    )
+
+    stream_offset: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    event_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    invocation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    channel: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    command: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    working_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    stage: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    attempt: Mapped[int | None] = mapped_column(nullable=True)
+    stream: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
@@ -610,8 +754,12 @@ class DecisionCase(Base):
     last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     required_worker_capability: Mapped[str | None] = mapped_column(String(32), nullable=True)
     required_worker_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    required_worker_label_present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ready_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ready_label_present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    decision_gate_closed_permanently: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    decision_gate_closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    decision_gate_closed_cycle_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

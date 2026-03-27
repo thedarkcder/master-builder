@@ -8,6 +8,7 @@ from orchestrator.core.discord.thread_context import (
     get_thread_issue_key,
     normalize_issue_key,
     put_thread_issue_key,
+    remove_thread_issue_key,
 )
 
 
@@ -32,6 +33,18 @@ class DiscordThreadContextTests(unittest.TestCase):
             LEGACY_THREAD_ISSUE_BY_CHANNEL_ID_KEY: {"thread-9": "MAB-91"},
         }
         self.assertEqual(get_thread_issue_key(discord_config=config, channel_id="thread-9"), "MAB-90")
+
+    def test_remove_thread_issue_key_clears_new_and_legacy_mappings(self) -> None:
+        config = {
+            THREAD_ISSUE_BY_CHANNEL_ID_KEY: {"thread-9": "MAB-90", "thread-10": "MAB-91"},
+            LEGACY_THREAD_ISSUE_BY_CHANNEL_ID_KEY: {"thread-9": "MAB-90", "thread-10": "MAB-91"},
+        }
+
+        updated = remove_thread_issue_key(discord_config=config, channel_id="thread-9")
+
+        self.assertNotIn("thread-9", updated[THREAD_ISSUE_BY_CHANNEL_ID_KEY])
+        self.assertNotIn("thread-9", updated[LEGACY_THREAD_ISSUE_BY_CHANNEL_ID_KEY])
+        self.assertEqual(updated[THREAD_ISSUE_BY_CHANNEL_ID_KEY]["thread-10"], "MAB-91")
 
 
 if __name__ == "__main__":

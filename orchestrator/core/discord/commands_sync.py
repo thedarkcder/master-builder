@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -15,10 +16,10 @@ from orchestrator.core.discord.command_sync_status import (
 )
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
-    PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
     resolve_platform_secret_ref,
 )
 from orchestrator.storage.db import create_session_factory
+from orchestrator.storage.models import Tenant
 from orchestrator.storage.run_queue_events import is_postgres_database_url
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
@@ -286,12 +287,14 @@ def sync_discord_guild_commands(
             current = get_discord_command_sync_status(session=sync_session)
             return bool(current.synced and current.healthy)
 
+        guild_ids = _configured_tenant_guild_ids(session=sync_session)
+
         if not bot_token_ref:
             mark_discord_command_sync_failure(
                 session=sync_session,
                 reason="missing_bot_token",
                 bot_token_configured=False,
-                guild_id_configured=bool(str(resolved_settings.discord_guild_id or "").strip()),
+                guild_id_configured=bool(guild_ids),
                 service_instance_id=service_instance_id,
             )
             sync_session.commit()
@@ -311,24 +314,14 @@ def sync_discord_guild_commands(
                 session=sync_session,
                 reason="missing_bot_token",
                 bot_token_configured=False,
-                guild_id_configured=bool(str(resolved_settings.discord_guild_id or "").strip()),
+                guild_id_configured=bool(guild_ids),
                 service_instance_id=service_instance_id,
             )
             sync_session.commit()
             logger.info("discord_command_sync_skipped reason=missing_bot_token secret_ref=%s", bot_token_ref)
             return False
 
-        guild_id = resolved_settings.discord_guild_id.strip()
-        if not guild_id:
-            guild_id = (
-                secret_resolver(
-                    sync_session,
-                    secret_ref=PLATFORM_SECRET_DISCORD_GUILD_ID_REF,
-                    encryption_key=resolved_settings.secrets_encryption_key,
-                )
-                or ""
-            ).strip()
-        if not guild_id:
+        if not guild_ids:
             mark_discord_command_sync_failure(
                 session=sync_session,
                 reason="missing_guild_id",
@@ -340,15 +333,19 @@ def sync_discord_guild_commands(
             logger.info("discord_command_sync_skipped reason=missing_guild_id")
             return False
 
+        current_guild_id = guild_ids[0]
         try:
             client = client_factory(bot_token=bot_token)
             application_id = client.get_application_id()
             commands = build_discord_guild_commands()
-            synced = client.overwrite_guild_commands(
-                application_id=application_id,
-                guild_id=guild_id,
-                commands=commands,
-            )
+            synced: list[dict] = []
+            for guild_id in guild_ids:
+                current_guild_id = guild_id
+                synced = client.overwrite_guild_commands(
+                    application_id=application_id,
+                    guild_id=guild_id,
+                    commands=commands,
+                )
         except (DiscordApiError, ValueError) as exc:
             mark_discord_command_sync_failure(
                 session=sync_session,
@@ -356,7 +353,7 @@ def sync_discord_guild_commands(
                 error=str(exc),
                 bot_token_configured=True,
                 guild_id_configured=True,
-                guild_id=guild_id,
+                guild_id=current_guild_id,
                 service_instance_id=service_instance_id,
             )
             sync_session.commit()
@@ -367,15 +364,15 @@ def sync_discord_guild_commands(
             session=sync_session,
             bot_token_configured=True,
             guild_id_configured=True,
-            guild_id=guild_id,
+            guild_id=guild_ids[0],
             application_id=application_id,
             command_count=len(synced),
             service_instance_id=service_instance_id,
         )
         sync_session.commit()
         logger.info(
-            "discord_command_sync_complete guild_id=%s application_id=%s command_count=%s",
-            guild_id,
+            "discord_command_sync_complete guild_ids=%s application_id=%s command_count=%s",
+            ",".join(guild_ids),
             application_id,
             len(synced),
         )
@@ -385,6 +382,19 @@ def sync_discord_guild_commands(
             _release_command_sync_lock(session=sync_session, settings=resolved_settings)
         if owns_session:
             sync_session.close()
+
+
+def _configured_tenant_guild_ids(*, session: Session) -> list[str]:
+    guild_ids: list[str] = []
+    tenants = session.execute(
+        select(Tenant).where(Tenant.is_enabled.is_(True)).order_by(Tenant.tenant_id.asc())
+    ).scalars()
+    for tenant in tenants:
+        discord_config = getattr(tenant, "discord_config", None) or {}
+        guild_id = str(discord_config.get("guild_id") or "").strip()
+        if guild_id and guild_id not in guild_ids:
+            guild_ids.append(guild_id)
+    return guild_ids
 
 
 def _try_acquire_command_sync_lock(*, session: Session, settings: Settings) -> bool:

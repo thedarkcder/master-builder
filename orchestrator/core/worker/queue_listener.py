@@ -52,31 +52,34 @@ class RunQueueNotificationBridge:
             self._thread.join(timeout=2.0)
 
     def _run(self) -> None:
+        while not self._stop_event.is_set():
+            self._run_once()
+
+    def _run_once(self) -> None:
         if self._psycopg is None:
             self._logger.error("worker_queue_listener_unavailable reason=missing_psycopg")
             self._loop.call_soon_threadsafe(self._wake_event.set)
             return
-        while not self._stop_event.is_set():
-            try:
-                with self._psycopg.connect(self._postgres_dsn, autocommit=True) as conn:
-                    with self._conn_lock:
-                        self._conn = conn
-                    conn.execute(f'LISTEN "{self._notify_channel}"')
-                    # Wake once on startup to drain any queued runs that predate the listener.
-                    self._loop.call_soon_threadsafe(self._wake_event.set)
-                    for _notification in conn.notifies():
-                        if self._stop_event.is_set():
-                            break
-                        self._loop.call_soon_threadsafe(self._wake_event.set)
-            except Exception as exc:
-                if not self._stop_event.is_set():
-                    self._logger.exception("worker_queue_listener_failed error=%s", exc)
-                    self._loop.call_soon_threadsafe(self._wake_event.set)
-                    # Dependency reconnect backoff, not workflow synchronization.
-                    self._stop_event.wait(RECONNECT_DELAY_SECONDS)
-            finally:
+        try:
+            with self._psycopg.connect(self._postgres_dsn, autocommit=True) as conn:
                 with self._conn_lock:
-                    self._conn = None
+                    self._conn = conn
+                conn.execute(f'LISTEN "{self._notify_channel}"')
+                # Wake once on startup to drain any queued runs that predate the listener.
+                self._loop.call_soon_threadsafe(self._wake_event.set)
+                for _notification in conn.notifies():
+                    if self._stop_event.is_set():
+                        break
+                    self._loop.call_soon_threadsafe(self._wake_event.set)
+        except Exception as exc:
+            if not self._stop_event.is_set():
+                self._logger.exception("worker_queue_listener_failed error=%s", exc)
+                self._loop.call_soon_threadsafe(self._wake_event.set)
+                # Dependency reconnect backoff, not workflow synchronization.
+                self._stop_event.wait(RECONNECT_DELAY_SECONDS)
+        finally:
+            with self._conn_lock:
+                self._conn = None
 
 
 async def wait_for_wake_or_stop(

@@ -33,6 +33,8 @@ _JSON_PARSE_ERROR_MARKERS = (
     "expecting value",
     "empty response",
 )
+_TOOL_REQUEST_TYPE = "tool_request"
+_FINAL_RESPONSE_TYPE = "final_response"
 
 
 @dataclass(frozen=True)
@@ -69,8 +71,26 @@ class _AsyncCodexLogWriter:
         self._worker.start()
         self._dropped = 0
         settings = get_settings()
-        self._batch_size = max(1, int(getattr(settings, "codex_log_batch_size", 50)))
-        self._batch_flush_ms = max(1, int(getattr(settings, "codex_log_batch_flush_ms", 50)))
+        self._batch_size = max(
+            1,
+            int(
+                getattr(
+                    settings,
+                    "log_db_batch_size",
+                    getattr(settings, "codex_log_batch_size", 50),
+                )
+            ),
+        )
+        self._batch_flush_ms = max(
+            1,
+            int(
+                getattr(
+                    settings,
+                    "log_db_batch_flush_ms",
+                    getattr(settings, "codex_log_batch_flush_ms", 50),
+                )
+            ),
+        )
 
     def enqueue(self, *, context: CodexInvocationContext, stream: str, message: str) -> bool:
         invocation_id = str(context.invocation_id or "").strip()
@@ -630,6 +650,113 @@ def invoke_codex_json(
     extra_on_log_line: Callable[[str, str], None] | None = None,
     require_json: bool = True,
 ) -> dict:
+    payload, _ = _invoke_codex_json_once(
+        runtime=runtime,
+        context=context,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        extra_on_log_line=extra_on_log_line,
+        require_json=require_json,
+    )
+    return payload
+
+
+def invoke_codex_json_with_tools(
+    *,
+    runtime: CodexRuntime,
+    context: CodexInvocationContext,
+    system_prompt: str,
+    user_prompt: str,
+    allowed_tools: set[str],
+    execute_tool: Callable[[str, dict[str, object]], dict[str, object]],
+    extra_on_log_line: Callable[[str, str], None] | None = None,
+    max_tool_hops: int = 8,
+    require_json: bool = True,
+) -> dict:
+    resume_session_id = str(context.codex_session_id or "").strip() or None
+    current_user_prompt = user_prompt
+    normalized_allowed_tools = {str(tool).strip() for tool in allowed_tools if str(tool).strip()}
+
+    for tool_hop in range(max(0, int(max_tool_hops)) + 1):
+        payload, observed_session_id = _invoke_codex_json_once(
+            runtime=runtime,
+            context=CodexInvocationContext(
+                channel=context.channel,
+                tenant_id=context.tenant_id,
+                project_id=context.project_id,
+                command=context.command,
+                stage=context.stage,
+                working_dir=context.working_dir,
+                issue_key=context.issue_key,
+                run_id=context.run_id,
+                attempt=context.attempt,
+                invocation_id=context.invocation_id,
+                reasoning_effort=context.reasoning_effort,
+                issue_description_chars=context.issue_description_chars,
+                codex_session_id=resume_session_id,
+            ),
+            system_prompt=system_prompt,
+            user_prompt=current_user_prompt,
+            extra_on_log_line=extra_on_log_line,
+            require_json=require_json,
+        )
+        if observed_session_id:
+            resume_session_id = observed_session_id
+
+        response_type = str(payload.get("type") or "").strip().lower()
+        if not response_type:
+            return payload
+        if response_type == _FINAL_RESPONSE_TYPE:
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                raise RuntimeError("Codex tool bridge final_response must contain an object result")
+            return result
+        if response_type != _TOOL_REQUEST_TYPE:
+            raise RuntimeError(f"Codex tool bridge returned unsupported response type '{response_type}'")
+        if tool_hop >= max_tool_hops:
+            raise RuntimeError("Codex tool hop limit exceeded")
+
+        tool_name = str(payload.get("tool_name") or "").strip()
+        if not tool_name:
+            raise RuntimeError("Codex tool bridge tool_request missing tool_name")
+        if tool_name not in normalized_allowed_tools:
+            raise RuntimeError(f"Codex tool bridge requested disallowed tool '{tool_name}'")
+        raw_tool_args = payload.get("tool_args")
+        if raw_tool_args is None:
+            tool_args: dict[str, object] = {}
+        elif isinstance(raw_tool_args, dict):
+            tool_args = dict(raw_tool_args)
+        else:
+            raise RuntimeError("Codex tool bridge tool_request tool_args must be an object")
+
+        try:
+            tool_result = execute_tool(tool_name, tool_args)
+            bridge_result: dict[str, object] = {
+                "tool_name": tool_name,
+                "ok": True,
+                "result": tool_result,
+            }
+        except Exception as exc:  # noqa: BLE001
+            bridge_result = {
+                "tool_name": tool_name,
+                "ok": False,
+                "error": str(exc),
+            }
+
+        current_user_prompt = _build_tool_result_prompt(tool_result=bridge_result)
+
+    raise RuntimeError("Codex tool hop limit exceeded")
+
+
+def _invoke_codex_json_once(
+    *,
+    runtime: CodexRuntime,
+    context: CodexInvocationContext,
+    system_prompt: str,
+    user_prompt: str,
+    extra_on_log_line: Callable[[str, str], None] | None = None,
+    require_json: bool = True,
+) -> tuple[dict, str | None]:
     (
         effective_user_prompt,
         knowledge_metrics,
@@ -727,7 +854,7 @@ def invoke_codex_json(
                 usage=usage,
             ),
         )
-        return payload
+        return payload, str(sink_state.get("codex_session_id") or "").strip() or None
     except Exception as exc:  # noqa: BLE001
         if hasattr(exc, "payload_preview") and isinstance(exc.payload_preview, str):
             failure_payload_preview = exc.payload_preview
@@ -741,7 +868,7 @@ def invoke_codex_json(
                 "_parse_error": failure_reason,
                 "_stage": context.stage,
                 "_command": context.command,
-            }
+            }, str(sink_state.get("codex_session_id") or "").strip() or None
         raise
     finally:
         _get_log_writer().flush_invocation(invocation_id=invocation_id)
@@ -781,6 +908,15 @@ def invoke_codex_json(
                     "duration_ms": duration_ms,
                 },
             )
+
+
+def _build_tool_result_prompt(*, tool_result: dict[str, object]) -> str:
+    return (
+        "Tool result:\n"
+        f"{json.dumps(tool_result, sort_keys=True)}\n\n"
+        "Continue from this result and return JSON only. "
+        "Return either another tool_request or a final_response."
+    )
 
 
 def _capture_session_id(

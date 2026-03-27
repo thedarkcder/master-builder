@@ -356,6 +356,34 @@ def _extract_last_message_from_json_stdout(lines: list[str]) -> str | None:
     return last_message
 
 
+def _extract_terminal_error_from_json_stdout(lines: list[str]) -> str | None:
+    last_error: str | None = None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        event_type = str(payload.get("type") or "").strip().lower()
+        if event_type == "error":
+            message = str(payload.get("message") or "").strip()
+            if message:
+                last_error = message
+                continue
+        if event_type == "turn.failed":
+            error_payload = payload.get("error")
+            if isinstance(error_payload, dict):
+                message = str(error_payload.get("message") or "").strip()
+                if message:
+                    last_error = message
+                    continue
+    return last_error
+
+
 def _coerce_token_count(value: object) -> int | None:
     if isinstance(value, bool):
         return None
@@ -676,8 +704,10 @@ def build_codex_runtime(
             process_stderr = "".join(stderr_lines)
             if returncode != 0:
                 stderr = (process_stderr or "").strip()
-                if "login" in stderr.lower() or "auth" in stderr.lower():
-                    auth_url = _extract_first_url(stderr)
+                structured_error = _extract_terminal_error_from_json_stdout(stdout_lines)
+                error_message = structured_error or stderr or "no stderr"
+                if "login" in error_message.lower() or "auth" in error_message.lower():
+                    auth_url = _extract_first_url(error_message)
                     auth_link = f" Open this link to authenticate: {auth_url}." if auth_url else ""
                     message = (
                         "Codex CLI is not authenticated."
@@ -686,7 +716,7 @@ def build_codex_runtime(
                     )
                     raise CodexRuntimeError(message)
                 raise CodexRuntimeError(
-                    f"Codex CLI command failed (exit={returncode}): {stderr or 'no stderr'}"
+                    f"Codex CLI command failed (exit={returncode}): {error_message}"
                 )
             output_file.seek(0)
             usage = _extract_usage_from_json_stdout(stdout_lines)

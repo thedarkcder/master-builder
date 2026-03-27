@@ -25,6 +25,9 @@ def _deps() -> DiscordIngressDependencies:
         assert_channel_scope=MagicMock(),
         assert_sensitive_command_permission=MagicMock(),
         resolve_scope=MagicMock(),
+        enrich_scope=MagicMock(),
+        rewrite_raw_command=MagicMock(),
+        allow_sensitive_command_bypass=MagicMock(return_value=False),
         handlers=handlers,
     )
 

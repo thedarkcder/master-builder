@@ -9,22 +9,19 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
-from orchestrator.api.schemas import DiscordCommandResponse
-from orchestrator.core.communications import (
-    HttpJsonResponseAction,
-    HttpJsonResponseBytesAction,
-    IngressResult,
-)
 from orchestrator.core.config import get_settings
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant
+
+pytestmark = pytest.mark.smoke
 
 
 @dataclass(frozen=True)
@@ -147,47 +144,14 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.discord.ingress.executor.execute_tenant_command_ingress",
-                return_value=DiscordCommandResponse(ok=True, command="ask", message="ok", data=None),
+                "orchestrator.api.routes.webhook.ingest_jira_webhook_event",
+                new=AsyncMock(return_value={"ok": True}),
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.routes.webhook_discord.execute_discord_ingress_command",
-                return_value=DiscordCommandResponse(ok=True, command="ask", message="ok", data=None),
-            )
-        )
-        self.patch_stack.enter_context(
-            patch(
-                "orchestrator.api.routes.webhook.build_jira_webhook_ingress_result",
-                new=AsyncMock(
-                    return_value=IngressResult(
-                        actions=(
-                            HttpJsonResponseAction(status_code=200, content={"ok": True}),
-                        )
-                    )
-                ),
-            )
-        )
-        self.patch_stack.enter_context(
-            patch(
-                "orchestrator.api.routes.webhook_github.build_github_webhook_ingress_result",
-                new=AsyncMock(
-                    return_value=IngressResult(
-                        actions=(
-                            HttpJsonResponseBytesAction(
-                                status_code=200,
-                                body=JSONResponse(status_code=200, content={"ok": True}).body,
-                            ),
-                        )
-                    )
-                ),
-            )
-        )
-        self.patch_stack.enter_context(
-            patch(
-                "orchestrator.api.routes.webhook_github.prepare_github_webhook_runtime",
-                new=AsyncMock(return_value=SimpleNamespace(transport_action_executors=())),
+                "orchestrator.api.routes.webhook_github.ingest_github_webhook_event",
+                new=AsyncMock(return_value=JSONResponse(status_code=200, content={"ok": True})),
             )
         )
         self.patch_stack.enter_context(
@@ -761,7 +725,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ),
             ("POST", "/discord/command/{tenant_id}"): RouteScenario(
                 path="/discord/command/route25",
-                json={"user_id": "u1", "command": "!ask test", "channel_id": "c1"},
+                json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
             ),
             ("POST", "/discord/interactions"): RouteScenario(
                 path="/discord/interactions",
@@ -769,7 +733,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ),
             ("POST", "/discord/webhook/{tenant_id}"): RouteScenario(
                 path="/discord/webhook/route25",
-                json={"user_id": "u1", "command": "!ask test", "channel_id": "c1"},
+                json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
             ),
             ("POST", "/github/webhook"): RouteScenario(path="/github/webhook", json={"action": "opened"}),
             ("GET", "/health"): RouteScenario(path="/health"),
@@ -778,7 +742,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/runs/{run_id}"): RouteScenario(path="/runs/run-e2e", auth=admin),
         }
 
-    def test_every_external_route_has_strict_e2e_scenario_and_no_500(self) -> None:
+    def test_every_external_route_has_smoke_scenario_and_no_500(self) -> None:
         scenarios = self._route_scenarios()
         discovered: set[tuple[str, str]] = set()
         for route in self.app.routes:

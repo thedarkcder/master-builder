@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
+from uuid import uuid4
 
 from sqlalchemy import desc, select
 
+from orchestrator.core.log_event_bus import (
+    build_codex_stream_matcher,
+    build_codex_stream_snapshot_query,
+    encode_stream_row,
+    get_run_stream_broker,
+    stream_from_subscriber,
+)
 from orchestrator.storage.models import RunLogEvent
-from orchestrator.storage.run_event_stream import RUN_EVENT_NOTIFY_CHANNEL
-from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
 
 
 def list_codex_log_events(
@@ -64,59 +69,37 @@ def stream_codex_events_ndjson(
     channel: str | None = None,
     command: str | None = None,
 ) -> Iterator[str]:  # noqa: ANN001
-    query = select(RunLogEvent).order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id)).limit(500)
-    if tenant_id:
-        query = query.where(RunLogEvent.tenant_id == tenant_id)
-    if project_id:
-        query = query.where(RunLogEvent.project_id == project_id)
-    if run_id:
-        query = query.where(RunLogEvent.run_id == run_id)
-    if channel:
-        query = query.where(RunLogEvent.channel == channel)
-    if command:
-        query = query.where(RunLogEvent.command == command)
+    rows = build_codex_stream_snapshot_query(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        run_id=run_id,
+        channel=channel,
+        command=command,
+        limit=500,
+    )
+    for row in rows:
+        payload = encode_stream_row(row)
+        if payload is not None:
+            yield payload
 
-    rows = session.execute(query).scalars().all()
-    for row in reversed(rows):
-        payload = {
-            "event_kind": "codex_log",
-            "tenant_id": row.tenant_id,
-            "project_id": row.project_id,
-            "run_id": row.run_id,
-            "issue_key": row.issue_key,
-            "agent_id": row.agent_id,
-            "invocation_id": row.invocation_id,
-            "channel": row.channel,
-            "command": row.command,
-            "working_dir": row.working_dir,
-            "stage": row.stage,
-            "attempt": row.attempt,
-            "stream": row.stream,
-            "message": row.message,
-            "recorded_at": row.recorded_at.isoformat(),
-        }
-        yield json.dumps(payload, separators=(",", ":")) + "\n"
-
-    if psycopg_module is None or not is_postgres_database_url(settings.database_url):
+    if not bool(getattr(settings, "log_bus_enabled", False)):
         return
 
-    with psycopg_module.connect(postgres_dsn_from_database_url(settings.database_url), autocommit=True) as conn:
-        conn.execute(f'LISTEN "{RUN_EVENT_NOTIFY_CHANNEL}"')
-        for notification in conn.notifies():
-            try:
-                payload = json.loads(str(notification.payload or "{}"))
-            except json.JSONDecodeError:
-                continue
-            if str(payload.get("event_kind") or "") != "codex_log":
-                continue
-            if tenant_id and str(payload.get("tenant_id") or "") != tenant_id:
-                continue
-            if project_id and str(payload.get("project_id") or "") != project_id:
-                continue
-            if run_id and str(payload.get("run_id") or "") != run_id:
-                continue
-            if channel and str(payload.get("channel") or "") != channel:
-                continue
-            if command and str(payload.get("command") or "") != command:
-                continue
-            yield json.dumps(payload, separators=(",", ":")) + "\n"
+    subscriber_id = f"codex-stream::{uuid4().hex}"
+    broker = get_run_stream_broker()
+    subscriber = broker.subscribe(
+        subscriber_id=subscriber_id,
+        buffer_size=max(1, int(getattr(settings, "log_subscriber_buffer_size", 256))),
+        match_fn=build_codex_stream_matcher(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+            channel=channel,
+            command=command,
+        ),
+        render_fn=encode_stream_row,
+    )
+    try:
+        yield from stream_from_subscriber(subscriber=subscriber)
+    finally:
+        broker.unsubscribe(subscriber_id)

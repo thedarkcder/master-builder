@@ -64,6 +64,7 @@ class DiscordNotificationTests(unittest.TestCase):
         fake_client.post_message.return_value = {"id": "msg-123"}
         with (
             patch("orchestrator.core.discord.notifications.resolve_platform_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.upsert_followup_context"),
             patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
@@ -188,6 +189,7 @@ class DiscordNotificationTests(unittest.TestCase):
         project = _project(notify_events=["decision_gate_required"])
         with (
             patch("orchestrator.core.discord.notifications.resolve_platform_secret_ref", return_value="bot-token"),
+            patch("orchestrator.core.discord.notifications.upsert_followup_context") as upsert_mock,
             patch("orchestrator.core.discord.notifications.DiscordApiClient", return_value=fake_client),
         ):
             result = send_tenant_discord_message(
@@ -206,10 +208,9 @@ class DiscordNotificationTests(unittest.TestCase):
             )
         self.assertTrue(result.sent)
         self.assertIn("thread-456", (project.discord_config or {}).get("ask_thread_channel_ids", []))
-        self.assertEqual(
-            (project.discord_config or {}).get("decision_gate_thread_issue_by_channel_id", {}).get("thread-456"),
-            "TP-302",
-        )
+        self.assertEqual(upsert_mock.call_args.kwargs["context_type"], "decision_gate")
+        self.assertEqual(upsert_mock.call_args.kwargs["thread_channel_id"], "thread-456")
+        self.assertEqual(upsert_mock.call_args.kwargs["issue_key"], "TP-302")
         session.commit.assert_called_once()
 
 

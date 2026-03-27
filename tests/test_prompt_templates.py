@@ -43,6 +43,20 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("XCUITest", prompt_text)
         self.assertIn('Never output "linux" when mandatory macos signals exist', prompt_text)
 
+    def test_pm_user_prompt_defines_decision_state_evidence_contract(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "pm_user.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("`decision_state` means the persisted Decision Gate / clarification state", prompt_text)
+        self.assertIn("The only authoritative way to determine `decision_state` is the `decision.read_state` tool", prompt_text)
+        self.assertIn('Do not emit `missing_evidence_sources=["decision_state"]` unless you actually called `decision.read_state`', prompt_text)
+        self.assertIn("If `decision.read_state` succeeds and reports that no prior decision state exists, that is a valid result", prompt_text)
+
     def test_test_user_prompt_requires_changed_scope_before_full_suite(self) -> None:
         prompt_path = (
             Path(__file__).resolve().parents[1]
@@ -103,6 +117,33 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Prefer the best direct recommendation, decision, or next step", user_prompt_text)
         self.assertIn("Do not fall back to intake or scope-triage language", user_prompt_text)
         self.assertNotIn("If the brief is incomplete", user_prompt_text)
+
+    def test_decision_planner_prompts_forbid_direct_db_inspection(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "policy"
+        system_prompt_text = (prompts_dir / "decision_planner_system.j2").read_text(encoding="utf-8")
+        user_prompt_text = (prompts_dir / "decision_planner_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("Never improvise direct database inspection", system_prompt_text)
+        self.assertIn("Persisted decision state must be read via `decision.read_state`", user_prompt_text)
+        self.assertIn("If `decision.read_state` or another allowed tool fails", user_prompt_text)
+        self.assertIn('"type":"tool_request"', user_prompt_text)
+        self.assertIn('"type":"final_response"', user_prompt_text)
+        self.assertNotIn("Agent tool command:", user_prompt_text)
+
+    def test_workflow_stage_prompts_forbid_direct_db_inspection(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        expected_text = (
+            "Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients;"
+        )
+        for prompt_name in ("pm_system.j2", "dev_system.j2", "test_system.j2", "review_system.j2"):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn(expected_text, prompt_text)
+
+        for prompt_name in ("pm_user.j2", "dev_user.j2", "test_user.j2", "review_user.j2"):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn('"type":"tool_request"', prompt_text)
+            self.assertIn('"type":"final_response"', prompt_text)
+            self.assertNotIn("Agent tool command:", prompt_text)
 
 
 if __name__ == "__main__":

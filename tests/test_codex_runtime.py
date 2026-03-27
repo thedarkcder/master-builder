@@ -292,6 +292,53 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             settings.codex_tool_database_url,
         )
 
+    def test_cli_request_preserves_non_postgres_tool_database_url(self) -> None:
+        settings = self._settings()
+        settings.codex_tool_database_url = "sqlite:////tmp/orchestrator-test.db"
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                Path(output_path).write_text("json-output", encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args, **kwargs):  # noqa: ANN001
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
+
+        self.assertEqual(
+            popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
+            settings.codex_tool_database_url,
+        )
+
     def test_cli_request_uses_model_override_when_provided(self) -> None:
         settings = self._settings()
 
@@ -744,6 +791,28 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):
                 runtime.run_text(system_prompt="s", user_prompt="u")
+
+        def fake_popen_structured_limit(args, **kwargs):  # noqa: ANN001
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(
+                args[output_idx],
+                returncode=1,
+                stdout_lines=[
+                    '{"type":"error","message":"You\'ve hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."}\n',
+                    '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."}}\n',
+                ],
+                stderr_lines=["Warning: no last agent message; wrote empty content to /tmp/tmp.txt\n"],
+            )
+
+        with (
+            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_structured_limit),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            with self.assertRaises(CodexRuntimeError) as exc_info:
+                runtime.run_text(system_prompt="s", user_prompt="u")
+            self.assertIn("usage limit", str(exc_info.exception).lower())
+            self.assertNotIn("no last agent message", str(exc_info.exception).lower())
 
         def fake_popen_empty(args, **kwargs):  # noqa: ANN001
             output_idx = args.index("--output-last-message") + 1

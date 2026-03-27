@@ -3,12 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import json
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.decision_state_repository import existing_case_for_issue
 from orchestrator.storage.models import (
     DecisionAnswer,
@@ -18,7 +22,11 @@ from orchestrator.storage.models import (
     Project,
     Tenant,
 )
-from orchestrator.core.decision_effect_service import enqueue_decision_answer_kb_effects
+from orchestrator.core.decision_effect_service import (
+    enqueue_cycle_comment_effect,
+    enqueue_decision_answer_kb_effects,
+)
+from orchestrator.tools.project_repo_checkout import project_repo_dir
 
 DECISION_CYCLE_COMMENT_MARKER = "<!-- decision-cycle:"
 
@@ -88,6 +96,36 @@ def recorded_cycle_answers(*, session: Session, cycle_id: str) -> list[DecisionA
         )
         .order_by(DecisionAnswer.created_at.asc())
     ).scalars().all()
+
+
+def latest_recorded_answers_for_issue(
+    *,
+    session: Session,
+    tenant_id: str,
+    issue_key: str,
+) -> list[DecisionAnswer]:
+    rows = session.execute(
+        select(DecisionAnswer)
+        .where(
+            DecisionAnswer.tenant_id == tenant_id,
+            DecisionAnswer.issue_key == issue_key,
+            DecisionAnswer.status.in_(("answered", "accepted")),
+        )
+        .order_by(DecisionAnswer.updated_at.desc(), DecisionAnswer.created_at.desc())
+    ).scalars().all()
+    latest_by_question_id: dict[str, DecisionAnswer] = {}
+    for answer in rows:
+        question_id = str(answer.question_id or "").strip()
+        if not question_id or question_id in latest_by_question_id:
+            continue
+        latest_by_question_id[question_id] = answer
+    return sorted(
+        latest_by_question_id.values(),
+        key=lambda answer: (
+            answer.accepted_at or answer.answered_at or answer.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            str(answer.question_id or "").strip(),
+        ),
+    )
 
 
 def serialize_recorded_answers_for_policy(answers: list[DecisionAnswer]) -> list[dict[str, str]]:
@@ -168,6 +206,108 @@ def _reply_dedupe_key(
     return f"{source_transport}:{cycle_id}:text:{digest}"
 
 
+def _normalize_question_payload(cycle: DecisionCycle) -> list[dict[str, str]]:
+    unresolved_ids = {
+        str(question_id).strip()
+        for question_id in cycle.unresolved_question_ids_json
+        if str(question_id).strip()
+    }
+    payload: list[dict[str, str]] = []
+    for item in cycle.question_set_json:
+        question_id = str(item.get("id") or "").strip()
+        question_text = str(item.get("text") or "").strip()
+        if not question_id or not question_text:
+            continue
+        if unresolved_ids and question_id not in unresolved_ids:
+            continue
+        payload.append(
+            {
+                "id": question_id,
+                "kind": str(item.get("kind") or "").strip() or "decision_gate",
+                "text": question_text,
+            }
+        )
+    return payload
+
+
+def _extract_reply_matches(
+    *,
+    session: Session,
+    settings: Any,
+    tenant: Tenant,
+    project: Project | None,
+    issue_key: str,
+    cycle: DecisionCycle,
+    reply_text: str,
+    existing_answers: list[DecisionAnswer],
+) -> list[dict[str, Any]]:
+    questions = _normalize_question_payload(cycle)
+    if not questions:
+        return []
+    runtime = build_codex_runtime(session=session, settings=settings)
+    working_dir = "."
+    if project is not None:
+        try:
+            working_dir = project_repo_dir(project)
+        except Exception:  # noqa: BLE001
+            working_dir = "."
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=CodexInvocationContext(
+            channel="system",
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id if project is not None else None,
+            command="policy.reply",
+            stage="decision_reply",
+            working_dir=working_dir,
+            issue_key=issue_key,
+            reasoning_effort="low",
+        ),
+        system_prompt=render_prompt("policy/decision_reply_system.j2"),
+        user_prompt=render_prompt(
+            "policy/decision_reply_user.j2",
+            issue_key=issue_key,
+            questions_json=json.dumps(questions),
+            existing_answers_json=json.dumps(
+                [
+                    {
+                        "question_id": answer.question_id,
+                        "status": answer.status,
+                        "answer": answer.normalized_answer,
+                    }
+                    for answer in existing_answers
+                ]
+            ),
+            reply_text=reply_text,
+        ),
+    )
+    answers_raw = payload.get("answers")
+    if not isinstance(answers_raw, list):
+        raise CodexRuntimeError("Decision reply extraction did not return an answers array")
+    normalized: list[dict[str, Any]] = []
+    for item in answers_raw:
+        if not isinstance(item, dict):
+            continue
+        question_id = str(item.get("question_id") or "").strip()
+        if not question_id:
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status not in {"ignored", "answered", "accepted"}:
+            status = "answered"
+        answer_text = str(item.get("answer") or "").strip()
+        if status in {"answered", "accepted"} and not answer_text:
+            continue
+        normalized.append(
+            {
+                "question_id": question_id,
+                "status": status,
+                "answer": answer_text,
+                "notes": str(item.get("notes") or "").strip() or None,
+            }
+        )
+    return normalized
+
+
 def _question_lookup(cycle: DecisionCycle) -> dict[str, dict[str, str]]:
     lookup: dict[str, dict[str, str]] = {}
     for item in cycle.question_set_json:
@@ -206,6 +346,8 @@ def _feedback_for_cycle_questions(
         metadata = dict(answer.metadata_json or {}) if answer is not None else {}
         note = str(metadata.get("notes") or "").strip()
         status = str(answer.status or "").strip().lower() if answer is not None else "open"
+        if status == "accepted":
+            continue
         row: dict[str, str] = {
             "question_id": question_id,
             "question_text": question_text,
@@ -342,6 +484,7 @@ def sync_cycle_answers_from_planner(
 def capture_decision_reply(
     *,
     session: Session,
+    settings: Any,
     tenant: Tenant,
     project: Project | None,
     issue_key: str,
@@ -394,12 +537,133 @@ def capture_decision_reply(
     else:
         evidence = existing_evidence
 
+    existing_answers = list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
+    matches = _extract_reply_matches(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        issue_key=issue_key,
+        cycle=cycle,
+        reply_text=reply_text,
+        existing_answers=existing_answers,
+    )
+    question_lookup = _question_lookup(cycle)
+    answer_lookup = {
+        str(answer.question_id or "").strip(): answer
+        for answer in existing_answers
+        if str(answer.question_id or "").strip()
+    }
+    accepted_question_ids: list[str] = []
+    answered_question_ids: list[str] = []
+    newly_accepted_rows: list[DecisionAnswer] = []
+    normalized_answers_payload: list[dict[str, str]] = []
+
+    for item in matches:
+        question_id = str(item.get("question_id") or "").strip()
+        if not question_id or question_id not in question_lookup:
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status == "ignored":
+            continue
+        if status not in {"answered", "accepted"}:
+            status = "answered"
+        answer_text = str(item.get("answer") or "").strip()
+        if not answer_text:
+            continue
+        answer = answer_lookup.get(question_id)
+        if answer is None:
+            answer = DecisionAnswer(
+                answer_id=uuid4().hex,
+                case_id=case.case_id,
+                cycle_id=cycle.cycle_id,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id if project is not None else None,
+                issue_key=issue_key,
+                question_id=question_id,
+                question_kind=question_lookup[question_id]["kind"],
+                question_text=question_lookup[question_id]["text"],
+                status="open",
+                normalized_answer=None,
+                source_transport=None,
+                source_ref=None,
+                evidence_ids_json=[],
+                metadata_json={},
+                answered_at=None,
+                accepted_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(answer)
+            answer_lookup[question_id] = answer
+
+        current_status = str(answer.status or "").strip().lower()
+        if current_status == "accepted" and status != "accepted":
+            status = "accepted"
+
+        notes = str(item.get("notes") or "").strip()
+        answer.metadata_json = {
+            **dict(answer.metadata_json or {}),
+            "notes": notes or None,
+        }
+        evidence_ids = [str(value).strip() for value in answer.evidence_ids_json if str(value).strip()]
+        if evidence.evidence_id not in evidence_ids:
+            answer.evidence_ids_json = [*evidence_ids, evidence.evidence_id]
+        answer.source_transport = source_transport
+        answer.source_ref = source_ref
+        answer.normalized_answer = answer_text
+        answer.answered_at = answer.answered_at or now
+        if status == "accepted":
+            if current_status != "accepted":
+                newly_accepted_rows.append(answer)
+            answer.accepted_at = answer.accepted_at or now
+            accepted_question_ids.append(question_id)
+        else:
+            answered_question_ids.append(question_id)
+        answer.status = status
+        answer.updated_at = now
+        normalized_answers_payload.append(
+            {
+                "question_id": question_id,
+                "status": status,
+                "answer": answer_text,
+            }
+        )
+
+    evidence.question_ids_json = sorted(
+        {
+            str(item.get("question_id") or "").strip()
+            for item in normalized_answers_payload
+            if str(item.get("question_id") or "").strip()
+        }
+    )
+    evidence.normalized_answers_json = normalized_answers_payload
+
+    comment_effect_id = enqueue_cycle_comment_effect(
+        session=session,
+        case=case,
+        cycle=cycle,
+        now=now,
+    )
+    kb_effect_ids = enqueue_decision_answer_kb_effects(
+        session=session,
+        case=case,
+        cycle=cycle,
+        answers=newly_accepted_rows,
+        evidence_id=evidence.evidence_id,
+        now=now,
+    )
+    # Flush captured answer state before the immediate recheck path runs so
+    # planner sync updates the same rows instead of inserting duplicates.
+    session.flush()
+    updated_answers = list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
+
     return DecisionReplyCaptureResult(
         case=case,
         cycle=cycle,
-        accepted_question_ids=(),
-        answered_question_ids=(),
+        accepted_question_ids=tuple(sorted(set(accepted_question_ids))),
+        answered_question_ids=tuple(sorted(set(answered_question_ids))),
         evidence_id=evidence.evidence_id,
-        effect_ids=(),
-        unresolved_question_feedback=(),
+        effect_ids=tuple({comment_effect_id, *kb_effect_ids}),
+        unresolved_question_feedback=_feedback_for_cycle_questions(cycle=cycle, answers=updated_answers),
     )

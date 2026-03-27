@@ -312,7 +312,7 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             assert refreshed is not None
             self.assertEqual(refreshed.status, "running")
 
-    def test_start_run_respects_tenant_max_concurrent_runs_limit(self) -> None:
+    def test_start_run_only_guards_expected_status(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             running = Run(
@@ -353,22 +353,10 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             session.commit()
             session.refresh(queued)
 
-            blocked = start_run(
-                session,
-                run=queued,
-                expected_status="queued",
-                max_concurrent_runs=1,
-            )
-            self.assertIsNone(blocked)
-            refreshed = session.get(Run, "run-queued-under-limit")
-            assert refreshed is not None
-            self.assertEqual(refreshed.status, "queued")
-
             started = start_run(
                 session,
                 run=queued,
                 expected_status="queued",
-                max_concurrent_runs=2,
                 worker_service_instance_id="node-a:1234",
             )
             self.assertIsNotNone(started)
@@ -376,6 +364,9 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             self.assertEqual(started.status, "running")
             self.assertEqual(started.worker_service_instance_id, "node-a:1234")
             self.assertIsNotNone(started.last_heartbeat_at)
+            refreshed_running = session.get(Run, "run-already-running")
+            assert refreshed_running is not None
+            self.assertEqual(refreshed_running.status, "running")
 
     def test_finalize_workflow_result_returns_run_when_ownership_is_lost(self) -> None:
         now = datetime.now(timezone.utc)

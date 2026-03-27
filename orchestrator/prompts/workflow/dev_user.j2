@@ -22,7 +22,13 @@ Confirmed external blockers: {{ confirmed_external_blockers_json }}
 Missing evidence sources: {{ missing_evidence_sources_json }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
 Allowed tools for this stage: {{ allowed_tools_json }}
-Agent tool command: {{ agent_tool_command }}
+
+Structured tool bridge:
+- To call an allowed governed tool, return JSON only:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When implementation is complete, return JSON only:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
 
 Required actions:
 1. Implement code changes that satisfy the acceptance criteria.

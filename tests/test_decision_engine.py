@@ -10,6 +10,7 @@ from orchestrator.core.decision_engine import (
     evaluate_worker_decision,
     resolve_enqueue_precheck_outcome,
 )
+from orchestrator.core.decision_precheck_mapping import derive_label_actions
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.label_action_service import apply_issue_label_actions
@@ -85,6 +86,26 @@ class DecisionEngineTests(unittest.TestCase):
         updated = decision.with_applied_labels(["agent:ready"])
         self.assertEqual(updated.pre_check.outcome, "ready_for_agent")
         self.assertIsNone(updated.block_reason)
+
+    def test_derive_label_actions_does_not_add_ready_label_when_gtd_is_blocked(self) -> None:
+        actions = derive_label_actions(
+            _precheck(
+                outcome="gtd_required",
+                ready_label_present=False,
+                required_worker_label_present=False,
+            )
+        )
+
+        self.assertEqual(
+            actions,
+            (
+                DecisionLabelAction(
+                    label="worker:linux",
+                    action="add",
+                    reason="required_worker_label_missing",
+                ),
+            ),
+        )
 
     def test_resolve_enqueue_precheck_outcome_uses_source_defaults(self) -> None:
         self.assertEqual(
@@ -195,6 +216,41 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertFalse(worker_decision.allowed)
         self.assertIsNotNone(worker_decision.decision_gate)
         self.assertIsNone(worker_decision.configuration_error)
+
+    def test_worker_decision_uses_canonical_clarification_service_when_context_available(self) -> None:
+        decision = SimpleNamespace(
+            pre_check=_precheck(outcome="decision_gate_required"),
+            block_reason="decision_gate_required",
+            policy_error=None,
+        )
+        with mock.patch(
+            "orchestrator.core.decision_clarification_service.evaluate_issue_clarification_state",
+            return_value=SimpleNamespace(
+                decision=decision,
+                classification="decision_gate",
+            ),
+        ) as evaluate_clarification:
+            worker_decision = evaluate_worker_decision(
+                run_plan=None,
+                tenant_id="t1",
+                project_id="p1",
+                issue_key="TP-1",
+                run_id="run-1",
+                issue_summary="summary",
+                issue_description="desc",
+                session=SimpleNamespace(),
+                tenant=SimpleNamespace(tenant_id="t1", jira_config={"ready_label": "agent:ready"}),
+                project=SimpleNamespace(project_id="p1"),
+                issue_labels=[],
+                settings=SimpleNamespace(),
+                tenant_jira_oauth_context_fn=lambda **_: None,
+                evaluate_pre_run_check_fn=lambda **_: _precheck(outcome="decision_gate_required"),
+            )
+
+        self.assertFalse(worker_decision.allowed)
+        self.assertEqual(worker_decision.classification, "decision_gate")
+        self.assertEqual(worker_decision.block_reason, "decision_gate_required")
+        evaluate_clarification.assert_called_once()
 
 
 class LabelActionServiceTests(unittest.TestCase):

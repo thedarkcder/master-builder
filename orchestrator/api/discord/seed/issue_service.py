@@ -120,6 +120,7 @@ def seed_issues_with_codex(
     session,
     tenant: Tenant,
     prompt_markdown: str,
+    scoped_project_id: str | None,
     force_issue_keys: list[str] | None,
     allow_create: bool,
     scoped_project_keys: list[str] | None,
@@ -156,7 +157,7 @@ def seed_issues_with_codex(
             invocation_context=CodexInvocationContext(
                 channel="discord",
                 tenant_id=tenant.tenant_id,
-                project_id=None,
+                project_id=scoped_project_id,
                 command="issues",
                 stage="seed",
                 working_dir=codex_working_dir,

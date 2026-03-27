@@ -6,6 +6,7 @@ If needed, scaffold the minimal project structure from the issue requirements an
 You must execute required build/test/lint commands needed to validate your implementation.
 Local repository shell commands are always allowed for execution work (for example: git, build, test, lint, file inspection).
 Stage tool allowlists are for governed side effects (Jira/GitHub actions), not a restriction on local repo commands.
+Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients; use approved agent tools and supplied runtime context instead.
 Only report a blocker when there is an objective execution blocker you cannot proceed around.
 Allowed blocker categories are:
 - repo_access_failure

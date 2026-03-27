@@ -8,8 +8,14 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.followup_context_service import (
+    CLOSED_FOLLOWUP_CONTEXT_STATUS,
+    FOLLOWUP_CONTEXT_HUMAN_INPUT,
+    close_followup_contexts,
+    upsert_followup_context,
+)
 from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.runs import enqueue_run
+from orchestrator.core.runs import RunBootstrap, enqueue_run
 from orchestrator.core.secrets import decrypt_value, encrypt_value
 from orchestrator.storage.models import Project, Run, RunHumanInputRequest, Tenant
 
@@ -47,6 +53,55 @@ def _extract_resume_source_plan(*, run: Run, request_context: dict[str, Any] | N
     return None
 
 
+def _extract_resume_source_state(*, run: Run, request_context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if isinstance(request_context, dict):
+        candidate = request_context.get("resume_source_state")
+        if isinstance(candidate, dict):
+            return dict(candidate)
+    if isinstance(run.plan, dict):
+        return dict(run.plan)
+    return None
+
+
+def _build_resumed_run_bootstrap(
+    *,
+    source_run: Run,
+    request: RunHumanInputRequest,
+) -> RunBootstrap:
+    source_plan = source_run.plan if isinstance(source_run.plan, dict) else {}
+    trigger_context = dict(source_plan.get("trigger_context")) if isinstance(source_plan.get("trigger_context"), dict) else {}
+    trigger_context["rerun_mode"] = "resume"
+    trigger_context["resume_stage"] = request.resume_stage
+    trigger_context["resume_session_id"] = request.resume_session_id
+    trigger_context["resume_source_run_id"] = request.source_run_id
+    trigger_context["human_input_request_ids"] = [request.request_id]
+
+    bootstrap_kwargs: dict[str, Any] = {}
+    request_context = request.request_context_json if isinstance(request.request_context_json, dict) else None
+    if request.resume_stage == "dev":
+        source_plan_payload = _extract_resume_source_plan(run=source_run, request_context=request_context)
+        if isinstance(source_plan_payload, dict):
+            trigger_context["resume_source_plan"] = dict(source_plan_payload)
+        bootstrap_kwargs["dev_session_id"] = request.resume_session_id
+    elif request.resume_stage == "review":
+        source_plan_payload = _extract_resume_source_plan(run=source_run, request_context=request_context)
+        if isinstance(source_plan_payload, dict):
+            trigger_context["resume_source_plan"] = dict(source_plan_payload)
+        source_state_payload = _extract_resume_source_state(run=source_run, request_context=request_context)
+        if isinstance(source_state_payload, dict):
+            trigger_context["resume_source_state"] = dict(source_state_payload)
+        bootstrap_kwargs["dev_session_id"] = request.resume_session_id
+    elif request.resume_stage == "pm":
+        bootstrap_kwargs["pm_session_id"] = request.resume_session_id
+    else:
+        bootstrap_kwargs["orchestrated_session_id"] = request.resume_session_id
+
+    return RunBootstrap(
+        plan={"trigger_context": trigger_context},
+        **bootstrap_kwargs,
+    )
+
+
 def _resume_target_for_run(*, run: Run, stage: str) -> HumanInputResumeTarget:
     normalized_stage = str(stage or "").strip().lower()
     if normalized_stage == "pm":
@@ -54,12 +109,21 @@ def _resume_target_for_run(*, run: Run, stage: str) -> HumanInputResumeTarget:
         if not session_id:
             raise ValueError("No PM session is available for human-input resume")
         return HumanInputResumeTarget(resume_stage="pm", resume_session_id=session_id)
-    if normalized_stage in {"dev", "test", "review"}:
+    if normalized_stage in {"dev", "test"}:
         session_id = str(getattr(run, "dev_session_id", "") or "").strip()
         if not session_id:
             raise ValueError("No Dev session is available for human-input resume")
         return HumanInputResumeTarget(
             resume_stage="dev",
+            resume_session_id=session_id,
+            resume_source_plan=_extract_resume_source_plan(run=run),
+        )
+    if normalized_stage == "review":
+        session_id = str(getattr(run, "dev_session_id", "") or "").strip()
+        if not session_id:
+            raise ValueError("No review execution session is available for human-input resume")
+        return HumanInputResumeTarget(
+            resume_stage="review",
             resume_session_id=session_id,
             resume_source_plan=_extract_resume_source_plan(run=run),
         )
@@ -95,6 +159,13 @@ def create_human_input_request(
     resume_source_plan = _extract_resume_source_plan(run=run, request_context=normalized_request_context)
     if resume_source_plan is not None and "resume_source_plan" not in normalized_request_context:
         normalized_request_context["resume_source_plan"] = dict(resume_source_plan)
+    resume_source_state = _extract_resume_source_state(run=run, request_context=normalized_request_context)
+    if (
+        str(source_stage or "").strip().lower() == "review"
+        and resume_source_state is not None
+        and "resume_source_state" not in normalized_request_context
+    ):
+        normalized_request_context["resume_source_state"] = dict(resume_source_state)
     resume_target = _resume_target_for_run(run=run, stage=source_stage)
     now = _now()
     expires_at = now + timedelta(minutes=max(1, int(expires_in_minutes or 15)))
@@ -152,6 +223,23 @@ def create_human_input_request(
     request.thread_channel_id = str(send_result.thread_channel_id or "").strip()
     request.thread_message_id = str(send_result.message_id or "").strip() or None
     session.add(request)
+    upsert_followup_context(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+        context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
+        channel_id=str(send_result.channel_id or "").strip() or None,
+        thread_channel_id=request.thread_channel_id,
+        root_message_id=request.thread_message_id,
+        issue_key=request.issue_key,
+        request_id=request.request_id,
+        run_id=run.run_id,
+        metadata={
+            "request_id": request.request_id,
+            "issue_key": request.issue_key,
+            "source_stage": request.source_stage,
+        },
+    )
     session.commit()
     session.refresh(request)
     return request
@@ -182,6 +270,26 @@ def pending_human_input_for_thread(
     if request is None:
         return None
     if not isinstance(getattr(request, "request_id", None), str) or not str(request.request_id).strip():
+        return None
+    if str(getattr(request, "status", "") or "").strip().lower() != "pending":
+        return None
+    expires_at = getattr(request, "expires_at", None)
+    if isinstance(expires_at, datetime) and expires_at <= _now():
+        return None
+    return request
+
+
+def pending_human_input_for_request_id(
+    *,
+    session: Session,
+    tenant_id: str,
+    request_id: str,
+) -> RunHumanInputRequest | None:
+    normalized_request_id = str(request_id or "").strip()
+    if not normalized_request_id:
+        return None
+    request = session.get(RunHumanInputRequest, normalized_request_id)
+    if request is None or str(getattr(request, "tenant_id", "") or "").strip() != str(tenant_id or "").strip():
         return None
     if str(getattr(request, "status", "") or "").strip().lower() != "pending":
         return None
@@ -265,34 +373,22 @@ def resume_run_from_human_input_reply(
             issue_description=source_run.issue_description,
         ),
         precheck_source_plan=source_run.plan,
+        bootstrap=_build_resumed_run_bootstrap(
+            source_run=source_run,
+            request=request,
+        ),
     )
     if not enqueue_result.enqueued:
         raise ValueError(f"Unable to enqueue resumed run: {enqueue_result.reason}")
-
-    next_plan = dict(enqueue_result.run.plan or {})
-    source_plan = source_run.plan if isinstance(source_run.plan, dict) else {}
-    trigger_context = dict(source_plan.get("trigger_context")) if isinstance(source_plan.get("trigger_context"), dict) else {}
-    trigger_context["rerun_mode"] = "resume"
-    trigger_context["resume_stage"] = request.resume_stage
-    trigger_context["resume_session_id"] = request.resume_session_id
-    trigger_context["resume_source_run_id"] = request.source_run_id
-    trigger_context["human_input_request_ids"] = [request.request_id]
-    if request.resume_stage == "dev":
-        source_plan_payload = _extract_resume_source_plan(
-            run=source_run,
-            request_context=request.request_context_json if isinstance(request.request_context_json, dict) else None,
-        )
-        if isinstance(source_plan_payload, dict):
-            trigger_context["resume_source_plan"] = dict(source_plan_payload)
-        enqueue_result.run.dev_session_id = request.resume_session_id
-    elif request.resume_stage == "pm":
-        enqueue_result.run.pm_session_id = request.resume_session_id
-    else:
-        enqueue_result.run.orchestrated_session_id = request.resume_session_id
-    next_plan["trigger_context"] = trigger_context
-    enqueue_result.run.plan = next_plan
     request.resumed_run_id = enqueue_result.run.run_id
     request.updated_at = _now()
+    close_followup_contexts(
+        session=session,
+        tenant_id=request.tenant_id,
+        context_type=FOLLOWUP_CONTEXT_HUMAN_INPUT,
+        request_id=request.request_id,
+        status=CLOSED_FOLLOWUP_CONTEXT_STATUS,
+    )
     session.commit()
     session.refresh(enqueue_result.run)
     session.refresh(request)

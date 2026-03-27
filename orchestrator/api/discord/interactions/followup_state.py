@@ -8,7 +8,10 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
-from orchestrator.core.discord.thread_context import get_thread_issue_key
+from orchestrator.core.followup_context_service import (
+    FOLLOWUP_CONTEXT_DECISION_GATE,
+    resolve_followup_context as resolve_shared_followup_context,
+)
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
@@ -94,6 +97,31 @@ def ask_thread_message_map_from_config(discord_config: dict) -> dict[str, str]:
     return normalized
 
 
+def resolve_thread_channel_for_reply(
+    *,
+    session: Session,
+    channel_id: str,
+    reply_to_message_id: str,
+) -> str:
+    normalized_channel_id = str(channel_id or "").strip()
+    normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
+    if not normalized_channel_id or not normalized_reply_to_message_id:
+        return normalized_channel_id
+    tenant = resolve_tenant_for_discord_channel(session=session, channel_id=normalized_channel_id)
+    if tenant is None:
+        return normalized_channel_id
+    project = resolve_project_for_discord_channel(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        channel_id=normalized_channel_id,
+    )
+    if project is None:
+        return normalized_channel_id
+    ask_thread_message_map = ask_thread_message_map_from_config(project.discord_config or {})
+    mapped_thread_channel_id = str(ask_thread_message_map.get(normalized_reply_to_message_id) or "").strip()
+    return mapped_thread_channel_id or normalized_channel_id
+
+
 def resolve_thread_id_by_message_suffix(
     *,
     client: DiscordApiClient,
@@ -132,17 +160,18 @@ def decision_gate_issue_for_thread(
     tenant = resolve_tenant_for_discord_channel(session=session, channel_id=normalized_channel_id)
     if tenant is None:
         return None
-    project = resolve_project_for_discord_channel(
+    context = resolve_shared_followup_context(
         session=session,
         tenant_id=tenant.tenant_id,
         channel_id=normalized_channel_id,
     )
-    if project is None:
-        return None
-    issue_key = get_thread_issue_key(discord_config=project.discord_config, channel_id=normalized_channel_id)
-    if not issue_key:
-        issue_key = get_thread_issue_key(discord_config=tenant.discord_config, channel_id=normalized_channel_id)
-    if not issue_key or issue_key_pattern.fullmatch(issue_key) is None:
+    issue_key = str(getattr(context, "issue_key", "") or "").strip().upper()
+    if (
+        context is None
+        or str(getattr(context, "context_type", "") or "").strip() != FOLLOWUP_CONTEXT_DECISION_GATE
+        or not issue_key
+        or issue_key_pattern.fullmatch(issue_key) is None
+    ):
         return None
     return tenant.tenant_id, issue_key
 

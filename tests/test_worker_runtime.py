@@ -79,7 +79,7 @@ class QueueListenerTests(unittest.TestCase):
             notify_channel="run_queue",
             psycopg_module=None,
         )
-        bridge._run()
+        bridge._run_once()
         loop.run_until_complete(asyncio.sleep(0))
         self.assertTrue(wake_event.is_set())
         logger.error.assert_called_once()
@@ -100,7 +100,7 @@ class QueueListenerTests(unittest.TestCase):
         )
         conn = _StopAfterFirstNotifyConn(stop_event=bridge._stop_event)
         bridge._psycopg = _FakePsycopg(conn)
-        bridge._run()
+        bridge._run_once()
         loop.run_until_complete(asyncio.sleep(0))
         self.assertIn('LISTEN "run_queue"', conn.executed[0])
         self.assertTrue(wake_event.is_set())

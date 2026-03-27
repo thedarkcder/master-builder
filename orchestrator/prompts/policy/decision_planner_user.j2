@@ -13,7 +13,13 @@ Current cycle metadata JSON:
 {{ current_cycle_metadata_json }}
 
 Allowed tools for this stage: {{ allowed_tools_json }}
-Agent tool command: {{ agent_tool_command }}
+
+Structured tool bridge:
+- To call an allowed tool, return JSON only in this shape:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When you are done, return JSON only in this shape:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
 
 Required process:
 1. Use `decision.read_state` to inspect persisted decision answers/evidence before asking new questions.
@@ -24,5 +30,7 @@ Required process:
 6. Return `question_states` for the full current cycle, including accepted, answered, and open items.
 7. If blocked, return only the exact currently open questions in `questions`.
 8. Treat the current cycle questions as historical context, not wording that must be preserved. If the remaining gap is narrower now, rewrite the open question text accordingly while keeping the same `question_id`.
+9. Do not inspect the database directly with Python, shell, SQL, or psycopg. Persisted decision state must be read via `decision.read_state`.
+10. If `decision.read_state` or another allowed tool fails, keep the gate blocked and explain the tool failure in `reason` instead of improvising direct database access.
 
 Output JSON only.

@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./orchestrator.db"
+    db_pool_size: int = 10
+    db_pool_max_overflow: int = 20
+    db_pool_timeout_seconds: int = 60
+    db_pool_recycle_seconds: int = 1800
+    db_pool_pre_ping: bool = True
     log_level: str = "INFO"
     admin_username: str = "admin"
     admin_password: str = "change-me"
@@ -51,6 +56,16 @@ class Settings(BaseSettings):
     codex_hang_detection_report_interval_seconds: int = 120
     codex_log_batch_size: int = 50
     codex_log_batch_flush_ms: int = 50
+    redis_url: str = ""
+    log_bus_enabled: bool = False
+    log_broker_poll_ms: int = 500
+    log_broker_fetch_limit: int = 1000
+    log_subscriber_buffer_size: int = 256
+    log_redis_publish_timeout_ms: int = 10
+    log_db_batch_size: int = 200
+    log_db_batch_flush_ms: int = 50
+    log_wake_debounce_ms: int = 10
+    log_retention_sweep_seconds: int = 60
     knowledge_injection_enabled: bool = True
     knowledge_base_enabled_default: bool = True
     knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = "aggressive"

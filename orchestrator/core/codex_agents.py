@@ -3,8 +3,13 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from typing import Any
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.codex_invocation import (
+    CodexInvocationContext,
+    invoke_codex_json,
+    invoke_codex_json_with_tools,
+)
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
@@ -20,9 +25,16 @@ from orchestrator.core.workflow.runner import (
 
 
 class CodexWorkflowAgents:
-    def __init__(self, *, runtime: CodexRuntime, log_sink: Callable[[dict], None] | None = None):
+    def __init__(
+        self,
+        *,
+        runtime: CodexRuntime,
+        log_sink: Callable[[dict], None] | None = None,
+        execute_tool: Callable[[CodexInvocationContext, str, dict[str, object]], dict[str, object]] | None = None,
+    ):
         self._runtime = runtime
         self._log_sink = log_sink
+        self._execute_tool = execute_tool
 
     def _stage_log_sink(
         self,
@@ -63,6 +75,62 @@ class CodexWorkflowAgents:
             return session_id
         return None
 
+    def _resume_source_state(self, *, request: WorkflowRequest) -> dict[str, Any]:
+        trigger_context = request.trigger_context if isinstance(request.trigger_context, dict) else {}
+        payload = trigger_context.get("resume_source_state")
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def _invoke_stage_payload(
+        self,
+        *,
+        request: WorkflowRequest,
+        stage: str,
+        attempt: int,
+        system_prompt: str,
+        user_prompt: str,
+        reasoning_effort: str = "medium",
+    ) -> dict[str, Any]:
+        context = CodexInvocationContext(
+            channel="worker",
+            tenant_id=request.tenant_id,
+            project_id=request.project_id,
+            command="workflow",
+            stage=stage,
+            working_dir=request.execution_repo_dir or ".",
+            issue_key=request.issue_key,
+            run_id=request.run_id,
+            attempt=attempt,
+            reasoning_effort=reasoning_effort,
+            issue_description_chars=len(request.issue_description or ""),
+            codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
+        )
+        allowed_tools = sorted(allowed_tools_for_stage(stage))
+        return invoke_codex_json_with_tools(
+            runtime=self._runtime,
+            context=context,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            allowed_tools=set(allowed_tools),
+            execute_tool=lambda tool_name, tool_args: self._execute_stage_tool(
+                context=context,
+                tool_name=tool_name,
+                tool_args=tool_args,
+            ),
+            extra_on_log_line=self._stage_log_sink(request=request, stage=stage, attempt=attempt),
+            require_json=False,
+        )
+
+    def _execute_stage_tool(
+        self,
+        *,
+        context: CodexInvocationContext,
+        tool_name: str,
+        tool_args: dict[str, object],
+    ) -> dict[str, object]:
+        if self._execute_tool is None:
+            raise RuntimeError("Codex workflow stage requested a tool but no tool executor is configured")
+        return self._execute_tool(context, tool_name, tool_args)
+
     def pm(
         self,
         request: WorkflowRequest,
@@ -73,22 +141,10 @@ class CodexWorkflowAgents:
         last_test_result: TestResult | None,
         last_review_result: ReviewResult | None,
     ) -> PmPlan:
-        payload = invoke_codex_json(
-            runtime=self._runtime,
-            context=CodexInvocationContext(
-                channel="worker",
-                tenant_id=request.tenant_id,
-                project_id=request.project_id,
-                command="workflow",
-                stage="pm",
-                working_dir=request.execution_repo_dir or ".",
-                issue_key=request.issue_key,
-                run_id=request.run_id,
-                attempt=attempt,
-                reasoning_effort="medium",
-                issue_description_chars=len(request.issue_description or ""),
-                codex_session_id=self._resume_session_id_for_stage(request=request, stage="pm"),
-            ),
+        payload = self._invoke_stage_payload(
+            request=request,
+            stage="pm",
+            attempt=attempt,
             system_prompt=render_prompt("workflow/pm_system.j2"),
             user_prompt=render_prompt(
                 "workflow/pm_user.j2",
@@ -134,17 +190,7 @@ class CodexWorkflowAgents:
                 available_worker_capabilities_json=json.dumps(request.available_worker_capabilities),
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("pm"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage pm --tool <tool_name> --args '<json-object>'"
-                ),
             ),
-            extra_on_log_line=self._stage_log_sink(request=request, stage="pm", attempt=attempt),
-            require_json=False,
         )
         raw_response = _extract_raw_response(payload)
         next_stage = str(payload.get("next_stage") or _extract_next_stage(raw_response) or "dev").strip().lower()
@@ -199,22 +245,10 @@ class CodexWorkflowAgents:
         attempt: int,
         feedback: str | None,
     ) -> DevResult:
-        payload = invoke_codex_json(
-            runtime=self._runtime,
-            context=CodexInvocationContext(
-                channel="worker",
-                tenant_id=request.tenant_id,
-                project_id=request.project_id,
-                command="workflow",
-                stage="dev",
-                working_dir=request.execution_repo_dir or ".",
-                issue_key=request.issue_key,
-                run_id=request.run_id,
-                attempt=attempt,
-                reasoning_effort="medium",
-                issue_description_chars=len(request.issue_description or ""),
-                codex_session_id=self._resume_session_id_for_stage(request=request, stage="dev"),
-            ),
+        payload = self._invoke_stage_payload(
+            request=request,
+            stage="dev",
+            attempt=attempt,
             system_prompt=render_prompt("workflow/dev_system.j2"),
             user_prompt=render_prompt(
                 "workflow/dev_user.j2",
@@ -241,17 +275,7 @@ class CodexWorkflowAgents:
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("dev"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage dev --tool <tool_name> --args '<json-object>'"
-                ),
             ),
-            extra_on_log_line=self._stage_log_sink(request=request, stage="dev", attempt=attempt),
-            require_json=False,
         )
         raw_response = _extract_raw_response(payload)
         pr_url_raw = payload.get("pr_url")
@@ -293,21 +317,10 @@ class CodexWorkflowAgents:
         dev_result: DevResult,
         attempt: int,
     ) -> TestResult:
-        payload = invoke_codex_json(
-            runtime=self._runtime,
-            context=CodexInvocationContext(
-                channel="worker",
-                tenant_id=request.tenant_id,
-                project_id=request.project_id,
-                command="workflow",
-                stage="test",
-                working_dir=request.execution_repo_dir or ".",
-                issue_key=request.issue_key,
-                run_id=request.run_id,
-                attempt=attempt,
-                reasoning_effort="medium",
-                issue_description_chars=len(request.issue_description or ""),
-            ),
+        payload = self._invoke_stage_payload(
+            request=request,
+            stage="test",
+            attempt=attempt,
             system_prompt=render_prompt("workflow/test_system.j2"),
             user_prompt=render_prompt(
                 "workflow/test_user.j2",
@@ -334,17 +347,7 @@ class CodexWorkflowAgents:
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("test"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage test --tool <tool_name> --args '<json-object>'"
-                ),
             ),
-            extra_on_log_line=self._stage_log_sink(request=request, stage="test", attempt=attempt),
-            require_json=False,
         )
 
         raw_response = _extract_raw_response(payload)
@@ -396,21 +399,11 @@ class CodexWorkflowAgents:
         test_result: TestResult,
         attempt: int,
     ) -> ReviewResult:
-        payload = invoke_codex_json(
-            runtime=self._runtime,
-            context=CodexInvocationContext(
-                channel="worker",
-                tenant_id=request.tenant_id,
-                project_id=request.project_id,
-                command="workflow",
-                stage="review",
-                working_dir=request.execution_repo_dir or ".",
-                issue_key=request.issue_key,
-                run_id=request.run_id,
-                attempt=attempt,
-                reasoning_effort="medium",
-                issue_description_chars=len(request.issue_description or ""),
-            ),
+        resume_source_state = self._resume_source_state(request=request)
+        payload = self._invoke_stage_payload(
+            request=request,
+            stage="review",
+            attempt=attempt,
             system_prompt=render_prompt("workflow/review_system.j2"),
             user_prompt=render_prompt(
                 "workflow/review_user.j2",
@@ -440,18 +433,10 @@ class CodexWorkflowAgents:
                 confirmed_external_blockers_json=json.dumps(plan.confirmed_external_blockers),
                 missing_evidence_sources_json=json.dumps(plan.missing_evidence_sources),
                 human_inputs_json=json.dumps(request.human_inputs),
+                previous_review_summary_json=json.dumps(resume_source_state.get("review_summary") or []),
+                previous_review_feedback=str(resume_source_state.get("review_feedback") or "").strip() or "none",
                 allowed_tools_json=json.dumps(sorted(allowed_tools_for_stage("review"))),
-                agent_tool_command=(
-                    "python -m orchestrator agent-tool "
-                    f"--tenant {request.tenant_id} "
-                    f"--project {request.project_id or ''} "
-                    f"--run {request.run_id} "
-                    f"--issue {request.issue_key} "
-                    "--stage review --tool <tool_name> --args '<json-object>'"
-                ),
             ),
-            extra_on_log_line=self._stage_log_sink(request=request, stage="review", attempt=attempt),
-            require_json=False,
         )
 
         raw_response = _extract_raw_response(payload)
@@ -852,16 +837,32 @@ def plan_seed_issues_with_codex(
     allowed_project_keys: list[str],
     invocation_context: CodexInvocationContext,
 ) -> dict:
-    payload = invoke_codex_json(
-        runtime=runtime,
-        context=invocation_context,
-        system_prompt=render_prompt("discord/issues_seed_system.j2"),
-        user_prompt=render_prompt(
-            "discord/issues_seed_user.j2",
-            allowed_project_keys_json=json.dumps(allowed_project_keys),
-            prompt_markdown=prompt_markdown,
-        ),
-    )
-    if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return an issue-seeding JSON object")
-    return payload
+    last_error: CodexRuntimeError | None = None
+    for attempt in range(2):
+        try:
+            payload = invoke_codex_json(
+                runtime=runtime,
+                context=invocation_context,
+                system_prompt=render_prompt("discord/issues_seed_system.j2"),
+                user_prompt=render_prompt(
+                    "discord/issues_seed_user.j2",
+                    allowed_project_keys_json=json.dumps(allowed_project_keys),
+                    prompt_markdown=prompt_markdown,
+                ),
+            )
+            if not isinstance(payload, dict):
+                raise CodexRuntimeError("Codex did not return an issue-seeding JSON object")
+            return payload
+        except CodexRuntimeError as exc:
+            last_error = exc
+            error_text = str(exc).lower()
+            retryable_empty_output = (
+                "no last agent message" in error_text
+                or "returned empty output" in error_text
+                or "empty response" in error_text
+                or "wrote empty content" in error_text
+            )
+            if not retryable_empty_output or attempt > 0:
+                raise
+    assert last_error is not None
+    raise last_error

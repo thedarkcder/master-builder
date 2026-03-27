@@ -17,6 +17,7 @@ def dispatch_issues_command(
     payload: DiscordCommandRequest,
     command_name: str,
     arguments: list[str],
+    scoped_project_id: str | None,
     scoped_project_keys: list[str],
     codex_working_dir: str,
     normalized_user_id: str,
@@ -54,6 +55,7 @@ def dispatch_issues_command(
             session=session,
             tenant=tenant,
             prompt_markdown=prompt_markdown,
+            scoped_project_id=scoped_project_id,
             scoped_project_keys=scoped_project_keys,
             codex_working_dir=codex_working_dir,
         )
@@ -68,6 +70,7 @@ def dispatch_issues_command(
                 request_id=None,
                 user_id=normalized_user_id,
                 channel_ids=[payload.channel_id.strip()],
+                project_id=scoped_project_id or "",
                 project_key=str(data.get("project_key") or ""),
                 issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
                 questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
@@ -94,6 +97,7 @@ def dispatch_issues_command(
                 detail="Follow-up replies require a Discord channel context",
             )
         context = find_seed_followup_context(
+            session=session,
             tenant=tenant,
             channel_id=payload.channel_id,
             user_id=normalized_user_id,
@@ -156,6 +160,7 @@ def dispatch_issues_command(
             prompt_markdown=followup_prompt,
             force_issue_keys=forced_issue_keys,
             allow_create=False,
+            scoped_project_id=str(context.get("project_id") or "").strip() or scoped_project_id,
             scoped_project_keys=[str(context.get("project_key") or "").strip().upper()]
             if str(context.get("project_key") or "").strip()
             else scoped_project_keys,
@@ -173,6 +178,7 @@ def dispatch_issues_command(
                         payload.channel_id,
                     }
                 ),
+                project_id=str(context.get("project_id") or "").strip() or scoped_project_id or "",
                 project_key=str(data.get("project_key") or context.get("project_key") or ""),
                 issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
                 questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
