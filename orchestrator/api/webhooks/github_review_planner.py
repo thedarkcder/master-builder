@@ -7,6 +7,7 @@ from orchestrator.core.communications import (
     GitHubInlineReviewBatchAction,
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
+    GitHubPullRequestReactionAction,
     GitHubStickyReviewCommentAction,
     TransportAction,
 )
@@ -52,6 +53,15 @@ def plan_pull_request_targets(
     planned_actions: list[TransportAction] = []
     for pr_number, _review_summary_present in pr_targets:
         signal = type("Signal", (), {"ready": False, "state": "not_triggered", "message": "review_not_triggered"})()
+        review_publication_actions: list[TransportAction] = []
+        if full_review_trigger:
+            planned_actions.append(
+                GitHubPullRequestReactionAction(
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    content="eyes",
+                )
+            )
         if full_review_trigger:
             try:
                 signal = reviewer_gate.evaluate_pr(
@@ -72,6 +82,13 @@ def plan_pull_request_targets(
                         "accepted": False,
                         "error": str(exc),
                     }
+                )
+                planned_actions.append(
+                    GitHubPullRequestReactionAction(
+                        repo_full_name=repo_full_name,
+                        pr_number=pr_number,
+                        content="confused",
+                    )
                 )
                 continue
 
@@ -116,7 +133,7 @@ def plan_pull_request_targets(
                     exc,
                 )
 
-            planned_actions.append(
+            review_publication_actions.append(
                 GitHubStickyReviewCommentAction(
                     request_id=request_id,
                     repo_full_name=repo_full_name,
@@ -144,7 +161,7 @@ def plan_pull_request_targets(
                     for change in changed_files
                     if str(change.filename or "").strip()
                 }
-                planned_actions.append(
+                review_publication_actions.append(
                     GitHubInlineReviewBatchAction(
                         request_id=request_id,
                         repo_full_name=repo_full_name,
@@ -179,6 +196,14 @@ def plan_pull_request_targets(
                     "green": green,
                 }
             )
+            planned_actions.append(
+                GitHubPullRequestReactionAction(
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    content=_resolve_pull_request_review_reaction(green=green),
+                )
+            )
+            planned_actions.extend(review_publication_actions)
 
         if full_review_trigger and green and pr_details is not None:
             if allow_auto_merge:
@@ -416,3 +441,7 @@ def valid_pr_details(details: object) -> bool:
         and hasattr(details, "head_sha")
         and bool(str(getattr(details, "head_sha", "") or "").strip())
     )
+
+
+def _resolve_pull_request_review_reaction(*, green: bool) -> str:
+    return "+1" if green else "confused"

@@ -118,6 +118,47 @@ class ReleaseTrainSyncSearchTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             client.search_issues(jql='project = "MAB"')
 
+    def test_count_ready_issues_prints_matching_issue_count(self) -> None:
+        module = _load_module()
+
+        class FakeJiraClient(module.JiraClient):
+            def __init__(self) -> None:
+                super().__init__(base_url="https://example.atlassian.net", email="e", api_token="t")
+                self.recorded_jql: str | None = None
+
+            def search_issues(self, *, jql: str):  # type: ignore[override]
+                self.recorded_jql = jql
+                return [
+                    module.JiraIssue(key="MAB-1", labels=[], status_name="READY TO RELEASE"),
+                    module.JiraIssue(key="MAB-2", labels=["release:v1.2.3"], status_name="READY TO RELEASE"),
+                ]
+
+        client = FakeJiraClient()
+        with mock.patch("sys.stdout", new_callable=mock.MagicMock()) as stdout:
+            exit_code = module.count_ready_issues(
+                client=client,
+                project_key="MAB",
+                ready_status="READY TO RELEASE",
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(client.recorded_jql, 'project = "MAB" AND status = "READY TO RELEASE"')
+        stdout.write.assert_any_call("2")
+        stdout.write.assert_any_call("\n")
+
+    def test_release_train_sync_workflow_skips_self_hosted_job_without_ready_issues(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / "release-train-sync.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("detect-ready-to-release:", workflow)
+        self.assertIn("runs-on: ubuntu-latest", workflow)
+        self.assertIn("needs: detect-ready-to-release", workflow)
+        self.assertIn("needs.detect-ready-to-release.outputs.ready_count != '0'", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

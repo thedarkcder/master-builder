@@ -123,6 +123,7 @@ def test_resume_run_from_human_input_reply_uses_request_context_resume_source_pl
         issue_summary="Apple Sign In",
         issue_description="Verify Apple Sign In",
         repo_url="https://github.com/example/repo",
+        branch="feature/GP-122",
         plan={},
     )
     resumed_run = SimpleNamespace(
@@ -149,6 +150,7 @@ def test_resume_run_from_human_input_reply_uses_request_context_resume_source_pl
 
     assert result is resumed_run
     bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
+    assert bootstrap.branch == "feature/GP-122"
     assert bootstrap.dev_session_id == "dev-session-1"
     assert bootstrap.plan["trigger_context"]["resume_source_plan"] == {"plan_steps": ["Verify Apple Sign In"]}
     assert bootstrap.plan["trigger_context"]["human_input_request_ids"] == ["request-1"]
@@ -178,6 +180,7 @@ def test_resume_run_from_human_input_reply_preserves_review_resume_state() -> No
         issue_summary="Apple Sign In",
         issue_description="Verify Apple Sign In",
         repo_url="https://github.com/example/repo",
+        branch="feature/GP-122",
         plan={
             "plan": {"plan_steps": ["Verify Apple Sign In"], "acceptance_criteria": ["Apple Sign In works"], "risks": []},
             "review_feedback": "Confirm nonce handling",
@@ -208,6 +211,7 @@ def test_resume_run_from_human_input_reply_preserves_review_resume_state() -> No
 
     assert result is resumed_run
     bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
+    assert bootstrap.branch == "feature/GP-122"
     assert bootstrap.dev_session_id == "dev-session-1"
     assert bootstrap.plan["trigger_context"]["resume_stage"] == "review"
     assert bootstrap.plan["trigger_context"]["resume_source_state"]["review_feedback"] == "Confirm nonce handling"

@@ -11,7 +11,8 @@ class DockerBuildContractTests(unittest.TestCase):
 
         expected_targets = {
             "api:": "app-runtime-base",
-            "worker-runtime:": "android-runtime",
+            "run-worker:": "android-runtime",
+            "webhook-worker:": "app-runtime-base",
             "knowledge-sync:": "app-runtime-base",
             "discord-gateway:": "voice-runtime",
             "discord-live-voice:": "voice-runtime",
@@ -24,6 +25,8 @@ class DockerBuildContractTests(unittest.TestCase):
                 service_block,
                 msg=f"{service_marker.rstrip(':')} should build from target {target}.",
             )
+
+        self.assertNotIn("worker-runtime:", compose, msg="Compose should no longer use the mixed worker service.")
 
     def test_python_dependencies_are_installed_before_app_source_copy(self) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")

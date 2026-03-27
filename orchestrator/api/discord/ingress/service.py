@@ -40,7 +40,6 @@ def execute_tenant_command_ingress(
     *,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: Literal["discord", "jira_comment"] = "discord",
     deps: DiscordIngressDependencies,
 ) -> DiscordCommandResponse:
@@ -84,7 +83,6 @@ def execute_tenant_command_ingress(
             session=session,
             defer_seed_issues=defer_seed_issues,
             require_ask_confirmation=require_ask_confirmation,
-            allow_plain_ask=allow_plain_ask,
             ingress_source=ingress_source,
             deps=runtime_deps,
         )

@@ -70,6 +70,16 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Do not default to broad `xcodebuild test`", prompt_text)
         self.assertIn("If you cannot identify a targeted test", prompt_text)
 
+    def test_dev_and_review_prompts_require_pr_head_to_use_integration_branch(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        dev_prompt_text = (prompts_dir / "dev_user.j2").read_text(encoding="utf-8")
+        review_prompt_text = (prompts_dir / "review_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("Integration branch as the only valid PR head branch", dev_prompt_text)
+        self.assertIn("Never open or update a PR from the Execution branch", dev_prompt_text)
+        self.assertIn("Integration branch as the canonical PR head branch", review_prompt_text)
+        self.assertIn("Execution branch (`run/...`)", review_prompt_text)
+
     def test_voice_room_engineer_prompt_enforces_spoken_style(self) -> None:
         system_prompt_path = (
             Path(__file__).resolve().parents[1]

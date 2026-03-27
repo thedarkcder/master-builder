@@ -35,7 +35,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="master-builder orchestrator")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("worker", help="Run background worker loop")
+    subparsers.add_parser("worker", help="Run background run worker loop")
+    subparsers.add_parser("worker-runs", help="Run background issue-execution worker loop")
+    subparsers.add_parser("worker-webhooks", help="Run background webhook worker loop")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
@@ -243,7 +245,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "worker":
-        worker_main()
+        worker_main(mode="runs")
+        return 0
+
+    if args.command == "worker-runs":
+        worker_main(mode="runs")
+        return 0
+
+    if args.command == "worker-webhooks":
+        worker_main(mode="webhooks")
         return 0
 
     if args.command == "discord-gateway":
