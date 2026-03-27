@@ -117,11 +117,12 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.enqueued)
         self.assertEqual(result.issue_key, "GP-122")
         self.assertFalse(result.issue_created)
-        self.assertEqual(queued_run.branch, "feature/no-key")
-        self.assertEqual(queued_run.pr_url, "https://github.com/org/repo/pull/11")
         create_bug_mock.assert_not_called()
         enqueue_run_mock.assert_called_once()
         self.assertEqual(enqueue_run_mock.call_args.kwargs["issue_key"], "GP-122")
+        bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
+        self.assertEqual(bootstrap.branch, "feature/no-key")
+        self.assertEqual(bootstrap.pr_url, "https://github.com/org/repo/pull/11")
 
     def test_creates_bug_when_issue_key_missing(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()
@@ -272,7 +273,7 @@ class PrRemediationServiceTests(unittest.TestCase):
             patch(
                 "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
                 return_value=enqueue_result,
-            ),
+            ) as enqueue_run_mock,
         ):
             result = enqueue_pr_remediation_if_needed(
                 session=session,
@@ -290,7 +291,7 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
         self.assertIsNone(result.reason)
-        manual_fix = enqueue_result.run.plan.get("trigger_context", {}).get("manual_fix_request")
+        manual_fix = enqueue_run_mock.call_args.kwargs["bootstrap"].plan.get("trigger_context", {}).get("manual_fix_request")
         self.assertIsInstance(manual_fix, dict)
         self.assertEqual(manual_fix.get("instruction_text"), "fix the flaky test")
         requested_comment = manual_fix.get("requested_comment")
@@ -342,7 +343,7 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
         self.assertEqual(result.issue_key, "GP-122")
-        manual_fix = enqueue_result.run.plan.get("trigger_context", {}).get("manual_fix_request")
+        manual_fix = enqueue_run_mock.call_args.kwargs["bootstrap"].plan.get("trigger_context", {}).get("manual_fix_request")
         self.assertIsInstance(manual_fix, dict)
         self.assertEqual(manual_fix.get("requested_by"), "owner-a")
         self.assertEqual(manual_fix.get("instruction_text"), "rename this variable")
@@ -407,7 +408,7 @@ class PrRemediationServiceTests(unittest.TestCase):
             patch(
                 "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
                 return_value=enqueue_result,
-            ),
+            ) as enqueue_run_mock,
         ):
             result = enqueue_pr_remediation_if_needed(
                 session=session,
@@ -424,7 +425,7 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
-        trigger_context = enqueue_result.run.plan.get("trigger_context", {})
+        trigger_context = enqueue_run_mock.call_args.kwargs["bootstrap"].plan.get("trigger_context", {})
         self.assertNotIn("review_comments", trigger_context)
         self.assertNotIn("issue_comments", trigger_context)
         requested_comment = trigger_context.get("requested_comment")
@@ -494,7 +495,7 @@ class PrRemediationServiceTests(unittest.TestCase):
             patch(
                 "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
                 return_value=enqueue_result,
-            ),
+            ) as enqueue_run_mock,
         ):
             result = enqueue_pr_remediation_if_needed(
                 session=session,
@@ -511,7 +512,7 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         self.assertTrue(result.triggered)
         self.assertTrue(result.enqueued)
-        trigger_context = enqueue_result.run.plan.get("trigger_context", {})
+        trigger_context = enqueue_run_mock.call_args.kwargs["bootstrap"].plan.get("trigger_context", {})
         self.assertNotIn("review_comments", trigger_context)
         self.assertNotIn("issue_comments", trigger_context)
         self.assertIsNone(trigger_context.get("code_context"))
