@@ -13,12 +13,14 @@ class _Session:
     def __init__(self) -> None:
         self._commits = 0
         self.refreshed = False
+        self.refresh_attribute_names: list[object] = []
 
     def commit(self) -> None:
         self._commits += 1
 
-    def refresh(self, _run) -> None:  # noqa: ANN001
+    def refresh(self, _run, attribute_names=None) -> None:  # noqa: ANN001
         self.refreshed = True
+        self.refresh_attribute_names.append(attribute_names)
 
     def get(self, _model, _key):  # noqa: ANN001
         return None
@@ -286,3 +288,45 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
     assert isinstance(run.plan, dict)
     assert run.plan.get("trigger_context") == {"source": "github_pr_review_feedback", "pr_number": 6}
     assert run.plan.get("stage_updates", [{}])[0].get("stage") == "run_not_ready"
+    assert session.refresh_attribute_names[0] == ["plan"]
+
+
+def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None:
+    session = _Session()
+    run = _run()
+    run.plan = {}
+    tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
+    oauth = _oauth_context(client=_IssueDetailClient(labels=[]))
+
+    def _refresh(_run, attribute_names=None):  # noqa: ANN001
+        session.refreshed = True
+        session.refresh_attribute_names.append(attribute_names)
+        if attribute_names == ["plan"]:
+            run.plan = {"trigger_context": {"source": "github_pr_review_feedback", "pr_number": 6}}
+
+    session.refresh = _refresh
+
+    with (
+        patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None),
+        patch("orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run),
+    ):
+        terminal, _meta = apply_decision_gate(
+            session=session,
+            run=run,
+            tenant=tenant,
+            settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
+            tenant_jira_oauth_context_fn=lambda **_: oauth,
+            evaluate_execution_readiness_fn=lambda **_: _readiness_check(
+                outcome="missing_ready_label",
+                ready_label_present=False,
+            ),
+            send_discord_message_fn=lambda **_: SimpleNamespace(sent=True, reason="sent"),
+            send_jira_message_fn=lambda **_: None,
+            ask_reply_components_fn=lambda: [],
+            blocked_status="blocked",
+            failed_status="failed",
+        )
+
+    assert terminal is run
+    assert isinstance(run.plan, dict)
+    assert run.plan.get("trigger_context") == {"source": "github_pr_review_feedback", "pr_number": 6}

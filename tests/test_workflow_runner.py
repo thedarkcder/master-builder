@@ -8,8 +8,8 @@ class _ExecuteOnlyAgents:
         self.fail = fail
         self.calls: int = 0
 
-    def execute(self, request: WorkflowRequest, *, test_feedback_hook=None) -> WorkflowResult:  # noqa: ANN001
-        _ = test_feedback_hook
+    def execute(self, request: WorkflowRequest, *, test_feedback_hook=None, stage_checkpoint_hook=None) -> WorkflowResult:  # noqa: ANN001
+        _ = (test_feedback_hook, stage_checkpoint_hook)
         self.calls += 1
         if self.fail:
             raise RuntimeError("boom")

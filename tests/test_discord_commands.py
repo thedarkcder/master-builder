@@ -2310,7 +2310,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                     command="what is blocked on this board?",
                 ),
                 session=session,
-                allow_plain_ask=True,
             )
 
         self.assertTrue(response.ok)
@@ -2397,7 +2396,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                     command="Here are the missing rollout details",
                 ),
                 session=session,
-                allow_plain_ask=True,
             )
 
         self.assertTrue(response.ok)
@@ -2450,7 +2448,6 @@ class DiscordCommandApiTests(unittest.TestCase):
                     command="More rollout details",
                 ),
                 session=session,
-                allow_plain_ask=True,
             )
 
         self.assertTrue(response.ok)
