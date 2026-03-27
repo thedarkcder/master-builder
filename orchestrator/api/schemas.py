@@ -561,7 +561,7 @@ class RunRead(BaseModel):
 
 class RunRerunRequest(BaseModel):
     mode: str = Field(default="fresh", pattern="^(fresh|resume)$")
-    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev)$")
+    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev|review)$")
 
     @field_validator("resume_stage")
     @classmethod

@@ -44,7 +44,15 @@ class PrRemediationServiceTests(unittest.TestCase):
                 "title": "Fix auth edge case",
                 "body": "Improve auth flow",
                 "html_url": "https://github.com/org/repo/pull/11",
-            }
+            },
+            "comment": {
+                "id": 777,
+                "body": "@mb fix this",
+                "html_url": "https://github.com/org/repo/pull/11#discussion_r777",
+                "user": {"login": "owner-a"},
+                "path": "GirlPower/App/AuthSystem.swift",
+                "line": 12,
+            },
         }
         settings = SimpleNamespace(secrets_encryption_key="k")
         return session, tenant, project, github_client, payload, settings
@@ -431,6 +439,34 @@ class PrRemediationServiceTests(unittest.TestCase):
         manual_fix = trigger_context.get("manual_fix_request")
         self.assertIsInstance(manual_fix, dict)
         self.assertIsInstance(manual_fix.get("code_context"), dict)
+
+    def test_untagged_review_comment_does_not_trigger_remediation(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        payload = {
+            **payload,
+            "comment": {
+                **payload["comment"],
+                "body": "fix this",
+            },
+        }
+
+        result = enqueue_pr_remediation_if_needed(
+            session=session,
+            tenant=tenant,
+            project=project,
+            github_client=github_client,
+            event="pull_request_review_comment",
+            action="created",
+            payload=payload,
+            pr_number=11,
+            repo_full_name="org/repo",
+            settings=settings,
+        )
+
+        self.assertFalse(result.triggered)
+        self.assertFalse(result.enqueued)
+        self.assertIsNone(result.issue_key)
+        github_client.get_pull_request_details.assert_not_called()
 
     def test_manual_fix_issue_comment_trigger_context_is_comment_only(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()

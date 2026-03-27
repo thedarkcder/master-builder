@@ -1319,6 +1319,65 @@ class AdminApiTests(unittest.TestCase):
             ).scalar_one_or_none()
             self.assertIsNone(lock)
 
+    def test_rerun_resume_review_uses_dev_session(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-review-resume",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-1001",
+                    issue_summary="failed review run",
+                    issue_description="Objective: resume from review.",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url="https://github.com/example/repo/pull/12",
+                    dev_session_id="dev-session-123",
+                    pm_session_id="pm-session-456",
+                    orchestrated_session_id="orchestrated-session-789",
+                    status="failed",
+                    last_error="review failed",
+                    plan={
+                        "plan": {
+                            "plan_steps": ["restore auth flow"],
+                            "acceptance_criteria": ["login works"],
+                            "risks": [],
+                        },
+                        "review_summary": ["Verify nonce handling"],
+                        "review_feedback": "Verify nonce handling with the QA account",
+                    },
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/runs/run-review-resume/rerun",
+            json={"mode": "resume", "resume_stage": "review"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["dev_session_id"], "dev-session-123")
+        trigger = body["plan"]["trigger_context"]
+        self.assertEqual(trigger["rerun_mode"], "resume")
+        self.assertEqual(trigger["resume_stage"], "review")
+        self.assertEqual(trigger["resume_session_id"], "dev-session-123")
+        self.assertEqual(trigger["resume_source_state"]["review_feedback"], "Verify nonce handling with the QA account")
+
     def test_cancel_terminal_run_from_admin_returns_conflict(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")

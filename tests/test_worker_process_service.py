@@ -301,7 +301,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         self.assertTrue(heartbeat.started)
         self.assertTrue(heartbeat.stopped)
 
-    def test_process_next_queued_run_publishes_manual_remediation_completion_after_finalize(self) -> None:
+    def test_process_next_queued_run_publishes_manual_remediation_completion_before_finalize_with_terminal_status(self) -> None:
         now = datetime.now(timezone.utc)
         run = SimpleNamespace(
             run_id="run-1",
@@ -382,7 +382,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
                 fail_guardrail_violation_fn=MagicMock(),
                 tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
-                lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": "locked"}),
+                lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
                 plan_posted_update_fn=MagicMock(),
                 pr_opened_update_fn=MagicMock(),
                 run_failed_update_fn=MagicMock(),
@@ -406,9 +406,234 @@ class WorkerProcessServiceTests(unittest.TestCase):
 
         self.assertIs(result, finalized_run)
         publish_completion.assert_called_once()
-        self.assertIs(publish_completion.call_args.kwargs["run"], finalized_run)
+        self.assertIs(publish_completion.call_args.kwargs["run"], run)
+        self.assertEqual(publish_completion.call_args.kwargs["terminal_status"], "succeeded")
         self.assertTrue(heartbeat.started)
         self.assertTrue(heartbeat.stopped)
+
+    def test_process_next_queued_run_keeps_heartbeat_running_until_finalize(self) -> None:
+        now = datetime.now(timezone.utc)
+        run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-122",
+            project_id="project-1",
+            status="running",
+            worker_service_instance_id="node-a:1234",
+            created_at=now,
+            started_at=now,
+            plan={},
+            pr_url=None,
+            last_error=None,
+        )
+        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
+        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        heartbeat = _FakeHeartbeatController()
+        session = MagicMock()
+        session.refresh.side_effect = lambda _target: None
+
+        def _finalize(*_args, **_kwargs):  # noqa: ANN001
+            self.assertFalse(heartbeat.stopped)
+            return run
+
+        result = process_next_queued_run(
+            session=session,
+            runner=SimpleNamespace(
+                run=MagicMock(
+                    return_value=WorkflowResult(
+                        succeeded=True,
+                        plan=None,
+                        pr_url=None,
+                        summary=["Done"],
+                        test_guidance=[],
+                        attempts=1,
+                    )
+                )
+            ),
+            logger=MagicMock(),
+            settings_fn=lambda: SimpleNamespace(
+                worker_capabilities="linux",
+                worker_workspace_key="worker-a",
+                project_repo_checkout_base_dir="/tmp/workdirs",
+                admin_ui_base_url="http://localhost:4100",
+                worker_run_heartbeat_interval_seconds=30,
+                tenant_id="tenant-1",
+            ),
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                run=run,
+                tenant=tenant,
+                terminal_run=None,
+            ),
+            apply_decision_gate_fn=lambda **_: (None, None),
+            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
+            send_jira_message_fn=MagicMock(),
+            ask_reply_components_fn=MagicMock(),
+            resolve_project_for_run_fn=MagicMock(return_value=project),
+            fail_missing_project_mapping_fn=MagicMock(),
+            block_archived_project_fn=MagicMock(),
+            ensure_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_checkout_fn=MagicMock(),
+            cleanup_run_workspaces_fn=MagicMock(),
+            build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+            bind_run_project_fn=MagicMock(),
+            workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
+            fail_guardrail_violation_fn=MagicMock(),
+            tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
+            lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
+            plan_posted_update_fn=MagicMock(),
+            pr_opened_update_fn=MagicMock(),
+            run_failed_update_fn=MagicMock(),
+            run_requeued_capability_update_fn=MagicMock(),
+            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            finalize_cancelled_run_fn=MagicMock(),
+            finalize_workflow_result_fn=_finalize,
+            requeue_workflow_result_for_capability_fn=MagicMock(),
+            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+            check_run_snapshot_freshness_fn=MagicMock(),
+            transition_issue_status_fn=MagicMock(),
+            emit_agent_event_fn=MagicMock(),
+            resolve_agent_id_fn=lambda: "worker-linux-local",
+            resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+            run_status_queued="queued",
+            run_status_running="running",
+            run_status_failed="failed",
+            run_status_blocked="blocked",
+            run_status_cancelled="cancelled",
+        )
+
+        self.assertIs(result, run)
+        self.assertTrue(heartbeat.started)
+        self.assertTrue(heartbeat.stopped)
+
+    def test_process_next_queued_run_records_mandatory_completion_failure_and_finalizes_failed_run(self) -> None:
+        now = datetime.now(timezone.utc)
+        run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-122",
+            project_id="project-1",
+            status="running",
+            worker_service_instance_id="node-a:1234",
+            created_at=now,
+            started_at=now,
+            plan={},
+            pr_url=None,
+            last_error=None,
+        )
+        finalized_run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-122",
+            project_id="project-1",
+            status="failed",
+            pr_url=None,
+            plan=run.plan,
+            last_error="Completion step failed",
+        )
+        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
+        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        heartbeat = _FakeHeartbeatController()
+        session = MagicMock()
+        session.refresh.side_effect = lambda _target: None
+        finalize_run = MagicMock(return_value=finalized_run)
+        cleanup = MagicMock()
+        emit_agent_event = MagicMock()
+        recorded_rows: list[dict[str, object]] = []
+
+        def _send_jira_message(**kwargs):  # noqa: ANN001
+            if kwargs.get("stage") == "review_summary":
+                raise RuntimeError("jira is unavailable")
+
+        def _record_run_log_event(**kwargs: object) -> None:
+            recorded_rows.append(dict(kwargs))
+
+        with patch("orchestrator.core.worker.process_service.record_run_log_event", side_effect=_record_run_log_event):
+            result = process_next_queued_run(
+                session=session,
+                runner=SimpleNamespace(
+                    run=MagicMock(
+                        return_value=WorkflowResult(
+                            succeeded=True,
+                            plan=None,
+                            pr_url=None,
+                            summary=["Done"],
+                            test_guidance=[],
+                            attempts=1,
+                            review_summary=["Approved with notes"],
+                        )
+                    )
+                ),
+                logger=MagicMock(),
+                settings_fn=lambda: SimpleNamespace(
+                    worker_capabilities="linux",
+                    worker_workspace_key="worker-a",
+                    project_repo_checkout_base_dir="/tmp/workdirs",
+                    admin_ui_base_url="http://localhost:4100",
+                    worker_run_heartbeat_interval_seconds=30,
+                    tenant_id="tenant-1",
+                ),
+                claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                    run=run,
+                    tenant=tenant,
+                    terminal_run=None,
+                ),
+                apply_decision_gate_fn=lambda **_: (None, None),
+                send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
+                send_jira_message_fn=_send_jira_message,
+                ask_reply_components_fn=MagicMock(),
+                resolve_project_for_run_fn=MagicMock(return_value=project),
+                fail_missing_project_mapping_fn=MagicMock(),
+                block_archived_project_fn=MagicMock(),
+                ensure_project_repository_checkout_fn=MagicMock(),
+                fail_project_repository_checkout_fn=MagicMock(),
+                cleanup_run_workspaces_fn=cleanup,
+                build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+                bind_run_project_fn=MagicMock(),
+                workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
+                fail_guardrail_violation_fn=MagicMock(),
+                tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
+                lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
+                plan_posted_update_fn=MagicMock(),
+                pr_opened_update_fn=MagicMock(),
+                run_failed_update_fn=MagicMock(),
+                run_requeued_capability_update_fn=MagicMock(),
+                run_requeued_stale_snapshot_update_fn=MagicMock(),
+                finalize_cancelled_run_fn=MagicMock(),
+                finalize_workflow_result_fn=finalize_run,
+                requeue_workflow_result_for_capability_fn=MagicMock(),
+                requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+                check_run_snapshot_freshness_fn=MagicMock(),
+                transition_issue_status_fn=MagicMock(),
+                emit_agent_event_fn=emit_agent_event,
+                resolve_agent_id_fn=lambda: "worker-linux-local",
+                resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+                run_status_queued="queued",
+                run_status_running="running",
+                run_status_failed="failed",
+                run_status_blocked="blocked",
+                run_status_cancelled="cancelled",
+            )
+
+        self.assertIs(result, finalized_run)
+        cleanup.assert_called_once()
+        finalize_run.assert_called_once()
+        finalized_workflow_result = finalize_run.call_args.kwargs["workflow_result"]
+        self.assertFalse(finalized_workflow_result.succeeded)
+        self.assertEqual(finalized_workflow_result.diagnostics.stage, "completion")
+        self.assertIn("jira_feedback", finalized_workflow_result.diagnostics.message)
+        self.assertIn("RuntimeError", finalized_workflow_result.diagnostics.message)
+        event_types = [call.kwargs["event_type"] for call in emit_agent_event.call_args_list]
+        self.assertIn("RUN_FAILED", event_types)
+        self.assertIn("TASK_FAILED", event_types)
+        self.assertNotIn("TASK_COMPLETED", event_types)
+        recorded_messages = [json.loads(str(row["message"])) for row in recorded_rows if row.get("stage") == "telemetry"]
+        self.assertTrue(
+            any(
+                message.get("event_kind") == "completion_step_failed"
+                and message.get("step") == "jira_feedback"
+                for message in recorded_messages
+            )
+        )
 
 
 if __name__ == "__main__":
