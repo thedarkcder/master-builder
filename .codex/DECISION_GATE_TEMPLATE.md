@@ -59,10 +59,20 @@ The orchestrator parses the sections below directly from this file.
   - what user journey is covered
 - Evidence:
   - demo video or screenshots if the change is user-visible
+- Regression / failure path:
+  - how the real failure is reproduced
+  - which owned boundary is exercised
+- Real boundary under test:
+  - which owned layer is being validated without mocking
+  - which external dependencies, if any, are mocked beyond that boundary
 
 ### Test expectations
-- Automated tests must prove the behavior a QA engineer would otherwise verify manually.
-- For user-facing changes, the acceptance path must be covered by automated UI tests unless explicitly justified.
+- Tests must prove real behavior the way a QA engineer would.
+- Tests must validate the layer where the behavior actually lives.
+- Don’t just prove the feature works; actively try to break it the way a real tester would.
+- UI automation for real workflows should hit the real backend API.
+- Mock only beyond the owned system boundary.
+- For bug fixes, happy-path-only coverage is insufficient.
 
 ## NFR markers
 - mvp
