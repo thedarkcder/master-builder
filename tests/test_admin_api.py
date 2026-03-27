@@ -22,7 +22,7 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeChunk, KnowledgeFact, KnowledgeSource, ManagedSecret, Project, Run, RunLock, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeChunk, KnowledgeFact, KnowledgeSource, ManagedSecret, Project, Run, RunLock, Tenant, TenantRunClaim
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -400,6 +400,9 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(projects[0].project_id, "tenant-a-default")
             self.assertEqual(projects[0].github_repository, "https://github.com/example/repo")
             self.assertEqual(projects[0].jira_project_key, "TP")
+            claim_row = session.get(TenantRunClaim, "tenant-a")
+            self.assertIsNotNone(claim_row)
+            self.assertEqual(claim_row.tenant_id, "tenant-a")
 
         list_response = self.client.get("/api/admin/tenants", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)
@@ -1102,7 +1105,7 @@ class AdminApiTests(unittest.TestCase):
                     issue_summary="failed run",
                     issue_description="Objective: rerun from admin.",
                     repo_url="https://github.com/example/repo",
-                    branch=None,
+                    branch="feature/TP-999",
                     pr_url=None,
                     dev_session_id="dev-session-123",
                     pm_session_id="pm-session-456",
@@ -1128,6 +1131,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["issue_key"], "TP-999")
         self.assertEqual(body["status"], "queued")
         self.assertNotEqual(body["run_id"], "run-failed-rerun")
+        self.assertEqual(body["branch"], "feature/TP-999")
         self.assertIsNone(body["dev_session_id"])
         self.assertIsNone(body["pm_session_id"])
         self.assertIsNone(body["orchestrated_session_id"])
@@ -1222,7 +1226,7 @@ class AdminApiTests(unittest.TestCase):
                     issue_summary="failed run",
                     issue_description="Objective: resume from dev.",
                     repo_url="https://github.com/example/repo",
-                    branch=None,
+                    branch="feature/TP-1000",
                     pr_url=None,
                     dev_session_id="dev-session-123",
                     pm_session_id="pm-session-456",
@@ -1252,6 +1256,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["branch"], "feature/TP-1000")
         self.assertEqual(body["dev_session_id"], "dev-session-123")
         self.assertIsNone(body["pm_session_id"])
         self.assertIsNone(body["orchestrated_session_id"])
@@ -1318,6 +1323,66 @@ class AdminApiTests(unittest.TestCase):
                 )
             ).scalar_one_or_none()
             self.assertIsNone(lock)
+
+    def test_rerun_resume_review_uses_dev_session(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-review-resume",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-1001",
+                    issue_summary="failed review run",
+                    issue_description="Objective: resume from review.",
+                    repo_url="https://github.com/example/repo",
+                    branch="feature/TP-1001",
+                    pr_url="https://github.com/example/repo/pull/12",
+                    dev_session_id="dev-session-123",
+                    pm_session_id="pm-session-456",
+                    orchestrated_session_id="orchestrated-session-789",
+                    status="failed",
+                    last_error="review failed",
+                    plan={
+                        "plan": {
+                            "plan_steps": ["restore auth flow"],
+                            "acceptance_criteria": ["login works"],
+                            "risks": [],
+                        },
+                        "review_summary": ["Verify nonce handling"],
+                        "review_feedback": "Verify nonce handling with the QA account",
+                    },
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/runs/run-review-resume/rerun",
+            json={"mode": "resume", "resume_stage": "review"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["branch"], "feature/TP-1001")
+        self.assertEqual(body["dev_session_id"], "dev-session-123")
+        trigger = body["plan"]["trigger_context"]
+        self.assertEqual(trigger["rerun_mode"], "resume")
+        self.assertEqual(trigger["resume_stage"], "review")
+        self.assertEqual(trigger["resume_session_id"], "dev-session-123")
+        self.assertEqual(trigger["resume_source_state"]["review_feedback"], "Verify nonce handling with the QA account")
 
     def test_cancel_terminal_run_from_admin_returns_conflict(self) -> None:
         payload = self._tenant_payload()

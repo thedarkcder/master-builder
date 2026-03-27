@@ -972,7 +972,11 @@ class DiscordInteractionsFollowupHelpersTests(unittest.TestCase):
         self.assertEqual(first_call_kwargs["message_id"], "msg-1")
         self.assertIn("thread-1", project.discord_config["ask_thread_channel_ids"])
         self.assertGreaterEqual(client.post_message.call_count, 3)
-        send_interaction_followup_mock.assert_not_called()
+        self.assertEqual(send_interaction_followup_mock.call_count, 2)
+        first_ack = send_interaction_followup_mock.call_args_list[0].kwargs
+        self.assertEqual(first_ack["application_id"], "app")
+        self.assertEqual(first_ack["interaction_token"], "tok")
+        self.assertEqual(first_ack["content"], "Posted response in a follow-up thread.")
 
     def test_decision_gate_issue_for_thread_reads_project_mapping(self) -> None:
         from orchestrator.api.discord.interactions.followup import _decision_gate_issue_for_thread

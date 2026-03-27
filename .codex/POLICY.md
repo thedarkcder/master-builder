@@ -18,6 +18,11 @@ These rules apply to both agents and humans. Violations should block the PR.
 - Provide “How to test” in PR and Jira.
 - No placeholders or TODO stubs in production paths.
   - If partial work unavoidable: create Backlog follow-up issue and stop.
+- Tests must validate the owned layer where the behavior actually lives.
+- Don’t just prove the feature works; actively try to break it the way a real tester would.
+- Never mock the layer being validated; mock only beyond the system boundary.
+- UI workflow tests must hit the real backend API.
+- For bug fixes, add a regression test that reproduces the failure mode.
 
 ## Allowed Jira actions (default)
 - Add comments

@@ -5,7 +5,6 @@ import logging
 from orchestrator.core.communications import (
     GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
-    GitHubStickyRemediationReviewThreadReplyAction,
     TransportAction,
 )
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
@@ -27,6 +26,7 @@ def publish_manual_pr_remediation_completion(
     settings,
     issue_url: str | None,
     logger_override=None,
+    terminal_status: str | None = None,
 ) -> None:  # noqa: ANN001
     log = logger_override or logger
     actions = build_manual_pr_remediation_completion_actions(
@@ -34,6 +34,7 @@ def publish_manual_pr_remediation_completion(
         run=run,
         workflow_result=workflow_result,
         issue_url=issue_url,
+        terminal_status=terminal_status,
     )
     if not actions:
         return
@@ -41,7 +42,7 @@ def publish_manual_pr_remediation_completion(
     github_config_raw = getattr(tenant, "github_config", {})
     github_config = github_config_raw if isinstance(github_config_raw, dict) else {}
     if not github_config:
-        return
+        raise RuntimeError("Manual PR remediation completion requires tenant GitHub configuration")
 
     try:
         github_client = github_client_from_tenant_config(
@@ -60,6 +61,10 @@ def publish_manual_pr_remediation_completion(
             ),
         )
     except Exception as exc:  # noqa: BLE001
+        message = (
+            "Failed to initialize GitHub client for manual PR remediation completion: "
+            f"{type(exc).__name__}: {exc}"
+        )
         log.warning(
             "manual_pr_remediation_completion_github_client_failed tenant_id=%s project_id=%s run_id=%s error=%s",
             getattr(tenant, "tenant_id", ""),
@@ -67,9 +72,14 @@ def publish_manual_pr_remediation_completion(
             getattr(run, "run_id", ""),
             exc,
         )
-        return
+        raise RuntimeError(message) from exc
 
-    executor = GitHubTransportExecutor(github_client=github_client, session=session, logger_override=log)
+    executor = GitHubTransportExecutor(
+        github_client=github_client,
+        session=session,
+        logger_override=log,
+        raise_on_error=True,
+    )
     for action in actions:
         executor.execute(action=action)
 
@@ -80,6 +90,7 @@ def build_manual_pr_remediation_completion_actions(
     run,
     workflow_result,
     issue_url: str | None,
+    terminal_status: str | None = None,
 ) -> tuple[TransportAction, ...]:  # noqa: ANN001
     trigger_context = _trigger_context(getattr(run, "plan", None))
     manual_fix_request = trigger_context.get("manual_fix_request")
@@ -97,8 +108,7 @@ def build_manual_pr_remediation_completion_actions(
     if not isinstance(triggering_comment_id, int) or pr_number is None:
         return ()
 
-    status_label = _status_label(getattr(run, "status", None))
-    issue_created = bool(trigger_context.get("issue_created"))
+    status_label = _status_label(terminal_status or getattr(run, "status", None))
     triggering_comment_url = str(requested_comment.get("url") or "").strip() or None
     requested_by = str(manual_fix_request.get("requested_by") or "").strip() or None
     instruction_text = str(manual_fix_request.get("instruction_text") or "").strip() or None
@@ -125,28 +135,10 @@ def build_manual_pr_remediation_completion_actions(
     )
 
     if requested_comment_type == "review_comment":
-        head_sha = str(trigger_context.get("head_sha") or "").strip() or None
         return (
             GitHubManualFixReviewThreadReplyAction(
                 triggering_comment_id=triggering_comment_id,
                 **common_kwargs,
-            ),
-            GitHubStickyRemediationReviewThreadReplyAction(
-                repo_full_name=repo_full_name,
-                pr_number=pr_number,
-                tenant_id=str(getattr(run, "tenant_id", "") or "").strip(),
-                project_id=str(getattr(project, "project_id", "") or "").strip(),
-                triggering_comment_id=triggering_comment_id,
-                issue_key=str(getattr(run, "issue_key", "") or "").strip() or None,
-                issue_url=issue_url,
-                issue_created=issue_created,
-                enqueued=True,
-                reason=reason,
-                run_id=str(getattr(run, "run_id", "") or "").strip() or None,
-                head_sha=head_sha,
-                event="workflow_run",
-                action_name=status_label.lower(),
-                status_label=status_label,
             ),
         )
 

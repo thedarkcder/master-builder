@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     codex_hang_detection_report_interval_seconds: int = 120
     codex_log_batch_size: int = 50
     codex_log_batch_flush_ms: int = 50
+    redis_url: str = ""
+    log_bus_enabled: bool = False
+    log_broker_poll_ms: int = 500
+    log_broker_fetch_limit: int = 1000
+    log_subscriber_buffer_size: int = 256
+    log_redis_publish_timeout_ms: int = 10
+    log_db_batch_size: int = 200
+    log_db_batch_flush_ms: int = 50
+    log_wake_debounce_ms: int = 10
+    log_retention_sweep_seconds: int = 60
     knowledge_injection_enabled: bool = True
     knowledge_base_enabled_default: bool = True
     knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = "aggressive"

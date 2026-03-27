@@ -25,6 +25,11 @@ This repo is worked on by automated agents and humans. Agents must follow this g
 - Testability (how-to-test definition)
 - NFR decision (MVP vs scale-ready)
 - Dependencies/risks explicitly called out
+- Testability:
+  - how to automate test is clearly defined
+  - expected test layers are identified (unit / integration / UI automation)
+  - UI automation requirement is defined for user-facing changes
+  - demo evidence requirement is clear where applicable
 
 If GTD is incomplete, stop early, request clarification, and mark blocked.
 
@@ -56,15 +61,27 @@ If GTD is incomplete, stop early, request clarification, and mark blocked.
   - How to test (commands + steps)
   - Risks/notes (2 bullets max)
   - Acceptance criteria checklist
+  - Evidence:
+    - For UI-visible PRs, include a short demo video or equivalent visual evidence
+    - screenshots are acceptable for simple changes, video required for workflows
+    - demo must reflect acceptance criteria and critical user path
+    - demo evidence supports review and does not replace automated testing
+  - Automated UI test coverage must align with the demonstrated user flow where applicable
 
 ## 5) Where to add tests
-- Backend: unit tests near the module; integration tests if needed.
-- React: React Testing Library for behavior; MSW for network mocking if present.
+- Backend: unit tests near the module; integration/API tests for owned persistence, transaction, auth, and wiring behavior where relevant.
+- React/Web: component tests for isolated behavior; Playwright for real user journeys.
+- UI automation for real workflows should hit the real backend API and may mock only external systems outside the product boundary.
+- Do not mock owned APIs when the purpose of the test is to validate backend, transaction, or persistence behavior.
 
 ## 6) How agents should work
 - Keep diffs minimal; avoid unrelated refactors.
 - Prefer explicit state machines/events over time-based waits.
 - No placeholders unless explicitly approved and tracked.
+- Design tests to validate the layer where the behavior actually lives.
+- Don’t just prove the feature works; actively try to break it the way a real tester would.
+- For bug fixes, start by reproducing the real failure mode.
+- Do not use mocked UI tests to prove backend/API correctness.
 
 ## 6.1) Mode handling (`pm` / `dev` / `test`)
 - `pm` mode:

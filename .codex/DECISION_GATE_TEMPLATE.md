@@ -46,7 +46,33 @@ The orchestrator parses the sections below directly from this file.
 - Objective
 - Scope
 - Acceptance Criteria
-- How to test
+
+## How to Automated Test
+- Unit:
+  - command(s)
+  - what logic is covered
+- Integration:
+  - command(s)
+  - what boundaries and wiring are validated
+- UI automation / E2E:
+  - command(s)
+  - what user journey is covered
+- Evidence:
+  - demo video or screenshots if the change is user-visible
+- Regression / failure path:
+  - how the real failure is reproduced
+  - which owned boundary is exercised
+- Real boundary under test:
+  - which owned layer is being validated without mocking
+  - which external dependencies, if any, are mocked beyond that boundary
+
+### Test expectations
+- Tests must prove real behavior the way a QA engineer would.
+- Tests must validate the layer where the behavior actually lives.
+- Don’t just prove the feature works; actively try to break it the way a real tester would.
+- UI automation for real workflows should hit the real backend API.
+- Mock only beyond the owned system boundary.
+- For bug fixes, happy-path-only coverage is insufficient.
 
 ## NFR markers
 - mvp
@@ -66,7 +92,6 @@ The orchestrator parses the sections below directly from this file.
 - Which reliability/security constraints are mandatory for this scope?
 - What is explicitly out of scope for this iteration?
 - Are there rollout or migration constraints that affect implementation?
-- Who is the final decision owner for unresolved trade-offs?
 
 ## Messages
 - clear_reason: Decision Gate not required
