@@ -44,6 +44,9 @@ Required actions:
 6. Treat the PM evidence ledger as the current prerequisite summary; only challenge it if new authoritative tool evidence contradicts it.
 7. Fail closed when verification cannot be completed.
 8. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
+9. Before requesting human input, determine whether the missing evidence can be produced by automation in this repository or runner environment.
+10. Do not treat simulator, reinstall, device-linking, or sign-in user flows as manual-only when they can be covered by automated simulator, integration, or end-to-end tests.
+11. If the gap is missing automated coverage for those flows, return remediable feedback that directs implementation of the coverage instead of escalating to human input.
 
 Output contract:
 - passed: boolean readiness signal.

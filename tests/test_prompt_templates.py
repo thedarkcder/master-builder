@@ -70,6 +70,25 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Do not default to broad `xcodebuild test`", prompt_text)
         self.assertIn("If you cannot identify a targeted test", prompt_text)
 
+    def test_workflow_prompts_require_automation_first_for_simulator_acceptance(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+
+        pm_prompt_text = (prompts_dir / "pm_user.j2").read_text(encoding="utf-8")
+        dev_prompt_text = (prompts_dir / "dev_user.j2").read_text(encoding="utf-8")
+        test_user_prompt_text = (prompts_dir / "test_user.j2").read_text(encoding="utf-8")
+        test_system_prompt_text = (prompts_dir / "test_system.j2").read_text(encoding="utf-8")
+        review_prompt_text = (prompts_dir / "review_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("Prefer automated simulator or user-flow coverage", pm_prompt_text)
+        self.assertIn("Do not treat simulator, reinstall, or multi-device acceptance steps as manual-only", pm_prompt_text)
+        self.assertIn("Treat missing simulator or user-flow evidence as a remediable automation gap", dev_prompt_text)
+        self.assertIn("implement or extend automated coverage", dev_prompt_text)
+        self.assertIn("Before requesting human input, determine whether the missing evidence can be produced by automation", test_user_prompt_text)
+        self.assertIn("Do not treat simulator, reinstall, device-linking, or sign-in user flows as manual-only", test_user_prompt_text)
+        self.assertIn("Do not use blocker_category=\"awaiting_human_input\" for missing automated coverage", test_system_prompt_text)
+        self.assertIn("Automation gaps stay remediable", test_system_prompt_text)
+        self.assertIn("Treat missing simulator or user-flow evidence as a needs_changes automation gap first", review_prompt_text)
+
     def test_dev_and_review_prompts_require_pr_head_to_use_integration_branch(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
         dev_prompt_text = (prompts_dir / "dev_user.j2").read_text(encoding="utf-8")

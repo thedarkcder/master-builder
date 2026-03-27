@@ -70,6 +70,9 @@ Required actions:
 11. If additional runtime values are needed but not explicitly listed in this ticket, request them via `run.request_human_input`, continue planning, and do not treat that as terminal evidence failure.
 12. Only emit missing_evidence_sources=`runtime_values` when the ticket explicitly names required runtime values and they remain unresolved; that path should block PM planning.
 13. Never guess that an evidence source is missing from ticket wording alone. For `decision_state`, `jira_issue`, and `knowledge`, first call the matching tool and use the result.
+14. Prefer automated simulator or user-flow coverage when acceptance mentions reinstall, simulator, sign-in, multi-device, or other end-user flows that can be exercised in-repo.
+15. Do not treat simulator, reinstall, or multi-device acceptance steps as manual-only evidence unless the ticket explicitly requires human observation that the repo tooling cannot automate.
+16. If those flows are not yet automated, plan that automation as implementation/test work before classifying the gap as awaiting human input.
 
 Output contract:
 - plan_steps: array of concrete execution steps.

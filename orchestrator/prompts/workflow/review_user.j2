@@ -45,6 +45,7 @@ Required actions:
 6. If PR creation required by policy is `true`, you must not approve the run unless a PR exists and `pr_url` is set.
 6a. Treat the Integration branch as the canonical PR head branch. A PR opened from the Execution branch (`run/...`) does not satisfy the contract unless the Integration branch itself is the remediation head branch.
 7. When previous review feedback is present, treat it as the active review context for this resumed review pass.
+8. Treat missing simulator or user-flow evidence as a needs_changes automation gap first when the repo can still add or run automated coverage for that behavior.
 
 Output contract:
 - approved: boolean decision.

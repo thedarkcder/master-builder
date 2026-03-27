@@ -42,6 +42,7 @@ Required actions:
 8a. If branch or PR actions are needed, treat the Integration branch as the only valid PR head branch. Never open or update a PR from the Execution branch (`run/...`).
 9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
 10. If PR creation required by policy is `true`, do not treat implementation as complete until a PR exists and `pr_url` is set.
+11. Treat missing simulator or user-flow evidence as a remediable automation gap first. When reinstall, sign-in, simulator, or multi-device behavior can be exercised in-repo, implement or extend automated coverage instead of requesting manual QA.
 
 Output contract:
 - change_summary: array of implemented changes (or concrete blocker facts).
