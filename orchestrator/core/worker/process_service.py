@@ -81,6 +81,7 @@ def process_next_queued_run(
     run_requeued_stale_snapshot_update_fn,
     finalize_cancelled_run_fn,
     finalize_workflow_result_fn,
+    persist_stage_checkpoint_fn,
     requeue_workflow_result_for_capability_fn,
     requeue_workflow_result_for_stale_snapshot_fn,
     check_run_snapshot_freshness_fn,
@@ -269,7 +270,16 @@ def process_next_queued_run(
     )
     heartbeat_controller.start()
     try:
-        workflow_result = runner.run(workflow_request, test_feedback_hook=_emit_test_feedback)
+        workflow_result = runner.run(
+            workflow_request,
+            test_feedback_hook=_emit_test_feedback,
+            stage_checkpoint_hook=lambda checkpoint: persist_stage_checkpoint_fn(
+                session,
+                run=run,
+                checkpoint=checkpoint,
+                expected_worker_service_instance_id=worker_service_instance_id,
+            ),
+        )
         session.refresh(run)
         if (
             str(run.worker_service_instance_id or "").strip() != str(worker_service_instance_id or "").strip()

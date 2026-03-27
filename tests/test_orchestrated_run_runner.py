@@ -3,7 +3,14 @@ from dataclasses import replace
 
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.workflow.orchestrated_run_runner import OrchestratedRunWorkflowExecutor
-from orchestrator.core.workflow.runner import DevResult, PmPlan, ReviewResult, TestResult, WorkflowRequest
+from orchestrator.core.workflow.runner import (
+    DevResult,
+    PmPlan,
+    ReviewResult,
+    TestResult,
+    WorkflowRequest,
+    WorkflowStageCheckpoint,
+)
 
 
 class _RuntimeNoop:
@@ -117,6 +124,43 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.review_calls, 2)
         self.assertEqual(stage_agents.dev_feedback, [None, "Fix Apple nonce handling"])
         self.assertEqual(result.pr_url, "https://example/pull/1")
+
+    def test_stage_checkpoint_hook_emits_durable_stage_artifacts(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+            dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/3")],
+            test_results=[TestResult(passed=True, guidance=["pytest -q"])],
+            review_results=[
+                ReviewResult(
+                    approved=True,
+                    outcome="approved",
+                    summary=["Looks good"],
+                    feedback=None,
+                    pr_url="https://example/pull/3",
+                )
+            ],
+        )
+        checkpoints: list[WorkflowStageCheckpoint] = []
+
+        result = self._executor(stage_agents).execute(
+            self._request(),
+            stage_checkpoint_hook=checkpoints.append,
+        )
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(
+            [(checkpoint.stage, checkpoint.status, checkpoint.attempt) for checkpoint in checkpoints],
+            [
+                ("pm", "completed", 1),
+                ("dev", "completed", 1),
+                ("test", "completed", 1),
+                ("review", "completed", 1),
+            ],
+        )
+        self.assertEqual(checkpoints[0].plan.plan_steps, ["plan"])
+        self.assertEqual(checkpoints[1].dev_result.change_summary, ["implemented"])
+        self.assertTrue(checkpoints[2].test_result.passed)
+        self.assertTrue(checkpoints[3].review_result.approved)
 
     def test_review_approved_without_pr_loops_back_when_pr_creation_required(self) -> None:
         stage_agents = _StubStageAgents(
