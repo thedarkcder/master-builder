@@ -137,7 +137,7 @@ def test_resume_run_from_human_input_reply_uses_request_context_resume_source_pl
 
     with (
         patch("orchestrator.core.run_human_input_service.encrypt_value", return_value="encrypted"),
-        patch("orchestrator.core.run_human_input_service.enqueue_run", return_value=enqueue_result),
+        patch("orchestrator.core.run_human_input_service.enqueue_run", return_value=enqueue_result) as enqueue_run_mock,
     ):
         result = resume_run_from_human_input_reply(
             session=session,
@@ -148,9 +148,10 @@ def test_resume_run_from_human_input_reply_uses_request_context_resume_source_pl
         )
 
     assert result is resumed_run
-    assert resumed_run.dev_session_id == "dev-session-1"
-    assert resumed_run.plan["trigger_context"]["resume_source_plan"] == {"plan_steps": ["Verify Apple Sign In"]}
-    assert resumed_run.plan["trigger_context"]["human_input_request_ids"] == ["request-1"]
+    bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
+    assert bootstrap.dev_session_id == "dev-session-1"
+    assert bootstrap.plan["trigger_context"]["resume_source_plan"] == {"plan_steps": ["Verify Apple Sign In"]}
+    assert bootstrap.plan["trigger_context"]["human_input_request_ids"] == ["request-1"]
 
 
 def test_resume_run_from_human_input_reply_preserves_review_resume_state() -> None:
@@ -195,7 +196,7 @@ def test_resume_run_from_human_input_reply_preserves_review_resume_state() -> No
 
     with (
         patch("orchestrator.core.run_human_input_service.encrypt_value", return_value="encrypted"),
-        patch("orchestrator.core.run_human_input_service.enqueue_run", return_value=enqueue_result),
+        patch("orchestrator.core.run_human_input_service.enqueue_run", return_value=enqueue_result) as enqueue_run_mock,
     ):
         result = resume_run_from_human_input_reply(
             session=session,
@@ -206,6 +207,7 @@ def test_resume_run_from_human_input_reply_preserves_review_resume_state() -> No
         )
 
     assert result is resumed_run
-    assert resumed_run.dev_session_id == "dev-session-1"
-    assert resumed_run.plan["trigger_context"]["resume_stage"] == "review"
-    assert resumed_run.plan["trigger_context"]["resume_source_state"]["review_feedback"] == "Confirm nonce handling"
+    bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
+    assert bootstrap.dev_session_id == "dev-session-1"
+    assert bootstrap.plan["trigger_context"]["resume_stage"] == "review"
+    assert bootstrap.plan["trigger_context"]["resume_source_state"]["review_feedback"] == "Confirm nonce handling"

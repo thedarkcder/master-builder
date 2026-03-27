@@ -12,6 +12,7 @@ from orchestrator.core.worker.process_service import _emit_orchestrated_trace_lo
 from orchestrator.core.worker.process_service import _extract_capability_requeue_target
 from orchestrator.core.worker.process_service import _run_completion_step
 from orchestrator.core.worker.process_service import process_next_queued_run
+from orchestrator.core.worker.stage_notifier import RunStageNotifier
 from orchestrator.core.workflow.runner import PmPlan, WorkflowDiagnostics, WorkflowResult
 
 
@@ -28,6 +29,50 @@ class _FakeHeartbeatController:
 
 
 class WorkerProcessServiceTests(unittest.TestCase):
+    def test_stage_notifier_refreshes_plan_before_appending_live_updates(self) -> None:
+        run = SimpleNamespace(
+            plan={},
+            tenant_id="tenant-1",
+            project_id="project-1",
+            run_id="run-1",
+            issue_key="GP-122",
+        )
+        session = MagicMock()
+        refresh_calls: list[object] = []
+
+        def refresh(target, attribute_names=None):  # noqa: ANN001
+            self.assertIs(target, run)
+            refresh_calls.append(attribute_names)
+            if attribute_names == ["plan"]:
+                run.plan = {"trigger_context": {"resume_stage": "dev"}}
+                return
+            self.assertIsNone(attribute_names)
+
+        session.refresh.side_effect = refresh
+        notifier = RunStageNotifier(
+            session=session,
+            tenant=SimpleNamespace(),
+            run=run,
+            settings=SimpleNamespace(),
+            project=None,
+            send_discord_message=lambda **_: SimpleNamespace(sent=True, reason=None),
+            send_jira_message=lambda **_: None,
+        )
+
+        notifier.append(
+            {
+                "stage": "plan_posted",
+                "discord_message": "Plan posted",
+                "jira_message": "Plan posted",
+            }
+        )
+
+        self.assertEqual(run.plan["trigger_context"], {"resume_stage": "dev"})
+        self.assertEqual(len(run.plan["live_stage_updates"]), 1)
+        self.assertEqual(run.plan["live_stage_updates"][0]["stage"], "plan_posted")
+        session.commit.assert_called_once()
+        self.assertEqual(refresh_calls, [["plan"], None])
+
     def test_emit_orchestrated_trace_logs_persists_stage_rows(self) -> None:
         recorded_rows: list[dict[str, object]] = []
 
@@ -258,7 +303,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         heartbeat = _FakeHeartbeatController()
         session = MagicMock()
 
-        def _refresh(target) -> None:  # noqa: ANN001
+        def _refresh(target, **_kwargs) -> None:  # noqa: ANN001
             _ = target
 
         session.refresh.side_effect = _refresh
@@ -372,7 +417,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
         heartbeat = _FakeHeartbeatController()
         session = MagicMock()
-        session.refresh.side_effect = lambda _target: None
+        session.refresh.side_effect = lambda _target, **_kwargs: None
         finalize_run = MagicMock(return_value=finalized_run)
 
         with patch("orchestrator.core.worker.process_service.publish_manual_pr_remediation_completion") as publish_completion:
@@ -467,7 +512,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
         heartbeat = _FakeHeartbeatController()
         session = MagicMock()
-        session.refresh.side_effect = lambda _target: None
+        session.refresh.side_effect = lambda _target, **_kwargs: None
 
         def _finalize(*_args, **_kwargs):  # noqa: ANN001
             self.assertFalse(heartbeat.stopped)
@@ -571,7 +616,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
         heartbeat = _FakeHeartbeatController()
         session = MagicMock()
-        session.refresh.side_effect = lambda _target: None
+        session.refresh.side_effect = lambda _target, **_kwargs: None
         finalize_run = MagicMock(return_value=finalized_run)
         cleanup = MagicMock()
         emit_agent_event = MagicMock()
@@ -701,7 +746,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
         project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
         heartbeat = _FakeHeartbeatController()
         session = MagicMock()
-        session.refresh.side_effect = lambda _target: None
+        session.refresh.side_effect = lambda _target, **_kwargs: None
         finalize_run = MagicMock(return_value=finalized_run)
         recorded_rows: list[dict[str, object]] = []
 
