@@ -487,6 +487,7 @@ def build_codex_runtime(
     settings: Settings,
     request_override: Callable[[str, str, str | None], str] | None = None,
 ) -> CodexRuntime:
+    _ = session
     if request_override is not None:
         def _request_with_override(
             system_prompt: str,
@@ -712,7 +713,7 @@ def build_codex_runtime(
                     message = (
                         "Codex CLI is not authenticated."
                         f"{auth_link} "
-                        "Run `docker compose run --rm worker-runtime codex login --device-auth`."
+                        "Run `docker compose run --rm run-worker codex login --device-auth`."
                     )
                     raise CodexRuntimeError(message)
                 raise CodexRuntimeError(

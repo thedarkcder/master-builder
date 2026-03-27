@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_JIRA,
     WebhookJobEnqueueRequest,
+    _acquire_subject_claim,
     claim_next_webhook_job,
     enqueue_webhook_job,
 )
@@ -96,3 +97,28 @@ class WebhookJobQueueTests(unittest.TestCase):
             claimed_job = session.get(WebhookJob, claim.job.job_id)
             self.assertIsNotNone(claimed_job)
             self.assertEqual(claimed_job.owner_id, "worker-1")
+
+    def test_acquire_subject_claim_does_not_steal_live_lease_from_other_owner(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                WebhookSubjectClaim(
+                    subject_key="jira:tenant-1:TP-3",
+                    owner_id="other-worker",
+                    lease_expires_at=now + timedelta(minutes=5),
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            acquired = _acquire_subject_claim(
+                session,
+                subject_key="jira:tenant-1:TP-3",
+                owner_id="worker-1",
+                now=now + timedelta(seconds=1),
+            )
+
+            self.assertFalse(acquired)
+            claim = session.get(WebhookSubjectClaim, {"subject_key": "jira:tenant-1:TP-3"})
+            self.assertIsNotNone(claim)
+            self.assertEqual(claim.owner_id, "other-worker")

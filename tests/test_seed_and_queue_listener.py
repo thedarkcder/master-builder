@@ -81,7 +81,7 @@ class QueueListenerTests(unittest.IsolatedAsyncioTestCase):
             notify_channel="run_queue",
             psycopg_module=None,
         )
-        bridge._run()
+        bridge._run_once()
         logger.error.assert_called_once()
 
         class FakeConn:
@@ -114,7 +114,7 @@ class QueueListenerTests(unittest.IsolatedAsyncioTestCase):
             notify_channel="run_queue",
             psycopg_module=psycopg,
         )
-        bridge._run()
+        bridge._run_once()
         self.assertGreaterEqual(loop.call_soon_threadsafe.call_count, 1)
 
         class RaisingPsycopg:
@@ -130,7 +130,8 @@ class QueueListenerTests(unittest.IsolatedAsyncioTestCase):
             notify_channel="run_queue",
             psycopg_module=RaisingPsycopg,
         )
-        bridge._run()
+        with unittest.mock.patch.object(queue_listener, "RECONNECT_DELAY_SECONDS", 0):
+            bridge._run_once()
         logger.exception.assert_called()
 
     def test_start_stop(self) -> None:
@@ -208,7 +209,7 @@ class QueueListenerTests(unittest.IsolatedAsyncioTestCase):
             notify_channel="run_queue",
             psycopg_module=psycopg,
         )
-        bridge._run()
+        bridge._run_once()
         logger.exception.assert_not_called()
 
 

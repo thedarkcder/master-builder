@@ -16,6 +16,7 @@ from orchestrator.core.workflow.runner import (
     WorkflowDiagnostics,
     WorkflowRequest,
     WorkflowResult,
+    WorkflowStageCheckpoint,
 )
 
 
@@ -103,6 +104,7 @@ class OrchestratedRunWorkflowExecutor:
         request: WorkflowRequest,
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
+        stage_checkpoint_hook: Callable[[WorkflowStageCheckpoint], None] | None = None,
     ) -> WorkflowResult:
         agents = self._stage_agents or CodexWorkflowAgents(
             runtime=self._runtime,
@@ -242,6 +244,36 @@ class OrchestratedRunWorkflowExecutor:
             test_guidance=test_guidance,
         )
 
+        def _persist_stage_checkpoint(checkpoint: WorkflowStageCheckpoint) -> WorkflowResult | None:
+            if stage_checkpoint_hook is None:
+                return None
+            try:
+                stage_checkpoint_hook(checkpoint)
+            except Exception as exc:  # noqa: BLE001
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage=checkpoint.stage,
+                    attempts=checkpoint.attempt,
+                    message=(
+                        f"{checkpoint.stage.upper()} checkpoint persistence failed: {type(exc).__name__}: {exc}"
+                    ),
+                    classification="state_persistence_failure",
+                )
+            return None
+
+        if _should_resume_from_dev(request):
+            checkpoint_failure = _persist_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="completed",
+                    summary="Resumed from persisted PM plan.",
+                    plan=plan,
+                )
+            )
+            if checkpoint_failure is not None:
+                return checkpoint_failure
         if _should_resume_from_review(request):
             source_state = _resume_source_state(request)
             resumed_dev_result = _resume_dev_result(source_state)
@@ -252,6 +284,32 @@ class OrchestratedRunWorkflowExecutor:
             state.review_feedback = (
                 str(source_state.get("review_feedback") or "").strip() or None
             )
+            for checkpoint in (
+                WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="completed",
+                    summary="Resumed from persisted PM plan.",
+                    plan=plan,
+                ),
+                WorkflowStageCheckpoint(
+                    stage="dev",
+                    attempt=1,
+                    status="completed",
+                    summary="Resumed from persisted dev result.",
+                    dev_result=resumed_dev_result,
+                ),
+                WorkflowStageCheckpoint(
+                    stage="test",
+                    attempt=1,
+                    status="completed",
+                    summary="Resumed from persisted passing test result.",
+                    test_result=resumed_test_result,
+                ),
+            ):
+                checkpoint_failure = _persist_stage_checkpoint(checkpoint)
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
             try:
                 review_result = agents.review(request, plan, resumed_dev_result, resumed_test_result, 1)
             except Exception as exc:  # noqa: BLE001
@@ -271,6 +329,17 @@ class OrchestratedRunWorkflowExecutor:
             review_outcome = _normalize_review_outcome(review_result)
             if review_outcome == "approved":
                 pr_url = review_result.pr_url or resumed_dev_result.pr_url
+                checkpoint_failure = _persist_stage_checkpoint(
+                    WorkflowStageCheckpoint(
+                        stage="review",
+                        attempt=1,
+                        status="completed",
+                        summary=review_message,
+                        review_result=review_result,
+                    )
+                )
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
                 stage_trace.append(
                     _stage_trace_entry(
                         stage="review",
@@ -294,12 +363,25 @@ class OrchestratedRunWorkflowExecutor:
                 )
 
             history.append({"stage": "review", "attempt": "1", "event": review_message})
+            checkpoint_status = "blocked" if review_outcome == "blocked" else "failed"
+            checkpoint_summary = review_result.feedback or review_message
+            checkpoint_failure = _persist_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="review",
+                    attempt=1,
+                    status=checkpoint_status,
+                    summary=checkpoint_summary,
+                    review_result=review_result,
+                )
+            )
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
             stage_trace.append(
                 _stage_trace_entry(
                     stage="review",
-                    status="failed" if review_outcome != "blocked" else "blocked",
+                    status=checkpoint_status,
                     attempt=1,
-                    summary=review_result.feedback or review_message,
+                    summary=checkpoint_summary,
                 )
             )
             return self._failure_result(
@@ -316,6 +398,17 @@ class OrchestratedRunWorkflowExecutor:
             history.append({"stage": "pm", "attempt": "1", "event": capability_mismatch_message})
             stage_trace[-1]["status"] = "blocked"
             stage_trace[-1]["summary"] = capability_mismatch_message
+            checkpoint_failure = _persist_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="blocked",
+                    summary=capability_mismatch_message,
+                    plan=plan,
+                )
+            )
+            if checkpoint_failure is not None:
+                return checkpoint_failure
             return self._failure_result(
                 request=request,
                 state=state,
@@ -330,6 +423,17 @@ class OrchestratedRunWorkflowExecutor:
             history.append({"stage": "pm", "attempt": "1", "event": missing_evidence_message})
             stage_trace[-1]["status"] = "blocked"
             stage_trace[-1]["summary"] = missing_evidence_message
+            checkpoint_failure = _persist_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="blocked",
+                    summary=missing_evidence_message,
+                    plan=plan,
+                )
+            )
+            if checkpoint_failure is not None:
+                return checkpoint_failure
             return self._failure_result(
                 request=request,
                 state=state,
@@ -344,6 +448,17 @@ class OrchestratedRunWorkflowExecutor:
             history.append({"stage": "pm", "attempt": "1", "event": external_blocker_message})
             stage_trace[-1]["status"] = "blocked"
             stage_trace[-1]["summary"] = external_blocker_message
+            checkpoint_failure = _persist_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="blocked",
+                    summary=external_blocker_message,
+                    plan=plan,
+                )
+            )
+            if checkpoint_failure is not None:
+                return checkpoint_failure
             return self._failure_result(
                 request=request,
                 state=state,
@@ -352,6 +467,18 @@ class OrchestratedRunWorkflowExecutor:
                 message=external_blocker_message,
                 classification="external_blocker",
             )
+
+        checkpoint_failure = _persist_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="pm",
+                attempt=1,
+                status="completed",
+                summary=_summarize_pm_plan(plan),
+                plan=plan,
+            )
+        )
+        if checkpoint_failure is not None:
+            return checkpoint_failure
 
         next_feedback: str | None = None
         max_loops = max(1, int(request.max_dev_test_review_loops or 1))
@@ -376,6 +503,17 @@ class OrchestratedRunWorkflowExecutor:
             )
             if terminal_dev_blocker is not None:
                 history.append({"stage": "dev", "attempt": str(attempt), "event": terminal_dev_blocker})
+                checkpoint_failure = _persist_stage_checkpoint(
+                    WorkflowStageCheckpoint(
+                        stage="dev",
+                        attempt=attempt,
+                        status="blocked",
+                        summary=terminal_dev_blocker,
+                        dev_result=dev_result,
+                    )
+                )
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
                 stage_trace.append(
                     _stage_trace_entry(
                         stage="dev",
@@ -400,6 +538,17 @@ class OrchestratedRunWorkflowExecutor:
                     summary=_summarize_dev_result(dev_result),
                 )
             )
+            checkpoint_failure = _persist_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="dev",
+                    attempt=attempt,
+                    status="completed",
+                    summary=_summarize_dev_result(dev_result),
+                    dev_result=dev_result,
+                )
+            )
+            if checkpoint_failure is not None:
+                return checkpoint_failure
 
             try:
                 test_result = agents.test(request, plan, dev_result, attempt)
@@ -421,6 +570,17 @@ class OrchestratedRunWorkflowExecutor:
             )
             if terminal_test_blocker is not None:
                 history.append({"stage": "test", "attempt": str(attempt), "event": terminal_test_blocker})
+                checkpoint_failure = _persist_stage_checkpoint(
+                    WorkflowStageCheckpoint(
+                        stage="test",
+                        attempt=attempt,
+                        status="blocked",
+                        summary=terminal_test_blocker,
+                        test_result=test_result,
+                    )
+                )
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
                 stage_trace.append(
                     _stage_trace_entry(
                         stage="test",
@@ -440,6 +600,17 @@ class OrchestratedRunWorkflowExecutor:
             if not test_result.passed:
                 feedback = _summarize_test_feedback(test_result)
                 history.append({"stage": "test", "attempt": str(attempt), "event": feedback})
+                checkpoint_failure = _persist_stage_checkpoint(
+                    WorkflowStageCheckpoint(
+                        stage="test",
+                        attempt=attempt,
+                        status="failed",
+                        summary=feedback,
+                        test_result=test_result,
+                    )
+                )
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
                 stage_trace.append(
                     _stage_trace_entry(
                         stage="test",
@@ -469,6 +640,17 @@ class OrchestratedRunWorkflowExecutor:
                     summary=_summarize_test_result(test_result),
                 )
             )
+            checkpoint_failure = _persist_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="test",
+                    attempt=attempt,
+                    status="completed",
+                    summary=_summarize_test_result(test_result),
+                    test_result=test_result,
+                )
+            )
+            if checkpoint_failure is not None:
+                return checkpoint_failure
 
             try:
                 review_result = agents.review(request, plan, dev_result, test_result, attempt)
@@ -488,6 +670,17 @@ class OrchestratedRunWorkflowExecutor:
             review_message = _summarize_review_result(review_result)
             review_outcome = _normalize_review_outcome(review_result)
             if review_outcome == "approved":
+                checkpoint_failure = _persist_stage_checkpoint(
+                    WorkflowStageCheckpoint(
+                        stage="review",
+                        attempt=attempt,
+                        status="completed",
+                        summary=review_message,
+                        review_result=review_result,
+                    )
+                )
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
                 pr_url = review_result.pr_url or dev_result.pr_url
                 if request.allow_pr_creation and not pr_url:
                     review_message = (
@@ -536,12 +729,24 @@ class OrchestratedRunWorkflowExecutor:
                 )
 
             history.append({"stage": "review", "attempt": str(attempt), "event": review_message})
+            terminal_review_blocker: str | None = None
             if review_outcome == "blocked":
                 terminal_review_blocker = _terminal_blocker_message(
                     category=review_result.blocker_category,
                     message=review_result.blocker_message or review_result.feedback or review_message,
                 )
                 if terminal_review_blocker is not None:
+                    checkpoint_failure = _persist_stage_checkpoint(
+                        WorkflowStageCheckpoint(
+                            stage="review",
+                            attempt=attempt,
+                            status="blocked",
+                            summary=terminal_review_blocker,
+                            review_result=review_result,
+                        )
+                    )
+                    if checkpoint_failure is not None:
+                        return checkpoint_failure
                     stage_trace.append(
                         _stage_trace_entry(
                             stage="review",
@@ -568,6 +773,17 @@ class OrchestratedRunWorkflowExecutor:
                     summary=review_message,
                 )
             )
+            checkpoint_failure = _persist_stage_checkpoint(
+                WorkflowStageCheckpoint(
+                    stage="review",
+                    attempt=attempt,
+                    status="blocked" if review_outcome == "blocked" and terminal_review_blocker is not None else "failed",
+                    summary=review_message,
+                    review_result=review_result,
+                )
+            )
+            if checkpoint_failure is not None:
+                return checkpoint_failure
             if attempt >= max_loops:
                 return self._failure_result(
                     request=request,

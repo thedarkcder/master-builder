@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -501,7 +502,7 @@ class PrReviewPublication(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     owner_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    review_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    review_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -580,6 +581,47 @@ class RunLogEvent(Base):
     attempt: Mapped[int | None] = mapped_column(nullable=True)
     stream: Mapped[str] = mapped_column(String(16), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class RunStreamEvent(Base):
+    __tablename__ = "run_stream_events"
+    __table_args__ = (
+        Index("ix_run_stream_events_run_id_stream_offset", "run_id", "stream_offset"),
+        Index("ix_run_stream_events_tenant_id_stream_offset", "tenant_id", "stream_offset"),
+    )
+
+    stream_offset: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    event_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    invocation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    channel: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    command: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    working_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    stage: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    attempt: Mapped[int | None] = mapped_column(nullable=True)
+    stream: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 

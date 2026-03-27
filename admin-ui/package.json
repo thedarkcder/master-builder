@@ -7,7 +7,9 @@
     "dev:turbo": "next dev --turbopack -p 4100",
     "lint": "next typegen && tsc --noEmit",
     "build": "next build",
-    "start": "next start -p 4100"
+    "start": "next start -p 4100",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
   },
   "engines": {
     "node": ">=20 <23"
@@ -27,6 +29,7 @@
     "tailwind-merge": "^2.5.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.51.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

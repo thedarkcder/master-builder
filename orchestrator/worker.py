@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from collections.abc import Callable
 from contextlib import suppress
 
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.config import get_settings
+from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.logging import configure_logging
 from orchestrator.core.platform_metrics import platform_metrics
@@ -28,6 +30,7 @@ from orchestrator.core.worker.queue_listener import (
     wait_for_wake_or_stop,
 )
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
+from orchestrator.core.workflow.runner import WorkflowRunner
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.run_queue_events import (
     RUN_QUEUE_NOTIFY_CHANNEL,
@@ -43,6 +46,8 @@ except ImportError:  # pragma: no cover - dependency is required at runtime
 
 logger = logging.getLogger(__name__)
 WORKER_DATABASE_RETRY_DELAY_SECONDS = 2.0
+WORKER_MODE_RUNS = "runs"
+WORKER_MODE_WEBHOOKS = "webhooks"
 
 
 class WorkerDependencyFailure(RuntimeError):
@@ -74,7 +79,7 @@ def _coerce_parallel_slots(raw_value: object) -> int:
     return max(1, parsed)
 
 
-def _resolve_parallel_slots_from_policy(*, session_factory) -> int:  # noqa: ANN001
+def _resolve_parallel_slots_from_policy(*, session_factory: sessionmaker[Session]) -> int:
     try:
         with session_factory() as session:
             tenants = session.execute(
@@ -109,7 +114,7 @@ def _resolve_parallel_slots_from_policy(*, session_factory) -> int:  # noqa: ANN
     return max_slots
 
 
-def process_next_queued_run(session, runner):  # noqa: ANN001
+def process_next_queued_run(session: Session, runner: WorkflowRunner) -> object | None:
     return _process_next_queued_run_with_dependencies(
         session=session,
         runner=runner,
@@ -117,11 +122,12 @@ def process_next_queued_run(session, runner):  # noqa: ANN001
     )
 
 
-def _process_next_queued_run_once(*, session_factory):  # noqa: ANN001
+def _process_next_webhook_job_once(*, session_factory: sessionmaker[Session]) -> object | None:
+    return _process_next_webhook_job_with_dependencies(session_factory=session_factory)
+
+
+def _process_next_run_once(*, session_factory: sessionmaker[Session]) -> object | None:
     with session_factory() as session:
-        webhook_job = _process_next_webhook_job_with_dependencies(session=session)
-        if webhook_job is not None:
-            return webhook_job
         try:
             runner = build_workflow_runner_for_session(session=session)
         except CodexRuntimeError as exc:
@@ -130,11 +136,25 @@ def _process_next_queued_run_once(*, session_factory):  # noqa: ANN001
         return process_next_queued_run(session, runner)
 
 
-async def _run_worker_slot(*, session_factory, stop_event: asyncio.Event) -> None:  # noqa: ANN001
+def _resolve_worker_processor(*, mode: str) -> Callable[..., object | None]:
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode == WORKER_MODE_RUNS:
+        return _process_next_run_once
+    if normalized_mode == WORKER_MODE_WEBHOOKS:
+        return _process_next_webhook_job_once
+    raise ValueError(f"Unsupported worker mode '{mode}'")
+
+
+async def _run_worker_slot(
+    *,
+    session_factory: sessionmaker[Session],
+    stop_event: asyncio.Event,
+    process_next_work_item_once: Callable[..., object | None],
+) -> None:
     while not stop_event.is_set():
         try:
             processed = await asyncio.to_thread(
-                _process_next_queued_run_once,
+                process_next_work_item_once,
                 session_factory=session_factory,
             )
         except WorkerDependencyFailure:
@@ -165,7 +185,13 @@ async def _wait_for_worker_retry_delay(*, stop_event: asyncio.Event, timeout_sec
     return True
 
 
-def _recover_worker_run_health_once(*, session_factory, settings, agent_id: str, service_instance_id: str) -> None:  # noqa: ANN001
+def _recover_worker_run_health_once(
+    *,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    agent_id: str,
+    service_instance_id: str,
+) -> None:
     with session_factory() as session:
         orphaned_locks = cleanup_orphan_run_locks(session=session)
         recovered = recover_stale_running_runs(
@@ -187,7 +213,14 @@ def _recover_worker_run_health_once(*, session_factory, settings, agent_id: str,
         )
 
 
-async def _run_stale_recovery_loop(*, session_factory, settings, stop_event: asyncio.Event, agent_id: str, service_instance_id: str) -> None:  # noqa: ANN001
+async def _run_stale_recovery_loop(
+    *,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    stop_event: asyncio.Event,
+    agent_id: str,
+    service_instance_id: str,
+) -> None:
     interval_seconds = max(15, int(getattr(settings, "worker_stale_sweep_interval_seconds", 60)))
     while not stop_event.is_set():
         try:
@@ -206,7 +239,7 @@ async def _run_stale_recovery_loop(*, session_factory, settings, stop_event: asy
             continue
 
 
-async def run_worker() -> None:
+async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     settings = get_settings()
     configure_logging(
         settings.log_level,
@@ -229,6 +262,7 @@ async def run_worker() -> None:
         )
 
     wake_event = asyncio.Event()
+    process_next_work_item_once = _resolve_worker_processor(mode=mode)
     listener = RunQueueNotificationBridge(
         postgres_dsn=postgres_dsn_from_database_url(settings.database_url),
         wake_event=wake_event,
@@ -241,24 +275,25 @@ async def run_worker() -> None:
     listener.start()
     service_instance_id = worker_service_instance_id()
     agent_id = str(settings.agent_id or "").strip() or "worker"
-    await asyncio.to_thread(
-        _recover_worker_run_health_once,
-        session_factory=session_factory,
-        settings=settings,
-        agent_id=agent_id,
-        service_instance_id=service_instance_id,
-    )
-    stale_recovery_task = asyncio.create_task(
-        _run_stale_recovery_loop(
+    if mode == WORKER_MODE_RUNS:
+        await asyncio.to_thread(
+            _recover_worker_run_health_once,
             session_factory=session_factory,
             settings=settings,
-            stop_event=stop_event,
             agent_id=agent_id,
             service_instance_id=service_instance_id,
         )
-    )
+        stale_recovery_task = asyncio.create_task(
+            _run_stale_recovery_loop(
+                session_factory=session_factory,
+                settings=settings,
+                stop_event=stop_event,
+                agent_id=agent_id,
+                service_instance_id=service_instance_id,
+            )
+        )
 
-    logger.info("worker_started")
+    logger.info("worker_started mode=%s", mode)
     slots: list[asyncio.Task[None]] = []
     try:
         while not stop_event.is_set():
@@ -270,7 +305,11 @@ async def run_worker() -> None:
             while len(slots) < parallel_slots:
                 slots.append(
                     asyncio.create_task(
-                        _run_worker_slot(session_factory=session_factory, stop_event=stop_event)
+                        _run_worker_slot(
+                            session_factory=session_factory,
+                            stop_event=stop_event,
+                            process_next_work_item_once=process_next_work_item_once,
+                        )
                     )
                 )
             while slots and not stop_event.is_set():
@@ -279,8 +318,18 @@ async def run_worker() -> None:
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 slots = list(pending)
+                slot_failed = False
                 for task in done:
-                    task.result()
+                    try:
+                        task.result()
+                    except WorkerDependencyFailure:
+                        raise
+                    except Exception as exc:
+                        slot_failed = True
+                        platform_metrics.record_worker_failure(kind="slot_crash")
+                        logger.exception("worker_slot_failed error=%s", exc)
+                if slot_failed and not stop_event.is_set():
+                    wake_event.set()
                 if stop_event.is_set():
                     break
                 if wake_event.is_set():
@@ -289,7 +338,11 @@ async def run_worker() -> None:
                     while len(slots) < parallel_slots:
                         slots.append(
                             asyncio.create_task(
-                                _run_worker_slot(session_factory=session_factory, stop_event=stop_event)
+                                _run_worker_slot(
+                                    session_factory=session_factory,
+                                    stop_event=stop_event,
+                                    process_next_work_item_once=process_next_work_item_once,
+                                )
                             )
                         )
     except WorkerDependencyFailure:
@@ -307,11 +360,11 @@ async def run_worker() -> None:
             with suppress(asyncio.CancelledError):
                 await stale_recovery_task
         listener.stop()
-        logger.info("worker_stopped")
+        logger.info("worker_stopped mode=%s", mode)
 
 
-def main() -> None:
-    asyncio.run(run_worker())
+def main(*, mode: str = WORKER_MODE_RUNS) -> None:
+    asyncio.run(run_worker(mode=mode))
 
 
 if __name__ == "__main__":

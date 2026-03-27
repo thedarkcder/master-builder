@@ -450,7 +450,7 @@ export type RunRecord = {
 
 export type RunRerunPayload = {
   mode: "fresh" | "resume";
-  resume_stage?: "orchestrated" | "pm" | "dev";
+  resume_stage?: "orchestrated" | "pm" | "dev" | "review";
 };
 
 export type RunEventRecord = {

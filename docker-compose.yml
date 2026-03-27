@@ -28,10 +28,22 @@ services:
       timeout: 5s
       retries: 12
 
+  redis:
+    image: redis:7-alpine
+    container_name: master-builder-redis
+    ports:
+      - "46379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   api:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-api
@@ -64,6 +76,8 @@ services:
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
+      ORCHESTRATOR_LOG_BUS_ENABLED: ${ORCHESTRATOR_LOG_BUS_ENABLED:-true}
       ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
       ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}
     ports:
@@ -72,6 +86,8 @@ services:
       mailpit:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test:
@@ -94,13 +110,61 @@ services:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
         
-  worker-runtime:
+  run-worker:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: android-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
-    container_name: master-builder-worker
+    container_name: master-builder-run-worker
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_MODEL: ${ORCHESTRATOR_CODEX_MODEL:-gpt-5-codex}
+      ORCHESTRATOR_CODEX_TIMEOUT_SECONDS: ${ORCHESTRATOR_CODEX_TIMEOUT_SECONDS:-0}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        mkdir -p /root/.codex
+        cp -a /app/.codex/. /root/.codex/
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator migrate
+        python -m orchestrator worker-runs
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
+
+  webhook-worker:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-webhook-worker
     restart: unless-stopped
     depends_on:
       api:
@@ -144,7 +208,7 @@ services:
         cp -a /app/.codex/. /root/.codex/
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
         python -m orchestrator migrate
-        python -m orchestrator worker
+        python -m orchestrator worker-webhooks
     volumes:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
@@ -153,6 +217,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: voice-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-discord-gateway
@@ -196,6 +261,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: voice-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-discord-live-voice
@@ -242,6 +308,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-knowledge-sync

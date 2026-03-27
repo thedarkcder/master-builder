@@ -445,7 +445,11 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
             session.commit()
 
         with (
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime", return_value=runtime),
+            patch("orchestrator.api.discord.commands.ask.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "Scoped answer"},
+            ),
             patch("orchestrator.api.discord.ask.context.tenant_jira_oauth_context", return_value=fake_oauth),
             patch("orchestrator.api.discord.ask.context._refresh_jira_connection_tokens", return_value="access-token"),
             patch("orchestrator.api.discord.ask.context._jira_oauth_client", return_value=fake_jira_client),

@@ -22,6 +22,8 @@ class CommandExecutionServiceTests(unittest.TestCase):
             assert_sensitive_command_permission=lambda _session, _tenant, _command, _user, _channel_id: None,
             resolve_scope=lambda _session, _tenant, _channel_id: CommandScope(project_keys=("PRJ",)),
             enrich_scope=lambda _session, _tenant, _command_name, _arguments, _payload, scope: scope,
+            rewrite_raw_command=lambda _session, _tenant, payload, _policy: payload.command,
+            allow_sensitive_command_bypass=lambda _session, _tenant, _command_name, _arguments, _payload: False,
             build_handler_registry=lambda _context: {"status": (lambda _ctx: DiscordCommandResponse(ok=True, command="status", message="ok"),)},
         )
 
@@ -37,7 +39,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
                 session=MagicMock(),
                 defer_seed_issues=False,
                 require_ask_confirmation=False,
-                allow_plain_ask=False,
                 ingress_source="discord",
                 deps=deps,
             )
@@ -55,7 +56,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=False,
             require_ask_confirmation=False,
-            allow_plain_ask=False,
             ingress_source="discord",
             deps=deps,
         )
@@ -73,7 +73,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=False,
             require_ask_confirmation=False,
-            allow_plain_ask=False,
             ingress_source="jira_comment",
             deps=deps,
         )
@@ -105,7 +104,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=False,
             require_ask_confirmation=False,
-            allow_plain_ask=False,
             ingress_source="discord",
             deps=deps,
         )
@@ -138,7 +136,6 @@ class CommandExecutionServiceTests(unittest.TestCase):
             session=MagicMock(),
             defer_seed_issues=False,
             require_ask_confirmation=False,
-            allow_plain_ask=False,
             ingress_source="discord",
             deps=deps,
         )

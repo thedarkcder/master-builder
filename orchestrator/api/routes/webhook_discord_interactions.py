@@ -25,7 +25,9 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.followup_context_service import resolve_followup_context
+from orchestrator.core.followup_context_service import (
+    resolve_discord_interaction_subject_scope as _resolve_interaction_subject_scope,
+)
 from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
     WebhookJobEnqueueRequest,
@@ -86,6 +88,10 @@ async def ingest_discord_interaction(
         tenant_id, project_id, subject_key = _resolve_interaction_subject_scope(
             session=session,
             payload=payload,
+            find_tenant_for_discord_channel=build_default_discord_interaction_dispatch_deps(
+                task_scheduler=lambda coro: coro,
+                logger=logger,
+            ).find_tenant_for_discord_channel,
         )
         enqueue_result = enqueue_webhook_job(
             session,
@@ -122,49 +128,6 @@ async def ingest_discord_interaction(
         result=_http_result_from_interaction_result(result),
         envelope=http_envelope,
     )
-
-
-def _resolve_interaction_subject_scope(*, session: Session, payload: dict) -> tuple[str | None, str | None, str]:
-    channel_id = str(payload.get("channel_id") or "").strip()
-    user_id = str(((payload.get("member") or {}).get("user") or {}).get("id") or "").strip()
-    tenant_id: str | None = None
-    project_id: str | None = None
-    if channel_id:
-        tenant = build_default_discord_interaction_dispatch_deps(
-            task_scheduler=lambda coro: coro,
-            logger=logger,
-        ).find_tenant_for_discord_channel(session=session, channel_id=channel_id)
-        if tenant is not None:
-            tenant_id = str(getattr(tenant, "tenant_id", "") or "").strip() or None
-    root_message_id = None
-    data = payload.get("data")
-    if isinstance(data, dict) and data.get("type") == 3:
-        root_message_id = str(data.get("target_id") or "").strip() or None
-    if root_message_id is None:
-        message = payload.get("message")
-        if isinstance(message, dict):
-            root_message_id = str(message.get("id") or "").strip() or None
-    if tenant_id and channel_id:
-        context = resolve_followup_context(
-            session=session,
-            tenant_id=tenant_id,
-            channel_id=channel_id,
-            root_message_id=root_message_id,
-        )
-        if context is not None:
-            project_id = str(getattr(context, "project_id", "") or "").strip() or None
-            context_id = str(getattr(context, "context_id", "") or "").strip()
-            if context_id:
-                return tenant_id, project_id, f"discord_followup:{context_id}"
-    if tenant_id and channel_id:
-        return tenant_id, project_id, f"discord_channel:{tenant_id}:{channel_id}"
-    if tenant_id and user_id:
-        return tenant_id, project_id, f"discord_user:{tenant_id}:{user_id}"
-    if channel_id:
-        return None, None, f"discord_channel::{channel_id}"
-    if user_id:
-        return None, None, f"discord_user::{user_id}"
-    return None, None, "discord_interaction:unknown"
 
 
 def _close_deferred_interaction_work(*, result: IngressResult) -> None:
