@@ -172,6 +172,7 @@ def rerun_run(
             "orchestrated": str(source_run.orchestrated_session_id or "").strip() or None,
             "pm": str(source_run.pm_session_id or "").strip() or None,
             "dev": str(source_run.dev_session_id or "").strip() or None,
+            "review": str(source_run.dev_session_id or "").strip() or None,
         }
         if normalized_resume_stage not in session_by_stage:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid resume stage")
@@ -193,9 +194,19 @@ def rerun_run(
                 )
             selected_source_plan = dict(source_plan_payload)
             next_trigger_context["resume_source_plan"] = selected_source_plan
+        if normalized_resume_stage == "review":
+            source_plan_payload = source_plan.get("plan")
+            if not isinstance(source_plan_payload, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No persisted PM plan is available for a review-stage resume",
+                )
+            selected_source_plan = dict(source_plan_payload)
+            next_trigger_context["resume_source_plan"] = selected_source_plan
+            next_trigger_context["resume_source_state"] = dict(source_plan)
         if normalized_resume_stage == "pm":
             enqueue_result.run.pm_session_id = selected_session_id
-        elif normalized_resume_stage == "dev":
+        elif normalized_resume_stage in {"dev", "review"}:
             enqueue_result.run.dev_session_id = selected_session_id
         else:
             enqueue_result.run.orchestrated_session_id = selected_session_id

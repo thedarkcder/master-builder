@@ -235,7 +235,7 @@ function DashboardNavPanel({
             className="flex min-h-10 items-center gap-2 rounded-md px-2 py-2 text-xs text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
             onClick={() => {
               close();
-              logout();
+              void logout();
               router.push("/login");
             }}
           >
@@ -251,7 +251,7 @@ function DashboardNavPanel({
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { credentials, ready, logout } = useAuth();
+  const { credentials, ready, logout, needsOnboarding, principal } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
@@ -268,10 +268,20 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (ready && !credentials) {
-      logout();
+      void logout();
       router.replace("/login");
     }
   }, [credentials, logout, ready, router]);
+
+  useEffect(() => {
+    const onboardingAllowed =
+      pathname === "/get-started" ||
+      pathname.startsWith("/tenants/new") ||
+      /^\/tenants\/[^/]+\/edit(\/|$)/.test(pathname);
+    if (ready && credentials && needsOnboarding && !onboardingAllowed) {
+      router.replace("/get-started");
+    }
+  }, [credentials, needsOnboarding, pathname, ready, router]);
 
   useEffect(() => {
     if (!credentials || !runContext.runId) {
@@ -340,6 +350,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to login...</main>;
   }
 
+  if (needsOnboarding && pathname !== "/get-started" && !pathname.startsWith("/tenants/new") && !/^\/tenants\/[^/]+\/edit(\/|$)/.test(pathname)) {
+    return <main className="p-8 text-sm text-muted-foreground">Redirecting to onboarding...</main>;
+  }
+
   const isWizardRoute =
     pathname.startsWith("/tenants/new") ||
     /^\/tenants\/[^/]+\/projects\/new(\/|$)/.test(pathname);
@@ -357,6 +371,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
+  const tenantMembership = decodedTenantId
+    ? principal?.memberships.find((membership) => membership.tenant_id === decodedTenantId)
+    : null;
+  const analyticsHref =
+    decodedTenantId && tenantMembership?.effective_mode === "non_technical"
+      ? `/tenants/${decodedTenantId}/analytics/business`
+      : decodedTenantId
+        ? `/tenants/${decodedTenantId}/analytics/token-overview`
+        : null;
+  const showSecretsNav = tenantMembership?.effective_mode !== "non_technical";
 
   const tenantNavItems: NavItem[] = decodedTenantId
     ? [
@@ -373,7 +397,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           matchPrefix: `/tenants/${decodedTenantId}/runs`
         },
         {
-          href: `/tenants/${decodedTenantId}/analytics/token-overview`,
+          href: analyticsHref ?? `/tenants/${decodedTenantId}/analytics/token-overview`,
           label: "Analytics",
           icon: BarChart3,
           matchPrefix: `/tenants/${decodedTenantId}/analytics`
@@ -384,12 +408,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           icon: Settings2,
           matchPrefix: `/tenants/${decodedTenantId}/edit`
         },
-        {
-          href: `/tenants/${decodedTenantId}/secrets`,
-          label: "Secrets",
-          icon: KeyRound,
-          matchPrefix: `/tenants/${decodedTenantId}/secrets`
-        }
+        ...(showSecretsNav
+          ? [
+              {
+                href: `/tenants/${decodedTenantId}/secrets`,
+                label: "Secrets",
+                icon: KeyRound,
+                matchPrefix: `/tenants/${decodedTenantId}/secrets`
+              }
+            ]
+          : [])
       ]
     : [];
 

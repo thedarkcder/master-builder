@@ -6,11 +6,34 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./orchestrator.db"
+    db_pool_size: int = 10
+    db_pool_max_overflow: int = 20
+    db_pool_timeout_seconds: int = 60
+    db_pool_recycle_seconds: int = 1800
+    db_pool_pre_ping: bool = True
     log_level: str = "INFO"
     admin_username: str = "admin"
     admin_password: str = "change-me"
     admin_token_secret: str = "local-dev-admin-token-secret"
     admin_token_ttl_seconds: int = 28800
+    auth_token_secret: str = "local-dev-auth-token-secret"
+    auth_token_ttl_seconds: int = 28800
+    discord_oauth_client_id: str = ""
+    discord_oauth_client_secret: str = ""
+    discord_oauth_redirect_url: str = "http://localhost:4000/api/public/discord/oauth/callback"
+    discord_install_state_secret: str = "local-dev-discord-install-secret"
+    discord_bot_permissions: int = 277025574912
+    email_delivery_provider: Literal["smtp", "resend"] = "smtp"
+    email_from_name: str = "Master Builder"
+    email_from_address: str = "no-reply@masterbuilder.local"
+    email_reply_to: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 1025
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = False
+    smtp_use_ssl: bool = False
+    resend_api_key: str = ""
     cors_origins: str = "http://localhost:4100,http://127.0.0.1:4100"
     cors_origin_regex: str = ""
     admin_ui_base_url: str = "http://localhost:4100"

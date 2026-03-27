@@ -1,3 +1,5 @@
+import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
+
 export type JiraConfig = {
   connection_id: string | null;
   project_keys: string[];
@@ -41,7 +43,12 @@ export type PolicyConfig = {
 
 export type DiscordConfig = {
   guild_id?: string | null;
+  installed_at?: string | null;
+  installer_user_id?: string | null;
   channel_id?: string | null;
+  onboarding_channel_id?: string | null;
+  onboarding_invite_expires_in_seconds?: number | null;
+  onboarding_invite_max_uses?: number | null;
   notify_events: string[];
   allowed_user_ids?: string[];
   command_secret_ref?: string | null;
@@ -59,6 +66,7 @@ export type TenantCreatePayload = {
   repos: ReposConfig;
   policy: PolicyConfig;
   discord: DiscordConfig | null;
+  experience?: Record<string, unknown>;
 };
 
 export type TenantUpdatePayload = {
@@ -69,6 +77,7 @@ export type TenantUpdatePayload = {
   repos: ReposConfig;
   policy: PolicyConfig;
   discord: DiscordConfig | null;
+  experience?: Record<string, unknown>;
 };
 
 export type TenantRecord = {
@@ -80,6 +89,8 @@ export type TenantRecord = {
   repos: ReposConfig;
   policy: PolicyConfig;
   discord: DiscordConfig | null;
+  experience: Record<string, unknown>;
+  setup_state: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -710,7 +721,30 @@ export type DiscordAllowlistApprovalResult = {
 
 export type Credentials = {
   apiBaseUrl: string;
-  accessToken: string;
+};
+
+export type MembershipRecord = {
+  membership_id: string;
+  tenant_id: string;
+  role: string;
+  permission_keys: string[];
+  effective_mode: "technical" | "non_technical";
+  mode_override: "technical" | "non_technical" | null;
+  onboarding_kind: "tenant_admin_setup" | "member_join";
+  first_signed_in_at: string | null;
+  onboarding_completed_at: string | null;
+  onboarding_version: string | null;
+  team_ids: string[];
+  discord_state: Record<string, unknown>;
+};
+
+export type AuthenticatedPrincipalRecord = {
+  principal_type: "platform_super_admin" | "tenant_user";
+  username?: string | null;
+  user_id?: string | null;
+  email?: string | null;
+  full_name?: string | null;
+  memberships: MembershipRecord[];
 };
 
 export type AdminLoginInput = {
@@ -719,12 +753,137 @@ export type AdminLoginInput = {
   password: string;
 };
 
-function authHeader(credentials: Credentials): string {
-  if (!credentials.accessToken) {
-    throw new Error("Admin access token is required.");
-  }
-  return `Bearer ${credentials.accessToken}`;
-}
+export type RegistrationInput = {
+  full_name: string;
+  email: string;
+  password: string;
+  tenant_name: string;
+};
+
+export type RegistrationResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  principal: AuthenticatedPrincipalRecord;
+  tenant: TenantRecord;
+};
+
+export type InviteAcceptInput = {
+  token: string;
+  password: string;
+  full_name?: string | null;
+};
+
+export type DeliverySummaryRecord = {
+  summary: {
+    completed_count: number;
+    in_review_count: number;
+    blocked_count: number;
+    failed_count: number;
+    queued_count: number;
+    median_cycle_time_hours: number | null;
+    average_cycle_time_hours: number | null;
+  };
+  timeline: Array<{
+    run_id: string;
+    project_id: string | null;
+    issue_key: string;
+    issue_summary: string | null;
+    status: string;
+    completed_at: string | null;
+    started_at: string | null;
+    pr_url: string | null;
+  }>;
+};
+
+export type TenantInviteRecord = {
+  invite_id: string;
+  tenant_id: string;
+  email: string;
+  full_name: string | null;
+  role: string;
+  team_ids: string[];
+  mode_override: "technical" | "non_technical" | null;
+  status: string;
+  invite_url: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TenantTeamRecord = {
+  team_id: string;
+  tenant_id: string;
+  name: string;
+  description: string | null;
+  permission_keys: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type TenantMemberRecord = {
+  membership_id: string;
+  tenant_id: string;
+  user_id: string;
+  email: string;
+  full_name: string | null;
+  is_active: boolean;
+  role: string;
+  permission_keys: string[];
+  effective_mode: "technical" | "non_technical";
+  mode_override: "technical" | "non_technical" | null;
+  onboarding_kind: "tenant_admin_setup" | "member_join";
+  first_signed_in_at: string | null;
+  onboarding_completed_at: string | null;
+  onboarding_version: string | null;
+  team_ids: string[];
+  discord_state: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TenantMemberUpdatePayload = {
+  role: "tenant_admin" | "technical_member" | "business_member";
+  team_ids: string[];
+  mode_override: "technical" | "non_technical" | null;
+  is_active: boolean;
+};
+
+export type TenantTeamCreatePayload = {
+  name: string;
+  description?: string | null;
+  permission_keys: string[];
+};
+
+export type TenantInviteCreatePayload = {
+  email: string;
+  full_name?: string | null;
+  role: "tenant_admin" | "technical_member" | "business_member";
+  team_ids: string[];
+  mode_override: "technical" | "non_technical" | null;
+};
+
+export type TenantDiscordIdentityRecord = {
+  linked: boolean;
+  discord_user_id?: string | null;
+  discord_username?: string | null;
+  discord_global_name?: string | null;
+  discord_avatar_hash?: string | null;
+  linked_at?: string | null;
+};
+
+export type TenantDiscordInviteRecord = {
+  invite_url: string;
+  expires_at: string | null;
+  max_uses: number | null;
+};
+
+export type DiscordInstallStartRecord = {
+  install_url: string;
+  expires_at: string;
+};
 
 function parseResponseBody(text: string): unknown {
   if (!text) {
@@ -743,12 +902,11 @@ async function request<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const base = credentials.apiBaseUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}${path}`, {
+  void credentials;
+  const response = await fetch(`/api/bff${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      Authorization: authHeader(credentials),
       ...(init?.headers ?? {})
     }
   });
@@ -769,6 +927,10 @@ async function request<T>(
 
 export async function verifyAdminCredentials(credentials: Credentials): Promise<void> {
   await request<{ username: string }>(credentials, "/api/admin/auth/me");
+}
+
+export async function readAuthenticatedPrincipal(credentials: Credentials): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(credentials, "/api/app/auth/me");
 }
 
 export async function authenticateAdmin(input: AdminLoginInput): Promise<Credentials> {
@@ -797,10 +959,210 @@ export async function authenticateAdmin(input: AdminLoginInput): Promise<Credent
     throw new Error("Authentication failed: missing access token");
   }
 
+  void parsed.access_token;
   return {
-    apiBaseUrl: base,
-    accessToken: parsed.access_token
+    apiBaseUrl: base
   };
+}
+
+export async function registerTenantAdministrator(
+  input: RegistrationInput,
+  apiBaseUrl = DEFAULT_API_BASE_URL
+): Promise<RegistrationResponse> {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/public/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? String((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+
+  return body as RegistrationResponse;
+}
+
+export async function acceptPublicInvite(
+  input: InviteAcceptInput,
+  apiBaseUrl = DEFAULT_API_BASE_URL
+): Promise<{
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  principal: AuthenticatedPrincipalRecord;
+}> {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/public/invites/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? String((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  return body as {
+    access_token: string;
+    token_type: string;
+    expires_in: number;
+    principal: AuthenticatedPrincipalRecord;
+  };
+}
+
+export async function completeOnboarding(
+  credentials: Credentials,
+  tenantId: string
+): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(
+    credentials,
+    `/api/app/onboarding/${encodeURIComponent(tenantId)}/complete`,
+    { method: "POST" }
+  );
+}
+
+export async function getTenantDeliverySummary(
+  credentials: Credentials,
+  tenantId: string
+): Promise<DeliverySummaryRecord> {
+  return request<DeliverySummaryRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/delivery-summary`
+  );
+}
+
+export function listTenantInvites(credentials: Credentials, tenantId: string): Promise<{ items: TenantInviteRecord[] }> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/invites`);
+}
+
+export function createTenantInvite(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantInviteCreatePayload
+): Promise<TenantInviteRecord> {
+  return request<{ invite: TenantInviteRecord } | TenantInviteRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/invites`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  ).then((result) => ("invite" in result ? result.invite : result));
+}
+
+export function resendTenantInvite(
+  credentials: Credentials,
+  tenantId: string,
+  inviteId: string
+): Promise<TenantInviteRecord> {
+  return request<{ invite: TenantInviteRecord }>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/invites/${encodeURIComponent(inviteId)}/resend`,
+    { method: "POST" }
+  ).then((result) => result.invite);
+}
+
+export function revokeTenantInvite(
+  credentials: Credentials,
+  tenantId: string,
+  inviteId: string
+): Promise<TenantInviteRecord> {
+  return request<{ invite: TenantInviteRecord }>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/invites/${encodeURIComponent(inviteId)}/revoke`,
+    { method: "POST" }
+  ).then((result) => result.invite);
+}
+
+export function listTenantTeams(credentials: Credentials, tenantId: string): Promise<TenantTeamRecord[]> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/teams`);
+}
+
+export function createTenantTeam(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantTeamCreatePayload
+): Promise<TenantTeamRecord> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/teams`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateTenantTeamRecord(
+  credentials: Credentials,
+  tenantId: string,
+  teamId: string,
+  payload: TenantTeamCreatePayload
+): Promise<TenantTeamRecord> {
+  return request(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/teams/${encodeURIComponent(teamId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function listTenantMembers(credentials: Credentials, tenantId: string): Promise<TenantMemberRecord[]> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/members`);
+}
+
+export function updateTenantMemberRecord(
+  credentials: Credentials,
+  tenantId: string,
+  membershipId: string,
+  payload: TenantMemberUpdatePayload
+): Promise<TenantMemberRecord> {
+  return request(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/members/${encodeURIComponent(membershipId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function getTenantDiscordIdentity(
+  credentials: Credentials,
+  tenantId: string
+): Promise<TenantDiscordIdentityRecord> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/identity`);
+}
+
+export function startTenantDiscordLink(
+  credentials: Credentials,
+  tenantId: string,
+  redirectTo = "/get-started"
+): Promise<{ authorize_url: string }> {
+  const query = new URLSearchParams({ redirect_to: redirectTo });
+  return request(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/link/start?${query.toString()}`,
+    { method: "POST" }
+  );
+}
+
+export function createTenantDiscordInvite(
+  credentials: Credentials,
+  tenantId: string
+): Promise<TenantDiscordInviteRecord> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/onboarding-invite`, {
+    method: "POST"
+  });
 }
 
 export function listTenants(credentials: Credentials): Promise<TenantRecord[]> {
@@ -976,6 +1338,21 @@ export function startGitHubInstall(
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/github/install/start${suffix}`, {
+    method: "POST"
+  });
+}
+
+export function startDiscordInstall(
+  credentials: Credentials,
+  tenantId: string,
+  options?: { returnTo?: "edit" | "wizard" }
+): Promise<DiscordInstallStartRecord> {
+  const query = new URLSearchParams();
+  if (options?.returnTo) {
+    query.set("return_to", options.returnTo);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/install/start${suffix}`, {
     method: "POST"
   });
 }
@@ -1610,11 +1987,10 @@ export async function streamRunEvents(
   onEvent: (event: RunEventRecord | (RunLogEventRecord & { event_kind?: string })) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const base = credentials.apiBaseUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}/api/admin/runs/${encodeURIComponent(runId)}/events/stream`, {
+  void credentials;
+  const response = await fetch(`/api/bff/api/admin/runs/${encodeURIComponent(runId)}/events/stream`, {
     method: "GET",
     headers: {
-      Authorization: authHeader(credentials),
       Accept: "application/x-ndjson"
     },
     signal

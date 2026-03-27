@@ -27,6 +27,7 @@ def publish_manual_pr_remediation_completion(
     settings,
     issue_url: str | None,
     logger_override=None,
+    terminal_status: str | None = None,
 ) -> None:  # noqa: ANN001
     log = logger_override or logger
     actions = build_manual_pr_remediation_completion_actions(
@@ -34,6 +35,7 @@ def publish_manual_pr_remediation_completion(
         run=run,
         workflow_result=workflow_result,
         issue_url=issue_url,
+        terminal_status=terminal_status,
     )
     if not actions:
         return
@@ -80,6 +82,7 @@ def build_manual_pr_remediation_completion_actions(
     run,
     workflow_result,
     issue_url: str | None,
+    terminal_status: str | None = None,
 ) -> tuple[TransportAction, ...]:  # noqa: ANN001
     trigger_context = _trigger_context(getattr(run, "plan", None))
     manual_fix_request = trigger_context.get("manual_fix_request")
@@ -97,7 +100,7 @@ def build_manual_pr_remediation_completion_actions(
     if not isinstance(triggering_comment_id, int) or pr_number is None:
         return ()
 
-    status_label = _status_label(getattr(run, "status", None))
+    status_label = _status_label(terminal_status or getattr(run, "status", None))
     issue_created = bool(trigger_context.get("issue_created"))
     triggering_comment_url = str(requested_comment.get("url") or "").strip() or None
     requested_by = str(manual_fix_request.get("requested_by") or "").strip() or None

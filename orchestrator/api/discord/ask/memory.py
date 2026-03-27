@@ -129,6 +129,7 @@ def collect_ask_context_with_history_context(
     scoped_issue_key: str | None,
     collect_ask_context_fn=None,  # noqa: ANN001
     existing_issue_keys_fn=None,  # noqa: ANN001
+    prune_history: bool = True,
 ) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
     collect_fn = collect_ask_context_fn or collect_ask_context
     existing_fn = existing_issue_keys_fn or existing_issue_keys_for_tenant
@@ -141,6 +142,7 @@ def collect_ask_context_with_history_context(
         scoped_issue_key=scoped_issue_key,
         collect_ask_context_fn=collect_fn,
         existing_issue_keys_fn=existing_fn,
+        prune_history=prune_history,
     )
 
 

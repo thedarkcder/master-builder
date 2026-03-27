@@ -37,6 +37,8 @@ def create_tenant(
             existing={},
             proposed=payload.discord.model_dump(exclude_unset=True) if payload.discord else None,
         ),
+        experience_config=dict(payload.experience),
+        setup_state=dict(payload.setup_state),
         created_at=now,
         updated_at=now,
     )
@@ -82,6 +84,8 @@ def update_tenant(
         existing=dict(tenant.discord_config or {}),
         proposed=payload.discord.model_dump(exclude_unset=True) if payload.discord else None,
     )
+    tenant.experience_config = dict(payload.experience)
+    tenant.setup_state = dict(payload.setup_state)
     tenant.updated_at = datetime.now(timezone.utc)
     ensure_default_project_for_tenant_fn(session, tenant=tenant)
     sync_tenant_jira_project_keys_fn(session, tenant=tenant)
