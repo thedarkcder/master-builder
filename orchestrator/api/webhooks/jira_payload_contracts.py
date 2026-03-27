@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "ask"}
+SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "ask", "clarify"}
 
 
 def normalize_jira_webhook_event(raw_value: object) -> str | None:
@@ -130,7 +130,7 @@ def parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None, s
             return None, None, "invalid_comment_command"
         return command_name, None, None
 
-    if command_name == "ask":
+    if command_name in {"ask", "clarify"}:
         inline_question = " ".join(parts[1:]).strip()
         full_question = "\n".join(part for part in [inline_question, *remaining_lines] if part).strip()
         if not full_question:
@@ -176,3 +176,24 @@ def extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
         return normalized_from_status, normalized_to_status
 
     return None, None
+
+
+def extract_changed_fields(payload: dict) -> list[str]:
+    changelog = payload.get("changelog")
+    if not isinstance(changelog, dict):
+        return []
+    items = changelog.get("items")
+    if not isinstance(items, list):
+        return []
+    changed_fields: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        field = item.get("field")
+        normalized = field.strip().casefold() if isinstance(field, str) and field.strip() else ""
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        changed_fields.append(normalized)
+    return changed_fields

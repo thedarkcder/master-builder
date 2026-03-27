@@ -715,6 +715,38 @@ def answer_pm_question_with_codex(
     return normalized_payload
 
 
+def classify_engineering_clarification_with_codex(
+    *,
+    runtime: CodexRuntime,
+    parent_issue_key: str,
+    parent_summary: str,
+    parent_description: str,
+    child_issue_key: str,
+    child_summary: str,
+    child_description: str,
+    question: str,
+    invocation_context: CodexInvocationContext,
+) -> dict:
+    payload = invoke_codex_json(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("jira/engineering_clarification_system.j2"),
+        user_prompt=render_prompt(
+            "jira/engineering_clarification_user.j2",
+            parent_issue_key=parent_issue_key,
+            parent_summary=parent_summary,
+            parent_description=parent_description,
+            child_issue_key=child_issue_key,
+            child_summary=child_summary,
+            child_description=child_description,
+            question=question,
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return an engineering clarification JSON object")
+    return payload
+
+
 def route_voice_room_persona_with_codex(
     *,
     runtime: CodexRuntime,

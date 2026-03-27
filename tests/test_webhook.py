@@ -44,7 +44,7 @@ from orchestrator.storage.db import create_session_factory, reset_db_engine_cach
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import FollowupContext, Project, Run, Tenant, WebhookJob
 from orchestrator.tools.discord_api import DiscordApiError
-from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
 
 pytestmark = pytest.mark.contract
 
@@ -1470,6 +1470,301 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertIsNotNone(processed)
         assert processed is not None
         self.assertEqual(processed.status, "done")
+
+    def test_webhook_pm_parent_material_change_refreshes_engineering_children(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-950", labels=["pm-parent"], status_name="To Do")
+        payload["changelog"] = {"items": [{"field": "description", "fromString": "old", "toString": "new"}]}
+
+        class _FakeClient:
+            def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
+                jql = kwargs["jql"]
+                if 'parent = "TP-950"' in jql or 'labels = "parent-tp-950"' in jql:
+                    return [JiraIssuePreview(key="TP-951", summary="Update retry UI", status="To Do")]
+                return []
+
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                issue_key = kwargs["issue_id_or_key"]
+                if issue_key == "TP-950":
+                    return JiraIssueDetail(
+                        key="TP-950",
+                        summary="Checkout recovery",
+                        status="To Do",
+                        description="Objective\nRefresh checkout recovery behavior\nOpen Questions\nNo open questions remain",
+                        labels=["pm-parent", "sync-current"],
+                    )
+                return JiraIssueDetail(
+                    key="TP-951",
+                    summary="Update retry UI",
+                    status="To Do",
+                    description="Technical Objective\nRefresh retry UI\nParent Feature Link\nTP-950: Checkout recovery\nBehavior Slice\nRetry success messaging",
+                    labels=["engineering-child", "parent-tp-950", "sync-current"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_codex",
+                return_value=(
+                    "synced",
+                    {
+                        "updated_parent": "TP-950",
+                        "updated_children": ["TP-951"],
+                        "created_children": [],
+                        "requires_input": False,
+                        "parent_revision": "rev-123",
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ) as seed_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow") as run_flow_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-950")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        seed_mock.assert_called_once()
+        run_flow_mock.assert_not_called()
+        self.assertGreaterEqual(comment_mock.call_count, 2)
+
+    def test_webhook_pm_parent_non_material_change_skips_child_sync(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-952", labels=["pm-parent"], status_name="To Do")
+        payload["changelog"] = {"items": [{"field": "status", "fromString": "To Do", "toString": "In Progress"}]}
+
+        class _FakeClient:
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                return JiraIssueDetail(
+                    key=str(kwargs["issue_id_or_key"]),
+                    summary="Parent feature",
+                    status="In Progress",
+                    description="Objective\nParent feature description",
+                    labels=["pm-parent", "sync-current"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_codex") as seed_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-952")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        seed_mock.assert_not_called()
+
+    def test_webhook_comment_command_clarify_creates_parent_followup_and_blocks_child(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-960", labels=["engineering-child", "parent-tp-950"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-5"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "/mb clarify What should the customer see when retry succeeds?"}],
+                    }
+                ],
+            },
+        }
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.replaced_labels: list[dict] = []
+
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                issue_key = kwargs["issue_id_or_key"]
+                if issue_key == "TP-960":
+                    return JiraIssueDetail(
+                        key="TP-960",
+                        summary="Retry UI behavior",
+                        status="To Do",
+                        description=(
+                            "Technical Objective\nRetry UI\nParent Feature Link\nTP-950: Checkout recovery\n"
+                            "Behavior Slice\nCustomer-facing retry success message"
+                        ),
+                        labels=["engineering-child", "parent-tp-950", "sync-current"],
+                    )
+                return JiraIssueDetail(
+                    key="TP-950",
+                    summary="Checkout recovery",
+                    status="To Do",
+                    description="Objective\nCheckout recovery parent",
+                    labels=["pm-parent", "sync-current"],
+                )
+
+            def replace_issue_labels(self, **kwargs):  # noqa: ANN003
+                self.replaced_labels.append(kwargs)
+                return None
+
+        client = _FakeClient()
+        oauth_context = SimpleNamespace(
+            client=client,
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=object()),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.classify_engineering_clarification_with_codex",
+                return_value={
+                    "classification": "product_behavior",
+                    "stakeholder_question": "When checkout retry succeeds after a recovery, what should the customer see?",
+                    "child_block_note": "Need a PM decision on the customer-facing outcome.",
+                    "reason": "The current brief leaves the user-facing behavior open.",
+                },
+            ),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-960")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertEqual(len(client.replaced_labels), 1)
+        self.assertIn("sync-blocked", client.replaced_labels[0]["labels"])
+        self.assertGreaterEqual(comment_mock.call_count, 2)
+        with self.session_factory() as session:
+            context = session.execute(
+                select(FollowupContext).where(
+                    FollowupContext.tenant_id == "tenant-webhook",
+                    FollowupContext.issue_key == "TP-950",
+                    FollowupContext.context_type == "engineering_clarification",
+                )
+            ).scalar_one_or_none()
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertEqual(context.status, "active")
+
+    def test_webhook_parent_comment_resolves_engineering_clarification_and_closes_context(self) -> None:
+        with self.session_factory() as session:
+            session.add(
+                FollowupContext(
+                    context_id="ctx-clarify-1",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    context_type="engineering_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id=None,
+                    issue_key="TP-950",
+                    request_id="engineering-clarification:TP-950",
+                    run_id=None,
+                    metadata_json={
+                        "affected_child_keys": ["TP-960"],
+                        "questions": [
+                            {
+                                "source_child_key": "TP-960",
+                                "original_question": "What should the customer see when retry succeeds?",
+                                "stakeholder_question": "When checkout retry succeeds after a recovery, what should the customer see?",
+                            }
+                        ],
+                    },
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-950", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-6"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Show a success banner and restore the cart summary."}],
+                    }
+                ],
+            },
+        }
+
+        class _FakeClient:
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                issue_key = kwargs["issue_id_or_key"]
+                if issue_key == "TP-950":
+                    return JiraIssueDetail(
+                        key="TP-950",
+                        summary="Checkout recovery",
+                        status="To Do",
+                        description="Objective\nCheckout recovery parent",
+                        labels=["pm-parent", "sync-blocked"],
+                    )
+                return JiraIssueDetail(
+                    key="TP-960",
+                    summary="Retry UI behavior",
+                    status="To Do",
+                    description="Technical Objective\nRetry UI\nParent Feature Link\nTP-950: Checkout recovery",
+                    labels=["engineering-child", "parent-tp-950", "sync-blocked"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_codex",
+                return_value=(
+                    "updated",
+                    {
+                        "updated_parent": "TP-950",
+                        "updated_children": ["TP-960"],
+                        "created_children": [],
+                        "requires_input": False,
+                        "parent_revision": "rev-456",
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-950")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertGreaterEqual(comment_mock.call_count, 2)
+        with self.session_factory() as session:
+            context = session.execute(
+                select(FollowupContext).where(
+                    FollowupContext.tenant_id == "tenant-webhook",
+                    FollowupContext.issue_key == "TP-950",
+                    FollowupContext.context_type == "engineering_clarification",
+                )
+            ).scalar_one_or_none()
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertEqual(context.status, "closed")
 
     def test_webhook_project_not_mapped_does_not_process_decision_reply(self) -> None:
         payload = self._jira_issue_payload(issue_key="NOPE-1", status_name="To Do")

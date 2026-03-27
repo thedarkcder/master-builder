@@ -18,8 +18,6 @@ from orchestrator.api.webhooks.pr_review_comment_service import (
     upsert_manual_fix_issue_comment_reply,
     publish_inline_review_batch,
     upsert_manual_fix_review_thread_reply,
-    upsert_sticky_remediation_comment,
-    upsert_sticky_remediation_review_thread_reply,
     upsert_sticky_review_comment,
 )
 from orchestrator.core.pr_review_findings import PrReviewFindingsResult, ReviewFinding
@@ -367,108 +365,33 @@ def test_review_publication_state_blocks_duplicate_and_recovers_after_failure() 
         assert published_duplicate.reason == "duplicate_signature"
 
 
-def test_upsert_sticky_remediation_comment_creates_and_updates() -> None:
-    github_client = SimpleNamespace(
-        list_pull_request_issue_comments=lambda **_kwargs: [],
-        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=202),
-        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=202),
-    )
-    created = upsert_sticky_remediation_comment(
-        github_client=github_client,
-        repo_full_name="org/repo",
-        pr_number=10,
-        tenant_id="t1",
-        project_id="p1",
-        issue_key="GP-10",
-        issue_url="https://jira.example.com/browse/GP-10",
-        issue_created=True,
-        enqueued=True,
-        reason=None,
-        run_id="run-10",
-        head_sha="abc123",
-        event="pull_request_review_comment",
-        action="created",
-    )
-    assert created.action == "created"
-    assert created.comment_id == 202
+def test_review_publication_state_persists_large_review_id() -> None:
+    with _review_session() as session:
+        acquired = acquire_review_publication(
+            session,
+            tenant_id="t1",
+            project_id="p1",
+            repo_full_name="org/repo",
+            pr_number=13,
+            head_sha="sha-3",
+            review_kind=PR_REVIEW_PUBLICATION_KIND_INLINE,
+            signature="sig-large",
+            request_id="req-large",
+        )
+        assert acquired.acquired is True
+        assert acquired.publication is not None
 
-    marker_body = "<!-- codex:pr-remediation:t1:p1:org/repo:10 -->"
-    github_client = SimpleNamespace(
-        list_pull_request_issue_comments=lambda **_kwargs: [SimpleNamespace(comment_id=202, body=marker_body)],
-        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
-        update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=202),
-    )
-    updated = upsert_sticky_remediation_comment(
-        github_client=github_client,
-        repo_full_name="org/repo",
-        pr_number=10,
-        tenant_id="t1",
-        project_id="p1",
-        issue_key="GP-10",
-        issue_url="https://jira.example.com/browse/GP-10",
-        issue_created=False,
-        enqueued=False,
-        reason="run_already_active",
-        run_id="run-10",
-        head_sha="abc123",
-        event="check_run",
-        action="completed",
-    )
-    assert updated.action == "updated"
-    assert updated.comment_id == 202
+        large_review_id = 4_294_967_299
+        mark_review_publication_published(
+            session,
+            publication=acquired.publication,
+            review_id=large_review_id,
+        )
+        session.commit()
 
-
-def test_upsert_sticky_remediation_review_thread_reply_creates_and_updates() -> None:
-    github_client = SimpleNamespace(
-        list_pull_request_review_comments=lambda **_kwargs: [],
-        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(comment_id=212),
-        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=212),
-    )
-    created = upsert_sticky_remediation_review_thread_reply(
-        github_client=github_client,
-        repo_full_name="org/repo",
-        pr_number=10,
-        tenant_id="t1",
-        project_id="p1",
-        triggering_comment_id=9001,
-        issue_key="GP-10",
-        issue_url="https://jira.example.com/browse/GP-10",
-        issue_created=True,
-        enqueued=True,
-        reason=None,
-        run_id="run-10",
-        head_sha="abc123",
-        event="pull_request_review_comment",
-        action="created",
-    )
-    assert created.action == "created"
-    assert created.comment_id == 212
-
-    marker_body = "<!-- codex:pr-remediation-thread:t1:p1:org/repo:10:9001 -->"
-    github_client = SimpleNamespace(
-        list_pull_request_review_comments=lambda **_kwargs: [SimpleNamespace(comment_id=212, body=marker_body)],
-        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(comment_id=999),
-        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=212),
-    )
-    updated = upsert_sticky_remediation_review_thread_reply(
-        github_client=github_client,
-        repo_full_name="org/repo",
-        pr_number=10,
-        tenant_id="t1",
-        project_id="p1",
-        triggering_comment_id=9001,
-        issue_key="GP-10",
-        issue_url="https://jira.example.com/browse/GP-10",
-        issue_created=False,
-        enqueued=False,
-        reason="run_already_active",
-        run_id="run-10",
-        head_sha="abc123",
-        event="pull_request_review_comment",
-        action="created",
-    )
-    assert updated.action == "updated"
-    assert updated.comment_id == 212
+        persisted = session.get(PrReviewPublication, acquired.publication.publication_id)
+        assert persisted is not None
+        assert persisted.review_id == large_review_id
 
 
 def test_upsert_manual_fix_review_thread_reply_creates_and_updates() -> None:

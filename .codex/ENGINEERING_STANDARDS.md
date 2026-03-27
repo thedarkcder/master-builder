@@ -87,6 +87,9 @@ If partial work is unavoidable:
 - Create a follow-up Jira issue in **Backlog** describing exactly what remains (file paths, behavior).
 - Mark current run **blocked** and stop.
 
+Don't leave dead code around
+- If the code and is behaviour is no longer required remove it
+
 Reviewer must block PRs with untracked placeholders.
 
 ## 6) Error handling & observability

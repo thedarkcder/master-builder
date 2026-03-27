@@ -19,6 +19,7 @@ FOLLOWUP_CONTEXT_ASK_THREAD = "ask_thread"
 FOLLOWUP_CONTEXT_SEED_FOLLOWUP = "seed_followup"
 FOLLOWUP_CONTEXT_ROOM_PM = "room_pm"
 FOLLOWUP_CONTEXT_HUMAN_INPUT = "human_input"
+FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION = "engineering_clarification"
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,80 @@ def resolve_followup_context(
     return None
 
 
+def resolve_discord_command_subject_key(
+    *,
+    session: Session,
+    tenant_id: str,
+    channel_id: str | None,
+    user_id: str,
+) -> str:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_channel_id = str(channel_id or "").strip() or None
+    normalized_user_id = str(user_id or "").strip()
+    if normalized_channel_id:
+        context = resolve_followup_context(
+            session=session,
+            tenant_id=normalized_tenant_id,
+            channel_id=normalized_channel_id,
+        )
+        if context is not None:
+            context_id = str(getattr(context, "context_id", "") or "").strip()
+            if context_id:
+                return f"discord_followup:{context_id}"
+        return f"discord_channel:{normalized_tenant_id}:{normalized_channel_id}"
+    return f"discord_user:{normalized_tenant_id}:{normalized_user_id}"
+
+
+def resolve_discord_interaction_subject_scope(
+    *,
+    session: Session,
+    payload: dict,
+    find_tenant_for_discord_channel,
+) -> tuple[str | None, str | None, str]:  # noqa: ANN001
+    channel_id = str(payload.get("channel_id") or "").strip()
+    user_id = str(((payload.get("member") or {}).get("user") or {}).get("id") or "").strip()
+    if not user_id:
+        user_id = str((payload.get("user") or {}).get("id") or "").strip()
+
+    tenant_id: str | None = None
+    project_id: str | None = None
+    if channel_id:
+        tenant = find_tenant_for_discord_channel(session=session, channel_id=channel_id)
+        if tenant is not None:
+            tenant_id = str(getattr(tenant, "tenant_id", "") or "").strip() or None
+
+    root_message_id = None
+    data = payload.get("data")
+    if isinstance(data, dict) and data.get("type") == 3:
+        root_message_id = str(data.get("target_id") or "").strip() or None
+    if root_message_id is None:
+        message = payload.get("message")
+        if isinstance(message, dict):
+            root_message_id = str(message.get("id") or "").strip() or None
+
+    if tenant_id and channel_id:
+        context = resolve_followup_context(
+            session=session,
+            tenant_id=tenant_id,
+            channel_id=channel_id,
+            root_message_id=root_message_id,
+        )
+        if context is not None:
+            project_id = str(getattr(context, "project_id", "") or "").strip() or None
+            context_id = str(getattr(context, "context_id", "") or "").strip()
+            if context_id:
+                return tenant_id, project_id, f"discord_followup:{context_id}"
+    if tenant_id and channel_id:
+        return tenant_id, project_id, f"discord_channel:{tenant_id}:{channel_id}"
+    if tenant_id and user_id:
+        return tenant_id, project_id, f"discord_user:{tenant_id}:{user_id}"
+    if channel_id:
+        return None, None, f"discord_channel::{channel_id}"
+    if user_id:
+        return None, None, f"discord_user::{user_id}"
+    return None, None, "discord_interaction:unknown"
+
+
 def close_followup_contexts(
     *,
     session: Session,
@@ -210,6 +285,39 @@ def close_followup_contexts(
         row.closed_at = now
         row.updated_at = now
     return len(rows)
+
+
+def resolve_issue_followup_context(
+    *,
+    session: Session,
+    tenant_id: str,
+    issue_key: str,
+    context_type: str | None = None,
+) -> FollowupContext | None:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    normalized_context_type = str(context_type or "").strip()
+    if not normalized_tenant_id or not normalized_issue_key:
+        return None
+    query = (
+        select(FollowupContext)
+        .where(
+            FollowupContext.tenant_id == normalized_tenant_id,
+            FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
+            FollowupContext.issue_key == normalized_issue_key,
+        )
+        .order_by(FollowupContext.updated_at.desc())
+    )
+    if normalized_context_type:
+        query = query.where(FollowupContext.context_type == normalized_context_type)
+    rows = session.execute(query).scalars().all()
+    if not rows:
+        return None
+    if len(rows) > 1 and normalized_context_type:
+        raise ValueError(
+            f"Multiple active follow-up contexts match tenant={normalized_tenant_id} issue={normalized_issue_key} type={normalized_context_type}"
+        )
+    return rows[0]
 
 
 def resolve_followup_reaction(
