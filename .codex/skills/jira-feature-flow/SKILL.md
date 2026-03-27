@@ -5,6 +5,25 @@ description: Use when the task is to implement or update a feature tied to a Jir
 
 > For backlog seeding/issue creation-sync work (non-execution), use `codex-jira-backlog` instead of this skill.
 
+## Execution unit (MANDATORY)
+- The executable work unit is an engineering child ticket, not the PM parent feature.
+- Jira issues labeled `pm-parent` are product records only. They are not implementation tickets.
+- Jira issues labeled `engineering-child` are the tickets this skill may execute.
+- Jira issues labeled `sync-stale` or `sync-blocked` must not be executed until refreshed from the latest parent feature.
+
+If the selected issue has `pm-parent`:
+- Do NOT implement any code.
+- Stop and tell the user to choose or create the engineering child ticket.
+
+If the selected issue has `sync-stale` or `sync-blocked`:
+- Do NOT implement any code.
+- Stop and refresh the engineering child from the latest parent feature first.
+
+If engineering discovers a product-behavior ambiguity:
+- Do NOT guess.
+- Route the question back through the PM/parent layer in non-technical terms.
+- Resume only after the parent feature has been updated and the child ticket is current again.
+
 ## Preflight dependency check (MANDATORY)
 Before starting work, verify:
 - Issue status indicates it is ready to work on.
@@ -26,7 +45,7 @@ If dependencies or blockers are found:
 
 
 ## Inputs (must obtain or ask for)
-- ISSUE_KEY (for example `<PROJECT_KEY>-<NUMBER>`)
+- ISSUE_KEY for the engineering child ticket (for example `<PROJECT_KEY>-<NUMBER>`)
 - Desired outcome: Done | Blocked | Testing
 - If "Done": PR/branch info (or commit) and any release notes
 
@@ -44,20 +63,26 @@ If Jira is unavailable/auth fails:
 
 ## Workflow (follow strictly)
 1) Fetch the Jira issue details (title, description, acceptance criteria, current status).
-2) Confirm you are working on exactly this ISSUE_KEY for the entire task.
-3) Ensure branch name is keyed to ISSUE_KEY:
+2) Confirm the issue is an engineering child ticket:
+   - Must not have `pm-parent`
+   - Must not have `sync-stale`
+   - Must not have `sync-blocked`
+3) Confirm you are working on exactly this ISSUE_KEY for the entire task.
+4) Ensure branch name is keyed to ISSUE_KEY:
    - `jira/<ISSUE_KEY>-<short-slug>`
-4) Add a Jira comment: "Starting work" + a 1-2 line plan + any assumptions.
-5) Implement the work in the repo:
+5) Add a Jira comment: "Starting work" + a 1-2 line plan + any assumptions.
+   - Put execution comments on the engineering child ticket.
+   - Use parent comments only for product clarification or sync notes when needed.
+6) Implement the work in the repo:
    - Keep changes minimal and aligned to acceptance criteria.
    - Run relevant tests/commands.
-6) Add a Jira comment: what changed + how to validate (commands, URLs, steps).
-7) Transition the issue:
+7) Add a Jira comment: what changed + how to validate (commands, URLs, steps).
+8) Transition the issue:
    - If outcome = Done -> transition to Done
    - If outcome = Testing -> transition to Testing (and document how to test)
    - If outcome = Blocked -> transition to Blocked AND add a comment explaining the blocker + what's needed
-8) Final Jira comment: summary + links (PR, commit, build) if available.
-9) When creating or editing PR descriptions, use proper Markdown formatting:
+9) Final Jira comment: summary + links (PR, commit, build) if available.
+10) When creating or editing PR descriptions, use proper Markdown formatting:
    - Use real line breaks and headings/lists (not escaped `\n` text).
    - Prefer `gh pr create --body-file <file>` / `gh pr edit --body-file <file>`.
    - Verify rendering with `gh pr view <number> --json body`.

@@ -87,7 +87,6 @@ class OrchestratedRunWorkflowExecutor:
         self,
         *,
         runtime: CodexRuntime,
-        runtime_resolver: Callable[[str, WorkflowRequest], CodexRuntime] | None = None,
         log_sink: Callable[[dict], None] | None = None,
         stage_agents: StageAgents | None = None,
         execute_tool: Callable[
@@ -96,7 +95,6 @@ class OrchestratedRunWorkflowExecutor:
         ] | None = None,
     ):
         self._runtime = runtime
-        self._runtime_resolver = runtime_resolver
         self._log_sink = log_sink
         self._stage_agents = stage_agents
         self._execute_tool = execute_tool
@@ -110,7 +108,6 @@ class OrchestratedRunWorkflowExecutor:
     ) -> WorkflowResult:
         agents = self._stage_agents or CodexWorkflowAgents(
             runtime=self._runtime,
-            runtime_resolver=self._runtime_resolver,
             log_sink=self._log_sink,
             execute_tool=(
                 None

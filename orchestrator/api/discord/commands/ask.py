@@ -196,6 +196,8 @@ def dispatch_ask_command(
             tenant_id=tenant.tenant_id,
             project_id=scoped_project_id,
             selector="discord.pm_answer",
+            agent_role="pm",
+            agent_name="voice_room_pm" if is_routed_voice_mode else "pm_primary",
         )
         github_context = collect_github_ask_context(
             session=session,
@@ -234,6 +236,8 @@ def dispatch_ask_command(
                         tenant_id=tenant.tenant_id,
                         project_id=scoped_project_id,
                         selector=selector,
+                        agent_role="pm" if selector == "discord.voice_room_pm" else None,
+                        agent_name="voice_room_pm" if selector == "discord.voice_room_pm" else None,
                     ),
                     transcript=question,
                     project_keys=normalized_project_keys,
