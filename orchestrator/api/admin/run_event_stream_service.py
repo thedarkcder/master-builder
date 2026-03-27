@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
+from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, select
 
-from orchestrator.storage.models import AgentLifecycleEvent, RunLogEvent
-from orchestrator.storage.run_event_stream import RUN_EVENT_NOTIFY_CHANNEL
-from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
+from orchestrator.core.log_event_bus import (
+    build_run_stream_matcher,
+    build_run_stream_snapshot_query,
+    encode_stream_row,
+    get_run_stream_broker,
+    stream_from_subscriber,
+)
 
 
 def stream_run_events_ndjson(
@@ -25,68 +28,28 @@ def stream_run_events_ndjson(
 
     initial_event_limit = max(1, min(int(getattr(settings, "run_events_initial_limit", 100)), 500))
     initial_log_limit = max(1, min(int(getattr(settings, "run_logs_initial_limit", 200)), 1000))
+    snapshot_rows = build_run_stream_snapshot_query(
+        run_id=run_id,
+        initial_event_limit=initial_event_limit,
+        initial_log_limit=initial_log_limit,
+    )
+    for row in snapshot_rows:
+        payload = encode_stream_row(row)
+        if payload is not None:
+            yield payload
 
-    initial_rows = session.execute(
-        select(AgentLifecycleEvent)
-        .where(AgentLifecycleEvent.run_id == run_id)
-        .order_by(desc(AgentLifecycleEvent.recorded_at), desc(AgentLifecycleEvent.event_id))
-        .limit(initial_event_limit)
-    ).scalars().all()
-    for row in reversed(initial_rows):
-        yield (
-            json.dumps(
-                {
-                    "event_type": row.event_type,
-                    "run_id": row.run_id,
-                    "issue_key": row.issue_key,
-                    "project_id": row.project_id,
-                    "agent_id": row.agent_id,
-                    "recorded_at": row.recorded_at.isoformat(),
-                },
-                separators=(",", ":"),
-            )
-            + "\n"
-        )
-    initial_logs = session.execute(
-        select(RunLogEvent)
-        .where(RunLogEvent.run_id == run_id)
-        .order_by(desc(RunLogEvent.recorded_at), desc(RunLogEvent.event_id))
-        .limit(initial_log_limit)
-    ).scalars().all()
-    for row in reversed(initial_logs):
-        yield (
-            json.dumps(
-                {
-                    "event_kind": "codex_log",
-                    "invocation_id": row.invocation_id,
-                    "channel": row.channel,
-                    "command": row.command,
-                    "working_dir": row.working_dir,
-                    "run_id": row.run_id,
-                    "issue_key": row.issue_key,
-                    "project_id": row.project_id,
-                    "agent_id": row.agent_id,
-                    "stage": row.stage,
-                    "attempt": row.attempt,
-                    "stream": row.stream,
-                    "message": row.message,
-                    "recorded_at": row.recorded_at.isoformat(),
-                },
-                separators=(",", ":"),
-            )
-            + "\n"
-        )
-
-    if psycopg_module is None or not is_postgres_database_url(settings.database_url):
+    if not bool(getattr(settings, "log_bus_enabled", False)):
         return
 
-    with psycopg_module.connect(postgres_dsn_from_database_url(settings.database_url), autocommit=True) as conn:
-        conn.execute(f'LISTEN "{RUN_EVENT_NOTIFY_CHANNEL}"')
-        for notification in conn.notifies():
-            try:
-                payload = json.loads(str(notification.payload or "{}"))
-            except json.JSONDecodeError:
-                continue
-            if str(payload.get("run_id") or "") != run_id:
-                continue
-            yield json.dumps(payload, separators=(",", ":")) + "\n"
+    subscriber_id = f"run-stream::{run_id}::{uuid4().hex}"
+    broker = get_run_stream_broker()
+    subscriber = broker.subscribe(
+        subscriber_id=subscriber_id,
+        buffer_size=max(1, int(getattr(settings, "log_subscriber_buffer_size", 256))),
+        match_fn=build_run_stream_matcher(run_id=run_id),
+        render_fn=encode_stream_row,
+    )
+    try:
+        yield from stream_from_subscriber(subscriber=subscriber)
+    finally:
+        broker.unsubscribe(subscriber_id)

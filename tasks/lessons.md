@@ -1,5 +1,7 @@
 2026-03-23
 
+- When the user explicitly switches from planning to implementation, verify the active collaboration mode first and move into execution if it is allowed. Do not repeat stale mode blockers after the mode has already changed.
+
 - When investigating config regressions, do not keep pushing environment-variable explanations after the user says the value is stored in the UI/secret manager. Verify the exact read path against the exact write path first.
 - For Discord config specifically, distinguish platform-scoped secrets from tenant-scoped secrets and tenant `discord_config`. A value existing in `tenant/<tenant_id>/DISCORD_GUILD_ID` or `tenant.discord_config.guild_id` does not help if runtime code only reads `platform/DISCORD_GUILD_ID`.
 - Decision Gate lifecycle rule: once a gate has been answered and cleared, it must never reopen for that issue. Do not reintroduce fingerprint-based reopening logic just because Jira summary/description/labels changed.
