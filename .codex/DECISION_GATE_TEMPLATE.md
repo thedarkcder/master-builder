@@ -46,7 +46,23 @@ The orchestrator parses the sections below directly from this file.
 - Objective
 - Scope
 - Acceptance Criteria
-- How to test
+
+## How to Automated Test
+- Unit:
+  - command(s)
+  - what logic is covered
+- Integration:
+  - command(s)
+  - what boundaries and wiring are validated
+- UI automation / E2E:
+  - command(s)
+  - what user journey is covered
+- Evidence:
+  - demo video or screenshots if the change is user-visible
+
+### Test expectations
+- Automated tests must prove the behavior a QA engineer would otherwise verify manually.
+- For user-facing changes, the acceptance path must be covered by automated UI tests unless explicitly justified.
 
 ## NFR markers
 - mvp
@@ -66,7 +82,6 @@ The orchestrator parses the sections below directly from this file.
 - Which reliability/security constraints are mandatory for this scope?
 - What is explicitly out of scope for this iteration?
 - Are there rollout or migration constraints that affect implementation?
-- Who is the final decision owner for unresolved trade-offs?
 
 ## Messages
 - clear_reason: Decision Gate not required
