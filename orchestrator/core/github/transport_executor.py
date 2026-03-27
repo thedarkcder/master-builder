@@ -25,10 +25,18 @@ logger = logging.getLogger(__name__)
 
 
 class GitHubTransportExecutor:
-    def __init__(self, *, github_client, session: Session, logger_override=None) -> None:  # noqa: ANN001
+    def __init__(  # noqa: ANN001
+        self,
+        *,
+        github_client,
+        session: Session,
+        logger_override=None,
+        raise_on_error: bool = False,
+    ) -> None:
         self._github_client = github_client
         self._session = session
         self._logger = logger_override or logger
+        self._raise_on_error = bool(raise_on_error)
 
     def execute(self, *, action: TransportAction) -> None:
         if isinstance(action, GitHubIssueCommentReactionAction):
@@ -86,6 +94,8 @@ class GitHubTransportExecutor:
                 action.pr_number,
                 exc,
             )
+            if self._raise_on_error:
+                raise
 
     def _execute_inline_review_batch(self, *, action: GitHubInlineReviewBatchAction) -> None:
         try:
@@ -109,6 +119,8 @@ class GitHubTransportExecutor:
                 action.pr_number,
                 exc,
             )
+            if self._raise_on_error:
+                raise
 
     def _execute_manual_fix_review_thread_reply(self, *, action: GitHubManualFixReviewThreadReplyAction) -> None:
         try:
@@ -138,6 +150,8 @@ class GitHubTransportExecutor:
                 action.pr_number,
                 exc,
             )
+            if self._raise_on_error:
+                raise
 
     def _execute_manual_fix_issue_comment_reply(self, *, action: GitHubManualFixIssueCommentReplyAction) -> None:
         try:
@@ -167,6 +181,8 @@ class GitHubTransportExecutor:
                 action.pr_number,
                 exc,
             )
+            if self._raise_on_error:
+                raise
 
     def _execute_pull_request_merge(self, *, action: GitHubPullRequestMergeAction) -> None:
         try:
@@ -182,3 +198,5 @@ class GitHubTransportExecutor:
                 action.pr_number,
                 exc,
             )
+            if self._raise_on_error:
+                raise
