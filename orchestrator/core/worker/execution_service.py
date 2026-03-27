@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
 
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
-from orchestrator.core.config import get_settings
+from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.jira_links import tenant_jira_issue_url
@@ -54,6 +56,8 @@ RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
 RUN_STATUS_CANCELLED = "cancelled"
 ASK_REPLY_OPEN_CUSTOM_ID = "ask.reply.open"
+TransportActionSender = Callable[..., object]
+AskReplyComponentsFactory = Callable[[], list[dict]]
 
 
 def _ask_reply_components() -> list[dict]:
@@ -96,35 +100,36 @@ def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | N
 
 def process_next_webhook_job_with_dependencies(
     *,
-    session: Session,
+    session_factory: sessionmaker[Session],
 ) -> object | None:
-    return process_next_webhook_job(
-        session=session,
-        settings=get_settings(),
-        owner_id=f"worker:{worker_service_instance_id()}",
-    )
+    with session_factory() as session:
+        return process_next_webhook_job(
+            session=session,
+            settings=get_settings(),
+            owner_id=f"worker:{worker_service_instance_id()}",
+        )
 
 
 def _process_next_queued_run_impl(
     *,
     session: Session,
     runner: WorkflowRunner,
-    send_discord_message_fn,
+    send_discord_message_fn: TransportActionSender,
 ) -> Run | None:
     from orchestrator.core.worker.process_service import process_next_queued_run as _process_next_queued_run_impl
 
     def _apply_decision_gate(
         *,
-        session,
-        run,
-        tenant,
-        settings,
-        send_discord_message_fn,
-        send_jira_message_fn,
-        ask_reply_components_fn,
+        session: Session,
+        run: Run,
+        tenant: Tenant,
+        settings: Settings,
+        send_discord_message_fn: TransportActionSender,
+        send_jira_message_fn: TransportActionSender,
+        ask_reply_components_fn: AskReplyComponentsFactory,
         blocked_status: str,
         failed_status: str,
-    ):  # noqa: ANN001
+    ) -> tuple[object | None, dict | None]:
         return apply_decision_gate(
             session=session,
             run=run,
@@ -212,7 +217,7 @@ def process_next_queued_run_with_dependencies(
     *,
     session: Session,
     runner: WorkflowRunner,
-    send_discord_message_fn=send_tenant_discord_message,
+    send_discord_message_fn: TransportActionSender = send_tenant_discord_message,
 ) -> Run | None:
     return _process_next_queued_run_impl(
         session=session,

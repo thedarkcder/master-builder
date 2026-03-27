@@ -268,6 +268,7 @@ def process_next_queued_run(
         worker_service_instance_id=worker_service_instance_id,
         heartbeat_interval_seconds=max(5, int(getattr(settings, "worker_run_heartbeat_interval_seconds", 30))),
     )
+    execution_context = _execution_context(workflow_request=workflow_request)
     heartbeat_controller.start()
     try:
         workflow_result = runner.run(
@@ -277,6 +278,7 @@ def process_next_queued_run(
                 session,
                 run=run,
                 checkpoint=checkpoint,
+                execution_context=execution_context,
                 expected_worker_service_instance_id=worker_service_instance_id,
             ),
         )
@@ -362,7 +364,7 @@ def process_next_queued_run(
                     workflow_result=workflow_result,
                     stage_updates=notifier.stage_updates,
                     error=error_text,
-                    execution_context=_execution_context(workflow_request=workflow_request),
+                    execution_context=execution_context,
                     expected_worker_service_instance_id=worker_service_instance_id,
                 )
         if workflow_result.pr_url:
@@ -419,7 +421,7 @@ def process_next_queued_run(
                     stage_updates=notifier.stage_updates,
                     required_worker_capability=capability_requeue_target,
                     required_worker_label=required_worker_label,
-                    execution_context=_execution_context(workflow_request=workflow_request),
+                    execution_context=execution_context,
                     expected_worker_service_instance_id=worker_service_instance_id,
                 )
 
@@ -468,7 +470,7 @@ def process_next_queued_run(
                 run=run,
                 workflow_result=workflow_result,
                 stage_updates=notifier.stage_updates,
-                execution_context=_execution_context(workflow_request=workflow_request),
+                execution_context=execution_context,
                 expected_worker_service_instance_id=worker_service_instance_id,
             )
         except Exception as exc:  # noqa: BLE001
@@ -863,12 +865,18 @@ def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: 
 
 def _execution_context(*, workflow_request) -> dict[str, str] | None:  # noqa: ANN001
     context: dict[str, str] = {}
-    execution_repo_dir = str(getattr(workflow_request, "execution_repo_dir", "") or "").strip()
-    workspace_key = str(getattr(workflow_request, "workspace_key", "") or "").strip()
-    if execution_repo_dir:
-        context["execution_repo_dir"] = execution_repo_dir
-    if workspace_key:
-        context["workspace_key"] = workspace_key
+    for source_attr, field_name in (
+        ("execution_repo_dir", "execution_repo_dir"),
+        ("workspace_key", "workspace_key"),
+        ("execution_branch", "execution_branch"),
+        ("integration_branch", "integration_branch"),
+        ("base_branch", "base_branch"),
+        ("start_point_ref", "start_point_ref"),
+        ("start_point_sha", "start_point_sha"),
+    ):
+        value = str(getattr(workflow_request, source_attr, "") or "").strip()
+        if value:
+            context[field_name] = value
     return context or None
 
 

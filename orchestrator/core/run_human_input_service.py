@@ -76,7 +76,8 @@ def _build_resumed_run_bootstrap(
     trigger_context["resume_source_run_id"] = request.source_run_id
     trigger_context["human_input_request_ids"] = [request.request_id]
 
-    bootstrap_kwargs: dict[str, Any] = {}
+    source_branch = str(getattr(source_run, "branch", "") or "").strip() or None
+    bootstrap_kwargs: dict[str, Any] = {"branch": source_branch}
     request_context = request.request_context_json if isinstance(request.request_context_json, dict) else None
     if request.resume_stage == "dev":
         source_plan_payload = _extract_resume_source_plan(run=source_run, request_context=request_context)

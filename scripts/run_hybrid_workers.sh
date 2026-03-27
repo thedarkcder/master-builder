@@ -33,7 +33,8 @@ fi
 DOCKER_SERVICES=(
   postgres
   api
-  worker-runtime
+  run-worker
+  webhook-worker
   knowledge-sync
   discord-gateway
   discord-live-voice
@@ -250,5 +251,5 @@ echo "Docker worker capability: linux (container)"
 echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"
 echo "Local Codex sandbox: ${ORCHESTRATOR_CODEX_SANDBOX_MODE}"
 echo "Shared repo checkout dir: ${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR}"
-echo "Starting local worker..."
-exec "${VENV_DIR}/bin/python" -m orchestrator worker
+echo "Starting local run worker..."
+exec "${VENV_DIR}/bin/python" -m orchestrator worker-runs

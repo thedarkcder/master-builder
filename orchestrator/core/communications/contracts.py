@@ -210,6 +210,14 @@ class GitHubPullRequestReviewCommentReactionAction(TransportAction):
 
 
 @dataclass(frozen=True)
+class GitHubPullRequestReactionAction(TransportAction):
+    kind: ClassVar[str] = "github_pull_request_reaction"
+    repo_full_name: str
+    pr_number: int
+    content: str
+
+
+@dataclass(frozen=True)
 class GitHubStickyReviewCommentAction(TransportAction):
     kind: ClassVar[str] = "github_sticky_review_comment"
     request_id: str

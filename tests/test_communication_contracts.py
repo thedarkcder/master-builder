@@ -26,6 +26,7 @@ from orchestrator.core.communications.contracts import (
     GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
+    GitHubPullRequestReactionAction,
     GitHubPullRequestReviewCommentReactionAction,
     GitHubStickyReviewCommentAction,
     HttpJsonResponseAction,
@@ -354,6 +355,13 @@ class CommunicationContractsTests(unittest.TestCase):
                 content="eyes",
             )
         )
+        executor.execute(
+            action=GitHubPullRequestReactionAction(
+                repo_full_name="org/repo",
+                pr_number=12,
+                content="confused",
+            )
+        )
 
         github_client.add_issue_comment_reaction.assert_called_once_with(
             repo_full_name="org/repo",
@@ -364,6 +372,11 @@ class CommunicationContractsTests(unittest.TestCase):
             repo_full_name="org/repo",
             comment_id=202,
             content="eyes",
+        )
+        github_client.sync_pull_request_reaction.assert_called_once_with(
+            repo_full_name="org/repo",
+            pr_number=12,
+            content="confused",
         )
 
     def test_github_transport_executor_supports_publication_actions(self) -> None:

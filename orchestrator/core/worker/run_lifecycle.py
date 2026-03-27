@@ -414,6 +414,7 @@ def persist_stage_checkpoint(
     *,
     run: Run,
     checkpoint: WorkflowStageCheckpoint,
+    execution_context: dict[str, str] | None = None,
     expected_worker_service_instance_id: str | None = None,
 ) -> Run:
     run = _refresh_owned_run(
@@ -429,11 +430,14 @@ def persist_stage_checkpoint(
     ):
         raise RuntimeError("Run ownership lost while persisting stage checkpoint")
     current_plan = dict(run.plan) if isinstance(run.plan, dict) else {}
-    run.plan = _apply_stage_checkpoint(
+    next_plan = _apply_stage_checkpoint(
         current_plan,
         checkpoint,
         completed_at=datetime.now(timezone.utc).isoformat(),
     )
+    if execution_context:
+        next_plan["execution_context"] = execution_context
+    run.plan = next_plan
     if checkpoint.stage == "dev" and checkpoint.dev_result is not None:
         run.pr_url = checkpoint.dev_result.pr_url
     elif checkpoint.stage == "review" and checkpoint.review_result is not None:

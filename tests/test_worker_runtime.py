@@ -27,7 +27,7 @@ class _FakeConn:
     def __enter__(self):  # noqa: ANN204
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
         return False
 
 
@@ -195,6 +195,35 @@ class RuntimeFactoryTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_process_next_run_once_does_not_touch_webhook_queue(self) -> None:
+        import orchestrator.worker as worker_module
+
+        run_session = MagicMock(name="run-session")
+
+        class _SessionCtx:
+            def __init__(self, current_session) -> None:  # noqa: ANN001
+                self._session = current_session
+
+            def __enter__(self):  # noqa: ANN204
+                return self._session
+
+            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+                return False
+
+        def _session_factory():  # noqa: ANN202
+            return _SessionCtx(run_session)
+
+        with (
+            patch.object(worker_module, "_process_next_webhook_job_with_dependencies") as webhook_mock,
+            patch.object(worker_module, "build_workflow_runner_for_session", return_value=MagicMock()) as runner_mock,
+            patch.object(worker_module, "process_next_queued_run", return_value=None) as run_mock,
+        ):
+            worker_module._process_next_run_once(session_factory=_session_factory)
+
+        webhook_mock.assert_not_called()
+        runner_mock.assert_called_once_with(session=run_session)
+        run_mock.assert_called_once_with(run_session, runner_mock.return_value)
+
     def test_run_worker_slot_retries_transient_database_errors(self) -> None:
         import orchestrator.worker as worker_module
         from sqlalchemy.exc import OperationalError
@@ -206,17 +235,17 @@ class WorkerTests(unittest.TestCase):
         )
         process_mock = MagicMock(side_effect=[transient_error, None])
 
-        async def _retry_now(*, stop_event, timeout_seconds):  # noqa: ANN202, ARG001
+        async def _retry_now(*, stop_event: object, timeout_seconds: object) -> bool:
+            _ = stop_event
+            _ = timeout_seconds
             return False
 
-        with (
-            patch.object(worker_module, "_process_next_queued_run_once", new=process_mock),
-            patch.object(worker_module, "_wait_for_worker_retry_delay", new=_retry_now),
-        ):
+        with patch.object(worker_module, "_wait_for_worker_retry_delay", new=_retry_now):
             asyncio.run(
                 worker_module._run_worker_slot(
                     session_factory=MagicMock(),
                     stop_event=asyncio.Event(),
+                    process_next_work_item_once=process_mock,
                 )
             )
 
@@ -234,28 +263,28 @@ class WorkerTests(unittest.TestCase):
             )
         )
 
-        with patch.object(worker_module, "_process_next_queued_run_once", new=process_mock):
-            with self.assertRaisesRegex(OperationalError, "password authentication failed"):
-                asyncio.run(
-                    worker_module._run_worker_slot(
-                        session_factory=MagicMock(),
-                        stop_event=asyncio.Event(),
-                    )
+        with self.assertRaisesRegex(OperationalError, "password authentication failed"):
+            asyncio.run(
+                worker_module._run_worker_slot(
+                    session_factory=MagicMock(),
+                    stop_event=asyncio.Event(),
+                    process_next_work_item_once=process_mock,
                 )
+            )
 
     def test_run_worker_slot_reraises_non_retryable_errors(self) -> None:
         import orchestrator.worker as worker_module
 
         process_mock = MagicMock(side_effect=RuntimeError("boom"))
 
-        with patch.object(worker_module, "_process_next_queued_run_once", new=process_mock):
-            with self.assertRaisesRegex(RuntimeError, "boom"):
-                asyncio.run(
-                    worker_module._run_worker_slot(
-                        session_factory=MagicMock(),
-                        stop_event=asyncio.Event(),
-                    )
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            asyncio.run(
+                worker_module._run_worker_slot(
+                    session_factory=MagicMock(),
+                    stop_event=asyncio.Event(),
+                    process_next_work_item_once=process_mock,
                 )
+            )
 
     def test_process_next_queued_run_passes_send_discord_fn(self) -> None:
         import orchestrator.worker as worker_module
@@ -265,6 +294,106 @@ class WorkerTests(unittest.TestCase):
             result = worker_module.process_next_queued_run(MagicMock(), MagicMock())
         self.assertIsNone(result)
         self.assertIn("send_discord_message_fn", process_mock.call_args.kwargs)
+
+    def test_run_worker_webhooks_skips_stale_recovery(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
+        listener = MagicMock()
+        wait_calls = {"count": 0}
+
+        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+            wait_calls["count"] += 1
+            if wait_calls["count"] == 1:
+                wake_event.set()
+                return
+            stop_event.set()
+
+        async def _run_worker_slot(
+            *,
+            session_factory: object,
+            stop_event: asyncio.Event,
+            process_next_work_item_once: object,
+        ) -> None:
+            _ = session_factory
+            self.assertIs(process_next_work_item_once, worker_module._process_next_webhook_job_once)
+            stop_event.set()
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=1),
+            patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
+            patch.object(worker_module, "_recover_worker_run_health_once") as recovery_mock,
+            patch.object(worker_module, "_run_stale_recovery_loop") as stale_loop_mock,
+            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+        ):
+            asyncio.run(worker_module.run_worker(mode="webhooks"))
+
+        recovery_mock.assert_not_called()
+        stale_loop_mock.assert_not_called()
+        listener.start.assert_called_once()
+        listener.stop.assert_called_once()
+
+    def test_run_worker_runs_uses_run_processor(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
+        listener = MagicMock()
+
+        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+            _ = stop_event
+            wake_event.set()
+
+        async def _run_worker_slot(
+            *,
+            session_factory: object,
+            stop_event: asyncio.Event,
+            process_next_work_item_once: object,
+        ) -> None:
+            _ = session_factory
+            self.assertIs(process_next_work_item_once, worker_module._process_next_run_once)
+            stop_event.set()
+
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=1),
+            patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
+            patch.object(worker_module, "_recover_worker_run_health_once") as recovery_mock,
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+        ):
+            asyncio.run(worker_module.run_worker(mode="runs"))
+
+        recovery_mock.assert_called_once()
+        listener.start.assert_called_once()
+        listener.stop.assert_called_once()
 
     def test_run_worker_requires_postgres(self) -> None:
         import orchestrator.worker as worker_module
@@ -294,7 +423,7 @@ class WorkerTests(unittest.TestCase):
         ):
             worker_module.main()
         run_mock.assert_called_once()
-        run_worker_mock.assert_called_once_with()
+        run_worker_mock.assert_called_once_with(mode="runs")
 
     def test_run_worker_processes_and_stops_cleanly(self) -> None:
         import orchestrator.worker as worker_module
@@ -323,14 +452,14 @@ class WorkerTests(unittest.TestCase):
         recovery_mock = MagicMock()
         wait_calls = {"count": 0}
 
-        async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
+        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
             wait_calls["count"] += 1
             if wait_calls["count"] == 1:
                 wake_event.set()
                 return
             stop_event.set()
 
-        async def _stale_recovery_loop(*, stop_event, **_kwargs):  # noqa: ANN001
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
         with (
@@ -370,7 +499,7 @@ class WorkerTests(unittest.TestCase):
             def __enter__(self):  # noqa: ANN204
                 return session
 
-            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
                 return False
 
         def _session_factory():  # noqa: ANN202
@@ -381,14 +510,14 @@ class WorkerTests(unittest.TestCase):
         recovery_mock = MagicMock()
         wait_calls = {"count": 0}
 
-        async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
+        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
             wait_calls["count"] += 1
             if wait_calls["count"] == 1:
                 wake_event.set()
                 return
             stop_event.set()
 
-        async def _stale_recovery_loop(*, stop_event, **_kwargs):  # noqa: ANN001
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
         with (
@@ -413,6 +542,68 @@ class WorkerTests(unittest.TestCase):
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
 
+    def test_run_worker_recovers_after_worker_slot_failure(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
+
+        listener = MagicMock()
+        recovery_mock = MagicMock()
+        slot_calls = {"count": 0}
+
+        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+            if slot_calls["count"] == 0:
+                wake_event.set()
+                return
+            if slot_calls["count"] >= 2:
+                stop_event.set()
+                return
+            await stop_event.wait()
+
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        async def _run_worker_slot(
+            *,
+            session_factory: object,
+            stop_event: asyncio.Event,
+            process_next_work_item_once: object,
+        ) -> None:
+            _ = session_factory
+            self.assertIs(process_next_work_item_once, worker_module._process_next_run_once)
+            slot_calls["count"] += 1
+            if slot_calls["count"] == 1:
+                raise RuntimeError("slot boom")
+            stop_event.set()
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_parallel_slots_from_policy", return_value=1),
+            patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
+            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+            patch.object(worker_module.platform_metrics, "record_worker_failure") as failure_metric,
+        ):
+            asyncio.run(worker_module.run_worker())
+
+        self.assertEqual(slot_calls["count"], 2)
+        failure_metric.assert_any_call(kind="slot_crash")
+        listener.start.assert_called_once()
+        listener.stop.assert_called_once()
+
     def test_run_worker_raises_runtime_unavailable_when_runner_build_fails(self) -> None:
         import orchestrator.worker as worker_module
 
@@ -429,7 +620,7 @@ class WorkerTests(unittest.TestCase):
             def __enter__(self):  # noqa: ANN204
                 return session
 
-            def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
                 return False
 
         def _session_factory():  # noqa: ANN202
@@ -445,10 +636,11 @@ class WorkerTests(unittest.TestCase):
         queue_bridge_mock = MagicMock(return_value=listener)
         recovery_mock = MagicMock()
 
-        async def _wait_for_wake_or_stop(*, wake_event, stop_event):  # noqa: ANN001
+        async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
+            _ = stop_event
             wake_event.set()
 
-        async def _stale_recovery_loop(*, stop_event, **_kwargs):  # noqa: ANN001
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
         with (

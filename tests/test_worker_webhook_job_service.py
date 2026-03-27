@@ -1,12 +1,15 @@
 import os
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
+from sqlalchemy.exc import PendingRollbackError
+
 from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
+    WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
@@ -172,3 +175,43 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertIsNotNone(processed)
             execute_command.assert_called_once()
             self.assertTrue(execute_command.call_args.kwargs["defer_seed_issues"])
+
+    def test_process_next_webhook_job_snapshots_job_context_before_rollback(self) -> None:
+        class _BrokenJob:
+            def __init__(self) -> None:
+                self._broken = False
+                self.tenant_id = "tenant-1"
+                self.subject_key = "github:tenant-1:pr-1"
+                self.job_id = "job-1"
+
+            @property
+            def transport(self) -> str:
+                if self._broken:
+                    raise PendingRollbackError("session rolled back")
+                return WEBHOOK_TRANSPORT_GITHUB
+
+        broken_job = _BrokenJob()
+        claim = SimpleNamespace(acquired=True, job=broken_job)
+        session = MagicMock()
+
+        def _fail_processing(*, claimed_job, **_kwargs):  # noqa: ANN001
+            claimed_job._broken = True
+            raise RuntimeError("flush failed")
+
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.claim_next_webhook_job", return_value=claim),
+            patch("orchestrator.core.worker.webhook_job_service._process_github_job", side_effect=_fail_processing),
+            patch(
+                "orchestrator.core.worker.webhook_job_service.mark_webhook_job_ids_failed",
+                return_value=("failed-job",),
+            ) as mark_failed,
+        ):
+            processed = process_next_webhook_job(
+                session=session,
+                settings=SimpleNamespace(),
+                owner_id="worker-1",
+            )
+
+        self.assertEqual(processed, "failed-job")
+        session.rollback.assert_called_once()
+        mark_failed.assert_called_once()

@@ -617,8 +617,27 @@ class WorkerProcessServiceTests(unittest.TestCase):
         session = MagicMock()
         session.refresh.side_effect = lambda _target, **_kwargs: None
 
-        def _persist_stage_checkpoint(_session, *, run, checkpoint, expected_worker_service_instance_id):  # noqa: ANN001
+        def _persist_stage_checkpoint(
+            _session,
+            *,
+            run,
+            checkpoint,
+            execution_context,
+            expected_worker_service_instance_id,
+        ):  # noqa: ANN001
             self.assertEqual(expected_worker_service_instance_id, "node-a:1234")
+            self.assertEqual(
+                execution_context,
+                {
+                    "execution_repo_dir": "/tmp/workdirs/route25-default/runs/run-1/repo",
+                    "workspace_key": "worker-a",
+                    "execution_branch": "run/gp-122/run-1",
+                    "integration_branch": "feature/GP-122",
+                    "base_branch": "staging",
+                    "start_point_ref": "origin/feature/GP-122",
+                    "start_point_sha": "abc123",
+                },
+            )
             run.plan = {
                 "plan": {
                     "plan_steps": list(checkpoint.plan.plan_steps),
@@ -632,6 +651,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     "unresolved_prerequisites": list(checkpoint.plan.unresolved_prerequisites),
                 },
                 "stage_checkpoints": {checkpoint.stage: {"status": checkpoint.status}},
+                "execution_context": dict(execution_context),
             }
             return run
 
@@ -689,7 +709,17 @@ class WorkerProcessServiceTests(unittest.TestCase):
             cleanup_run_workspaces_fn=MagicMock(),
             build_run_heartbeat_controller_fn=lambda **_: heartbeat,
             bind_run_project_fn=MagicMock(),
-            workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
+            workflow_request_for_run_fn=MagicMock(
+                return_value=SimpleNamespace(
+                    start_point_ref="origin/feature/GP-122",
+                    start_point_sha="abc123",
+                    execution_repo_dir="/tmp/workdirs/route25-default/runs/run-1/repo",
+                    workspace_key="worker-a",
+                    execution_branch="run/gp-122/run-1",
+                    integration_branch="feature/GP-122",
+                    base_branch="staging",
+                )
+            ),
             fail_guardrail_violation_fn=MagicMock(),
             tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
             lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
@@ -703,7 +733,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             persist_stage_checkpoint_fn=_persist_stage_checkpoint,
             requeue_workflow_result_for_capability_fn=MagicMock(),
             requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
-            check_run_snapshot_freshness_fn=MagicMock(),
+            check_run_snapshot_freshness_fn=MagicMock(return_value=SimpleNamespace(stale=False, message=None)),
             transition_issue_status_fn=MagicMock(),
             emit_agent_event_fn=MagicMock(),
             resolve_agent_id_fn=lambda: "worker-linux-local",
