@@ -43,8 +43,10 @@ class _FakeJiraClient:
         self._labels = list(labels or [])
         self._seed_existing_issues = list(seed_existing_issues or [])
         self._created_issue_keys = list(created_issue_keys or ["TP-301"])
+        self._created_issue_index = 0
         self.create_calls: list[dict[str, object]] = []
         self.update_calls: list[dict[str, object]] = []
+        self.link_calls: list[dict[str, object]] = []
 
     def search_issues_by_jql(self, *, access_token: str, cloud_id: str, jql: str, max_results: int):  # noqa: ARG002
         if "ORDER BY updated DESC" in jql or "issuekey in (" in jql:
@@ -90,6 +92,38 @@ class _FakeJiraClient:
             errors=[],
         )
 
+    def create_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+        issue,
+    ) -> JiraIssueCreateResult:  # noqa: ANN001
+        self.create_calls.append(
+            {
+                "access_token": access_token,
+                "cloud_id": cloud_id,
+                "project_key": project_key,
+                "issue": issue,
+            }
+        )
+        if self._created_issue_index >= len(self._created_issue_keys):
+            issue_key = f"{project_key}-{300 + self._created_issue_index + 1}"
+        else:
+            issue_key = self._created_issue_keys[self._created_issue_index]
+        self._created_issue_index += 1
+        return JiraIssueCreateResult(key=issue_key, issue_id=str(self._created_issue_index))
+
+    def list_project_issue_types_for_create(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+    ) -> list[str]:  # noqa: ARG002
+        return ["Epic", "Story", "Task", "Subtask"]
+
     def update_issue_fields(
         self,
         *,
@@ -108,6 +142,23 @@ class _FakeJiraClient:
                 "summary": summary,
                 "description": description,
                 "labels": list(labels),
+            }
+        )
+
+    def add_issue_link(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        inward_issue_key: str,
+        outward_issue_key: str,
+    ) -> None:
+        self.link_calls.append(
+            {
+                "access_token": access_token,
+                "cloud_id": cloud_id,
+                "inward_issue_key": inward_issue_key,
+                "outward_issue_key": outward_issue_key,
             }
         )
 
@@ -277,18 +328,33 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         return json.dumps(
             {
                 "project_key": "TP",
-                "issues": [
+                "parent_issue": {
+                    "summary": summary,
+                    "objective": "Clarify cross-account relink behavior.",
+                    "user_value": "Support and engineering share one product-level relink decision.",
+                    "recommendation": "Document the expected relink policy before implementation starts.",
+                    "scope_in": ["Device relink decision"],
+                    "scope_out": [],
+                    "acceptance_criteria": ["Policy is documented"],
+                    "ui_references": [],
+                    "success_outcomes": ["Stakeholders can review the product behavior without technical detail."],
+                    "dependencies": [],
+                    "risks": [],
+                    "open_questions": [],
+                    "labels": ["seeded", "pm-parent"],
+                    "issue_type": "Task",
+                },
+                "engineering_children": [
                     {
-                        "summary": summary,
-                        "objective": "Clarify cross-account relink behavior.",
-                        "scope_in": ["Device relink decision"],
-                        "scope_out": [],
-                        "acceptance_criteria": ["Policy is documented"],
-                        "how_to_test": ["Review the seeded issue"],
-                        "nfr_intent": "MVP",
-                        "dependencies": [],
+                        "summary": f"{summary} implementation",
+                        "behavior_slice": "Persist and enforce the agreed relink decision in the application flow.",
+                        "technical_objective": "Implement the relink policy in the affected code path.",
+                        "implementation_plan": ["Update the relink workflow", "Add verification coverage"],
+                        "technical_dependencies": [],
                         "risks": [],
-                        "labels": ["seeded"],
+                        "how_to_test": ["Run the relink workflow tests"],
+                        "done_criteria": ["Implementation matches the parent feature behavior"],
+                        "labels": ["engineering-child"],
                         "issue_type": "Task",
                     }
                 ],
@@ -364,7 +430,7 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
             status="To Do",
             description="Clarify the device relink policy.",
             labels=["agent:ready"],
-            created_issue_keys=["TP-301"],
+            created_issue_keys=["TP-301", "TP-302"],
         )
         fake_oauth = {
             "client": fake_jira_client,
@@ -383,9 +449,10 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["command"], "issues")
         self.assertIn("TP-301", body["message"])
-        self.assertEqual(body["data"]["created_issue_keys"], ["TP-301"])
+        self.assertIn("TP-302", body["message"])
+        self.assertEqual(body["data"]["created_issue_keys"], ["TP-301", "TP-302"])
         self.assertEqual(queue.calls, 1)
-        self.assertEqual(len(fake_jira_client.create_calls), 1)
+        self.assertEqual(len(fake_jira_client.create_calls), 2)
         self.assertEqual(fake_jira_client.create_calls[0]["project_key"], "TP")
 
     def test_issues_seed_uses_project_scoped_codex_model_override(self) -> None:
@@ -396,7 +463,7 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
             status="To Do",
             description="Clarify the device relink policy.",
             labels=["agent:ready"],
-            created_issue_keys=["TP-303"],
+            created_issue_keys=["TP-303", "TP-304"],
         )
         fake_oauth = {
             "client": fake_jira_client,
@@ -445,7 +512,11 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
             session.commit()
 
         with (
-            patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime", return_value=runtime),
+            patch("orchestrator.api.discord.commands.ask.build_runtime_for_selector", return_value=runtime),
+            patch(
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
+                return_value={"mode": "answer", "summary": "Scoped answer"},
+            ),
             patch("orchestrator.api.discord.ask.context.tenant_jira_oauth_context", return_value=fake_oauth),
             patch("orchestrator.api.discord.ask.context._refresh_jira_connection_tokens", return_value="access-token"),
             patch("orchestrator.api.discord.ask.context._jira_oauth_client", return_value=fake_jira_client),
@@ -499,7 +570,7 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
             status="To Do",
             description="Clarify the device relink policy.",
             labels=["agent:ready"],
-            created_issue_keys=["TP-302"],
+            created_issue_keys=["TP-302", "TP-303"],
         )
         fake_oauth = {
             "client": fake_jira_client,
@@ -517,7 +588,8 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         body = response.json()
         self.assertTrue(body["ok"])
         self.assertIn("TP-302", body["message"])
-        self.assertEqual(body["data"]["created_issue_keys"], ["TP-302"])
+        self.assertIn("TP-303", body["message"])
+        self.assertEqual(body["data"]["created_issue_keys"], ["TP-302", "TP-303"])
         self.assertEqual(queue.calls, 2)
 
     def test_issues_seed_returns_controlled_503_when_codex_empty_output_repeats(self) -> None:

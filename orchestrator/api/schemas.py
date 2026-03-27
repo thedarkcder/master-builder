@@ -554,6 +554,35 @@ class ManagedSecretResolveResult(BaseModel):
     resolved: bool
 
 
+class AgentRuntimeRoutingUpdate(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentExecutionProfileRead(BaseModel):
+    profile_name: str
+    runtime_kind: str
+    cli_command: str
+    model: str
+    reasoning_effort: str | None = None
+    tool_bridge_allowed: bool
+    fallback_profile: str | None = None
+
+
+class AgentRuntimeRoutingDefaultsRead(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentRuntimeRoutingRead(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+    available_roles: list[str] = Field(default_factory=list)
+    available_named_agents: list[str] = Field(default_factory=list)
+    available_profiles: dict[str, AgentExecutionProfileRead] = Field(default_factory=dict)
+    effective_defaults: AgentRuntimeRoutingDefaultsRead = Field(default_factory=AgentRuntimeRoutingDefaultsRead)
+
+
 class RunRead(BaseModel):
     run_id: str
     tenant_id: str

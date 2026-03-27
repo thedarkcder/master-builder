@@ -4,12 +4,36 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
+from orchestrator.core.codex_models import (
+    normalize_codex_model,
+    normalize_codex_reasoning_effort,
+    parse_supported_codex_models,
+)
 
 PROFILE_PM_CONVERSATION = "pm_conversation"
 PROFILE_ENGINEERING_EXECUTION = "engineering_execution"
 PROFILE_GENERAL_PLANNING = "general_planning"
 PROFILE_MARKETING_CONVERSATION = "marketing_conversation"
+PROFILE_PM_CONVERSATION_DEFAULT = "pm_conversation_default"
+PROFILE_PM_CONVERSATION_FAST = "pm_conversation_fast"
+PROFILE_ENGINEERING_EXECUTION_DEFAULT = "engineering_execution_default"
+PROFILE_ENGINEERING_EXECUTION_FAST = "engineering_execution_fast"
+PROFILE_ENGINEERING_EXECUTION_DEEP = "engineering_execution_deep"
+PROFILE_GENERAL_PLANNING_DEFAULT = "general_planning_default"
+PROFILE_MARKETING_CONVERSATION_DEFAULT = "marketing_conversation_default"
+
+AGENT_ROLE_PM = "pm"
+AGENT_ROLE_ENGINEERING = "engineering"
+AGENT_ROLE_TEST = "test"
+AGENT_ROLE_REVIEW = "review"
+AGENT_ROLE_MARKETING = "marketing"
+
+AGENT_NAME_PM_PRIMARY = "pm_primary"
+AGENT_NAME_VOICE_ROOM_PM = "voice_room_pm"
+AGENT_NAME_WORKFLOW_DEV_DEFAULT = "workflow_dev_default"
+AGENT_NAME_WORKFLOW_TEST_DEFAULT = "workflow_test_default"
+AGENT_NAME_WORKFLOW_REVIEW_DEFAULT = "workflow_review_default"
+AGENT_NAME_MARKETING_DEFAULT = "marketing_default"
 
 _SUPPORTED_RUNTIME_KINDS = {"codex_cli", "chat_cli"}
 _DEFAULT_ROUTING = {
@@ -28,6 +52,36 @@ _DEFAULT_ROUTING = {
     "workflow.test": PROFILE_ENGINEERING_EXECUTION,
     "workflow.review": PROFILE_ENGINEERING_EXECUTION,
 }
+_KNOWN_AGENT_ROLES = (
+    AGENT_ROLE_PM,
+    AGENT_ROLE_ENGINEERING,
+    AGENT_ROLE_TEST,
+    AGENT_ROLE_REVIEW,
+    AGENT_ROLE_MARKETING,
+)
+_KNOWN_AGENT_NAMES = (
+    AGENT_NAME_PM_PRIMARY,
+    AGENT_NAME_VOICE_ROOM_PM,
+    AGENT_NAME_WORKFLOW_DEV_DEFAULT,
+    AGENT_NAME_WORKFLOW_TEST_DEFAULT,
+    AGENT_NAME_WORKFLOW_REVIEW_DEFAULT,
+    AGENT_NAME_MARKETING_DEFAULT,
+)
+_DEFAULT_AGENT_ROLE_ROUTING = {
+    AGENT_ROLE_PM: PROFILE_PM_CONVERSATION_DEFAULT,
+    AGENT_ROLE_ENGINEERING: PROFILE_ENGINEERING_EXECUTION_DEFAULT,
+    AGENT_ROLE_TEST: PROFILE_ENGINEERING_EXECUTION_DEFAULT,
+    AGENT_ROLE_REVIEW: PROFILE_ENGINEERING_EXECUTION_DEFAULT,
+    AGENT_ROLE_MARKETING: PROFILE_MARKETING_CONVERSATION_DEFAULT,
+}
+_DEFAULT_AGENT_NAME_ROUTING = {
+    AGENT_NAME_PM_PRIMARY: PROFILE_PM_CONVERSATION_DEFAULT,
+    AGENT_NAME_VOICE_ROOM_PM: PROFILE_PM_CONVERSATION_FAST,
+    AGENT_NAME_WORKFLOW_DEV_DEFAULT: PROFILE_ENGINEERING_EXECUTION_DEFAULT,
+    AGENT_NAME_WORKFLOW_TEST_DEFAULT: PROFILE_ENGINEERING_EXECUTION_FAST,
+    AGENT_NAME_WORKFLOW_REVIEW_DEFAULT: PROFILE_ENGINEERING_EXECUTION_DEEP,
+    AGENT_NAME_MARKETING_DEFAULT: PROFILE_MARKETING_CONVERSATION_DEFAULT,
+}
 
 
 @dataclass(frozen=True)
@@ -41,11 +95,60 @@ class AgentExecutionProfile:
     fallback_profile: str | None = None
 
 
+def list_known_agent_roles() -> list[str]:
+    return list(_KNOWN_AGENT_ROLES)
+
+
+def list_known_agent_names() -> list[str]:
+    return list(_KNOWN_AGENT_NAMES)
+
+
+def default_agent_role_routing() -> dict[str, str]:
+    return dict(_DEFAULT_AGENT_ROLE_ROUTING)
+
+
+def default_agent_name_routing() -> dict[str, str]:
+    return dict(_DEFAULT_AGENT_NAME_ROUTING)
+
+
+def normalize_agent_routing(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for raw_key, raw_profile_name in raw.items():
+        key = str(raw_key or "").strip()
+        profile_name = str(raw_profile_name or "").strip()
+        if key and profile_name:
+            normalized[key] = profile_name
+    return normalized
+
+
+def merge_agent_routing(
+    *,
+    default_routing: dict[str, str],
+    configured_routing: dict[str, str] | None,
+) -> dict[str, str]:
+    merged = dict(default_routing)
+    merged.update(configured_routing or {})
+    return merged
+
+
+def _select_fast_codex_model(*, default_model: str, configured_models: str | None) -> str:
+    options = parse_supported_codex_models(default_model=default_model, configured_models=configured_models)
+    for candidate in options:
+        if candidate.model_id == "gpt-5.3-codex-spark":
+            return candidate.model_id
+    if len(options) >= 2:
+        return options[1].model_id
+    return normalize_codex_model(default_model) or "gpt-5.4"
+
+
 def default_execution_profiles(
     *,
     default_codex_cli_command: str,
     default_codex_model: str,
     default_codex_reasoning_effort: str,
+    default_codex_supported_models: str | None = None,
     default_chat_cli_command: str | None = None,
     default_chat_model: str | None = None,
     default_chat_reasoning_effort: str | None = None,
@@ -56,6 +159,10 @@ def default_execution_profiles(
     normalized_chat_model = normalize_codex_model(default_chat_model) or normalized_codex_model
     normalized_codex_effort = normalize_codex_reasoning_effort(default_codex_reasoning_effort) or "medium"
     normalized_chat_effort = normalize_codex_reasoning_effort(default_chat_reasoning_effort) or normalized_codex_effort
+    fast_codex_model = _select_fast_codex_model(
+        default_model=normalized_codex_model,
+        configured_models=default_codex_supported_models,
+    )
     return {
         PROFILE_PM_CONVERSATION: {
             "runtime_kind": "chat_cli",
@@ -65,6 +172,22 @@ def default_execution_profiles(
             "tool_bridge_allowed": False,
             "fallback_profile": PROFILE_GENERAL_PLANNING,
         },
+        PROFILE_PM_CONVERSATION_DEFAULT: {
+            "runtime_kind": "chat_cli",
+            "cli_command": normalized_chat_command,
+            "model": normalized_chat_model,
+            "reasoning_effort": normalized_chat_effort,
+            "tool_bridge_allowed": False,
+            "fallback_profile": PROFILE_GENERAL_PLANNING_DEFAULT,
+        },
+        PROFILE_PM_CONVERSATION_FAST: {
+            "runtime_kind": "chat_cli",
+            "cli_command": normalized_chat_command,
+            "model": normalized_chat_model,
+            "reasoning_effort": "low",
+            "tool_bridge_allowed": False,
+            "fallback_profile": PROFILE_GENERAL_PLANNING_DEFAULT,
+        },
         PROFILE_ENGINEERING_EXECUTION: {
             "runtime_kind": "codex_cli",
             "cli_command": normalized_codex_command,
@@ -72,7 +195,35 @@ def default_execution_profiles(
             "reasoning_effort": normalized_codex_effort,
             "tool_bridge_allowed": True,
         },
+        PROFILE_ENGINEERING_EXECUTION_DEFAULT: {
+            "runtime_kind": "codex_cli",
+            "cli_command": normalized_codex_command,
+            "model": normalized_codex_model,
+            "reasoning_effort": normalized_codex_effort,
+            "tool_bridge_allowed": True,
+        },
+        PROFILE_ENGINEERING_EXECUTION_FAST: {
+            "runtime_kind": "codex_cli",
+            "cli_command": normalized_codex_command,
+            "model": fast_codex_model,
+            "reasoning_effort": "low",
+            "tool_bridge_allowed": True,
+        },
+        PROFILE_ENGINEERING_EXECUTION_DEEP: {
+            "runtime_kind": "codex_cli",
+            "cli_command": normalized_codex_command,
+            "model": normalized_codex_model,
+            "reasoning_effort": "high",
+            "tool_bridge_allowed": True,
+        },
         PROFILE_GENERAL_PLANNING: {
+            "runtime_kind": "codex_cli",
+            "cli_command": normalized_codex_command,
+            "model": normalized_codex_model,
+            "reasoning_effort": normalized_codex_effort,
+            "tool_bridge_allowed": True,
+        },
+        PROFILE_GENERAL_PLANNING_DEFAULT: {
             "runtime_kind": "codex_cli",
             "cli_command": normalized_codex_command,
             "model": normalized_codex_model,
@@ -86,6 +237,14 @@ def default_execution_profiles(
             "reasoning_effort": normalized_chat_effort,
             "tool_bridge_allowed": False,
             "fallback_profile": PROFILE_GENERAL_PLANNING,
+        },
+        PROFILE_MARKETING_CONVERSATION_DEFAULT: {
+            "runtime_kind": "chat_cli",
+            "cli_command": normalized_chat_command,
+            "model": normalized_chat_model,
+            "reasoning_effort": normalized_chat_effort,
+            "tool_bridge_allowed": False,
+            "fallback_profile": PROFILE_GENERAL_PLANNING_DEFAULT,
         },
     }
 
@@ -157,7 +316,25 @@ def merge_execution_profile_routing(
     return merged
 
 
-def resolve_execution_profile_name(*, routing: dict[str, str], selector: str) -> str:
+def resolve_execution_profile_name(
+    *,
+    routing: dict[str, str],
+    selector: str,
+    agent_role: str | None = None,
+    agent_name: str | None = None,
+    platform_role_routing: dict[str, str] | None = None,
+    platform_name_routing: dict[str, str] | None = None,
+) -> str:
+    normalized_agent_name = str(agent_name or "").strip()
+    normalized_agent_role = str(agent_role or "").strip()
+    if normalized_agent_name:
+        profile_name = str((platform_name_routing or {}).get(normalized_agent_name) or "").strip()
+        if profile_name:
+            return profile_name
+    if normalized_agent_role:
+        profile_name = str((platform_role_routing or {}).get(normalized_agent_role) or "").strip()
+        if profile_name:
+            return profile_name
     normalized_selector = str(selector or "").strip()
     if not normalized_selector:
         return PROFILE_GENERAL_PLANNING

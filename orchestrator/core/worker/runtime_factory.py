@@ -21,6 +21,16 @@ def build_workflow_runner_for_session(*, session: Session) -> WorkflowRunner:
             tenant_id=request.tenant_id,
             project_id=request.project_id,
             selector=f"workflow.{stage}",
+            agent_role=(
+                "engineering"
+                if stage == "dev"
+                else ("test" if stage == "test" else ("review" if stage == "review" else None))
+            ),
+            agent_name=(
+                "workflow_dev_default"
+                if stage == "dev"
+                else ("workflow_test_default" if stage == "test" else ("workflow_review_default" if stage == "review" else None))
+            ),
         ),
         execute_tool=lambda tenant_id, project_id, run_id, issue_key, stage, tool_name, tool_args: execute_agent_tool(
             session=session,
