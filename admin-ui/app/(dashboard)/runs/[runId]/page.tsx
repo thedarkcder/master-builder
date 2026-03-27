@@ -1318,14 +1318,15 @@ export default function RunDetailPage() {
               {busy ? "Refreshing..." : "Refresh"}
             </Button>
             {isRerunnable ? (
-              <details className="relative">
-                <summary className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
+              <details className="relative" data-testid="run-rerun-menu">
+                <summary data-testid="run-rerun-trigger" className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
                   {rerunBusy ? "Requeueing..." : "Rerun"}
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 min-w-64 rounded-md border border-border bg-background p-1 shadow-lg">
                   {rerunSessionOptions.map((option) => (
                     <button
                       key={option.key}
+                      data-testid={`rerun-option-${option.key}`}
                       type="button"
                       className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
                       onClick={() => void handleRerunSelection(option.payload, `resume from ${option.label}`)}
@@ -1345,6 +1346,7 @@ export default function RunDetailPage() {
                     </button>
                   ))}
                   <button
+                    data-testid="rerun-option-fresh"
                     type="button"
                     className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
                     onClick={() => void handleRerunSelection({ mode: "fresh" }, "fresh rerun")}
@@ -1384,15 +1386,19 @@ export default function RunDetailPage() {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span><span className="font-medium text-foreground">Tenant</span> {run.tenant_id}</span>
             {run.project_id ? <span><span className="font-medium text-foreground">Project</span> {run.project_id}</span> : null}
-            {run.branch ? <span><span className="font-medium text-foreground">Branch</span> <code className="rounded bg-muted px-1">{run.branch}</code></span> : null}
+            {run.branch ? (
+              <span data-testid="run-branch">
+                <span className="font-medium text-foreground">Branch</span> <code className="rounded bg-muted px-1">{run.branch}</code>
+              </span>
+            ) : null}
             {executionContext.integration_branch && executionContext.integration_branch !== run.branch ? (
-              <span>
+              <span data-testid="run-integration-branch">
                 <span className="font-medium text-foreground">Integration branch</span>{" "}
                 <code className="rounded bg-muted px-1">{executionContext.integration_branch}</code>
               </span>
             ) : null}
             {executionContext.execution_branch ? (
-              <span>
+              <span data-testid="run-execution-branch">
                 <span className="font-medium text-foreground">Execution branch</span>{" "}
                 <code className="rounded bg-muted px-1">{executionContext.execution_branch}</code>
               </span>
@@ -1401,7 +1407,7 @@ export default function RunDetailPage() {
             {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {new Date(run.started_at).toLocaleString()}</span> : null}
             {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {new Date(run.finished_at).toLocaleString()}</span> : null}
             {run.status !== "queued" && run.status !== "running" ? (
-              <span className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
+              <span data-testid="run-not-active" className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
                 Not active
               </span>
             ) : null}
@@ -1466,6 +1472,8 @@ export default function RunDetailPage() {
               return (
                 <div key={stage} className="flex items-center gap-2">
                   <div
+                    data-testid={`run-stage-${stage}`}
+                    data-stage-status={progress.status}
                     className="flex flex-col items-center gap-1 rounded-lg border px-3 py-2 text-xs"
                     style={{
                       borderColor: isInterrupted ? "rgb(239 68 68 / 0.35)" : isDone || isRunning ? stageColor(stage) + "60" : undefined,
@@ -1481,7 +1489,7 @@ export default function RunDetailPage() {
                         {stage}
                       </span>
                     </div>
-                    <span className="text-[10px] text-muted-foreground">{progress.detail}</span>
+                    <span data-testid={`run-stage-${stage}-detail`} className="text-[10px] text-muted-foreground">{progress.detail}</span>
                   </div>
                   {idx < 3 ? <span className="text-muted-foreground/40">→</span> : null}
                 </div>
