@@ -481,6 +481,8 @@ def handle_engineering_clarification_command(
         tenant_id=context.tenant_id,
         project_id=context.project.project_id,
         selector="discord.pm_answer",
+        agent_role="pm",
+        agent_name="pm_primary",
     )
     try:
         translation = classify_engineering_clarification_with_codex(

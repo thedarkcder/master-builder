@@ -22,7 +22,20 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeChunk, KnowledgeFact, KnowledgeSource, ManagedSecret, Project, Run, RunLock, Tenant, TenantRunClaim
+from orchestrator.storage.models import (
+    JiraOAuthConnection,
+    KnowledgeAsset,
+    KnowledgeChunk,
+    KnowledgeFact,
+    KnowledgeSource,
+    ManagedSecret,
+    PlatformSetting,
+    Project,
+    Run,
+    RunLock,
+    Tenant,
+    TenantRunClaim,
+)
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -238,6 +251,60 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(resolve_response.status_code, 200)
         self.assertTrue(resolve_response.json()["resolved"])
         self.assertEqual(resolve_response.json()["source"], "managed")
+
+    def test_agent_runtime_routes_default_response(self) -> None:
+        response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["role_routing"], {})
+        self.assertEqual(body["name_routing"], {})
+        self.assertIn("pm", body["available_roles"])
+        self.assertIn("voice_room_pm", body["available_named_agents"])
+        self.assertIn("pm_conversation_fast", body["available_profiles"])
+        self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
+        self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
+
+    def test_agent_runtime_routes_upsert_and_reset(self) -> None:
+        put_response = self.client.put(
+            "/api/admin/agent-runtimes",
+            json={
+                "role_routing": {"pm": "pm_conversation_fast"},
+                "name_routing": {"workflow_review_default": "engineering_execution_deep"},
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(put_response.status_code, 200)
+        body = put_response.json()
+        self.assertEqual(body["role_routing"]["pm"], "pm_conversation_fast")
+        self.assertEqual(body["name_routing"]["workflow_review_default"], "engineering_execution_deep")
+
+        get_response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(get_response.json()["role_routing"]["pm"], "pm_conversation_fast")
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            row = session.get(PlatformSetting, "agent_runtime_routing")
+            self.assertIsNotNone(row)
+            self.assertEqual(row.value_json["role_routing"]["pm"], "pm_conversation_fast")
+            self.assertEqual(row.value_json["name_routing"]["workflow_review_default"], "engineering_execution_deep")
+
+        reset_response = self.client.post("/api/admin/agent-runtimes/reset", auth=("admin", "secret"))
+        self.assertEqual(reset_response.status_code, 200)
+        self.assertEqual(reset_response.json()["role_routing"], {})
+        self.assertEqual(reset_response.json()["name_routing"], {})
+
+    def test_agent_runtime_routes_reject_unknown_role_and_profile(self) -> None:
+        response = self.client.put(
+            "/api/admin/agent-runtimes",
+            json={
+                "role_routing": {"unknown-role": "pm_conversation_fast"},
+                "name_routing": {"workflow_review_default": "missing-profile"},
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unknown agent role", response.text)
 
     def test_platform_secret_list_excludes_tenant_and_project_scoped_refs(self) -> None:
         create_response = self.client.post(

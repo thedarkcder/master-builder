@@ -32,3 +32,9 @@
 - Admin UI changes need a real behavior test harness, not just lint/type checks. If run-state rendering or stage telemetry behavior is in scope, add executable UI behavior coverage before claiming the fix is complete.
 - Do not leave `ANN001` or `ARG001` debt in touched files. Add the missing types or rename/remove intentionally unused arguments before calling the work done.
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.
+
+2026-03-27
+
+- When a user narrows config scope from tenant-level to platform-wide admin control, stop planning tenant policy/UI work immediately. Verify the existing platform admin surface first, and align the design to that control plane before expanding the schema.
+- When a merge exposes a missing compatibility seam, do not default to restoring the seam if it weakens the architecture. First check whether the behavior should instead flow through the canonical shared policy path, then update tests/helpers to use that path.
+- If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.

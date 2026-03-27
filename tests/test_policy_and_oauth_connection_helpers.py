@@ -184,6 +184,62 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(profile.model, "gpt-5.3-codex-spark")
         self.assertEqual(profile.reasoning_effort, "low")
 
+    def test_resolve_agent_execution_profile_prefers_platform_named_agent_routing(self) -> None:
+        settings = SimpleNamespace(
+            codex_cli_command="codex",
+            codex_model="gpt-5.4",
+            codex_reasoning_effort="medium",
+            codex_supported_models="gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+            chat_cli_command="chat-cli",
+            chat_model="gpt-5.4",
+            chat_reasoning_effort="medium",
+        )
+        profile = resolve_agent_execution_profile(
+            settings=settings,
+            tenant_policy={
+                "execution_profile_routing": {
+                    "discord.pm_answer": "pm_conversation",
+                },
+            },
+            project_overrides=None,
+            selector="discord.pm_answer",
+            agent_role="pm",
+            agent_name="voice_room_pm",
+            platform_role_routing={"pm": "pm_conversation_default"},
+            platform_name_routing={"voice_room_pm": "pm_conversation_fast"},
+        )
+        self.assertEqual(profile.profile_name, "pm_conversation_fast")
+        self.assertEqual(profile.runtime_kind, "chat_cli")
+        self.assertEqual(profile.reasoning_effort, "low")
+
+    def test_resolve_agent_execution_profile_prefers_platform_role_over_selector(self) -> None:
+        settings = SimpleNamespace(
+            codex_cli_command="codex",
+            codex_model="gpt-5.4",
+            codex_reasoning_effort="medium",
+            codex_supported_models="gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+            chat_cli_command="chat-cli",
+            chat_model="gpt-5.4",
+            chat_reasoning_effort="medium",
+        )
+        profile = resolve_agent_execution_profile(
+            settings=settings,
+            tenant_policy={
+                "execution_profile_routing": {
+                    "workflow.dev": "general_planning",
+                },
+            },
+            project_overrides=None,
+            selector="workflow.dev",
+            agent_role="engineering",
+            agent_name=None,
+            platform_role_routing={"engineering": "engineering_execution_deep"},
+            platform_name_routing={},
+        )
+        self.assertEqual(profile.profile_name, "engineering_execution_deep")
+        self.assertEqual(profile.runtime_kind, "codex_cli")
+        self.assertEqual(profile.reasoning_effort, "high")
+
 
 class JiraConnectionServiceTests(unittest.TestCase):
     def test_resolve_tenant_jira_connection_validation(self) -> None:

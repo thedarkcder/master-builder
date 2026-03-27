@@ -79,13 +79,13 @@ def execute_tenant_command_ingress(
     try:
         response = execute_tenant_command(
             tenant_id=tenant_id,
-            payload=payload,
-            session=session,
-            defer_seed_issues=defer_seed_issues,
-            require_ask_confirmation=require_ask_confirmation,
-            ingress_source=ingress_source,
-            deps=runtime_deps,
-        )
+        payload=payload,
+        session=session,
+        defer_seed_issues=defer_seed_issues,
+        require_ask_confirmation=require_ask_confirmation,
+        ingress_source=ingress_source,
+        deps=runtime_deps,
+    )
         session.commit()
         return response
     except Exception:

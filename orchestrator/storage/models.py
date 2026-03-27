@@ -93,6 +93,15 @@ class ManagedSecret(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PlatformSetting(Base):
+    __tablename__ = "platform_settings"
+
+    setting_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Run(Base):
     __tablename__ = "runs"
 
