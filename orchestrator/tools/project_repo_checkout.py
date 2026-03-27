@@ -376,6 +376,7 @@ def cleanup_run_workspaces(
 ) -> None:
     repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project_id)
     run_root = project_run_root_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project_id, run_id=run_id)
+    workspaces_root = run_root / "workspaces"
     if workspace_key is not None:
         workspace_root = project_run_workspace_root_dir(
             base_dir=base_dir,
@@ -386,8 +387,12 @@ def cleanup_run_workspaces(
         )
         if workspace_root.exists():
             shutil.rmtree(workspace_root, ignore_errors=True)
+        if workspaces_root.exists():
+            try:
+                workspaces_root.rmdir()
+            except OSError:
+                pass
     else:
-        workspaces_root = run_root / "workspaces"
         if workspaces_root.exists():
             shutil.rmtree(workspaces_root, ignore_errors=True)
         legacy_repo = project_legacy_run_repo_dir(

@@ -161,6 +161,8 @@ def _build_ingress_dependencies():
             payload=payload,
             current_scope=current_scope,
         ),
+        prune_missing_issue_keys_from_ask_history_fn=ask_history_runtime.prune_missing_issue_keys_from_ask_history,
+        recent_ask_history_fn=ask_history_runtime.recent_ask_history,
         collect_ask_context_with_history_context_fn=ask_runtime.collect_ask_context_with_history_context,
         collect_github_ask_context_fn=lambda **kwargs: ask_runtime.collect_github_ask_context(
             **kwargs,

@@ -72,6 +72,7 @@ def collect_ask_context_with_history_context(
     channel_id: str,
     question: str,
     scoped_issue_key: str | None,
+    prune_history: bool = True,
 ) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
     return _collect_ask_context_with_history_context_impl(
         session=session,
@@ -82,6 +83,7 @@ def collect_ask_context_with_history_context(
         scoped_issue_key=scoped_issue_key,
         collect_ask_context_fn=collect_ask_context,
         existing_issue_keys_fn=ask_history_runtime.existing_issue_keys_for_tenant,
+        prune_history=prune_history,
     )
 
 
@@ -140,7 +142,12 @@ def ask_board_message(
         question=question,
         scoped_issue_key=scoped_issue_key,
         scoped_project_id=scoped_project_id,
-        collect_ask_context_with_history_context_fn=collect_ask_context_with_history_context,
+        prune_missing_issue_keys_from_ask_history_fn=ask_history_runtime.prune_missing_issue_keys_from_ask_history,
+        recent_ask_history_fn=ask_history_runtime.recent_ask_history,
+        collect_ask_context_with_history_context_fn=lambda **kwargs: collect_ask_context_with_history_context(
+            **kwargs,
+            prune_history=False,
+        ),
         get_settings_fn=get_settings_impl,
         build_codex_runtime_fn=build_codex_runtime,
         tenant_project_keys_fn=_tenant_project_keys,

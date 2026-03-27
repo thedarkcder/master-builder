@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.communications.command_pipeline import (
+    CommandIngressPolicy,
     CommandExecutionContext,
     CommandScope,
     dispatch_registered_command,
@@ -25,6 +26,8 @@ class CommandExecutionDependencies:
     assert_sensitive_command_permission: Callable[[Session, Any, str, str, str | None], None]
     resolve_scope: Callable[[Session, Any, str | None], CommandScope]
     enrich_scope: Callable[[Session, Any, str, tuple[str, ...], Any, CommandScope], CommandScope]
+    rewrite_raw_command: Callable[[Session, Any, DiscordCommandRequest, CommandIngressPolicy], str]
+    allow_sensitive_command_bypass: Callable[[Session, Any, str, tuple[str, ...], Any], bool]
     build_handler_registry: Callable[[CommandExecutionContext], dict[str, tuple[Callable, ...]]]
 
 
@@ -54,20 +57,27 @@ def execute_tenant_command(
         deps.assert_channel_scope(session, tenant, payload.channel_id)
 
     policy = resolve_command_ingress_policy(normalized_ingress_source)
-    raw_command = payload.command.strip()
+    raw_command = deps.rewrite_raw_command(session, tenant, payload, policy).strip()
     _, command_name, arguments = deps.resolve_discord_command(
         tenant,
         raw_command,
         payload.channel_id,
         policy.allow_plain_ask,
     )
-    deps.assert_sensitive_command_permission(
+    if not deps.allow_sensitive_command_bypass(
         session,
         tenant,
         command_name,
-        payload.user_id,
-        payload.channel_id,
-    )
+        tuple(arguments),
+        payload,
+    ):
+        deps.assert_sensitive_command_permission(
+            session,
+            tenant,
+            command_name,
+            payload.user_id,
+            payload.channel_id,
+        )
 
     normalized_user_id = payload.user_id.strip()
     normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
