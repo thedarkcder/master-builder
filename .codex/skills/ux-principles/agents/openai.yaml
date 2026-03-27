@@ -1,4 +1,0 @@
-interface:
-  display_name: "UX Principles"
-  short_description: "Apply consistent UX patterns across core flows."
-  default_prompt: "Use $ux-principles to evaluate UX changes for structure, navigation, feedback, responsiveness, and accessibility."
