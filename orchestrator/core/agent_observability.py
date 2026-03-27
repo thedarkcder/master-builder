@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from uuid import uuid4
 import threading
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from orchestrator.storage.models import AgentLifecycleEvent
-from orchestrator.storage.run_event_stream import notify_run_event
+from orchestrator.core.log_event_bus import EVENT_KIND_AGENT_LIFECYCLE, register_stream_offsets
+from orchestrator.storage.models import AgentLifecycleEvent, RunStreamEvent
 
 ALLOWED_AGENT_EVENTS = {
     "ISSUE_ASSIGNED",
@@ -141,31 +141,27 @@ def record_agent_lifecycle_event(
             recorded_at=timestamp,
         )
     )
-    session.flush()
-    notify_run_event(
-        session,
+    stream_row = RunStreamEvent(
+        event_kind=EVENT_KIND_AGENT_LIFECYCLE,
         tenant_id=normalized_tenant,
-        run_id=normalized_run,
-        event_type=normalized_event_type,
-        issue_key=str(issue_key or "").strip() or None,
         project_id=normalized_project,
+        run_id=normalized_run,
+        issue_key=str(issue_key or "").strip() or None,
         agent_id=normalized_agent,
-        recorded_at=timestamp.isoformat(),
+        event_type=normalized_event_type,
+        invocation_id=None,
+        channel=None,
+        command=None,
+        working_dir=None,
+        stage=None,
+        attempt=None,
+        stream=None,
+        message=None,
+        recorded_at=timestamp,
     )
-
-    cutoff_ids = session.execute(
-        select(AgentLifecycleEvent.event_id)
-        .where(AgentLifecycleEvent.tenant_id == normalized_tenant)
-        .order_by(desc(AgentLifecycleEvent.recorded_at), desc(AgentLifecycleEvent.event_id))
-        .offset(max(0, max_events_per_tenant))
-    ).scalars().all()
-    if cutoff_ids:
-        session.execute(
-            delete(AgentLifecycleEvent).where(
-                AgentLifecycleEvent.tenant_id == normalized_tenant,
-                AgentLifecycleEvent.event_id.in_(cutoff_ids),
-            )
-        )
+    session.add(stream_row)
+    session.flush()
+    register_stream_offsets(session=session, rows=[stream_row])
 
 
 agent_observability_tracker = AgentObservabilityTracker()
@@ -173,3 +169,49 @@ agent_observability_tracker = AgentObservabilityTracker()
 
 def reset_agent_observability_for_tests() -> None:
     agent_observability_tracker.reset()
+
+
+def prune_agent_lifecycle_events(
+    *,
+    session: Session,
+    max_events_per_tenant: int = MAX_PERSISTED_EVENTS_PER_TENANT,
+) -> int:
+    ranked_legacy = (
+        select(
+            AgentLifecycleEvent.event_id,
+            func.row_number()
+            .over(
+                partition_by=AgentLifecycleEvent.tenant_id,
+                order_by=(AgentLifecycleEvent.recorded_at.desc(), AgentLifecycleEvent.event_id.desc()),
+            )
+            .label("row_number"),
+        ).subquery()
+    )
+    cutoff_legacy_ids = session.execute(
+        select(ranked_legacy.c.event_id).where(ranked_legacy.c.row_number > max(0, int(max_events_per_tenant)))
+    ).scalars().all()
+    deleted = 0
+    if cutoff_legacy_ids:
+        result = session.execute(delete(AgentLifecycleEvent).where(AgentLifecycleEvent.event_id.in_(cutoff_legacy_ids)))
+        deleted += int(result.rowcount or 0)
+
+    ranked_stream = (
+        select(
+            RunStreamEvent.stream_offset,
+            func.row_number()
+            .over(
+                partition_by=RunStreamEvent.tenant_id,
+                order_by=RunStreamEvent.stream_offset.desc(),
+            )
+            .label("row_number"),
+        )
+        .where(RunStreamEvent.event_kind == EVENT_KIND_AGENT_LIFECYCLE)
+        .subquery()
+    )
+    cutoff_stream_ids = session.execute(
+        select(ranked_stream.c.stream_offset).where(ranked_stream.c.row_number > max(0, int(max_events_per_tenant)))
+    ).scalars().all()
+    if cutoff_stream_ids:
+        result = session.execute(delete(RunStreamEvent).where(RunStreamEvent.stream_offset.in_(cutoff_stream_ids)))
+        deleted += int(result.rowcount or 0)
+    return deleted
