@@ -31,5 +31,6 @@
 - When replacing a status surface like a GitHub comment with reactions, verify the replacement exists end-to-end for the exact target object. Do not remove the old path until the new PR/comment reaction path is implemented, ordered correctly, and covered by production-path tests.
 - When a user says the problem is stage handoff, do not jump to tool restriction theories. Trace the orchestrator boundary first: confirm whether the parent worker stayed alive long enough to persist the stage result and launch the next stage.
 - Admin UI changes need a real behavior test harness, not just lint/type checks. If run-state rendering or stage telemetry behavior is in scope, add executable UI behavior coverage before claiming the fix is complete.
+- Auth.js, onboarding, registration, and tenant-settings UI changes need executable browser coverage before PR creation. Do not treat lint/type checks or backend tests as substitutes for user-flow verification.
 - Do not leave `ANN001` or `ARG001` debt in touched files. Add the missing types or rename/remove intentionally unused arguments before calling the work done.
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.

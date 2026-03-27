@@ -91,6 +91,9 @@ async function loginAgainstBackend(identifier: string, password: string): Promis
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret",
+  pages: {
+    signIn: "/login",
+  },
   session: {
     strategy: "jwt"
   },
@@ -112,6 +115,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     })
   ],
   callbacks: {
+    authorized({ auth, request }) {
+      const pathname = request.nextUrl.pathname;
+      const isPublicPath =
+        pathname === "/login" ||
+        pathname === "/register" ||
+        pathname === "/privacy" ||
+        pathname.startsWith("/invite/accept");
+      return isPublicPath || Boolean(auth);
+    },
     async jwt({ token, user }: { token: JWT; user?: User }) {
       if (user) {
         token.accessToken = (user as { accessToken?: string }).accessToken;
