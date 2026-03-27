@@ -39,6 +39,7 @@ Required actions:
 6. Treat only this run-owned worktree as authoritative local repo state. Do not adapt to unrelated in-flight changes, wrong branches, or shared dirty state.
 7. Use a blocker only for the allowed terminal categories from the system prompt, and include exact details in change_summary.
 8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch/PR actions).
+8a. If branch or PR actions are needed, treat the Integration branch as the only valid PR head branch. Never open or update a PR from the Execution branch (`run/...`).
 9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
 10. If PR creation required by policy is `true`, do not treat implementation as complete until a PR exists and `pr_url` is set.
 

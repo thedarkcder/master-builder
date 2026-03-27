@@ -51,6 +51,19 @@ type InvocationSessionRow = {
   codexSessionId: string | null;
 };
 
+type StageCheckpointEntry = {
+  status: string;
+  completedAt: string | null;
+  summary: string;
+};
+
+type StageProgressStatus = "not_started" | "running" | "completed" | "interrupted";
+
+type StageProgressEntry = {
+  status: StageProgressStatus;
+  detail: string;
+};
+
 type TimelineSegment = {
   key: string;
   label: string;
@@ -162,6 +175,55 @@ function parseTelemetryPayload(message: string): InvocationTelemetry | null {
   } catch {
     return null;
   }
+}
+
+function parseStageCheckpoints(plan: Record<string, unknown> | null | undefined): Partial<Record<AgentStage, StageCheckpointEntry>> {
+  if (!isRecord(plan)) {
+    return {};
+  }
+  const raw = plan["stage_checkpoints"];
+  if (!isRecord(raw)) {
+    return {};
+  }
+  const parsed: Partial<Record<AgentStage, StageCheckpointEntry>> = {};
+  for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
+    const item = raw[stage];
+    if (!isRecord(item)) {
+      continue;
+    }
+    parsed[stage] = {
+      status: String(item["status"] ?? "").trim().toLowerCase() || "completed",
+      completedAt: String(item["completed_at"] ?? "").trim() || null,
+      summary: String(item["summary"] ?? "").trim(),
+    };
+  }
+  return parsed;
+}
+
+function parseExecutionContext(plan: Record<string, unknown> | null | undefined): Record<string, string> {
+  if (!isRecord(plan)) {
+    return {};
+  }
+  const raw = plan["execution_context"];
+  if (!isRecord(raw)) {
+    return {};
+  }
+  const parsed: Record<string, string> = {};
+  for (const key of [
+    "execution_repo_dir",
+    "workspace_key",
+    "execution_branch",
+    "integration_branch",
+    "base_branch",
+    "start_point_ref",
+    "start_point_sha",
+  ]) {
+    const value = String(raw[key] ?? "").trim();
+    if (value) {
+      parsed[key] = value;
+    }
+  }
+  return parsed;
 }
 
 function stageFromCommand(command: string | null | undefined): string {
@@ -639,6 +701,8 @@ export default function RunDetailPage() {
       .sort((a, b) => a.order - b.order);
     return { stageEvents, workstreamEvents };
   }, [run?.plan]);
+  const stageCheckpoints = useMemo(() => parseStageCheckpoints(run?.plan ?? null), [run?.plan]);
+  const executionContext = useMemo(() => parseExecutionContext(run?.plan ?? null), [run?.plan]);
   const invocationSessionRows = useMemo(() => {
     const telemetryRows = logs
       .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
@@ -725,6 +789,17 @@ export default function RunDetailPage() {
     }
     return run?.dev_session_id ?? null;
   }, [invocationSessionRows, run?.dev_session_id]);
+  const hasReviewResumeState = useMemo(() => {
+    if (!run?.dev_session_id || !isRecord(run.plan)) {
+      return false;
+    }
+    if (stageCheckpoints.review) {
+      return true;
+    }
+    const reviewSummary = toStringList(run.plan["review_summary"]);
+    const reviewFeedback = String(run.plan["review_feedback"] ?? "").trim();
+    return reviewSummary.length > 0 || reviewFeedback.length > 0;
+  }, [run?.dev_session_id, run?.plan, stageCheckpoints.review]);
   const rerunSessionOptions = useMemo(() => {
     if (!run) {
       return [] as RerunSessionOption[];
@@ -760,6 +835,12 @@ export default function RunDetailPage() {
         payload: { mode: "resume" as const, resume_stage: "dev" as const },
         sessionId: run.dev_session_id,
       },
+      {
+        key: "review",
+        label: "Review",
+        payload: { mode: "resume" as const, resume_stage: "review" as const },
+        sessionId: hasReviewResumeState ? run.dev_session_id : null,
+      },
     ].filter((option) => Boolean(option.sessionId));
     const sorted = candidates.sort((a, b) => {
       const aRank = recencyBySession.get(String(a.sessionId)) ?? Number.NEGATIVE_INFINITY;
@@ -773,7 +854,7 @@ export default function RunDetailPage() {
       ...option,
       isLastSession: Boolean(latestCodexSessionId) && option.sessionId === latestCodexSessionId,
     }));
-  }, [invocationSessionRows, latestCodexSessionId, run]);
+  }, [hasReviewResumeState, invocationSessionRows, latestCodexSessionId, run]);
 
   async function handleRerunSelection(payload: RunRerunPayload, label: string) {
     if (!credentials || !run) {
@@ -936,16 +1017,32 @@ export default function RunDetailPage() {
     return snapshots;
   }, [logs]);
   const stageProgress = useMemo(() => {
-    const stages: Record<AgentStage, { status: "not_started" | "running" | "completed"; detail: string }> = {
+    const stages: Record<AgentStage, StageProgressEntry> = {
       pm: { status: "not_started", detail: "not started" },
       dev: { status: "not_started", detail: "not started" },
       test: { status: "not_started", detail: "not started" },
       review: { status: "not_started", detail: "not started" }
     };
     const timeOf = (value: string | null): number => (value ? new Date(value).getTime() : 0);
+    for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
+      const checkpoint = stageCheckpoints[stage];
+      if (!checkpoint) {
+        continue;
+      }
+      const completedLabel = checkpoint.completedAt
+        ? `completed · ${new Date(checkpoint.completedAt).toLocaleTimeString()}`
+        : "completed";
+      stages[stage] = {
+        status: checkpoint.status === "completed" ? "completed" : "interrupted",
+        detail: checkpoint.summary ? `${completedLabel} · ${checkpoint.summary}` : completedLabel,
+      };
+    }
     for (const row of invocationSessionRows) {
       const stage = String(row.stage ?? "").trim().toLowerCase() as AgentStage;
       if (!(stage in stages)) {
+        continue;
+      }
+      if (stageCheckpoints[stage]?.status === "completed") {
         continue;
       }
       const current = stages[stage];
@@ -955,9 +1052,20 @@ export default function RunDetailPage() {
         continue;
       }
       if (row.finishedAt) {
-        const duration = row.durationMs !== null ? `${formatDuration(row.durationMs)}` : "completed";
-        stages[stage] = { status: "completed", detail: `${rowRank}::completed · ${duration}` };
+        if (isActiveRun) {
+          const duration = row.durationMs !== null ? `${formatDuration(row.durationMs)}` : "completed";
+          stages[stage] = { status: "completed", detail: `${rowRank}::completed · ${duration}` };
+          continue;
+        }
+        stages[stage] = {
+          status: "interrupted",
+          detail: `${rowRank}::agent finished, checkpoint missing`,
+        };
       } else if (row.startedAt) {
+        if (!isActiveRun) {
+          stages[stage] = { status: "interrupted", detail: `${rowRank}::interrupted before completion` };
+          continue;
+        }
         const startMs = new Date(row.startedAt).getTime();
         const runningMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
         stages[stage] = { status: "running", detail: `${rowRank}::running · ${formatDuration(runningMs)}` };
@@ -969,7 +1077,7 @@ export default function RunDetailPage() {
       stages[key] = { ...stages[key], detail: trimmed };
     }
     return stages;
-  }, [invocationSessionRows]);
+  }, [invocationSessionRows, isActiveRun, stageCheckpoints]);
   const runTimeline = useMemo(() => {
     if (!run) {
       return null;
@@ -1210,14 +1318,15 @@ export default function RunDetailPage() {
               {busy ? "Refreshing..." : "Refresh"}
             </Button>
             {isRerunnable ? (
-              <details className="relative">
-                <summary className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
+              <details className="relative" data-testid="run-rerun-menu">
+                <summary data-testid="run-rerun-trigger" className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
                   {rerunBusy ? "Requeueing..." : "Rerun"}
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 min-w-64 rounded-md border border-border bg-background p-1 shadow-lg">
                   {rerunSessionOptions.map((option) => (
                     <button
                       key={option.key}
+                      data-testid={`rerun-option-${option.key}`}
                       type="button"
                       className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
                       onClick={() => void handleRerunSelection(option.payload, `resume from ${option.label}`)}
@@ -1237,6 +1346,7 @@ export default function RunDetailPage() {
                     </button>
                   ))}
                   <button
+                    data-testid="rerun-option-fresh"
                     type="button"
                     className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
                     onClick={() => void handleRerunSelection({ mode: "fresh" }, "fresh rerun")}
@@ -1276,12 +1386,28 @@ export default function RunDetailPage() {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span><span className="font-medium text-foreground">Tenant</span> {run.tenant_id}</span>
             {run.project_id ? <span><span className="font-medium text-foreground">Project</span> {run.project_id}</span> : null}
-            {run.branch ? <span><span className="font-medium text-foreground">Branch</span> <code className="rounded bg-muted px-1">{run.branch}</code></span> : null}
+            {run.branch ? (
+              <span data-testid="run-branch">
+                <span className="font-medium text-foreground">Branch</span> <code className="rounded bg-muted px-1">{run.branch}</code>
+              </span>
+            ) : null}
+            {executionContext.integration_branch && executionContext.integration_branch !== run.branch ? (
+              <span data-testid="run-integration-branch">
+                <span className="font-medium text-foreground">Integration branch</span>{" "}
+                <code className="rounded bg-muted px-1">{executionContext.integration_branch}</code>
+              </span>
+            ) : null}
+            {executionContext.execution_branch ? (
+              <span data-testid="run-execution-branch">
+                <span className="font-medium text-foreground">Execution branch</span>{" "}
+                <code className="rounded bg-muted px-1">{executionContext.execution_branch}</code>
+              </span>
+            ) : null}
             <span><span className="font-medium text-foreground">Created</span> {new Date(run.created_at).toLocaleString()}</span>
             {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {new Date(run.started_at).toLocaleString()}</span> : null}
             {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {new Date(run.finished_at).toLocaleString()}</span> : null}
             {run.status !== "queued" && run.status !== "running" ? (
-              <span className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
+              <span data-testid="run-not-active" className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
                 Not active
               </span>
             ) : null}
@@ -1335,24 +1461,35 @@ export default function RunDetailPage() {
               const progress = stageProgress[stage];
               const isRunning = progress.status === "running";
               const isDone = progress.status === "completed";
+              const isInterrupted = progress.status === "interrupted";
               const statusDot = isRunning
                 ? <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-warning" />
                 : isDone
                   ? <span className="inline-block h-2 w-2 rounded-full bg-success" />
-                  : <span className="inline-block h-2 w-2 rounded-full border border-muted-foreground/40 bg-muted" />;
+                  : isInterrupted
+                    ? <span className="inline-block h-2 w-2 rounded-full bg-destructive" />
+                    : <span className="inline-block h-2 w-2 rounded-full border border-muted-foreground/40 bg-muted" />;
               return (
                 <div key={stage} className="flex items-center gap-2">
                   <div
+                    data-testid={`run-stage-${stage}`}
+                    data-stage-status={progress.status}
                     className="flex flex-col items-center gap-1 rounded-lg border px-3 py-2 text-xs"
-                    style={{ borderColor: isDone || isRunning ? stageColor(stage) + "60" : undefined, backgroundColor: isDone || isRunning ? stageColor(stage) + "10" : undefined }}
+                    style={{
+                      borderColor: isInterrupted ? "rgb(239 68 68 / 0.35)" : isDone || isRunning ? stageColor(stage) + "60" : undefined,
+                      backgroundColor: isInterrupted ? "rgb(239 68 68 / 0.08)" : isDone || isRunning ? stageColor(stage) + "10" : undefined,
+                    }}
                   >
                     <div className="flex items-center gap-1.5">
                       {statusDot}
-                      <span className="font-semibold uppercase tracking-wide" style={{ color: isDone || isRunning ? stageColor(stage) : undefined }}>
+                      <span
+                        className="font-semibold uppercase tracking-wide"
+                        style={{ color: isInterrupted ? "rgb(220 38 38)" : isDone || isRunning ? stageColor(stage) : undefined }}
+                      >
                         {stage}
                       </span>
                     </div>
-                    <span className="text-[10px] text-muted-foreground">{progress.detail}</span>
+                    <span data-testid={`run-stage-${stage}-detail`} className="text-[10px] text-muted-foreground">{progress.detail}</span>
                   </div>
                   {idx < 3 ? <span className="text-muted-foreground/40">→</span> : null}
                 </div>

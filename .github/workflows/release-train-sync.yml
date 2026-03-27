@@ -23,8 +23,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  assign-ready-to-release:
+  detect-ready-to-release:
     if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      ready_count: ${{ steps.detect.outputs.ready_count }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Count Ready to Release issues
+        id: detect
+        env:
+          JIRA_BASE_URL: ${{ vars.RELEASE_JIRA_BASE_URL }}
+          JIRA_CLOUD_ID: ${{ vars.RELEASE_JIRA_CLOUD_ID }}
+          JIRA_EMAIL: ${{ vars.RELEASE_JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.RELEASE_JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.RELEASE_JIRA_PROJECT_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_BASE_URL}" ] || [ -z "${JIRA_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ] || [ -z "${JIRA_PROJECT_KEY}" ]; then
+            echo "Missing release automation Jira configuration. Check RELEASE_JIRA_* vars/secrets."
+            exit 1
+          fi
+
+          args=(
+            "scripts/release_train_sync.py"
+            "count-ready"
+            "--jira-base-url" "${JIRA_BASE_URL}"
+            "--jira-email" "${JIRA_EMAIL}"
+            "--jira-api-token" "${JIRA_API_TOKEN}"
+            "--project-key" "${JIRA_PROJECT_KEY}"
+            "--ready-status" "READY TO RELEASE"
+          )
+          if [ -n "${JIRA_CLOUD_ID:-}" ]; then
+            args+=("--jira-cloud-id" "${JIRA_CLOUD_ID}")
+          fi
+          ready_count="$(python "${args[@]}")"
+          ready_count="$(printf '%s' "${ready_count}" | tr -d '[:space:]')"
+          echo "ready_count=${ready_count:-0}" >> "$GITHUB_OUTPUT"
+
+  assign-ready-to-release:
+    needs: detect-ready-to-release
+    if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true' && (github.event_name == 'workflow_dispatch' || needs.detect-ready-to-release.outputs.ready_count != '0')
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5

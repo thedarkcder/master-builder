@@ -563,6 +563,13 @@ def dispatch_run_control_command(
             tenant=tenant,
             extra_executable_statuses=("In Progress",),
         )
+        rechecked_issue_labels = getattr(decision_result, "issue_labels", None)
+        effective_issue_labels = list(rechecked_issue_labels or issue_labels or [])
+        pre_check = getattr(getattr(decision_result, "decision", None), "pre_check", None)
+        ready_label = str(getattr(pre_check, "ready_label", "") or "").strip()
+        ready_label_present = bool(getattr(pre_check, "ready_label_present", False))
+        if ready_label and ready_label_present and ready_label not in effective_issue_labels:
+            effective_issue_labels.append(ready_label)
         return _queue_run_from_issue_context(
             session=session,
             tenant=tenant,
@@ -572,7 +579,7 @@ def dispatch_run_control_command(
             issue_key=issue_key,
             issue_summary=issue_preview.summary,
             issue_description=issue_description,
-            issue_labels=decision_result.issue_labels or issue_labels,
+            issue_labels=effective_issue_labels or None,
             settings_factory=settings_factory,
             tenant_jira_oauth_context=tenant_jira_oauth_context,
             conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",

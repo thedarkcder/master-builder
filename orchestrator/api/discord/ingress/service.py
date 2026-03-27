@@ -28,6 +28,8 @@ class DiscordIngressDependencies:
     assert_sensitive_command_permission: Callable
     resolve_scope: Callable
     enrich_scope: Callable
+    rewrite_raw_command: Callable
+    allow_sensitive_command_bypass: Callable
     handlers: DiscordIngressHandlers
 
 
@@ -38,7 +40,6 @@ def execute_tenant_command_ingress(
     *,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: Literal["discord", "jira_comment"] = "discord",
     deps: DiscordIngressDependencies,
 ) -> DiscordCommandResponse:
@@ -71,19 +72,20 @@ def execute_tenant_command_ingress(
         assert_sensitive_command_permission=deps.assert_sensitive_command_permission,
         resolve_scope=deps.resolve_scope,
         enrich_scope=deps.enrich_scope,
+        rewrite_raw_command=deps.rewrite_raw_command,
+        allow_sensitive_command_bypass=deps.allow_sensitive_command_bypass,
         build_handler_registry=_build_handler_registry,
     )
     try:
         response = execute_tenant_command(
             tenant_id=tenant_id,
-            payload=payload,
-            session=session,
-            defer_seed_issues=defer_seed_issues,
-            require_ask_confirmation=require_ask_confirmation,
-            allow_plain_ask=allow_plain_ask,
-            ingress_source=ingress_source,
-            deps=runtime_deps,
-        )
+        payload=payload,
+        session=session,
+        defer_seed_issues=defer_seed_issues,
+        require_ask_confirmation=require_ask_confirmation,
+        ingress_source=ingress_source,
+        deps=runtime_deps,
+    )
         session.commit()
         return response
     except Exception:

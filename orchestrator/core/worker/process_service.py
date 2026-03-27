@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from time import perf_counter
+from traceback import format_exception
 from uuid import uuid4
 
 from orchestrator.core.dashboard_links import admin_run_url
 from orchestrator.core.project_policy import resolve_effective_policy
+from orchestrator.core.runs import mark_run_terminal
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
 from orchestrator.core.worker_capabilities import (
@@ -14,6 +17,7 @@ from orchestrator.core.worker_capabilities import (
 )
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
 from orchestrator.core.worker_workspace import resolve_worker_workspace_key
+from orchestrator.core.workflow.runner import WorkflowDiagnostics, WorkflowResult
 
 
 def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: str) -> None:  # noqa: ANN001
@@ -77,6 +81,7 @@ def process_next_queued_run(
     run_requeued_stale_snapshot_update_fn,
     finalize_cancelled_run_fn,
     finalize_workflow_result_fn,
+    persist_stage_checkpoint_fn,
     requeue_workflow_result_for_capability_fn,
     requeue_workflow_result_for_stale_snapshot_fn,
     check_run_snapshot_freshness_fn,
@@ -263,93 +268,36 @@ def process_next_queued_run(
         worker_service_instance_id=worker_service_instance_id,
         heartbeat_interval_seconds=max(5, int(getattr(settings, "worker_run_heartbeat_interval_seconds", 30))),
     )
+    execution_context = _execution_context(workflow_request=workflow_request)
     heartbeat_controller.start()
     try:
-        workflow_result = runner.run(workflow_request, test_feedback_hook=_emit_test_feedback)
-    finally:
-        heartbeat_controller.stop()
-    _emit_orchestrated_trace_logs(
-        session=session,
-        run=run,
-        workflow_result=workflow_result,
-        agent_id=agent_id,
-    )
-    _emit_detailed_jira_feedback(
-        session=session,
-        tenant=tenant,
-        run=run,
-        settings=settings,
-        workflow_result=workflow_result,
-        send_jira_message_fn=send_jira_message_fn,
-    )
-    session.refresh(run)
-    if (
-        str(run.worker_service_instance_id or "").strip() != str(worker_service_instance_id or "").strip()
-        or run.status not in {run_status_running, run_status_cancelled}
-    ):
-        logger.warning(
-            "worker_run_ownership_lost run_id=%s tenant_id=%s issue_key=%s status=%s current_owner=%s expected_owner=%s",
-            run.run_id,
-            run.tenant_id,
-            run.issue_key,
-            run.status,
-            run.worker_service_instance_id,
-            worker_service_instance_id,
+        workflow_result = runner.run(
+            workflow_request,
+            test_feedback_hook=_emit_test_feedback,
+            stage_checkpoint_hook=lambda checkpoint: persist_stage_checkpoint_fn(
+                session,
+                run=run,
+                checkpoint=checkpoint,
+                execution_context=execution_context,
+                expected_worker_service_instance_id=worker_service_instance_id,
+            ),
         )
-        return run
-    if run.status == run_status_cancelled:
-        _cleanup_run_workspaces_safe(
-            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
-            logger=logger,
-            base_dir=settings.project_repo_checkout_base_dir,
-            tenant_id=run.tenant_id,
-            project_id=project.project_id,
-            run_id=run.run_id,
-        )
-        return finalize_cancelled_run_fn(
-            session,
-            run=run,
-            stage_updates=notifier.stage_updates,
-            expected_worker_service_instance_id=worker_service_instance_id,
-        )
-    if workflow_result.plan is not None:
-        notifier.append(
-            plan_posted_update_fn(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                jira_url=jira_issue_url,
-                run_url=run_dashboard_url,
+        session.refresh(run)
+        if (
+            str(run.worker_service_instance_id or "").strip() != str(worker_service_instance_id or "").strip()
+            or run.status not in {run_status_running, run_status_cancelled}
+        ):
+            logger.warning(
+                "worker_run_ownership_lost run_id=%s tenant_id=%s issue_key=%s status=%s current_owner=%s expected_owner=%s",
+                run.run_id,
+                run.tenant_id,
+                run.issue_key,
+                run.status,
+                run.worker_service_instance_id,
+                worker_service_instance_id,
             )
-        )
-        emit_agent_event_fn(
-            event_type="PLAN_POSTED",
-            tenant_id=run.tenant_id,
-            project_id=project.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-        )
-    if workflow_result.succeeded and workflow_request.start_point_ref and workflow_request.start_point_sha:
-        freshness = check_run_snapshot_freshness_fn(
-            base_dir=settings.project_repo_checkout_base_dir,
-            tenant_id=tenant.tenant_id,
-            project=project,
-            start_point_ref=workflow_request.start_point_ref,
-            start_point_sha=workflow_request.start_point_sha,
-        )
-        if freshness.stale:
-            error_text = freshness.message or "Branch snapshot stale; requeueing from latest snapshot."
-            notifier.append(
-                run_requeued_stale_snapshot_update_fn(
-                    tenant_id=run.tenant_id,
-                    issue_key=run.issue_key,
-                    run_id=run.run_id,
-                    jira_url=jira_issue_url,
-                    run_url=run_dashboard_url,
-                    error=error_text,
-                )
-            )
+            return run
+        if run.status == run_status_cancelled:
             _cleanup_run_workspaces_safe(
                 cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
                 logger=logger,
@@ -358,172 +306,532 @@ def process_next_queued_run(
                 project_id=project.project_id,
                 run_id=run.run_id,
             )
-            return requeue_workflow_result_for_stale_snapshot_fn(
+            return finalize_cancelled_run_fn(
                 session,
                 run=run,
-                workflow_result=workflow_result,
                 stage_updates=notifier.stage_updates,
-                error=error_text,
-                execution_context=_execution_context(workflow_request=workflow_request),
                 expected_worker_service_instance_id=worker_service_instance_id,
             )
-    if workflow_result.pr_url:
-        notifier.append(
-            pr_opened_update_fn(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                jira_url=jira_issue_url,
-                run_url=run_dashboard_url,
-                pr_url=workflow_result.pr_url,
-            )
-        )
-        emit_agent_event_fn(
-            event_type="PR_OPENED",
-            tenant_id=run.tenant_id,
-            project_id=project.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-        )
-    if not workflow_result.succeeded:
-        capability_requeue_target = _extract_capability_requeue_target(workflow_result)
-        if capability_requeue_target is not None:
-            required_worker_label = worker_label_for_capability(capability_requeue_target)
-            error_text = (
-                workflow_result.diagnostics.message
-                if workflow_result.diagnostics is not None
-                else "Execution capability mismatch"
-            )
+        if workflow_result.plan is not None:
             notifier.append(
-                run_requeued_capability_update_fn(
+                plan_posted_update_fn(
                     tenant_id=run.tenant_id,
                     issue_key=run.issue_key,
                     run_id=run.run_id,
                     jira_url=jira_issue_url,
                     run_url=run_dashboard_url,
+                )
+            )
+            emit_agent_event_fn(
+                event_type="PLAN_POSTED",
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+                issue_key=run.issue_key,
+                agent_id=agent_id,
+            )
+        if workflow_result.succeeded and workflow_request.start_point_ref and workflow_request.start_point_sha:
+            freshness = check_run_snapshot_freshness_fn(
+                base_dir=settings.project_repo_checkout_base_dir,
+                tenant_id=tenant.tenant_id,
+                project=project,
+                start_point_ref=workflow_request.start_point_ref,
+                start_point_sha=workflow_request.start_point_sha,
+            )
+            if freshness.stale:
+                error_text = freshness.message or "Branch snapshot stale; requeueing from latest snapshot."
+                notifier.append(
+                    run_requeued_stale_snapshot_update_fn(
+                        tenant_id=run.tenant_id,
+                        issue_key=run.issue_key,
+                        run_id=run.run_id,
+                        jira_url=jira_issue_url,
+                        run_url=run_dashboard_url,
+                        error=error_text,
+                    )
+                )
+                _cleanup_run_workspaces_safe(
+                    cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+                    logger=logger,
+                    base_dir=settings.project_repo_checkout_base_dir,
+                    tenant_id=run.tenant_id,
+                    project_id=project.project_id,
+                    run_id=run.run_id,
+                )
+                return requeue_workflow_result_for_stale_snapshot_fn(
+                    session,
+                    run=run,
+                    workflow_result=workflow_result,
+                    stage_updates=notifier.stage_updates,
+                    error=error_text,
+                    execution_context=execution_context,
+                    expected_worker_service_instance_id=worker_service_instance_id,
+                )
+        if workflow_result.pr_url:
+            notifier.append(
+                pr_opened_update_fn(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    jira_url=jira_issue_url,
+                    run_url=run_dashboard_url,
+                    pr_url=workflow_result.pr_url,
+                )
+            )
+            emit_agent_event_fn(
+                event_type="PR_OPENED",
+                tenant_id=run.tenant_id,
+                project_id=project.project_id,
+                run_id=run.run_id,
+                issue_key=run.issue_key,
+                agent_id=agent_id,
+            )
+        if not workflow_result.succeeded:
+            capability_requeue_target = _extract_capability_requeue_target(workflow_result)
+            if capability_requeue_target is not None:
+                required_worker_label = worker_label_for_capability(capability_requeue_target)
+                error_text = (
+                    workflow_result.diagnostics.message
+                    if workflow_result.diagnostics is not None
+                    else "Execution capability mismatch"
+                )
+                notifier.append(
+                    run_requeued_capability_update_fn(
+                        tenant_id=run.tenant_id,
+                        issue_key=run.issue_key,
+                        run_id=run.run_id,
+                        jira_url=jira_issue_url,
+                        run_url=run_dashboard_url,
+                        required_worker_label=required_worker_label,
+                        error=error_text,
+                    )
+                )
+                _cleanup_run_workspaces_safe(
+                    cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+                    logger=logger,
+                    base_dir=settings.project_repo_checkout_base_dir,
+                    tenant_id=run.tenant_id,
+                    project_id=project.project_id,
+                    run_id=run.run_id,
+                )
+                return requeue_workflow_result_for_capability_fn(
+                    session,
+                    run=run,
+                    workflow_result=workflow_result,
+                    stage_updates=notifier.stage_updates,
+                    required_worker_capability=capability_requeue_target,
                     required_worker_label=required_worker_label,
-                    error=error_text,
+                    execution_context=execution_context,
+                    expected_worker_service_instance_id=worker_service_instance_id,
                 )
-            )
-            _cleanup_run_workspaces_safe(
-                cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
-                logger=logger,
-                base_dir=settings.project_repo_checkout_base_dir,
-                tenant_id=run.tenant_id,
-                project_id=project.project_id,
-                run_id=run.run_id,
-            )
-            return requeue_workflow_result_for_capability_fn(
-                session,
-                run=run,
-                workflow_result=workflow_result,
-                stage_updates=notifier.stage_updates,
-                required_worker_capability=capability_requeue_target,
-                required_worker_label=required_worker_label,
-                execution_context=_execution_context(workflow_request=workflow_request),
-                expected_worker_service_instance_id=worker_service_instance_id,
-            )
-        error_text = (
-            workflow_result.diagnostics.message
-            if workflow_result.diagnostics is not None
-            else "Workflow failed without diagnostics"
-        )
-        notifier.append(
-            run_failed_update_fn(
-                tenant_id=run.tenant_id,
-                issue_key=run.issue_key,
-                run_id=run.run_id,
-                jira_url=jira_issue_url,
-                run_url=run_dashboard_url,
-                error=error_text,
-            )
-        )
-        emit_agent_event_fn(
-            event_type="RUN_FAILED",
-            tenant_id=run.tenant_id,
-            project_id=project.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-        )
-        emit_agent_event_fn(
-            event_type="TASK_FAILED",
-            tenant_id=run.tenant_id,
-            project_id=project.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-        )
-        diagnostics_stage = (
-            workflow_result.diagnostics.stage.upper()
-            if workflow_result.diagnostics is not None and workflow_result.diagnostics.stage
-            else ""
-        )
-        if diagnostics_stage == "BUILD":
-            emit_agent_event_fn(
-                event_type="BUILD_FAILED",
-                tenant_id=run.tenant_id,
-                project_id=project.project_id,
-                run_id=run.run_id,
-                issue_key=run.issue_key,
-                agent_id=agent_id,
-            )
-        if diagnostics_stage == "TEST":
-            emit_agent_event_fn(
-                event_type="TEST_FAILED",
-                tenant_id=run.tenant_id,
-                project_id=project.project_id,
-                run_id=run.run_id,
-                issue_key=run.issue_key,
-                agent_id=agent_id,
-            )
-    else:
-        emit_agent_event_fn(
-            event_type="TASK_COMPLETED",
-            tenant_id=run.tenant_id,
-            project_id=project.project_id,
-            run_id=run.run_id,
-            issue_key=run.issue_key,
-            agent_id=agent_id,
-        )
-    _cleanup_run_workspaces_safe(
-        cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
-        logger=logger,
-        base_dir=settings.project_repo_checkout_base_dir,
-        tenant_id=run.tenant_id,
-        project_id=project.project_id,
-        run_id=run.run_id,
-    )
 
-    finalized_run = finalize_workflow_result_fn(
-        session,
-        run=run,
-        workflow_result=workflow_result,
-        stage_updates=notifier.stage_updates,
-        execution_context=_execution_context(workflow_request=workflow_request),
-        expected_worker_service_instance_id=worker_service_instance_id,
-    )
-    try:
-        publish_manual_pr_remediation_completion(
+        workflow_result = _run_mandatory_completion_phase(
             session=session,
             tenant=tenant,
             project=project,
-            run=finalized_run,
+            run=run,
+            workflow_result=workflow_result,
+            settings=settings,
+            logger=logger,
+            send_jira_message_fn=send_jira_message_fn,
+            cleanup_run_workspaces_fn=cleanup_run_workspaces_fn,
+            base_dir=settings.project_repo_checkout_base_dir,
+            jira_issue_url=jira_issue_url,
+            agent_id=agent_id,
+            terminal_status="succeeded" if workflow_result.succeeded else "failed",
+            workspace_key=worker_workspace_key,
+        )
+        if not workflow_result.succeeded:
+            error_text = (
+                workflow_result.diagnostics.message
+                if workflow_result.diagnostics is not None
+                else "Workflow failed without diagnostics"
+            )
+            notifier.append(
+                run_failed_update_fn(
+                    tenant_id=run.tenant_id,
+                    issue_key=run.issue_key,
+                    run_id=run.run_id,
+                    jira_url=jira_issue_url,
+                    run_url=run_dashboard_url,
+                    error=error_text,
+                )
+            )
+        _record_completion_step_event(
+            session=session,
+            run=run,
+            agent_id=agent_id,
+            step="finalize",
+            status="started",
+        )
+        try:
+            finalized_run = finalize_workflow_result_fn(
+                session,
+                run=run,
+                workflow_result=workflow_result,
+                stage_updates=notifier.stage_updates,
+                execution_context=execution_context,
+                expected_worker_service_instance_id=worker_service_instance_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failure_message = f"Run finalization failed after mandatory completion: {type(exc).__name__}: {exc}"
+            logger.exception(
+                "worker_run_finalize_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s error=%s",
+                run.tenant_id,
+                project.project_id,
+                run.run_id,
+                run.issue_key,
+                exc,
+            )
+            session.rollback()
+            try:
+                _record_completion_step_event(
+                    session=session,
+                    run=run,
+                    agent_id=agent_id,
+                    step="finalize",
+                    status="failed",
+                    error_class=type(exc).__name__,
+                    error_message=str(exc),
+                    stack_trace="".join(format_exception(type(exc), exc, exc.__traceback__)),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "worker_run_finalize_failure_log_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s",
+                    run.tenant_id,
+                    project.project_id,
+                    run.run_id,
+                    run.issue_key,
+                )
+            finalized_run = mark_run_terminal(
+                session,
+                run_id=run.run_id,
+                terminal_status=run_status_failed,
+                last_error=failure_message,
+            )
+            emit_agent_event_fn(
+                event_type="RUN_FAILED",
+                tenant_id=finalized_run.tenant_id,
+                project_id=project.project_id,
+                run_id=finalized_run.run_id,
+                issue_key=finalized_run.issue_key,
+                agent_id=agent_id,
+            )
+            emit_agent_event_fn(
+                event_type="TASK_FAILED",
+                tenant_id=finalized_run.tenant_id,
+                project_id=project.project_id,
+                run_id=finalized_run.run_id,
+                issue_key=finalized_run.issue_key,
+                agent_id=agent_id,
+            )
+            return finalized_run
+        _record_completion_step_event(
+            session=session,
+            run=run,
+            agent_id=agent_id,
+            step="finalize",
+            status="succeeded",
+        )
+
+        if workflow_result.succeeded:
+            emit_agent_event_fn(
+                event_type="TASK_COMPLETED",
+                tenant_id=finalized_run.tenant_id,
+                project_id=project.project_id,
+                run_id=finalized_run.run_id,
+                issue_key=finalized_run.issue_key,
+                agent_id=agent_id,
+            )
+        else:
+            emit_agent_event_fn(
+                event_type="RUN_FAILED",
+                tenant_id=finalized_run.tenant_id,
+                project_id=project.project_id,
+                run_id=finalized_run.run_id,
+                issue_key=finalized_run.issue_key,
+                agent_id=agent_id,
+            )
+            emit_agent_event_fn(
+                event_type="TASK_FAILED",
+                tenant_id=finalized_run.tenant_id,
+                project_id=project.project_id,
+                run_id=finalized_run.run_id,
+                issue_key=finalized_run.issue_key,
+                agent_id=agent_id,
+            )
+            diagnostics_stage = (
+                workflow_result.diagnostics.stage.upper()
+                if workflow_result.diagnostics is not None and workflow_result.diagnostics.stage
+                else ""
+            )
+            if diagnostics_stage == "BUILD":
+                emit_agent_event_fn(
+                    event_type="BUILD_FAILED",
+                    tenant_id=finalized_run.tenant_id,
+                    project_id=project.project_id,
+                    run_id=finalized_run.run_id,
+                    issue_key=finalized_run.issue_key,
+                    agent_id=agent_id,
+                )
+            if diagnostics_stage == "TEST":
+                emit_agent_event_fn(
+                    event_type="TEST_FAILED",
+                    tenant_id=finalized_run.tenant_id,
+                    project_id=project.project_id,
+                    run_id=finalized_run.run_id,
+                    issue_key=finalized_run.issue_key,
+                    agent_id=agent_id,
+                )
+        return finalized_run
+    finally:
+        heartbeat_controller.stop()
+
+
+def _run_mandatory_completion_phase(
+    *,
+    session,
+    tenant,
+    project,
+    run,
+    workflow_result: WorkflowResult,
+    settings,
+    logger,
+    send_jira_message_fn,
+    cleanup_run_workspaces_fn,
+    base_dir: str,
+    jira_issue_url: str | None,
+    agent_id: str,
+    terminal_status: str,
+    workspace_key: str | None,
+) -> WorkflowResult:  # noqa: ANN001
+    failures: list[dict[str, str]] = []
+    _run_completion_step(
+        session=session,
+        run=run,
+        agent_id=agent_id,
+        logger=logger,
+        step="orchestration_trace",
+        failures=failures,
+        fn=lambda: _emit_orchestrated_trace_logs(
+            session=session,
+            run=run,
+            workflow_result=workflow_result,
+            agent_id=agent_id,
+        ),
+    )
+    _run_completion_step(
+        session=session,
+        run=run,
+        agent_id=agent_id,
+        logger=logger,
+        step="jira_feedback",
+        failures=failures,
+        fn=lambda: _emit_detailed_jira_feedback(
+            session=session,
+            tenant=tenant,
+            run=run,
+            settings=settings,
+            workflow_result=workflow_result,
+            send_jira_message_fn=send_jira_message_fn,
+        ),
+    )
+    _run_completion_step(
+        session=session,
+        run=run,
+        agent_id=agent_id,
+        logger=logger,
+        step="workspace_cleanup",
+        failures=failures,
+        fn=lambda: cleanup_run_workspaces_fn(
+            base_dir=base_dir,
+            tenant_id=run.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            workspace_key=workspace_key,
+        ),
+    )
+    _run_completion_step(
+        session=session,
+        run=run,
+        agent_id=agent_id,
+        logger=logger,
+        step="manual_pr_reporting",
+        failures=failures,
+        fn=lambda: publish_manual_pr_remediation_completion(
+            session=session,
+            tenant=tenant,
+            project=project,
+            run=run,
             workflow_result=workflow_result,
             settings=settings,
             issue_url=jira_issue_url,
             logger_override=logger,
-        )
+            terminal_status=terminal_status,
+        ),
+    )
+    if not failures:
+        return workflow_result
+    return _workflow_result_with_completion_failures(workflow_result=workflow_result, failures=failures)
+
+
+def _run_completion_step(
+    *,
+    session,
+    run,
+    agent_id: str,
+    logger,
+    step: str,
+    failures: list[dict[str, str]],
+    fn,
+) -> None:  # noqa: ANN001
+    _record_completion_step_event(
+        session=session,
+        run=run,
+        agent_id=agent_id,
+        step=step,
+        status="started",
+    )
+    started = perf_counter()
+    try:
+        fn()
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "manual_pr_remediation_completion_publish_failed tenant_id=%s project_id=%s run_id=%s error=%s",
-            finalized_run.tenant_id,
-            project.project_id,
-            finalized_run.run_id,
+        duration_ms = max(0, int((perf_counter() - started) * 1000))
+        stack_trace = "".join(format_exception(type(exc), exc, exc.__traceback__))
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "worker_completion_step_rollback_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s step=%s",
+                getattr(run, "tenant_id", ""),
+                getattr(run, "project_id", ""),
+                getattr(run, "run_id", ""),
+                getattr(run, "issue_key", ""),
+                step,
+            )
+        logger.exception(
+            "worker_completion_step_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s step=%s error_class=%s error=%s",
+            getattr(run, "tenant_id", ""),
+            getattr(run, "project_id", ""),
+            getattr(run, "run_id", ""),
+            getattr(run, "issue_key", ""),
+            step,
+            type(exc).__name__,
             exc,
         )
-    return finalized_run
+        _record_completion_step_event(
+            session=session,
+            run=run,
+            agent_id=agent_id,
+            step=step,
+            status="failed",
+            duration_ms=duration_ms,
+            error_class=type(exc).__name__,
+            error_message=str(exc),
+            stack_trace=stack_trace,
+        )
+        failures.append(
+            {
+                "step": step,
+                "error_class": type(exc).__name__,
+                "error_message": str(exc),
+            }
+        )
+        return
+    duration_ms = max(0, int((perf_counter() - started) * 1000))
+    _record_completion_step_event(
+        session=session,
+        run=run,
+        agent_id=agent_id,
+        step=step,
+        status="succeeded",
+        duration_ms=duration_ms,
+    )
+
+
+def _record_completion_step_event(
+    *,
+    session,
+    run,
+    agent_id: str,
+    step: str,
+    status: str,
+    duration_ms: int | None = None,
+    error_class: str | None = None,
+    error_message: str | None = None,
+    stack_trace: str | None = None,
+) -> None:  # noqa: ANN001
+    payload: dict[str, object] = {
+        "event_kind": f"completion_step_{status}",
+        "step": step,
+        "status": status,
+    }
+    if duration_ms is not None:
+        payload["duration_ms"] = duration_ms
+    if error_class:
+        payload["error_class"] = error_class
+    if error_message:
+        payload["error_message"] = error_message
+    if stack_trace:
+        payload["stack_trace"] = stack_trace
+    record_run_log_event(
+        session=session,
+        tenant_id=run.tenant_id,
+        project_id=getattr(run, "project_id", None),
+        run_id=run.run_id,
+        issue_key=run.issue_key,
+        agent_id=agent_id,
+        invocation_id=uuid4().hex,
+        channel="worker",
+        command="workflow.completion",
+        working_dir=None,
+        stage="telemetry",
+        attempt=None,
+        stream="system",
+        message=json.dumps(payload, sort_keys=True),
+    )
+    session.commit()
+
+
+def _workflow_result_with_completion_failures(
+    *,
+    workflow_result: WorkflowResult,
+    failures: list[dict[str, str]],
+) -> WorkflowResult:
+    failure_lines = [
+        f"{item['step']} ({item['error_class']}): {item['error_message']}"
+        for item in failures
+    ]
+    history = list(workflow_result.diagnostics.history) if workflow_result.diagnostics is not None else []
+    history.extend(
+        {
+            "stage": "completion",
+            "attempt": str(workflow_result.attempts),
+            "event": f"completion_step_failed:{item['step']}:{item['error_class']}:{item['error_message']}",
+        }
+        for item in failures
+    )
+    return WorkflowResult(
+        succeeded=False,
+        plan=workflow_result.plan,
+        pr_url=workflow_result.pr_url,
+        summary=list(workflow_result.summary),
+        test_guidance=list(workflow_result.test_guidance),
+        attempts=workflow_result.attempts,
+        dev_rationale=list(workflow_result.dev_rationale),
+        review_summary=list(workflow_result.review_summary),
+        review_feedback=workflow_result.review_feedback,
+        orchestration_stage_trace=list(workflow_result.orchestration_stage_trace),
+        orchestration_workstream_trace=list(workflow_result.orchestration_workstream_trace),
+        follow_up_issue=workflow_result.follow_up_issue,
+        diagnostics=WorkflowDiagnostics(
+            stage="completion",
+            message="Mandatory completion steps failed: " + "; ".join(failure_lines),
+            attempts=workflow_result.attempts,
+            history=history,
+            classification="completion_failure",
+        ),
+    )
 
 
 def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: ANN001
@@ -557,12 +865,18 @@ def _extract_capability_requeue_target(workflow_result) -> str | None:  # noqa: 
 
 def _execution_context(*, workflow_request) -> dict[str, str] | None:  # noqa: ANN001
     context: dict[str, str] = {}
-    execution_repo_dir = str(getattr(workflow_request, "execution_repo_dir", "") or "").strip()
-    workspace_key = str(getattr(workflow_request, "workspace_key", "") or "").strip()
-    if execution_repo_dir:
-        context["execution_repo_dir"] = execution_repo_dir
-    if workspace_key:
-        context["workspace_key"] = workspace_key
+    for source_attr, field_name in (
+        ("execution_repo_dir", "execution_repo_dir"),
+        ("workspace_key", "workspace_key"),
+        ("execution_branch", "execution_branch"),
+        ("integration_branch", "integration_branch"),
+        ("base_branch", "base_branch"),
+        ("start_point_ref", "start_point_ref"),
+        ("start_point_sha", "start_point_sha"),
+    ):
+        value = str(getattr(workflow_request, source_attr, "") or "").strip()
+        if value:
+            context[field_name] = value
     return context or None
 
 

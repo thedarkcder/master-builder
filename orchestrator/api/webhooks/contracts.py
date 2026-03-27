@@ -18,6 +18,7 @@ from orchestrator.api.webhooks.github_payload_contracts import (
 )
 from orchestrator.api.webhooks.jira_payload_contracts import (
     adf_to_text,
+    extract_changed_fields,
     extract_issue_payload,
     extract_jira_comment_author_account_id,
     extract_jira_comment_text,
@@ -44,6 +45,7 @@ JIRA_COMMENT_EVENTS = {"comment_created", "comment_updated"}
 __all__ = [
     "JIRA_COMMENT_EVENTS",
     "adf_to_text",
+    "extract_changed_fields",
     "extract_delivery_id",
     "extract_installation_id",
     "extract_issue_payload",

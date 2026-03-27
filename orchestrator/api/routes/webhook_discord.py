@@ -8,10 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.discord.shared.state import command_matches
 from orchestrator.api.transport_runtime import execute_http_ingress_result, http_json_response_action
 from orchestrator.api.schemas import DiscordCommandRequest
-from orchestrator.core.followup_context_service import resolve_followup_context
+from orchestrator.core.followup_context_service import (
+    resolve_discord_command_subject_key as _resolve_discord_command_subject_key,
+)
 from orchestrator.api.webhooks.payload_utils import (
     extract_webhook_token as _extract_webhook_token,
     read_json_payload as _read_json_payload,
@@ -115,13 +116,7 @@ async def build_discord_webhook_ingress_result(
             dedupe_key=request_id,
             event_type=envelope.event_type,
             payload_json=command_payload.model_dump(mode="json"),
-            context_json={
-                "defer_seed_issues": command_matches(
-                    normalized_command,
-                    command_name="issues",
-                    subcommand="seed",
-                ),
-            },
+            context_json={},
         ),
     )
     notify_webhook_job_enqueued(
@@ -172,24 +167,3 @@ async def ingest_discord_webhook(
         envelope=envelope,
     )
     return execute_http_ingress_result(result=result, envelope=envelope)
-
-
-def _resolve_discord_command_subject_key(
-    *,
-    session: Session,
-    tenant_id: str,
-    channel_id: str | None,
-    user_id: str,
-) -> str:
-    if channel_id:
-        context = resolve_followup_context(
-            session=session,
-            tenant_id=tenant_id,
-            channel_id=channel_id,
-        )
-        if context is not None:
-            context_id = str(getattr(context, "context_id", "") or "").strip()
-            if context_id:
-                return f"discord_followup:{context_id}"
-        return f"discord_channel:{tenant_id}:{channel_id}"
-    return f"discord_user:{tenant_id}:{user_id}"

@@ -11,12 +11,18 @@ from orchestrator.core.worker.run_lifecycle import (
     fail_missing_project_mapping,
     fail_project_repository_checkout,
     finalize_workflow_result,
+    persist_stage_checkpoint,
     requeue_workflow_result_for_capability,
     requeue_workflow_result_for_stale_snapshot,
     resolve_project_for_run,
     start_run,
 )
-from orchestrator.core.workflow.runner import PmPlan, WorkflowDiagnostics, WorkflowResult
+from orchestrator.core.workflow.runner import (
+    PmPlan,
+    WorkflowDiagnostics,
+    WorkflowResult,
+    WorkflowStageCheckpoint,
+)
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Project, Run, RunLock, Tenant
@@ -281,6 +287,86 @@ class WorkerRunLifecycleTests(unittest.TestCase):
             )
             lock = self._get_lock(session, issue_key="TA-200")
             self.assertIsNone(lock)
+
+    def test_persist_stage_checkpoint_merges_artifacts_and_survives_finalization(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            run = Run(
+                run_id="run-checkpoint",
+                tenant_id="tenant-a",
+                issue_key="TA-205",
+                issue_summary="persist checkpoints",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url=None,
+                status="running",
+                last_error=None,
+                plan={
+                    "trigger_context": {"resume_stage": "dev"},
+                    "live_stage_updates": [{"stage": "lock_acquired", "recorded_at": now.isoformat()}],
+                },
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                project_id="tenant-a-default",
+                worker_service_instance_id="node-a:1234",
+            )
+            session.add(run)
+            session.add(
+                RunLock(
+                    tenant_id="tenant-a",
+                    issue_key="TA-205",
+                    dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                    run_id="run-checkpoint",
+                    locked_at=now,
+                )
+            )
+            session.commit()
+            session.refresh(run)
+
+            persist_stage_checkpoint(
+                session,
+                run=run,
+                checkpoint=WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="completed",
+                    summary="PM completed",
+                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
+                ),
+                execution_context={
+                    "execution_branch": "run/ta-205/run-checkpoint",
+                    "integration_branch": "feature/TA-205",
+                },
+                expected_worker_service_instance_id="node-a:1234",
+            )
+
+            self.assertEqual(run.plan["trigger_context"], {"resume_stage": "dev"})
+            self.assertEqual(run.plan["plan"]["plan_steps"], ["plan"])
+            self.assertEqual(run.plan["stage_checkpoints"]["pm"]["status"], "completed")
+            self.assertEqual(run.plan["execution_context"]["execution_branch"], "run/ta-205/run-checkpoint")
+            self.assertEqual(run.plan["execution_context"]["integration_branch"], "feature/TA-205")
+            self.assertEqual(run.plan["live_stage_updates"][0]["stage"], "lock_acquired")
+
+            finalized = finalize_workflow_result(
+                session,
+                run=run,
+                workflow_result=WorkflowResult(
+                    succeeded=True,
+                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
+                    pr_url=None,
+                    summary=["done"],
+                    test_guidance=["pytest -q"],
+                    attempts=1,
+                ),
+                stage_updates=[{"stage": "task_completed"}],
+                expected_worker_service_instance_id="node-a:1234",
+            )
+
+            self.assertEqual(finalized.status, "succeeded")
+            self.assertEqual(finalized.plan["stage_checkpoints"]["pm"]["status"], "completed")
+            self.assertEqual(finalized.plan["trigger_context"], {"resume_stage": "dev"})
 
     def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
         now = datetime.now(timezone.utc)

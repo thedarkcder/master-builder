@@ -60,7 +60,6 @@ ROOM_SINGLE_KEYS = (
     "pm_thread_channel_id",
 )
 LIVE_VOICE_LINK_KEYS = ("live_voice_room_links",)
-MAX_PENDING_SEED_FOLLOWUPS = 30
 MAX_PENDING_SEED_FOLLOWUP_AGE = timedelta(hours=24)
 
 
@@ -334,55 +333,6 @@ def assert_channel_scope(*, session: Session, tenant: Tenant, channel_id: str | 
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Command channel does not match project or tenant Discord channel",
         )
-
-
-def tenant_seed_followups(tenant: Tenant) -> list[dict]:
-    discord_config = getattr(tenant, "discord_config", None) or {}
-    raw_entries = discord_config.get("seed_followups")
-    if not isinstance(raw_entries, list):
-        return []
-    normalized: list[dict] = []
-    for item in raw_entries:
-        if not isinstance(item, dict):
-            continue
-        request_id = str(item.get("request_id") or "").strip()
-        if not request_id:
-            continue
-        channel_ids_raw = item.get("channel_ids")
-        channel_ids = (
-            [str(value).strip() for value in channel_ids_raw if str(value).strip()]
-            if isinstance(channel_ids_raw, list)
-            else []
-        )
-        questions_raw = item.get("questions")
-        questions = (
-            [str(value).strip() for value in questions_raw if str(value).strip()]
-            if isinstance(questions_raw, list)
-            else []
-        )
-        issue_keys_raw = item.get("issue_keys")
-        issue_keys = (
-            [str(value).strip().upper() for value in issue_keys_raw if str(value).strip()]
-            if isinstance(issue_keys_raw, list)
-            else []
-        )
-        prompt_markdown = str(item.get("prompt_markdown") or "").strip()
-        if not prompt_markdown:
-            continue
-        normalized.append(
-            {
-                "request_id": request_id,
-                "user_id": str(item.get("user_id") or "").strip() or None,
-                "channel_ids": channel_ids,
-                "questions": questions,
-                "issue_keys": issue_keys,
-                "project_id": str(item.get("project_id") or "").strip() or None,
-                "project_key": str(item.get("project_key") or "").strip().upper() or None,
-                "prompt_markdown": prompt_markdown,
-                "updated_at": str(item.get("updated_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
-            }
-        )
-    return normalized
 
 
 def _parse_iso_timestamp(raw_value: str) -> datetime | None:

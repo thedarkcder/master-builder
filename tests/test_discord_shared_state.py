@@ -308,35 +308,6 @@ class DiscordSharedStateTests(unittest.TestCase):
             state_module.clear_seed_followup_context(session=session, tenant=tenant, request_id=request_id)
         close_mock.assert_called_once()
 
-    def test_tenant_seed_followups_normalization(self) -> None:
-        tenant = SimpleNamespace(
-            discord_config={
-                "seed_followups": [
-                    {"request_id": "", "prompt_markdown": "skip"},
-                    {"request_id": "r1", "prompt_markdown": "", "channel_ids": ["c1"]},
-                    {
-                        "request_id": "r2",
-                        "user_id": "u1",
-                        "channel_ids": [" c1 ", ""],
-                        "questions": [" q1 ", ""],
-                        "issue_keys": ["mab-1", ""],
-                        "project_id": "example-default",
-                        "project_key": "mab",
-                        "prompt_markdown": "prompt",
-                    },
-                ]
-            }
-        )
-
-        entries = state_module.tenant_seed_followups(tenant)
-        self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]["request_id"], "r2")
-        self.assertEqual(entries[0]["channel_ids"], ["c1"])
-        self.assertEqual(entries[0]["questions"], ["q1"])
-        self.assertEqual(entries[0]["issue_keys"], ["MAB-1"])
-        self.assertEqual(entries[0]["project_id"], "example-default")
-        self.assertEqual(entries[0]["project_key"], "MAB")
-
     def test_find_seed_followup_context_skips_stale_entries(self) -> None:
         stale_time = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
         tenant = SimpleNamespace(tenant_id="t1")

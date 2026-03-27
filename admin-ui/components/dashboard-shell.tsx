@@ -7,6 +7,7 @@ import type { ComponentType } from "react";
 import {
   Activity,
   BarChart3,
+  Bot,
   Building2,
   FolderKanban,
   KeyRound,
@@ -47,6 +48,7 @@ type NavItem = {
 const globalNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/tenants/select", label: "Tenants", icon: Building2 },
+  { href: "/agent-runtimes", label: "Agent Runtimes", icon: Bot },
   { href: "/secrets", label: "Secrets", icon: KeyRound }
 ];
 
