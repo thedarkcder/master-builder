@@ -15,6 +15,7 @@ from orchestrator.core.agent_observability import (
 from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
 from orchestrator.core.workflow.runner import (
     PmPlan,
+    WorkflowStageCheckpoint,
     WorkflowDiagnostics,
     WorkflowResult,
 )
@@ -30,8 +31,22 @@ class _SuccessRunner:
     def __init__(self) -> None:
         self.last_request = None
 
-    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
+    def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
         self.last_request = request
+        if stage_checkpoint_hook is not None:
+            stage_checkpoint_hook(
+                WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="completed",
+                    summary="PM completed",
+                    plan=PmPlan(
+                        plan_steps=["plan", "build", "validate"],
+                        acceptance_criteria=["has PR link"],
+                        risks=[],
+                    ),
+                )
+            )
         return WorkflowResult(
             succeeded=True,
             plan=PmPlan(
@@ -48,7 +63,8 @@ class _SuccessRunner:
 
 
 class _FailureRunner:
-    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
+    def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
+        _ = stage_checkpoint_hook
         return WorkflowResult(
             succeeded=False,
             plan=PmPlan(
@@ -70,7 +86,8 @@ class _FailureRunner:
 
 
 class _CapabilityMismatchRunner:
-    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
+    def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
+        _ = stage_checkpoint_hook
         return WorkflowResult(
             succeeded=False,
             plan=PmPlan(
@@ -362,6 +379,9 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertTrue(processed.plan["succeeded"])
             self.assertEqual(processed.plan["attempts"], 1)
+            self.assertEqual(processed.plan["plan"]["plan_steps"], ["plan", "build", "validate"])
+            self.assertEqual(processed.plan["stage_checkpoints"]["pm"]["status"], "completed")
+            self.assertEqual(processed.plan["latest_completed_stage"], "pm")
             stage_updates = processed.plan["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],

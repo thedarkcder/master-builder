@@ -13,7 +13,12 @@ from orchestrator.core.worker.process_service import _extract_capability_requeue
 from orchestrator.core.worker.process_service import _run_completion_step
 from orchestrator.core.worker.process_service import process_next_queued_run
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
-from orchestrator.core.workflow.runner import PmPlan, WorkflowDiagnostics, WorkflowResult
+from orchestrator.core.workflow.runner import (
+    PmPlan,
+    WorkflowDiagnostics,
+    WorkflowResult,
+    WorkflowStageCheckpoint,
+)
 
 
 class _FakeHeartbeatController:
@@ -265,6 +270,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             run_requeued_stale_snapshot_update_fn=MagicMock(),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=MagicMock(),
+            persist_stage_checkpoint_fn=MagicMock(),
             requeue_workflow_result_for_capability_fn=MagicMock(),
             requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
             check_run_snapshot_freshness_fn=MagicMock(),
@@ -365,6 +371,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             run_requeued_stale_snapshot_update_fn=MagicMock(),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=MagicMock(),
+            persist_stage_checkpoint_fn=MagicMock(),
             requeue_workflow_result_for_capability_fn=MagicMock(),
             requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
             check_run_snapshot_freshness_fn=MagicMock(),
@@ -472,6 +479,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 run_requeued_stale_snapshot_update_fn=MagicMock(),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=finalize_run,
+                persist_stage_checkpoint_fn=MagicMock(),
                 requeue_workflow_result_for_capability_fn=MagicMock(),
                 requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
                 check_run_snapshot_freshness_fn=MagicMock(),
@@ -569,6 +577,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
             run_requeued_stale_snapshot_update_fn=MagicMock(),
             finalize_cancelled_run_fn=MagicMock(),
             finalize_workflow_result_fn=_finalize,
+            persist_stage_checkpoint_fn=MagicMock(),
             requeue_workflow_result_for_capability_fn=MagicMock(),
             requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
             check_run_snapshot_freshness_fn=MagicMock(),
@@ -586,6 +595,127 @@ class WorkerProcessServiceTests(unittest.TestCase):
         self.assertIs(result, run)
         self.assertTrue(heartbeat.started)
         self.assertTrue(heartbeat.stopped)
+
+    def test_process_next_queued_run_persists_stage_checkpoint_before_finalize(self) -> None:
+        now = datetime.now(timezone.utc)
+        run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-122",
+            project_id="project-1",
+            status="running",
+            worker_service_instance_id="node-a:1234",
+            created_at=now,
+            started_at=now,
+            plan={},
+            pr_url=None,
+            last_error=None,
+        )
+        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
+        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        heartbeat = _FakeHeartbeatController()
+        session = MagicMock()
+        session.refresh.side_effect = lambda _target, **_kwargs: None
+
+        def _persist_stage_checkpoint(_session, *, run, checkpoint, expected_worker_service_instance_id):  # noqa: ANN001
+            self.assertEqual(expected_worker_service_instance_id, "node-a:1234")
+            run.plan = {
+                "plan": {
+                    "plan_steps": list(checkpoint.plan.plan_steps),
+                    "acceptance_criteria": list(checkpoint.plan.acceptance_criteria),
+                    "risks": list(checkpoint.plan.risks),
+                    "next_stage": checkpoint.plan.next_stage,
+                    "execution_worker_capability": checkpoint.plan.execution_worker_capability,
+                    "missing_evidence_sources": list(checkpoint.plan.missing_evidence_sources),
+                    "confirmed_external_blockers": list(checkpoint.plan.confirmed_external_blockers),
+                    "resolved_prerequisites": list(checkpoint.plan.resolved_prerequisites),
+                    "unresolved_prerequisites": list(checkpoint.plan.unresolved_prerequisites),
+                },
+                "stage_checkpoints": {checkpoint.stage: {"status": checkpoint.status}},
+            }
+            return run
+
+        def _runner_run(_request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG001
+            self.assertIsNotNone(stage_checkpoint_hook)
+            stage_checkpoint_hook(
+                WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="completed",
+                    summary="PM complete",
+                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
+                )
+            )
+            return WorkflowResult(
+                succeeded=True,
+                plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
+                pr_url=None,
+                summary=["Done"],
+                test_guidance=[],
+                attempts=1,
+            )
+
+        def _finalize(*_args, run, **_kwargs):  # noqa: ANN001
+            self.assertEqual(run.plan["plan"]["plan_steps"], ["plan"])
+            self.assertEqual(run.plan["stage_checkpoints"]["pm"]["status"], "completed")
+            return run
+
+        result = process_next_queued_run(
+            session=session,
+            runner=SimpleNamespace(run=_runner_run),
+            logger=MagicMock(),
+            settings_fn=lambda: SimpleNamespace(
+                worker_capabilities="linux",
+                worker_workspace_key="worker-a",
+                project_repo_checkout_base_dir="/tmp/workdirs",
+                admin_ui_base_url="http://localhost:4100",
+                worker_run_heartbeat_interval_seconds=30,
+                tenant_id="tenant-1",
+            ),
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: SimpleNamespace(
+                run=run,
+                tenant=tenant,
+                terminal_run=None,
+            ),
+            apply_decision_gate_fn=lambda **_: (None, None),
+            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
+            send_jira_message_fn=MagicMock(),
+            ask_reply_components_fn=MagicMock(),
+            resolve_project_for_run_fn=MagicMock(return_value=project),
+            fail_missing_project_mapping_fn=MagicMock(),
+            block_archived_project_fn=MagicMock(),
+            ensure_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_checkout_fn=MagicMock(),
+            cleanup_run_workspaces_fn=MagicMock(),
+            build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+            bind_run_project_fn=MagicMock(),
+            workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
+            fail_guardrail_violation_fn=MagicMock(),
+            tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-122"),
+            lock_acquired_update_fn=MagicMock(return_value={"stage": "lock_acquired", "discord_message": "locked", "jira_message": ""}),
+            plan_posted_update_fn=MagicMock(),
+            pr_opened_update_fn=MagicMock(),
+            run_failed_update_fn=MagicMock(),
+            run_requeued_capability_update_fn=MagicMock(),
+            run_requeued_stale_snapshot_update_fn=MagicMock(),
+            finalize_cancelled_run_fn=MagicMock(),
+            finalize_workflow_result_fn=_finalize,
+            persist_stage_checkpoint_fn=_persist_stage_checkpoint,
+            requeue_workflow_result_for_capability_fn=MagicMock(),
+            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+            check_run_snapshot_freshness_fn=MagicMock(),
+            transition_issue_status_fn=MagicMock(),
+            emit_agent_event_fn=MagicMock(),
+            resolve_agent_id_fn=lambda: "worker-linux-local",
+            resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+            run_status_queued="queued",
+            run_status_running="running",
+            run_status_failed="failed",
+            run_status_blocked="blocked",
+            run_status_cancelled="cancelled",
+        )
+
+        self.assertIs(result, run)
 
     def test_process_next_queued_run_records_mandatory_completion_failure_and_finalizes_failed_run(self) -> None:
         now = datetime.now(timezone.utc)
@@ -682,6 +812,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 run_requeued_stale_snapshot_update_fn=MagicMock(),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=finalize_run,
+                persist_stage_checkpoint_fn=MagicMock(),
                 requeue_workflow_result_for_capability_fn=MagicMock(),
                 requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
                 check_run_snapshot_freshness_fn=MagicMock(),
@@ -811,6 +942,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 run_requeued_stale_snapshot_update_fn=MagicMock(),
                 finalize_cancelled_run_fn=MagicMock(),
                 finalize_workflow_result_fn=finalize_run,
+                persist_stage_checkpoint_fn=MagicMock(),
                 requeue_workflow_result_for_capability_fn=MagicMock(),
                 requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
                 check_run_snapshot_freshness_fn=MagicMock(),
