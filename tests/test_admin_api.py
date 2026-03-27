@@ -22,7 +22,7 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeChunk, KnowledgeFact, KnowledgeSource, ManagedSecret, Project, Run, RunLock, Tenant
+from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeChunk, KnowledgeFact, KnowledgeSource, ManagedSecret, Project, Run, RunLock, Tenant, TenantRunClaim
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -400,6 +400,9 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(projects[0].project_id, "tenant-a-default")
             self.assertEqual(projects[0].github_repository, "https://github.com/example/repo")
             self.assertEqual(projects[0].jira_project_key, "TP")
+            claim_row = session.get(TenantRunClaim, "tenant-a")
+            self.assertIsNotNone(claim_row)
+            self.assertEqual(claim_row.tenant_id, "tenant-a")
 
         list_response = self.client.get("/api/admin/tenants", auth=("admin", "secret"))
         self.assertEqual(list_response.status_code, 200)

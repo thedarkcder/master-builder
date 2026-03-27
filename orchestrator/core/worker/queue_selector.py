@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.core.worker_capabilities import (
@@ -64,9 +65,13 @@ def _lock_tenant_run_claim(session: Session, *, tenant_id: str) -> TenantRunClai
     now = datetime.now(timezone.utc)
     claim_row = session.get(TenantRunClaim, tenant_id)
     if claim_row is None:
-        claim_row = TenantRunClaim(tenant_id=tenant_id, updated_at=now)
-        session.add(claim_row)
-        session.flush()
+        try:
+            with session.begin_nested():
+                claim_row = TenantRunClaim(tenant_id=tenant_id, updated_at=now)
+                session.add(claim_row)
+                session.flush()
+        except IntegrityError:
+            pass
     claim_query = select(TenantRunClaim).where(TenantRunClaim.tenant_id == tenant_id)
     if _is_postgres(session):
         claim_query = claim_query.with_for_update()
