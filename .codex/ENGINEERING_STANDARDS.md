@@ -28,7 +28,10 @@ These are non-negotiable standards for agent and human changes in this repo. If 
   - behavior / end-to-end tests for real workflows
   - UI automation for user-visible journeys
 - Core logic must be testable without external services.
-- Keep side effects at the edges (DB / HTTP / queues / browser / filesystem / third-party APIs).
+- Keep side effects at the edges (DB / HTTP / queues / browser / filesystem / third-party APIs) to keep core logic clean and testable.
+- Tests must validate the layer where the behavior actually lives.
+- Never mock the layer you are trying to prove works; mock only beyond the system boundary.
+- Don’t just prove the feature works; actively try to break it the way a real tester would.
 - For bug fixes, add a regression test that fails before the fix and passes after it.
 - Implementation is not complete until the relevant automated tests are written and passing.
 
@@ -43,6 +46,9 @@ UI automation is required when:
 - the change affects a critical user journey
 - the bug being fixed was observed at the UI level
 - the integration between frontend and backend is part of the value
+- UI automation for real workflows must hit the real backend API.
+- Mock only external systems outside the product boundary.
+- For critical workflows, UI automation must cover both the main success path and at least one meaningful failure, misuse, or repeat-action scenario.
 
 Preferred frameworks:
 - Web: Playwright
@@ -60,6 +66,16 @@ Do not rely only on:
 - mocked UI assertions that do not prove real outcomes
 
 If UI automation is not added for a user-facing change, the PR must explicitly justify why.
+
+## Failure-path and boundary-testing standard
+
+For bug fixes, incident fixes, and risky workflows:
+- The primary test must reproduce the real failure mode.
+- Happy-path-only tests are insufficient.
+- If the defect is in an owned layer, tests must exercise that layer.
+- Where a user-visible issue is caused by backend behavior, add:
+  - a backend/API/integration regression test for the real failure path
+  - UI automation for the user-visible workflow
 
 ## 2) Execution gate: “Good To Do” requirement
 
@@ -155,6 +171,10 @@ A PR should be blocked if it contains:
 - missing UI automation for user-facing changes without justification
 - missing demo evidence for UI-visible changes
 - "how to test" steps that depend on manual exploration when the workflow is automatable
+- tests only cover the happy path for workflows with meaningful failure or misuse paths
+- tests mock the owned layer where the defect actually exists
+- UI tests are used as the main proof of backend/API behavior without hitting the real backend
+- no regression test reproduces the reported failure mode for a bug fix
 
 ## 7.1) Mandatory test execution gate (pre-commit and pre-PR)
 
