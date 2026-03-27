@@ -52,6 +52,8 @@ def stage_handle_issue_deleted(
         tenant=context.tenant,
         issue_key=context.issue_key,
     )
+    if removed_seed_contexts > 0 or removed_seed_issue_refs > 0:
+        session.commit()
     logger.info(
         "jira_webhook_issue_deleted request_id=%s tenant_id=%s issue_key=%s removed_history_entries=%s removed_seed_contexts=%s removed_seed_issue_refs=%s",
         context.request_id,

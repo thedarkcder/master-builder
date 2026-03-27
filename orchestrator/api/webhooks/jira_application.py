@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
+
+from fastapi import status
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -20,11 +21,17 @@ from orchestrator.api.webhooks.jira_webhook_types import (
     jira_webhook_response,
     snapshot_jira_webhook_context,
 )
+from orchestrator.core.webhook_job_queue import (
+    WEBHOOK_TRANSPORT_JIRA,
+    WebhookJobEnqueueRequest,
+    enqueue_webhook_job,
+)
 from orchestrator.core.communications.enqueue_reason_contract import enqueue_reason_guidance
 from orchestrator.core.communications import HttpJsonResponseAction, IngressResult, TransportAction, TransportEnvelope
 from orchestrator.core.observability import reset_log_context, set_log_context
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
+from orchestrator.storage.run_queue_events import notify_webhook_job_enqueued
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +40,7 @@ logger = logging.getLogger(__name__)
 class JiraWebhookPlan:
     content: dict
     actions: tuple[TransportAction, ...] = ()
+    status_code: int = 200
 
 async def build_jira_webhook_ingress_result(
     *,
@@ -78,11 +86,73 @@ async def build_jira_webhook_ingress_result(
             settings=settings,
         )
         context_snapshot = snapshot_jira_webhook_context(context=context)
+        enqueue_result = enqueue_webhook_job(
+            session,
+            request=WebhookJobEnqueueRequest(
+                transport=WEBHOOK_TRANSPORT_JIRA,
+                request_id=context.request_id,
+                tenant_id=context.tenant_id,
+                project_id=context.project.project_id if context.project is not None else None,
+                subject_key=f"jira:{context.tenant_id}:{context.issue_key}",
+                dedupe_key=context.delivery_id,
+                event_type=context.webhook_event,
+                payload_json=dict(context.payload),
+                context_json={
+                    "snapshot": {
+                        "request_id": context_snapshot.request_id,
+                        "tenant_id": context_snapshot.tenant_id,
+                        "payload": dict(context_snapshot.payload),
+                        "webhook_event": context_snapshot.webhook_event,
+                        "issue_key": context_snapshot.issue_key,
+                        "issue_labels": list(context_snapshot.issue_labels),
+                        "issue_status": context_snapshot.issue_status,
+                        "issue_status_category_key": context_snapshot.issue_status_category_key,
+                        "issue_summary": context_snapshot.issue_summary,
+                        "issue_description": context_snapshot.issue_description,
+                        "comment_command": context_snapshot.comment_command,
+                        "comment_command_argument": context_snapshot.comment_command_argument,
+                        "comment_command_error": context_snapshot.comment_command_error,
+                        "delivery_id": context_snapshot.delivery_id,
+                        "project_id": context_snapshot.project_id,
+                    }
+                },
+            ),
+        )
+        notify_webhook_job_enqueued(
+            session,
+            transport=WEBHOOK_TRANSPORT_JIRA,
+            tenant_id=context.tenant_id,
+            project_id=context.project.project_id if context.project is not None else None,
+            subject_key=f"jira:{context.tenant_id}:{context.issue_key}",
+            job_id=enqueue_result.job.job_id,
+            dedupe_key=enqueue_result.job.dedupe_key,
+        )
+        session.commit()
+        logger.info(
+            "jira_webhook_job_enqueued request_id=%s tenant_id=%s issue_key=%s job_id=%s delivery_id=%s created=%s",
+            context.request_id,
+            context.tenant_id,
+            context.issue_key,
+            enqueue_result.job.job_id,
+            context.delivery_id,
+            enqueue_result.created,
+        )
         return _http_json_result(
-            await asyncio.to_thread(
-                _process_jira_webhook_context_in_thread,
-                context_snapshot=context_snapshot,
-                settings=settings,
+            JiraWebhookPlan(
+                content={
+                    "request_id": context.request_id,
+                    "tenant_id": context.tenant_id,
+                    "project_id": context.project.project_id if context.project is not None else None,
+                    "issue_key": context.issue_key,
+                    "delivery_id": context.delivery_id,
+                    "accepted": True,
+                    "enqueued": False,
+                    "queued": enqueue_result.created,
+                    "reason": "queued_for_reconciliation" if enqueue_result.created else "duplicate_delivery",
+                    "job_id": enqueue_result.job.job_id,
+                    "webhook_event": context.webhook_event,
+                },
+                status_code=status.HTTP_202_ACCEPTED,
             )
         )
     finally:
@@ -165,6 +235,6 @@ def _http_json_result(plan: JiraWebhookPlan) -> IngressResult:
     return IngressResult(
         actions=(
             *plan.actions,
-            HttpJsonResponseAction(status_code=200, content=plan.content),
+            HttpJsonResponseAction(status_code=plan.status_code, content=plan.content),
         )
     )

@@ -10,6 +10,7 @@ from orchestrator.core.decision_engine import (
     evaluate_worker_decision,
     resolve_enqueue_precheck_outcome,
 )
+from orchestrator.core.decision_precheck_mapping import derive_label_actions
 from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.label_action_service import apply_issue_label_actions
@@ -85,6 +86,26 @@ class DecisionEngineTests(unittest.TestCase):
         updated = decision.with_applied_labels(["agent:ready"])
         self.assertEqual(updated.pre_check.outcome, "ready_for_agent")
         self.assertIsNone(updated.block_reason)
+
+    def test_derive_label_actions_does_not_add_ready_label_when_gtd_is_blocked(self) -> None:
+        actions = derive_label_actions(
+            _precheck(
+                outcome="gtd_required",
+                ready_label_present=False,
+                required_worker_label_present=False,
+            )
+        )
+
+        self.assertEqual(
+            actions,
+            (
+                DecisionLabelAction(
+                    label="worker:linux",
+                    action="add",
+                    reason="required_worker_label_missing",
+                ),
+            ),
+        )
 
     def test_resolve_enqueue_precheck_outcome_uses_source_defaults(self) -> None:
         self.assertEqual(

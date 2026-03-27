@@ -97,7 +97,8 @@ def derive_label_actions(pre_check: object) -> tuple[DecisionLabelAction, ...]:
     actions: list[DecisionLabelAction] = []
     ready_label_missing = bool(getattr(pre_check, "ready_label_missing", False))
     ready_label = str(getattr(pre_check, "ready_label", "") or "").strip()
-    if ready_label_missing and ready_label:
+    outcome = str(getattr(pre_check, "outcome", "") or "").strip().lower()
+    if ready_label_missing and ready_label and outcome == "missing_ready_label":
         actions.append(
             DecisionLabelAction(
                 label=ready_label,

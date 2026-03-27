@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +17,7 @@ from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform_secret_service import platform_secret_service
 from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import (
@@ -31,35 +29,6 @@ from orchestrator.storage.models import (
 from tests.production_path_support import load_json_fixture
 
 pytestmark = pytest.mark.production_path
-
-
-class _DeferredTaskHarness:
-    def __init__(self) -> None:
-        self._events: list[threading.Event] = []
-        self._errors: list[BaseException] = []
-
-    def create_task(self, coro):  # noqa: ANN001
-        event = threading.Event()
-        self._events.append(event)
-
-        def _runner() -> None:
-            try:
-                asyncio.run(coro)
-            except BaseException as exc:  # noqa: BLE001
-                self._errors.append(exc)
-            finally:
-                event.set()
-
-        thread = threading.Thread(target=_runner, daemon=True)
-        thread.start()
-        return SimpleNamespace(add_done_callback=lambda callback: None, thread=thread)
-
-    def wait(self, *, timeout: float = 5.0) -> None:
-        for event in self._events:
-            if not event.wait(timeout):
-                raise AssertionError("Deferred Discord followup task did not complete in time")
-        if self._errors:
-            raise self._errors[0]
 
 
 class _FakeDiscordApiClient:
@@ -244,16 +213,19 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             headers=self._signed_headers(payload_bytes),
         )
 
-    def test_application_help_command_runs_real_deferred_followup_and_creates_thread(self) -> None:
-        harness = _DeferredTaskHarness()
+    def _process_one_job(self):
+        with self.session_factory() as session:
+            return process_next_webhook_job(
+                session=session,
+                settings=get_settings(),
+                owner_id="worker:test",
+            )
+
+    def test_application_help_command_runs_real_queued_followup_and_creates_thread(self) -> None:
         discord_client = _FakeDiscordApiClient()
         payload = load_json_fixture("discord", "interactions", "application_command_help.json")
 
         with (
-            patch(
-                "orchestrator.api.routes.webhook_discord_interactions.asyncio.create_task",
-                new=harness.create_task,
-            ),
             patch(
                 "orchestrator.api.discord.interactions.followup_transport.DiscordApiClient",
                 return_value=discord_client,
@@ -262,7 +234,7 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             response = self._post_interaction(payload)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["type"], 5)
-            harness.wait()
+            self._process_one_job()
 
         with self.session_factory() as session:
             project = session.get(Project, "example-default")
@@ -280,7 +252,6 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
         self.assertIn("Continue here with follow-up questions", str(discord_client.posted_messages[1]["content"]))
 
     def test_stale_issue_bound_reply_modal_falls_back_to_ask_followup(self) -> None:
-        harness = _DeferredTaskHarness()
         discord_client = _FakeDiscordApiClient()
         issue_key = "TP-42"
         with self.session_factory() as session:
@@ -338,10 +309,6 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
 
         with (
             patch(
-                "orchestrator.api.routes.webhook_discord_interactions.asyncio.create_task",
-                new=harness.create_task,
-            ),
-            patch(
                 "orchestrator.api.discord.interactions.followup_transport.DiscordApiClient",
                 return_value=discord_client,
             ),
@@ -369,7 +336,7 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             response = self._post_interaction(payload)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["type"], 5)
-            harness.wait()
+            self._process_one_job()
 
         self.assertEqual(discord_client.created_threads, [])
         self.assertEqual(len(discord_client.posted_messages), 1)
