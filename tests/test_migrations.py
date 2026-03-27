@@ -1,10 +1,13 @@
 import unittest
 import json
+from collections import Counter
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 from sqlalchemy import text
 
@@ -12,6 +15,28 @@ from orchestrator.storage.migrations import run_migrations
 
 
 class MigrationTests(unittest.TestCase):
+    def test_revision_graph_has_single_unique_head(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = Config(str(root / "alembic.ini"))
+        config.attributes["configure_logger"] = False
+        config.set_main_option(
+            "script_location",
+            str(root / "orchestrator" / "storage" / "migrations"),
+        )
+        script = ScriptDirectory.from_config(config)
+
+        revision_ids: list[str] = []
+        for path in sorted((root / "orchestrator" / "storage" / "migrations" / "versions").glob("*.py")):
+            contents = path.read_text(encoding="utf-8")
+            for line in contents.splitlines():
+                if line.startswith("revision = "):
+                    revision_ids.append(line.split("=", maxsplit=1)[1].strip().strip('"'))
+                    break
+
+        duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
+        self.assertEqual(duplicates, {})
+        self.assertEqual(script.get_heads(), ["20260327_0043"])
+
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
         fake_config.attributes = {}
