@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
 from orchestrator.api.discord.interactions.application import build_default_discord_interaction_dispatch_deps
 from orchestrator.api.discord.interactions.dispatcher import dispatch_discord_interaction
+from orchestrator.api.discord.shared.state import command_matches
 from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.transport_runtime import (
@@ -316,7 +317,11 @@ def _process_discord_command_job(
         tenant_id=claimed_job.tenant_id,
         payload=payload,
         session=session,
-        defer_seed_issues=bool((claimed_job.context_json or {}).get("defer_seed_issues")),
+        defer_seed_issues=command_matches(
+            payload.command,
+            command_name="issues",
+            subcommand="seed",
+        ),
     )
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 

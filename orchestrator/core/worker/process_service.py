@@ -686,6 +686,17 @@ def _run_completion_step(
     except Exception as exc:  # noqa: BLE001
         duration_ms = max(0, int((perf_counter() - started) * 1000))
         stack_trace = "".join(format_exception(type(exc), exc, exc.__traceback__))
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "worker_completion_step_rollback_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s step=%s",
+                getattr(run, "tenant_id", ""),
+                getattr(run, "project_id", ""),
+                getattr(run, "run_id", ""),
+                getattr(run, "issue_key", ""),
+                step,
+            )
         logger.exception(
             "worker_completion_step_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s step=%s error_class=%s error=%s",
             getattr(run, "tenant_id", ""),

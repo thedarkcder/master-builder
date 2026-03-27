@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
 from orchestrator.core.webhook_job_queue import (
+    WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_JIRA,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
@@ -137,3 +138,37 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertEqual(job.status, "done")
             self.assertEqual(run.status, "cancelled")
             self.assertEqual(run.last_error, "Cancelled by jira_webhook:gtd_required")
+
+    def test_discord_command_jobs_derive_seed_deferral_in_worker_service(self) -> None:
+        request = WebhookJobEnqueueRequest(
+            transport=WEBHOOK_TRANSPORT_DISCORD_COMMAND,
+            request_id="request-2",
+            tenant_id="tenant-1",
+            project_id=None,
+            subject_key="discord_channel:tenant-1:channel-1",
+            dedupe_key="discord-request-2",
+            event_type="command_webhook",
+            payload_json={
+                "user_id": "user-1",
+                "command": "!issues seed build stories",
+                "channel_id": "channel-1",
+            },
+            context_json={},
+        )
+        with self.session_factory() as session:
+            enqueue_webhook_job(session, request=request)
+            session.commit()
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.worker.webhook_job_service.execute_tenant_discord_ingress_command"
+            ) as execute_command:
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    owner_id="worker-1",
+                )
+
+            self.assertIsNotNone(processed)
+            execute_command.assert_called_once()
+            self.assertTrue(execute_command.call_args.kwargs["defer_seed_issues"])

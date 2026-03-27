@@ -42,7 +42,7 @@ def publish_manual_pr_remediation_completion(
     github_config_raw = getattr(tenant, "github_config", {})
     github_config = github_config_raw if isinstance(github_config_raw, dict) else {}
     if not github_config:
-        return
+        raise RuntimeError("Manual PR remediation completion requires tenant GitHub configuration")
 
     try:
         github_client = github_client_from_tenant_config(
@@ -61,6 +61,10 @@ def publish_manual_pr_remediation_completion(
             ),
         )
     except Exception as exc:  # noqa: BLE001
+        message = (
+            "Failed to initialize GitHub client for manual PR remediation completion: "
+            f"{type(exc).__name__}: {exc}"
+        )
         log.warning(
             "manual_pr_remediation_completion_github_client_failed tenant_id=%s project_id=%s run_id=%s error=%s",
             getattr(tenant, "tenant_id", ""),
@@ -68,9 +72,14 @@ def publish_manual_pr_remediation_completion(
             getattr(run, "run_id", ""),
             exc,
         )
-        return
+        raise RuntimeError(message) from exc
 
-    executor = GitHubTransportExecutor(github_client=github_client, session=session, logger_override=log)
+    executor = GitHubTransportExecutor(
+        github_client=github_client,
+        session=session,
+        logger_override=log,
+        raise_on_error=True,
+    )
     for action in actions:
         executor.execute(action=action)
 
