@@ -108,17 +108,18 @@ class CodexRuntimeTests(unittest.TestCase):
     def test_run_json_forwards_usage_callback(self) -> None:
         captured_usage: dict[str, int] = {}
 
-        def _request(  # noqa: ANN001
-            _system_prompt,
-            _user_prompt,
-            _working_dir,
-            _on_log_line,
-            _reasoning_effort,
-            _resume_session_id,
-            _on_session_id,
-            on_usage,
+        def _request(
+            _system_prompt: str,
+            _user_prompt: str,
+            _working_dir: str | None,
+            _on_log_line: object,
+            _reasoning_effort: str | None,
+            _resume_session_id: str | None,
+            _on_session_id: object,
+            on_usage: object,
         ) -> str:
             if on_usage is not None:
+                assert callable(on_usage)
                 on_usage(
                     {
                         "prompt_tokens": 12,
@@ -226,7 +227,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen_write_output(args, **kwargs):  # noqa: ANN001
+        def fake_popen_write_output(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], output_text="json-output")
 
@@ -276,7 +277,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
@@ -323,7 +324,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
@@ -383,7 +384,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001, ARG001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
@@ -402,7 +403,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         config_idx = call_args.index("-c") + 1
         self.assertEqual(call_args[config_idx], 'reasoning.effort="medium"')
 
-        def fake_popen_stdout(args, **kwargs):  # noqa: ANN001
+        def fake_popen_stdout(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], stdout_lines=["stdout-output\n"], output_text="")
 
@@ -447,7 +448,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
 
         holder: dict[str, _FakePopen] = {}
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             proc = _FakePopen(args[output_idx])
             holder["proc"] = proc
@@ -499,7 +500,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
@@ -571,7 +572,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
@@ -628,7 +629,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
@@ -685,7 +686,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
@@ -750,7 +751,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen_auth(args, **kwargs):  # noqa: ANN001
+        def fake_popen_auth(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], returncode=1, stderr_lines=["auth required\n"])
 
@@ -761,9 +762,9 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
                 runtime.run_text(system_prompt="s", user_prompt="u")
-            self.assertIn("docker compose run --rm worker-runtime codex login --device-auth", str(exc_info.exception))
+            self.assertIn("docker compose run --rm run-worker codex login --device-auth", str(exc_info.exception))
 
-        def fake_popen_auth_with_link(args, **kwargs):  # noqa: ANN001
+        def fake_popen_auth_with_link(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(
                 args[output_idx],
@@ -780,7 +781,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 runtime.run_text(system_prompt="s", user_prompt="u")
             self.assertIn("https://auth.openai.com/device/abc123", str(exc_info.exception))
 
-        def fake_popen_boom(args, **kwargs):  # noqa: ANN001
+        def fake_popen_boom(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], returncode=2, stderr_lines=["boom\n"])
 
@@ -792,7 +793,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             with self.assertRaises(CodexRuntimeError):
                 runtime.run_text(system_prompt="s", user_prompt="u")
 
-        def fake_popen_structured_limit(args, **kwargs):  # noqa: ANN001
+        def fake_popen_structured_limit(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(
                 args[output_idx],
@@ -814,7 +815,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             self.assertIn("usage limit", str(exc_info.exception).lower())
             self.assertNotIn("no last agent message", str(exc_info.exception).lower())
 
-        def fake_popen_empty(args, **kwargs):  # noqa: ANN001
+        def fake_popen_empty(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], output_text="")
 

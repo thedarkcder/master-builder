@@ -335,12 +335,18 @@ class WorkerRunLifecycleTests(unittest.TestCase):
                     summary="PM completed",
                     plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
                 ),
+                execution_context={
+                    "execution_branch": "run/ta-205/run-checkpoint",
+                    "integration_branch": "feature/TA-205",
+                },
                 expected_worker_service_instance_id="node-a:1234",
             )
 
             self.assertEqual(run.plan["trigger_context"], {"resume_stage": "dev"})
             self.assertEqual(run.plan["plan"]["plan_steps"], ["plan"])
             self.assertEqual(run.plan["stage_checkpoints"]["pm"]["status"], "completed")
+            self.assertEqual(run.plan["execution_context"]["execution_branch"], "run/ta-205/run-checkpoint")
+            self.assertEqual(run.plan["execution_context"]["integration_branch"], "feature/TA-205")
             self.assertEqual(run.plan["live_stage_updates"][0]["stage"], "lock_acquired")
 
             finalized = finalize_workflow_result(
