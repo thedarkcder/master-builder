@@ -81,6 +81,8 @@ class PolicyConfig(BaseModel):
 
 class DiscordConfig(BaseModel):
     guild_id: str | None = None
+    installed_at: str | None = None
+    installer_user_id: str | None = None
     channel_id: str | None = None
     channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
@@ -118,6 +120,9 @@ class DiscordConfig(BaseModel):
     room_persona_voices: dict[str, str] = Field(default_factory=dict)
     pm_room_persona_names: dict[str, str] = Field(default_factory=dict)
     pm_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    onboarding_channel_id: str | None = None
+    onboarding_invite_expires_in_seconds: int | None = None
+    onboarding_invite_max_uses: int | None = None
 
     @model_serializer(mode="plain")
     def serialize_sparse(self) -> dict[str, object]:
@@ -195,6 +200,8 @@ class TenantCreate(BaseModel):
     repos: ReposConfig
     policy: PolicyConfig
     discord: DiscordConfig | None = None
+    experience: dict = Field(default_factory=lambda: {"default_mode": "technical"})
+    setup_state: dict = Field(default_factory=dict)
 
 
 class TenantUpdate(BaseModel):
@@ -205,19 +212,205 @@ class TenantUpdate(BaseModel):
     repos: ReposConfig
     policy: PolicyConfig
     discord: DiscordConfig | None = None
+    experience: dict = Field(default_factory=lambda: {"default_mode": "technical"})
+    setup_state: dict = Field(default_factory=dict)
 
 
 class TenantRead(BaseModel):
     tenant_id: str
     name: str
     is_enabled: bool
+    archived_at: datetime | None = None
+    purge_after_at: datetime | None = None
     jira: JiraConfig
     github: GithubConfig
     repos: ReposConfig
     policy: PolicyConfig
     discord: DiscordConfig | None
+    experience: dict = Field(default_factory=dict)
+    setup_state: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class TenantMembershipIdentityRead(BaseModel):
+    membership_id: str
+    tenant_id: str
+    role: str
+    permission_keys: list[str] = Field(default_factory=list)
+    effective_mode: str
+    mode_override: str | None = None
+    onboarding_kind: str
+    first_signed_in_at: datetime | None = None
+    onboarding_completed_at: datetime | None = None
+    onboarding_version: str | None = None
+    team_ids: list[str] = Field(default_factory=list)
+    discord_state: dict = Field(default_factory=dict)
+
+
+class AuthenticatedPrincipalRead(BaseModel):
+    principal_type: str
+    username: str | None = None
+    user_id: str | None = None
+    email: str | None = None
+    full_name: str | None = None
+    memberships: list[TenantMembershipIdentityRead] = Field(default_factory=list)
+
+
+class TenantUserLoginRequest(BaseModel):
+    email: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class TenantUserLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    principal: AuthenticatedPrincipalRead
+
+
+class PublicRegistrationRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=255)
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=8)
+    tenant_name: str = Field(min_length=1, max_length=255)
+
+
+class PublicRegistrationResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    principal: AuthenticatedPrincipalRead
+    tenant: TenantRead
+
+
+class TenantInviteCreate(BaseModel):
+    email: str = Field(min_length=1, max_length=320)
+    full_name: str | None = Field(default=None, max_length=255)
+    role: str = Field(pattern="^(tenant_admin|technical_member|business_member)$")
+    team_ids: list[str] = Field(default_factory=list)
+    mode_override: str | None = Field(default=None, pattern="^(technical|non_technical)$")
+
+
+class TenantInviteRead(BaseModel):
+    invite_id: str
+    tenant_id: str
+    email: str
+    full_name: str | None = None
+    role: str
+    team_ids: list[str] = Field(default_factory=list)
+    mode_override: str | None = None
+    status: str
+    invite_url: str | None = None
+    expires_at: datetime
+    accepted_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TenantInviteActionResult(BaseModel):
+    invite: TenantInviteRead
+
+
+class TenantInviteListRead(BaseModel):
+    items: list[TenantInviteRead] = Field(default_factory=list)
+
+
+class TenantTeamCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    permission_keys: list[str] = Field(default_factory=list)
+
+
+class TenantTeamUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    permission_keys: list[str] = Field(default_factory=list)
+
+
+class TenantTeamRead(BaseModel):
+    team_id: str
+    tenant_id: str
+    name: str
+    description: str | None = None
+    permission_keys: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class TenantMemberRead(BaseModel):
+    membership_id: str
+    tenant_id: str
+    user_id: str
+    email: str
+    full_name: str | None = None
+    is_active: bool
+    role: str
+    permission_keys: list[str] = Field(default_factory=list)
+    effective_mode: str
+    mode_override: str | None = None
+    onboarding_kind: str
+    first_signed_in_at: datetime | None = None
+    onboarding_completed_at: datetime | None = None
+    onboarding_version: str | None = None
+    team_ids: list[str] = Field(default_factory=list)
+    discord_state: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class TenantMemberUpdate(BaseModel):
+    role: str = Field(pattern="^(tenant_admin|technical_member|business_member)$")
+    team_ids: list[str] = Field(default_factory=list)
+    mode_override: str | None = Field(default=None, pattern="^(technical|non_technical)$")
+    is_active: bool = True
+
+
+class TenantDiscordLinkStartRead(BaseModel):
+    authorize_url: str
+
+
+class TenantDiscordIdentityRead(BaseModel):
+    oauth_configured: bool = False
+    linked: bool
+    discord_user_id: str | None = None
+    discord_username: str | None = None
+    discord_global_name: str | None = None
+    discord_avatar_hash: str | None = None
+    linked_at: datetime | None = None
+
+
+class TenantDiscordInviteRead(BaseModel):
+    invite_url: str
+    expires_at: datetime | None = None
+    max_uses: int | None = None
+
+
+class DeliverySummaryAggregateRead(BaseModel):
+    completed_count: int
+    in_review_count: int
+    blocked_count: int
+    failed_count: int
+    queued_count: int
+    median_cycle_time_hours: float | None = None
+    average_cycle_time_hours: float | None = None
+
+
+class DeliveryTimelineItemRead(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    issue_key: str
+    issue_summary: str | None = None
+    status: str
+    completed_at: datetime | None = None
+    started_at: datetime | None = None
+    pr_url: str | None = None
+
+
+class TenantDeliverySummaryRead(BaseModel):
+    summary: DeliverySummaryAggregateRead
+    timeline: list[DeliveryTimelineItemRead] = Field(default_factory=list)
 
 
 class ProjectCreate(BaseModel):
@@ -446,6 +639,11 @@ class CodexModelCatalogRead(BaseModel):
 
 
 class GitHubInstallStart(BaseModel):
+    install_url: str
+    expires_at: datetime
+
+
+class DiscordInstallStart(BaseModel):
     install_url: str
     expires_at: datetime
 
@@ -710,6 +908,30 @@ class PlatformObservabilityRead(BaseModel):
     active_runs: int
     failed_runs_last_24h: int
     run_duration: ObservabilityDurationStatsRead
+
+
+class PlatformServiceInstanceRead(BaseModel):
+    instance_id: str
+    label: str
+    status: str
+    summary: str
+    updated_at: datetime | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    active_run_count: int = 0
+
+
+class PlatformServiceStatusRead(BaseModel):
+    service_id: str
+    label: str
+    status: str
+    summary: str
+    updated_at: datetime | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    instances: list[PlatformServiceInstanceRead] = Field(default_factory=list)
+
+
+class PlatformStatusRead(BaseModel):
+    services: list[PlatformServiceStatusRead] = Field(default_factory=list)
 
 
 class TenantObservabilityRead(BaseModel):

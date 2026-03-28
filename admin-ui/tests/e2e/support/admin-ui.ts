@@ -1,9 +1,8 @@
+import { encode } from "next-auth/jwt";
 import type { Page, Route } from "@playwright/test";
 
 import {
-  AUTH_COOKIE_KEY,
   AUTH_COOKIE_TTL_SECONDS,
-  AUTH_STORAGE_KEY,
   DEFAULT_API_BASE_URL,
 } from "../../../lib/auth-constants";
 import type {
@@ -12,11 +11,25 @@ import type {
   RunLogEventRecord,
   RunRecord,
   RunRerunPayload,
+  AuthenticatedPrincipalRecord,
+  DeliverySummaryRecord,
+  MembershipRecord,
+  TenantDiscordIdentityRecord,
+  TenantInviteRecord,
+  TenantMemberRecord,
   TenantRecord,
+  TenantTeamRecord,
   TokenTimelineRecord,
 } from "../../../lib/api";
 
 export const ADMIN_ACCESS_TOKEN = "playwright-admin-token";
+export const TENANT_ACCESS_TOKEN = "playwright-tenant-token";
+
+const APP_BASE_URL = "http://localhost:4100";
+const BACKEND_BASE_URL = DEFAULT_API_BASE_URL;
+const AUTH_SECRET = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret";
+const AUTH_SESSION_COOKIE_NAME = "authjs.session-token";
+const AUTH_SESSION_COOKIE_SALT = "authjs.session-token";
 
 type AdminRouteHandler = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -24,34 +37,22 @@ type AdminRouteHandler = {
   handler: (route: Route, url: URL) => Promise<void> | void;
 };
 
+type AppRouteHandler = AdminRouteHandler;
+
+type TenantSessionSeed = {
+  principal: AuthenticatedPrincipalRecord;
+  accessToken?: string;
+  userName?: string | null;
+  userEmail?: string | null;
+};
+
 export async function seedAdminSession(page: Page, accessToken = ADMIN_ACCESS_TOKEN): Promise<void> {
-  await page.context().addCookies([
-    {
-      name: AUTH_COOKIE_KEY,
-      value: "1",
-      url: "http://localhost:4100",
-      sameSite: "Lax",
-    },
-  ]);
-  await page.addInitScript(
-    ({ storageKey, apiBaseUrl, token, authCookieKey, authCookieTtlSeconds }) => {
-      window.localStorage.setItem(
-        storageKey,
-        JSON.stringify({
-          apiBaseUrl,
-          accessToken: token,
-        }),
-      );
-      document.cookie = `${authCookieKey}=1; path=/; max-age=${authCookieTtlSeconds}; samesite=lax`;
-    },
-    {
-      storageKey: AUTH_STORAGE_KEY,
-      apiBaseUrl: DEFAULT_API_BASE_URL,
-      token: accessToken,
-      authCookieKey: AUTH_COOKIE_KEY,
-      authCookieTtlSeconds: AUTH_COOKIE_TTL_SECONDS,
-    },
-  );
+  await seedAuthenticatedSession(page, {
+    principal: makePlatformAdminPrincipal(),
+    accessToken,
+    userName: "admin",
+    userEmail: null,
+  });
 }
 
 export async function installAdminApiMocks(page: Page, handlers: AdminRouteHandler[]): Promise<void> {
@@ -83,6 +84,80 @@ export async function installAdminApiMocks(page: Page, handlers: AdminRouteHandl
   });
 }
 
+export async function installBffApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, APP_BASE_URL, handlers);
+}
+
+export async function installAppApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, APP_BASE_URL, handlers);
+}
+
+export async function installBackendApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, BACKEND_BASE_URL, handlers);
+}
+
+export async function seedTenantSession(
+  page: Page,
+  { principal, accessToken = TENANT_ACCESS_TOKEN, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
+  await seedAuthenticatedSession(page, { principal, accessToken, userEmail, userName });
+}
+
+async function seedAuthenticatedSession(
+  page: Page,
+  { principal, accessToken, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
+  const token = await encode({
+    secret: AUTH_SECRET,
+    salt: AUTH_SESSION_COOKIE_SALT,
+    token: {
+      sub: principal.user_id ?? principal.email ?? principal.username ?? "playwright-user",
+      name: userName ?? principal.full_name ?? principal.username ?? principal.email ?? "Playwright User",
+      email: userEmail ?? principal.email ?? null,
+      accessToken,
+      principal,
+    },
+    maxAge: AUTH_COOKIE_TTL_SECONDS,
+  });
+
+  await page.context().addCookies([
+    {
+      name: AUTH_SESSION_COOKIE_NAME,
+      value: token,
+      url: APP_BASE_URL,
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAuthSessionMock(page, { principal, userEmail, userName });
+}
+
+export async function mockCredentialSignIn(
+  page: Page,
+  seed: TenantSessionSeed,
+): Promise<void> {
+  await page.route(`${APP_BASE_URL}/api/auth/callback/credentials**`, async (route) => {
+    await seedTenantSession(page, seed);
+    const principal = seed.principal;
+    const redirectUrl =
+      principal.principal_type === "platform_super_admin"
+        ? `${APP_BASE_URL}/dashboard`
+        : principal.memberships[0]
+          ? `${APP_BASE_URL}/${encodeURIComponent(principal.memberships[0].tenant_id)}/dashboard`
+          : `${APP_BASE_URL}/tenants/select`;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        status: 200,
+        url: redirectUrl,
+      }),
+    });
+  });
+}
+
 export async function fulfillJson(route: Route, body: unknown, status = 200): Promise<void> {
   await route.fulfill({
     status,
@@ -96,6 +171,8 @@ export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord 
     tenant_id: "route25",
     name: "Route 25",
     is_enabled: true,
+    archived_at: null,
+    purge_after_at: null,
     jira: {
       connection_id: null,
       project_keys: ["ROUTE"],
@@ -134,6 +211,10 @@ export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord 
       codex_reasoning_effort: "medium",
     },
     discord: null,
+    experience: {
+      default_mode: "technical",
+    },
+    setup_state: {},
     created_at: "2026-03-27T16:00:00Z",
     updated_at: "2026-03-27T16:00:00Z",
     ...overrides,
@@ -222,6 +303,152 @@ export function makeTokenTimeline(run: RunRecord): TokenTimelineRecord {
   };
 }
 
+export function makeMembership(overrides: Partial<MembershipRecord> = {}): MembershipRecord {
+  return {
+    membership_id: "membership-route25",
+    tenant_id: "route25",
+    role: "technical_member",
+    permission_keys: ["technical.access"],
+    effective_mode: "technical",
+    mode_override: null,
+    onboarding_kind: "member_join",
+    first_signed_in_at: "2026-03-27T16:00:00Z",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+    onboarding_version: "v1",
+    team_ids: [],
+    discord_state: {},
+    ...overrides,
+  };
+}
+
+export function makeTenantUserPrincipal(
+  overrides: Partial<AuthenticatedPrincipalRecord> = {},
+): AuthenticatedPrincipalRecord {
+  return {
+    principal_type: "tenant_user",
+    user_id: "user-route25",
+    email: "person@example.com",
+    full_name: "Person Example",
+    memberships: [makeMembership()],
+    ...overrides,
+  };
+}
+
+export function makePlatformAdminPrincipal(
+  overrides: Partial<AuthenticatedPrincipalRecord> = {},
+): AuthenticatedPrincipalRecord {
+  return {
+    principal_type: "platform_super_admin",
+    username: "admin",
+    user_id: null,
+    email: null,
+    full_name: null,
+    memberships: [],
+    ...overrides,
+  };
+}
+
+export function makeDiscordIdentity(
+  overrides: Partial<TenantDiscordIdentityRecord> = {},
+): TenantDiscordIdentityRecord {
+  return {
+    oauth_configured: true,
+    linked: false,
+    discord_user_id: null,
+    discord_username: null,
+    discord_global_name: null,
+    discord_avatar_hash: null,
+    linked_at: null,
+    ...overrides,
+  };
+}
+
+export function makeTeam(overrides: Partial<TenantTeamRecord> = {}): TenantTeamRecord {
+  return {
+    team_id: "delivery",
+    tenant_id: "route25",
+    name: "Delivery",
+    description: "Delivery team",
+    permission_keys: [],
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeInvite(overrides: Partial<TenantInviteRecord> = {}): TenantInviteRecord {
+  return {
+    invite_id: "invite-route25",
+    tenant_id: "route25",
+    email: "newperson@example.com",
+    full_name: "New Person",
+    role: "business_member",
+    team_ids: [],
+    mode_override: null,
+    status: "pending",
+    invite_url: "http://localhost:4100/invite/accept?token=invite-token",
+    expires_at: "2026-03-29T16:00:00Z",
+    accepted_at: null,
+    revoked_at: null,
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeMember(overrides: Partial<TenantMemberRecord> = {}): TenantMemberRecord {
+  return {
+    membership_id: "membership-route25",
+    tenant_id: "route25",
+    user_id: "user-route25",
+    email: "person@example.com",
+    full_name: "Person Example",
+    is_active: true,
+    role: "technical_member",
+    permission_keys: ["technical.access"],
+    effective_mode: "technical",
+    mode_override: null,
+    onboarding_kind: "member_join",
+    first_signed_in_at: "2026-03-27T16:00:00Z",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+    onboarding_version: "v1",
+    team_ids: [],
+    discord_state: {},
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeDeliverySummary(
+  overrides: Partial<DeliverySummaryRecord> = {},
+): DeliverySummaryRecord {
+  return {
+    summary: {
+      completed_count: 4,
+      in_review_count: 1,
+      blocked_count: 1,
+      failed_count: 0,
+      queued_count: 2,
+      median_cycle_time_hours: 6,
+      average_cycle_time_hours: 8,
+    },
+    timeline: [
+      {
+        run_id: "run-1",
+        project_id: "route25-default",
+        issue_key: "GP-125",
+        issue_summary: "Ship onboarding checklist",
+        status: "completed",
+        completed_at: "2026-03-27T15:00:00Z",
+        started_at: "2026-03-27T12:00:00Z",
+        pr_url: "https://github.com/thedarkcder/master-builder/pull/173",
+      },
+    ],
+    ...overrides,
+  };
+}
+
 export function makeStageInvocationLogs(options: {
   runId?: string;
   stage: "pm" | "dev" | "test" | "review";
@@ -304,15 +531,15 @@ export async function mockRunDetailApis(
       plan: { pre_check: { outcome: "ready_for_agent" } },
       pr_url: null,
     });
-  await installAdminApiMocks(page, [
+  await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/admin/auth/me",
-      handler: (route) => fulfillJson(route, { username: "admin" }),
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
     },
     {
       method: "GET",
-      pathname: /^\/api\/admin\/runs\/[^/]+$/,
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+$/,
       handler: (route, url) => {
         const runId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
         if (runId === options.run.run_id) {
@@ -330,17 +557,17 @@ export async function mockRunDetailApis(
     },
     {
       method: "GET",
-      pathname: /^\/api\/admin\/runs\/[^/]+\/events$/,
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events$/,
       handler: (route) => fulfillJson(route, options.events ?? []),
     },
     {
       method: "GET",
-      pathname: /^\/api\/admin\/runs\/[^/]+\/logs$/,
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/logs$/,
       handler: (route) => fulfillJson(route, options.logs ?? []),
     },
     {
       method: "GET",
-      pathname: new RegExp(`^/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/runs/[^/]+/token-timeline$`),
+      pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/runs/[^/]+/token-timeline$`),
       handler: (route, url) => {
         const runId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
         if (runId === nextRun.run_id) {
@@ -351,17 +578,17 @@ export async function mockRunDetailApis(
     },
     {
       method: "GET",
-      pathname: `/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}`,
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}`,
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: `/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects`,
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects`,
       handler: (route) => fulfillJson(route, projects),
     },
     {
       method: "POST",
-      pathname: `/api/admin/runs/${encodeURIComponent(options.run.run_id)}/rerun`,
+      pathname: `/api/bff/api/admin/runs/${encodeURIComponent(options.run.run_id)}/rerun`,
       handler: async (route) => {
         const payload = JSON.parse(route.request().postData() ?? "{}") as RunRerunPayload;
         options.onRerun?.(payload);
@@ -369,4 +596,55 @@ export async function mockRunDetailApis(
       },
     },
   ]);
+}
+
+async function installAuthSessionMock(
+  page: Page,
+  { principal, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
+  let sessionActive = true;
+  await page.route(`${APP_BASE_URL}/api/auth/csrf**`, async (route) => {
+    await fulfillJson(route, { csrfToken: "playwright-csrf-token" });
+  });
+  await page.route(`${APP_BASE_URL}/api/auth/signout**`, async (route) => {
+    sessionActive = false;
+    await fulfillJson(route, { url: `${APP_BASE_URL}/login` });
+  });
+  await page.route(`${APP_BASE_URL}/api/auth/session**`, async (route) => {
+    if (!sessionActive) {
+      await fulfillJson(route, null);
+      return;
+    }
+    await fulfillJson(route, {
+      user: {
+        name: userName ?? principal.full_name ?? principal.username ?? principal.email ?? "Playwright User",
+        email: userEmail ?? principal.email ?? null,
+        principal,
+      },
+      expires: "2099-01-01T00:00:00.000Z",
+    });
+  });
+}
+
+async function installApiMocks(page: Page, baseUrl: string, handlers: AppRouteHandler[]): Promise<void> {
+  await page.route(`${baseUrl}/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const method = request.method().toUpperCase();
+    for (const candidate of handlers) {
+      if (candidate.method && candidate.method !== method) {
+        continue;
+      }
+      if (typeof candidate.pathname === "string") {
+        if (candidate.pathname !== url.pathname) {
+          continue;
+        }
+      } else if (!candidate.pathname.test(url.pathname)) {
+        continue;
+      }
+      await candidate.handler(route, url);
+      return;
+    }
+    await route.fallback();
+  });
 }

@@ -91,7 +91,7 @@ def github_install_callback(
             f"?tenant_id={quote(tenant.tenant_id, safe='')}&github_install=success"
         )
     return (
-        f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/edit"
+        f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/settings/github"
         "?github_install=success"
     )
 

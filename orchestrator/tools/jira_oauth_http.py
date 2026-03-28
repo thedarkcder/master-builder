@@ -6,7 +6,7 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from orchestrator.tools.jira_oauth_models import JiraOAuthError
+from orchestrator.tools.jira_oauth_models import JiraOAuthError, JiraOAuthHttpError
 
 
 class JiraOAuthHttpClient:
@@ -114,7 +114,12 @@ class JiraOAuthHttpClient:
                 response_body = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8")
-            raise JiraOAuthError(f"{error_prefix} ({exc.code}): {error_body}") from exc
+            raise JiraOAuthHttpError(
+                f"{error_prefix} ({exc.code}): {error_body}",
+                status_code=exc.code,
+                error_prefix=error_prefix,
+                error_body=error_body,
+            ) from exc
 
         if not response_body:
             return {}

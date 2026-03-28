@@ -162,7 +162,14 @@ class DiscordApiClient:
         normalized_parent = created_parent if isinstance(created_parent, str) and created_parent.strip() else None
         return DiscordTextChannel(channel_id=channel_id, name=created_name, parent_id=normalized_parent)
 
-    def post_message(self, *, channel_id: str, content: str, components: list[dict] | None = None) -> dict:
+    def post_message(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        components: list[dict] | None = None,
+        flags: int | None = None,
+    ) -> dict:
         normalized_channel_id = channel_id.strip()
         normalized_content = content.strip()
         if not normalized_channel_id:
@@ -172,6 +179,8 @@ class DiscordApiClient:
         payload: dict[str, object] = {"content": normalized_content}
         if components:
             payload["components"] = components
+        if flags is not None:
+            payload["flags"] = int(flags)
         data = self._request_json(
             method="POST",
             path=f"/channels/{normalized_channel_id}/messages",
@@ -190,6 +199,7 @@ class DiscordApiClient:
         file_bytes: bytes,
         content_type: str = "application/octet-stream",
         components: list[dict] | None = None,
+        flags: int | None = None,
     ) -> dict:
         normalized_channel_id = channel_id.strip()
         normalized_content = content.strip()
@@ -205,6 +215,8 @@ class DiscordApiClient:
             payload["content"] = normalized_content
         if components:
             payload["components"] = components
+        if flags is not None:
+            payload["flags"] = int(flags)
         data = self._request_multipart(
             method="POST",
             path=f"/channels/{normalized_channel_id}/messages",
@@ -316,6 +328,56 @@ class DiscordApiClient:
     def send_direct_message(self, *, user_id: str, content: str) -> dict:
         channel_id = self.create_dm_channel(user_id=user_id)
         return self.post_message(channel_id=channel_id, content=content)
+
+    def create_invite(
+        self,
+        *,
+        channel_id: str,
+        max_age: int | None = None,
+        max_uses: int | None = None,
+        unique: bool = True,
+    ) -> dict:
+        normalized_channel_id = channel_id.strip()
+        if not normalized_channel_id:
+            raise ValueError("Discord channel ID cannot be empty")
+        payload: dict[str, object] = {"unique": unique}
+        if max_age is not None:
+            payload["max_age"] = int(max_age)
+        if max_uses is not None:
+            payload["max_uses"] = int(max_uses)
+        data = self._request_json(
+            method="POST",
+            path=f"/channels/{normalized_channel_id}/invites",
+            payload=payload,
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord create invite response was not an object")
+        return data
+
+    def add_guild_member(
+        self,
+        *,
+        guild_id: str,
+        user_id: str,
+        user_access_token: str,
+    ) -> dict:
+        normalized_guild_id = guild_id.strip()
+        normalized_user_id = user_id.strip()
+        normalized_access_token = user_access_token.strip()
+        if not normalized_guild_id:
+            raise ValueError("Discord guild ID cannot be empty")
+        if not normalized_user_id:
+            raise ValueError("Discord user ID cannot be empty")
+        if not normalized_access_token:
+            raise ValueError("Discord user access token cannot be empty")
+        data = self._request_json(
+            method="PUT",
+            path=f"/guilds/{normalized_guild_id}/members/{normalized_user_id}",
+            payload={"access_token": normalized_access_token},
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord add guild member response was not an object")
+        return data
 
     def ensure_text_channel(
         self,

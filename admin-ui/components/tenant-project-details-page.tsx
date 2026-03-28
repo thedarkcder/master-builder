@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useParams, usePathname } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import {
   Archive,
   ArrowLeft,
@@ -41,6 +41,12 @@ import {
   type RunRecord,
   type RunStatus,
 } from "@/lib/api";
+import {
+  canAccessPlatformAdmin,
+  canAccessTechnicalSurface,
+  canManageProjects,
+  getProjectArchiveRedirectRoute,
+} from "@/lib/auth-routing";
 import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
 type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
@@ -196,12 +202,14 @@ function formatBoolean(value: boolean): string {
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
   const pathname = usePathname();
-  const { credentials, ready } = useAuth();
+  const router = useRouter();
+  const { credentials, ready, principal } = useAuth();
 
   // Project state
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [form, setForm] = useState<ProjectFormState>(() => buildProjectFormState(null));
   const [busy, setBusy] = useState(false);
+  const [archiveConfirmationName, setArchiveConfirmationName] = useState("");
   const [statusLine, setStatusLine] = useState("");
   const [repoOptions, setRepoOptions] = useState<string[]>([]);
   const [jiraOptions, setJiraOptions] = useState<string[]>([]);
@@ -212,6 +220,7 @@ export function TenantProjectDetailsPage() {
 
   // Runs state
   const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [runsStatusLine, setRunsStatusLine] = useState("");
   const [runsBusy, setRunsBusy] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [runIssueFilter, setRunIssueFilter] = useState("");
@@ -233,17 +242,49 @@ export function TenantProjectDetailsPage() {
     () => `project/${params.tenantId}/${params.projectId}/`,
     [params.tenantId, params.projectId]
   );
-  const activeTab = useMemo<Tab>(() => resolveProjectSection(pathname) ?? "overview", [pathname]);
+  const canReadCodexModels = canAccessPlatformAdmin(principal);
+  const allowProjectManagement = canManageProjects(principal, params.tenantId);
+  const canAccessTechnicalPolicy = canAccessTechnicalSurface(principal, params.tenantId);
+  const activeTab = useMemo<Tab>(() => {
+    const resolved = resolveProjectSection(pathname) ?? "overview";
+    if (allowProjectManagement) {
+      return resolved;
+    }
+    return resolved === "settings" || resolved === "notifications" || resolved === "secrets" ? "overview" : resolved;
+  }, [allowProjectManagement, pathname]);
+  const visibleTabs = useMemo(
+    () => (allowProjectManagement ? TABS : TABS.filter((tab) => tab.id === "overview" || tab.id === "runs")),
+    [allowProjectManagement],
+  );
 
   async function loadOptions() {
     if (!credentials) return;
+    if (!allowProjectManagement) {
+      setRepoOptions([]);
+      setJiraOptions([]);
+      return;
+    }
     try {
       const tenant = await getTenant(credentials, params.tenantId);
-      const modelCatalog = await listCodexModels(credentials);
-      setCodexModels(modelCatalog.models);
-      setGlobalCodexModel(modelCatalog.default_model);
-      setReasoningEfforts(modelCatalog.reasoning_efforts);
-      setGlobalCodexReasoningEffort(modelCatalog.default_reasoning_effort);
+      if (canReadCodexModels) {
+        try {
+          const modelCatalog = await listCodexModels(credentials);
+          setCodexModels(modelCatalog.models);
+          setGlobalCodexModel(modelCatalog.default_model);
+          setReasoningEfforts(modelCatalog.reasoning_efforts);
+          setGlobalCodexReasoningEffort(modelCatalog.default_reasoning_effort);
+        } catch {
+          setCodexModels([]);
+          setGlobalCodexModel("");
+          setReasoningEfforts([]);
+          setGlobalCodexReasoningEffort("");
+        }
+      } else {
+        setCodexModels([]);
+        setGlobalCodexModel("");
+        setReasoningEfforts([]);
+        setGlobalCodexReasoningEffort("");
+      }
       if (tenant.github.installation_id) {
         const repos = await listGitHubRepositories(credentials, params.tenantId);
         setRepoOptions(repos.map((repo) => repo.html_url));
@@ -280,6 +321,10 @@ export function TenantProjectDetailsPage() {
         offset: (runPage - 1) * runPageSize,
       });
       setRuns(payload);
+      setRunsStatusLine("");
+    } catch (error) {
+      setRuns([]);
+      setRunsStatusLine(`Runs are unavailable: ${(error as Error).message}`);
     } finally {
       setRunsBusy(false);
     }
@@ -305,7 +350,7 @@ export function TenantProjectDetailsPage() {
 
   useEffect(() => {
     if (ready && credentials) void loadProject();
-  }, [ready, credentials, params.tenantId, params.projectId]);
+  }, [ready, credentials, params.tenantId, params.projectId, allowProjectManagement]);
 
   useEffect(() => {
     if (ready && credentials && project && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
@@ -319,6 +364,10 @@ export function TenantProjectDetailsPage() {
 
   async function toggleArchive() {
     if (!credentials || !project) return;
+    if (!project.is_archived && archiveConfirmationName.trim() !== project.name.trim()) {
+      setStatusLine(`Enter "${project.name}" to archive this project.`);
+      return;
+    }
     setBusy(true);
     try {
       const updated = await updateProject(credentials, params.tenantId, params.projectId, {
@@ -331,8 +380,14 @@ export function TenantProjectDetailsPage() {
         discord: project.discord,
         is_archived: !project.is_archived,
       });
+      if (updated.is_archived) {
+        setArchiveConfirmationName("");
+        router.push(getProjectArchiveRedirectRoute(principal, params.tenantId));
+        return;
+      }
       setProject(updated);
       setForm(buildProjectFormState(updated));
+      setArchiveConfirmationName("");
       setStatusLine(updated.is_archived ? "Project archived." : "Project unarchived.");
     } catch (error) {
       setStatusLine(`Unable to update project: ${(error as Error).message}`);
@@ -568,7 +623,7 @@ export function TenantProjectDetailsPage() {
       {/* Header strip */}
       <div className="flex flex-wrap items-center gap-3">
         <Button asChild variant="ghost" size="sm" className="-ml-1">
-          <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects`}>
+          <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
             Back
           </Link>
@@ -586,7 +641,7 @@ export function TenantProjectDetailsPage() {
       {/* Underline tab bar */}
       <div className="border-b overflow-x-auto">
         <nav className="-mb-px flex min-w-max gap-1" aria-label="Project sections">
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <Link
               key={tab.id}
               href={buildProjectSectionPath(params.tenantId, params.projectId, tab.id)}
@@ -608,43 +663,66 @@ export function TenantProjectDetailsPage() {
           {statusLine ? (
             <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
           ) : null}
+          {runsStatusLine ? (
+            <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{runsStatusLine}</p>
+          ) : null}
           {project ? (
             <>
-              <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
-                <Card>
-                  <CardHeader className="pb-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <CardTitle className="text-base">Project overview</CardTitle>
-                        <p className="text-sm text-muted-foreground">
-                          Core project identity and the main places operators will go next.
-                        </p>
+              <section className="overflow-hidden rounded-2xl border bg-background">
+                <div className="grid gap-6 p-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+                  <aside className="space-y-4">
+                    <div className="rounded-xl border bg-muted/20 p-4">
+                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Project</p>
+                      <p className="mt-2 text-base font-semibold text-foreground">{project.name}</p>
+                      <div className="mt-4 grid gap-3 text-sm">
+                        <div>
+                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Status</p>
+                          <p className="mt-1 font-medium">{project.is_archived ? "Archived" : "Active"}</p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Jira project</p>
+                          <p className="mt-1 font-medium">{project.jira_project_key}</p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Secret refs</p>
+                          <p className="mt-1 font-medium">{Object.keys(secretRefs).length}</p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Loaded runs</p>
+                          <p className="mt-1 font-medium">{runs.length}</p>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {allowProjectManagement ? (
                         <Button asChild size="sm">
                           <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Open settings</Link>
                         </Button>
-                        <Button asChild size="sm" variant="outline">
-                          <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
-                            Browse knowledge
-                          </Link>
-                        </Button>
-                      </div>
+                      ) : null}
+                      <Button asChild size="sm" variant="outline">
+                        <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
+                          Browse knowledge
+                        </Link>
+                      </Button>
+                      {allowProjectManagement ? (
+                        <>
+                          <Button asChild size="sm" variant="outline">
+                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
+                              Add knowledge
+                            </Link>
+                          </Button>
+                          <Button asChild size="sm" variant="outline">
+                            <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
+                          </Button>
+                        </>
+                      ) : null}
                     </div>
-                  </CardHeader>
-                  <CardContent className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Project name</p>
-                      <p className="text-sm font-medium text-foreground">{project.name}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</p>
-                      <p className="text-sm font-medium text-foreground">{project.is_archived ? "Archived" : "Active"}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Repository</p>
+                  </aside>
+                  <div className="space-y-5">
+                    <div className="rounded-xl border px-4 py-3">
+                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Repository</p>
                       <Link
-                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                        className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
                         href={project.github_repository}
                         target="_blank"
                         rel="noopener noreferrer"
@@ -653,143 +731,106 @@ export function TenantProjectDetailsPage() {
                         <ExternalLink className="h-3 w-3" />
                       </Link>
                     </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Jira project</p>
-                      <p className="text-sm font-medium text-foreground">{project.jira_project_key}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Secret refs</p>
-                      <p className="text-sm font-medium text-foreground">{Object.keys(secretRefs).length}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Loaded runs</p>
-                      <p className="text-sm font-medium text-foreground">{runs.length}</p>
-                    </div>
-                  </CardContent>
-                </Card>
+                    <div className="grid gap-4 xl:grid-cols-3">
+                {canAccessTechnicalPolicy ? (
+                  <>
+                    <Card className="xl:col-span-1">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base">Effective AI policy</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {project.effective_policy.codex_model ?? (globalCodexModel || "Global default")}
+                          </p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reasoning mode</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {project.effective_policy.codex_reasoning_effort ?? (globalCodexReasoningEffort || "medium")}
+                          </p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge base</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {formatBoolean(project.effective_policy.knowledge_base_enabled)}
+                          </p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Knowledge answer mode
+                          </p>
+                          <p className="text-sm font-medium text-foreground">{project.effective_policy.knowledge_auto_answer_mode}</p>
+                        </div>
+                      </CardContent>
+                    </Card>
 
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base">Quick navigation</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-2 sm:grid-cols-2">
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Settings</Link>
-                    </Button>
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
-                        Browse knowledge
-                      </Link>
-                    </Button>
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
-                        Add knowledge
-                      </Link>
-                    </Button>
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
-                    </Button>
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "secrets")}>Secrets</Link>
-                    </Button>
-                  </CardContent>
-                </Card>
-              </div>
+                    <Card className="xl:col-span-1">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base">Effective automation policy</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR creation</p>
+                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_creation)}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code review</p>
+                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_code_reviews)}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation</p>
+                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Manual PR fix requests</p>
+                            <p className="text-sm font-medium text-foreground">
+                              {formatBoolean(project.effective_policy.allow_manual_pr_fix_requests)}
+                            </p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Auto merge</p>
+                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_auto_merge)}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Label mutations</p>
+                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_label_mutations)}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Jira transitions</p>
+                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_jira_transitions)}</p>
+                          </div>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Dev/test/review loops</p>
+                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_dev_test_review_loops}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation loops</p>
+                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_pr_auto_remediation_loops}</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Concurrent runs</p>
+                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_concurrent_runs}</p>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Allowed commands</p>
+                          <p className="text-sm text-foreground">
+                            {(project.effective_policy.allowed_commands ?? []).length > 0
+                              ? (project.effective_policy.allowed_commands ?? []).join(", ")
+                              : "None"}
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </>
+                ) : null}
 
-              <div className="grid gap-4 xl:grid-cols-3">
-                <Card className="xl:col-span-1">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base">Effective AI policy</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</p>
-                      <p className="text-sm font-medium text-foreground">
-                        {project.effective_policy.codex_model ?? (globalCodexModel || "Global default")}
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reasoning mode</p>
-                      <p className="text-sm font-medium text-foreground">
-                        {project.effective_policy.codex_reasoning_effort ?? (globalCodexReasoningEffort || "medium")}
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge base</p>
-                      <p className="text-sm font-medium text-foreground">
-                        {formatBoolean(project.effective_policy.knowledge_base_enabled)}
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge answer mode</p>
-                      <p className="text-sm font-medium text-foreground">{project.effective_policy.knowledge_auto_answer_mode}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="xl:col-span-1">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base">Effective automation policy</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR creation</p>
-                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_creation)}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code review</p>
-                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_code_reviews)}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation</p>
-                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Manual PR fix requests</p>
-                        <p className="text-sm font-medium text-foreground">
-                          {formatBoolean(project.effective_policy.allow_manual_pr_fix_requests)}
-                        </p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Auto merge</p>
-                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_auto_merge)}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Label mutations</p>
-                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_label_mutations)}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Jira transitions</p>
-                        <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_jira_transitions)}</p>
-                      </div>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Dev/test/review loops</p>
-                        <p className="text-sm font-medium text-foreground">{project.effective_policy.max_dev_test_review_loops}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation loops</p>
-                        <p className="text-sm font-medium text-foreground">{project.effective_policy.max_pr_auto_remediation_loops}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Concurrent runs</p>
-                        <p className="text-sm font-medium text-foreground">{project.effective_policy.max_concurrent_runs}</p>
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Allowed commands</p>
-                      <p className="text-sm text-foreground">
-                        {(project.effective_policy.allowed_commands ?? []).length > 0
-                          ? (project.effective_policy.allowed_commands ?? []).join(", ")
-                          : "None"}
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="xl:col-span-1">
+                <Card className={canAccessTechnicalPolicy ? "xl:col-span-1" : "xl:col-span-3"}>
                   <CardHeader className="pb-3">
                     <div className="flex items-center gap-2">
                       <Library className="h-4 w-4 text-primary" />
@@ -797,17 +838,21 @@ export function TenantProjectDetailsPage() {
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge browser</p>
-                      <p className="text-sm text-muted-foreground">
-                        Inspect indexed assets, metadata, and retrieval chunks from the dedicated browser page.
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add knowledge</p>
-                      <p className="text-sm text-muted-foreground">
-                        Upload files directly into the knowledge store from the Add Knowledge tab.
-                      </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge browser</p>
+                        <p className="text-sm text-muted-foreground">
+                          Inspect indexed assets, metadata, and retrieval chunks from the dedicated browser page.
+                        </p>
+                      </div>
+                      {allowProjectManagement ? (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add knowledge</p>
+                          <p className="text-sm text-muted-foreground">
+                            Upload files directly into the knowledge store from the Add Knowledge tab.
+                          </p>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Sources</p>
@@ -823,20 +868,24 @@ export function TenantProjectDetailsPage() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button asChild size="sm" variant="outline">
-                        <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
+                        <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
                           Browse knowledge
                         </Link>
                       </Button>
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
-                          Add knowledge
-                        </Link>
-                      </Button>
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=sources`}>
-                          Sources
-                        </Link>
-                      </Button>
+                      {allowProjectManagement ? (
+                        <>
+                          <Button asChild size="sm" variant="outline">
+                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
+                              Add knowledge
+                            </Link>
+                          </Button>
+                          <Button asChild size="sm" variant="outline">
+                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=sources`}>
+                              Sources
+                            </Link>
+                          </Button>
+                        </>
+                      ) : null}
                     </div>
                     <div className="space-y-1">
                       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Secrets</p>
@@ -846,7 +895,10 @@ export function TenantProjectDetailsPage() {
                     </div>
                   </CardContent>
                 </Card>
-              </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
             </>
           ) : (
             <p className="text-sm text-muted-foreground">Loading project details…</p>
@@ -1233,18 +1285,44 @@ export function TenantProjectDetailsPage() {
                     </CardContent>
                   </Card>
 
-                  <Card className="border-warning/40">
+                  <Card className="border-red-200 bg-red-50/40">
                     <CardHeader>
-                      <CardTitle className="text-base">Archive</CardTitle>
+                      <CardTitle className="text-base">Danger zone</CardTitle>
                     </CardHeader>
-                    <CardContent className="flex flex-wrap items-center justify-between gap-3">
+                    <CardContent className="space-y-4">
                       <p className="text-sm text-muted-foreground">
-                        Archive this project to stop treating it as an active workspace without deleting its history.
+                        Archive this project to remove it from the active workspace while keeping it recoverable.
                       </p>
-                      <Button variant="outline" size="sm" onClick={() => void toggleArchive()} disabled={busy}>
-                        <Archive className="mr-1.5 h-3.5 w-3.5" />
-                        {project.is_archived ? "Unarchive" : "Archive"}
-                      </Button>
+                      {project.is_archived ? null : (
+                        <div className="space-y-2">
+                          <p className="text-sm text-muted-foreground">
+                            Type <span className="font-medium text-foreground">{project.name}</span> to confirm.
+                          </p>
+                          <Input
+                            value={archiveConfirmationName}
+                            onChange={(event) => setArchiveConfirmationName(event.target.value)}
+                            placeholder={project.name}
+                            disabled={busy}
+                          />
+                        </div>
+                      )}
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-xs text-muted-foreground">
+                          {project.is_archived
+                            ? "Unarchive to return the project to the active workspace."
+                            : "Archiving removes access from the active list immediately."}
+                        </p>
+                        <Button
+                          variant="outline"
+                          className={project.is_archived ? undefined : "border-red-300 bg-red-600 text-white hover:bg-red-700 hover:text-white"}
+                          size="sm"
+                          onClick={() => void toggleArchive()}
+                          disabled={busy || (!project.is_archived && archiveConfirmationName.trim() !== project.name.trim())}
+                        >
+                          <Archive className="mr-1.5 h-3.5 w-3.5" />
+                          {project.is_archived ? "Unarchive project" : "Archive project"}
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 </div>
@@ -1376,6 +1454,12 @@ export function TenantProjectDetailsPage() {
               </Button>
               </div>
             </div>
+
+            {runsStatusLine ? (
+              <p className="rounded-lg border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+                {runsStatusLine}
+              </p>
+            ) : null}
 
             {runs.length === 0 ? (
               <p className="rounded-lg border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">

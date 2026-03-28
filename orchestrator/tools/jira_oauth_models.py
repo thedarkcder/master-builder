@@ -10,6 +10,18 @@ class JiraOAuthError(RuntimeError):
     pass
 
 
+class JiraOAuthHttpError(JiraOAuthError):
+    def __init__(self, message: str, *, status_code: int, error_prefix: str, error_body: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_prefix = error_prefix
+        self.error_body = error_body
+
+
+class JiraOAuthAuthRequiredError(JiraOAuthError):
+    pass
+
+
 @dataclass(frozen=True)
 class JiraOAuthTokenSet:
     access_token: str
