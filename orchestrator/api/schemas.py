@@ -370,6 +370,7 @@ class TenantDiscordLinkStartRead(BaseModel):
 
 
 class TenantDiscordIdentityRead(BaseModel):
+    oauth_configured: bool = False
     linked: bool
     discord_user_id: str | None = None
     discord_username: str | None = None

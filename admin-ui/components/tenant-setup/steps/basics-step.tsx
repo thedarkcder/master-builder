@@ -8,14 +8,28 @@ type BasicsStepProps = {
 
 export function BasicsStep({ name, tenantIdPreview, onNameChange }: BasicsStepProps) {
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className="max-w-2xl space-y-5">
       <div className="space-y-2">
-        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Tenant Name</label>
-        <Input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="Tenant Demo" />
+        <label htmlFor="tenant-name" className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+          Workspace name
+        </label>
+        <Input
+          id="tenant-name"
+          value={name}
+          onChange={(event) => onNameChange(event.target.value)}
+          placeholder="Route25"
+          className="h-14 rounded-2xl border-slate-200 bg-white text-base"
+        />
       </div>
-      <div className="space-y-2">
-        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Tenant ID Preview</label>
-        <Input value={tenantIdPreview} disabled />
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Workspace ID</div>
+            <div className="mt-1 font-mono text-sm text-slate-900">{tenantIdPreview || "Generated from the workspace name."}</div>
+          </div>
+          <p className="text-sm text-slate-600">Generated automatically from the workspace name.</p>
+        </div>
       </div>
     </div>
   );

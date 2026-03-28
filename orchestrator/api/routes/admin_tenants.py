@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.config_helpers import (
@@ -41,6 +41,7 @@ from orchestrator.api.admin.tenant_project_routes_service import (
 )
 from orchestrator.api.routes.app_auth import invite_to_schema
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.url_helpers import resolve_public_base_url
 from orchestrator.api.schemas import (
     ProjectCreate,
     ProjectRead,
@@ -63,7 +64,12 @@ from orchestrator.api.schemas import (
     TenantUpdate,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord.oauth import build_discord_oauth_authorize_url, issue_discord_oauth_state
+from orchestrator.core.discord.oauth import (
+    DiscordOAuthError,
+    build_discord_oauth_authorize_url,
+    discord_oauth_is_configured,
+    issue_discord_oauth_state,
+)
 from orchestrator.core.invites import email_delivery
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
@@ -112,9 +118,10 @@ def _validate_codex_assets_for_tenant_init() -> None:
     )
 
 
-def _build_invite_url(*, raw_token: str) -> str:
+def _build_invite_url(*, request: Request, raw_token: str) -> str:
     settings = get_settings()
-    return f"{settings.admin_ui_base_url.rstrip('/')}/invite/accept?token={raw_token}"
+    base_url = resolve_public_base_url(request=request, configured_base_url=settings.admin_ui_base_url)
+    return f"{base_url}/invite/accept?token={raw_token}"
 
 
 def _invite_to_schema_with_url(invite: object, *, invite_url: str | None = None) -> TenantInviteRead:
@@ -181,6 +188,28 @@ def _discord_client(*, session: Session) -> DiscordApiClient:
     if not normalized:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Discord bot token is not configured")
     return DiscordApiClient(bot_token=normalized)
+
+
+def _resolve_discord_invite_channel_id(*, client: DiscordApiClient, discord_config: dict) -> str:
+    onboarding_channel_id = str(discord_config.get("onboarding_channel_id") or "").strip()
+    if onboarding_channel_id:
+        return onboarding_channel_id
+
+    channel_id = str(discord_config.get("channel_id") or "").strip()
+    if channel_id:
+        return channel_id
+
+    guild_id = str(discord_config.get("guild_id") or "").strip()
+    if not guild_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant Discord guild is not configured")
+
+    try:
+        channels = client.list_text_channels(guild_id=guild_id)
+    except DiscordApiError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    if not channels:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No Discord text channels are available for this tenant")
+    return channels[0].channel_id
 
 
 @router.get("/tenants", response_model=list[TenantRead])
@@ -266,6 +295,7 @@ def update_tenant(
 def create_tenant_invite(
     tenant_id: str,
     payload: TenantInviteCreate,
+    request: Request,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantInviteRead:
@@ -289,7 +319,7 @@ def create_tenant_invite(
         invited_by_user_id=principal.user_id,
     )
     session.commit()
-    invite_url = _build_invite_url(raw_token=raw_token)
+    invite_url = _build_invite_url(request=request, raw_token=raw_token)
     email_delivery.send_tenant_invite_email(
         email=invite.email,
         full_name=invite.full_name,
@@ -317,6 +347,7 @@ def get_tenant_invites(
 def resend_tenant_invite(
     tenant_id: str,
     invite_id: str,
+    request: Request,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantInviteActionResult:
@@ -331,7 +362,7 @@ def resend_tenant_invite(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
     next_invite, raw_token = resend_invite(session=session, invite=invite, invited_by_user_id=principal.user_id)
     session.commit()
-    invite_url = _build_invite_url(raw_token=raw_token)
+    invite_url = _build_invite_url(request=request, raw_token=raw_token)
     email_delivery.send_tenant_invite_email(
         email=next_invite.email,
         full_name=next_invite.full_name,
@@ -524,12 +555,14 @@ def get_tenant_discord_identity(
     session: Session = Depends(get_session),
 ) -> TenantDiscordIdentityRead:
     membership = require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    oauth_configured = discord_oauth_is_configured(settings=get_settings())
     if principal.user_id is None or membership is None:
-        return TenantDiscordIdentityRead(linked=False)
+        return TenantDiscordIdentityRead(linked=False, oauth_configured=oauth_configured)
     identity = get_discord_identity(session=session, user_id=principal.user_id)
     if identity is None:
-        return TenantDiscordIdentityRead(linked=False)
+        return TenantDiscordIdentityRead(linked=False, oauth_configured=oauth_configured)
     return TenantDiscordIdentityRead(
+        oauth_configured=oauth_configured,
         linked=True,
         discord_user_id=identity.discord_user_id,
         discord_username=identity.discord_username,
@@ -556,7 +589,10 @@ def start_tenant_discord_link(
         user_id=principal.user_id,
         redirect_to=redirect_to,
     )
-    authorize_url = build_discord_oauth_authorize_url(settings=settings, state=state)
+    try:
+        authorize_url = build_discord_oauth_authorize_url(settings=settings, state=state)
+    except DiscordOAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return TenantDiscordLinkStartRead(authorize_url=authorize_url)
 
 
@@ -573,10 +609,8 @@ def create_tenant_discord_onboarding_invite(
     if principal.user_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant user context required")
     discord_config = dict(tenant.discord_config or {})
-    channel_id = str(discord_config.get("onboarding_channel_id") or "").strip()
-    if not channel_id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant Discord onboarding channel is not configured")
     client = _discord_client(session=session)
+    channel_id = _resolve_discord_invite_channel_id(client=client, discord_config=discord_config)
     expires_in_seconds = discord_config.get("onboarding_invite_expires_in_seconds")
     max_uses = discord_config.get("onboarding_invite_max_uses")
     try:

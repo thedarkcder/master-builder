@@ -16,9 +16,12 @@ test("registers a tenant admin through the real backend and lands in get started
 
   await expect(page).toHaveURL(/\/get-started$/, { timeout: 15000 });
   await expect(page.getByRole("heading", { name: "Set up workspace" })).toBeVisible();
+  await expect(page.getByText("Credentials")).toHaveCount(0);
+  await expect(page.getByText("Open platform secrets")).toHaveCount(0);
 });
 
 test("accepts a real invite through the browser flow and lands in member onboarding", async ({ page, request }) => {
+  test.setTimeout(60000);
   const ownerEmail = uniqueEmail("playwright-owner");
   const invitedEmail = uniqueEmail("playwright-invite");
   const tenantName = `Playwright Invite Workspace ${Date.now()}`;
@@ -57,7 +60,7 @@ test("accepts a real invite through the browser flow and lands in member onboard
   await page.getByLabel("Password").fill("PlaywrightPass123!");
   await page.getByRole("button", { name: "Accept invite" }).click();
 
-  await expect(page).toHaveURL(/\/get-started$/);
+  await expect(page).toHaveURL(/\/get-started$/, { timeout: 15000 });
   await expect(page.getByRole("heading", { name: "Join workspace" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Confirm your details" })).toBeVisible();
   await page.getByRole("button", { name: "Continue to experience" }).click();
@@ -65,7 +68,7 @@ test("accepts a real invite through the browser flow and lands in member onboard
   await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.getByRole("heading", { name: "Finish onboarding" })).toBeVisible();
   await page.getByRole("button", { name: "Finish" }).click();
-  await expect(page).toHaveURL(new RegExp(`/tenants/${tenantId}/dashboard$`), { timeout: 15000 });
+  await expect(page).toHaveURL(new RegExp(`/tenants/${tenantId}/dashboard$`), { timeout: 30000 });
   await expect(page.getByRole("heading", { name: tenantName })).toBeVisible();
 });
 

@@ -53,52 +53,11 @@ function StatCard({ label, value, sub, icon, iconBg }: StatCardProps) {
 }
 
 export default function DashboardPage() {
-  const { credentials, ready, principal } = useAuth();
+  const { credentials, ready, principal, principalReady } = useAuth();
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentRuns, setRecentRuns] = useState<RunRecord[]>([]);
-
-  async function loadDashboard() {
-    if (!credentials) return;
-    setLoading(true);
-    setErrorMessage(null);
-    try {
-      const [tenants, runs, secrets] = await Promise.all([
-        listTenants(credentials),
-        listRuns(credentials, {}),
-        listManagedSecrets(credentials)
-      ]);
-
-      const enabledTenants = tenants.filter((t) => t.is_enabled).length;
-      const runningRuns = runs.filter((r) => r.status === "queued" || r.status === "running").length;
-      const failedRuns = runs.filter((r) => r.status === "failed").length;
-      const orderedRuns = [...runs].sort((a, b) => b.created_at.localeCompare(a.created_at));
-
-      setStats({ totalTenants: tenants.length, enabledTenants, totalRuns: runs.length, runningRuns, failedRuns, totalSecrets: secrets.length });
-      setRecentRuns(orderedRuns.slice(0, 8));
-    } catch (error) {
-      setErrorMessage(`Failed to load dashboard: ${(error as Error).message}`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (ready && credentials && principal?.principal_type === "tenant_user") {
-      window.location.replace(getDefaultAuthenticatedRoute(principal));
-      return;
-    }
-  }, [credentials, principal, ready]);
-
-  useEffect(() => {
-    if (ready && credentials) void loadDashboard();
-  }, [ready, credentials, principal?.principal_type]);
-
-  if (principal?.principal_type === "tenant_user") {
-    return <main className="p-8 text-sm text-muted-foreground">Redirecting to workspace...</main>;
-  }
-
   const statsData = useMemo(() => {
     if (!stats) return [];
     return [
@@ -139,6 +98,56 @@ export default function DashboardPage() {
       }
     ];
   }, [stats]);
+
+  async function loadDashboard() {
+    if (!credentials) return;
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      const [tenants, runs, secrets] = await Promise.all([
+        listTenants(credentials),
+        listRuns(credentials, {}),
+        listManagedSecrets(credentials)
+      ]);
+
+      const enabledTenants = tenants.filter((t) => t.is_enabled).length;
+      const runningRuns = runs.filter((r) => r.status === "queued" || r.status === "running").length;
+      const failedRuns = runs.filter((r) => r.status === "failed").length;
+      const orderedRuns = [...runs].sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+      setStats({ totalTenants: tenants.length, enabledTenants, totalRuns: runs.length, runningRuns, failedRuns, totalSecrets: secrets.length });
+      setRecentRuns(orderedRuns.slice(0, 8));
+    } catch (error) {
+      setErrorMessage(`Failed to load dashboard: ${(error as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (ready && credentials && principalReady && principal?.principal_type === "tenant_user") {
+      window.location.replace(getDefaultAuthenticatedRoute(principal));
+      return;
+    }
+  }, [credentials, principal, principalReady, ready]);
+
+  useEffect(() => {
+    if (!ready || !credentials || !principalReady) {
+      return;
+    }
+    if (principal?.principal_type === "tenant_user") {
+      return;
+    }
+    void loadDashboard();
+  }, [credentials, principal?.principal_type, principalReady, ready]);
+
+  if (!principalReady) {
+    return <main className="p-8 text-sm text-muted-foreground">Loading dashboard...</main>;
+  }
+
+  if (principal?.principal_type === "tenant_user") {
+    return <main className="p-8 text-sm text-muted-foreground">Redirecting to workspace...</main>;
+  }
 
   return (
     <div className="space-y-6">

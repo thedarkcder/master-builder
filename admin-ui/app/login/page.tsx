@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -12,18 +12,39 @@ import { Input } from "@/components/ui/input";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { credentials, ready, login, needsOnboarding, principal } = useAuth();
 
-  const [identifier, setIdentifier] = useState("admin");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  function normalizeAuthErrorMessage(message: string | null | undefined): string | null {
+    if (!message) {
+      return null;
+    }
+    if (message === "CredentialsSignin" || message === "Invalid tenant credentials") {
+      return "Invalid credentials";
+    }
+    return message;
+  }
 
   useEffect(() => {
     if (ready && credentials && principal) {
       router.replace(needsOnboarding ? "/get-started" : getDefaultAuthenticatedRoute(principal));
     }
   }, [credentials, needsOnboarding, principal, ready, router]);
+
+  useEffect(() => {
+    const authError = searchParams.get("error");
+    const nextError = normalizeAuthErrorMessage(authError);
+    if (nextError) {
+      setErrorMessage(nextError);
+    }
+  }, [searchParams]);
+
+  const resetSucceeded = searchParams.get("reset") === "success";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -35,7 +56,7 @@ export default function LoginPage() {
         password
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid credentials";
+      const message = normalizeAuthErrorMessage(error instanceof Error ? error.message : "Invalid credentials");
       setErrorMessage(message);
     } finally {
       setIsSubmitting(false);
@@ -94,13 +115,24 @@ export default function LoginPage() {
               />
             </div>
 
-            {errorMessage ? (
-              <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400" role="alert">
-                {errorMessage}
-              </p>
-            ) : null}
+            <div className="flex justify-end">
+              <Link href="/forgot-password" className="text-sm text-indigo-300 underline-offset-2 hover:underline">
+                Forgot password?
+              </Link>
+            </div>
 
-            <Button
+          {errorMessage ? (
+            <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400" role="alert">
+              {errorMessage}
+            </p>
+          ) : null}
+          {resetSucceeded ? (
+            <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+              Password updated. Sign in with your new password.
+            </p>
+          ) : null}
+
+          <Button
               className="w-full bg-indigo-600 text-white hover:bg-indigo-500 focus-visible:ring-indigo-500"
               type="submit"
               disabled={isSubmitting}

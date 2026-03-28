@@ -1,5 +1,9 @@
 import { redirect } from "next/navigation";
 
-export default function HomePage() {
-  redirect("/tenants/select");
+import { auth } from "@/auth";
+import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+
+export default async function HomePage() {
+  const session = await auth();
+  redirect(getDefaultAuthenticatedRoute(session?.user?.principal));
 }

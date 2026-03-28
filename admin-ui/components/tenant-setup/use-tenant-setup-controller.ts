@@ -65,7 +65,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
     return formValuesToTextFields(defaultTenantFormValues());
   });
-  const [statusLine, setStatusLine] = useState("Start with tenant basics.");
+  const [statusLine, setStatusLine] = useState("");
   const [saving, setSaving] = useState(false);
   const [createdTenantId, setCreatedTenantId] = useState(() => {
     const draft = readWizardDraft();
@@ -106,9 +106,6 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     if (stepKey === "discord") {
       if (!values.discord.guild_id?.trim()) {
         return "Install the Discord bot before continuing.";
-      }
-      if (!values.discord.onboarding_channel_id?.trim()) {
-        return "Choose an onboarding channel before continuing.";
       }
       return null;
     }
@@ -161,7 +158,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
         } else if (searchParams.get("discord_install") === "success") {
           setStatusLine("Discord bot install completed. Confirm the onboarding channel and invite settings.");
         } else {
-          setStatusLine(`Loaded tenant ${record.tenant_id}.`);
+          setStatusLine("");
         }
       } catch (error) {
         if (!ignore) {

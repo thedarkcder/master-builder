@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { CheckCircle2, KeyRound, Link2, RefreshCw } from "lucide-react";
+import { CheckCircle2, Link2, RefreshCw } from "lucide-react";
 
 import type { JiraProjectRecord } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -27,59 +26,74 @@ export function JiraStep({
   onLoadJiraProjects
 }: JiraStepProps) {
   return (
-    <div className="space-y-3">
-      <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">Before connecting Jira</p>
-        <p>
-          Save these secret refs in <strong>Secrets</strong>: <code className="font-mono">JIRA_OAUTH_CLIENT_ID</code>,{" "}
-          <code className="font-mono">JIRA_OAUTH_CLIENT_SECRET</code>.
-        </p>
-      </div>
-      <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-        <CheckCircle2 className="mr-1 inline h-4 w-4" />
-        Jira connection: <strong>{connectionId ?? "not connected"}</strong>
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button asChild variant="outline">
-          <Link href="/secrets">
-            <KeyRound className="mr-2 h-4 w-4" />
-            Open Secrets
-          </Link>
-        </Button>
-        <Button onClick={onStartJiraConnect}>
-          <Link2 className="mr-2 h-4 w-4" />
-          Connect Jira
-        </Button>
-        <Button variant="outline" onClick={onLoadJiraProjects} disabled={!connectionId}>
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Load Jira Projects
-        </Button>
-      </div>
-
-      {jiraProjects.length > 0 ? (
-        <div className="grid gap-2 md:grid-cols-2">
-          {jiraProjects.map((project) => {
-            const selected = selectedProjectKeys.has(project.key);
-            return (
-              <label key={project.key} className="flex items-center gap-2 rounded-md border p-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={selected}
-                  onChange={() => onToggleJiraProject(project.key)}
-                  className="h-4 w-4 rounded border-input"
-                />
-                <span>
-                  <strong>{project.key}</strong> - {project.name}
-                </span>
-              </label>
-            );
-          })}
+    <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50/70 px-5 py-5">
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            Jira connection
+          </div>
+          <div className="text-sm text-slate-600">{connectionId ?? "Not connected yet"}</div>
+          <div className="flex flex-col gap-2 pt-1">
+            <Button onClick={onStartJiraConnect}>
+              <Link2 className="mr-2 h-4 w-4" />
+              Connect Jira
+            </Button>
+            <Button variant="outline" onClick={onLoadJiraProjects} disabled={!connectionId}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Load projects
+            </Button>
+          </div>
         </div>
-      ) : null}
+      </div>
 
-      <div className="space-y-2">
-        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Project Keys</label>
-        <Input value={projectKeysText} onChange={(event) => onProjectKeysTextChange(event.target.value)} placeholder="TP, APP" />
+      <div className="min-w-0 space-y-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Projects</div>
+          {jiraProjects.length > 0 ? <div className="text-sm text-slate-500">{selectedProjectKeys.size} selected</div> : null}
+        </div>
+
+        {jiraProjects.length > 0 ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            {jiraProjects.map((project) => {
+              const selected = selectedProjectKeys.has(project.key);
+              return (
+                <label
+                  key={project.key}
+                  className={[
+                    "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm ring-1 transition-colors",
+                    selected ? "bg-slate-950 text-white ring-slate-950" : "bg-white text-slate-800 ring-slate-200",
+                  ].join(" ")}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => onToggleJiraProject(project.key)}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <span>
+                    <strong>{project.key}</strong> - {project.name}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600 ring-1 ring-slate-200">
+            Load projects after connecting Jira.
+          </div>
+        )}
+
+        <div className="space-y-2 border-t border-slate-200 pt-5">
+          <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Project keys</label>
+          <Input
+            value={projectKeysText}
+            onChange={(event) => onProjectKeysTextChange(event.target.value)}
+            placeholder="TP, APP"
+            className="h-12 rounded-2xl border-slate-200 bg-white"
+          />
+          <p className="text-sm text-slate-500">Use this field only if you need to paste keys manually.</p>
+        </div>
       </div>
     </div>
   );

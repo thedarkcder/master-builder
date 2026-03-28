@@ -11,6 +11,12 @@ from sqlalchemy.orm import Session
 from orchestrator.core.admin_tokens import parse_admin_access_token
 from orchestrator.core.auth_tokens import parse_auth_access_token
 from orchestrator.core.config import get_settings
+from orchestrator.core.passwords import hash_password, verify_password
+from orchestrator.core.platform_secret_service import (
+    PLATFORM_SECRET_ADMIN_PASSWORD_HASH_REF,
+    platform_secret_service,
+    resolve_platform_secret_ref,
+)
 from orchestrator.core.tenant_access import (
     MODE_TECHNICAL,
     PERMISSION_ANALYTICS_BUSINESS_VIEW,
@@ -65,11 +71,46 @@ class AuthenticatedPrincipal:
         return None
 
 
-def validate_admin_credentials(*, username: str, password: str) -> bool:
+def _resolve_admin_password_hash(*, session: Session) -> str | None:
+    settings = get_settings()
+    encryption_key = settings.secrets_encryption_key.strip()
+    if not encryption_key:
+        return None
+    return resolve_platform_secret_ref(
+        session,
+        secret_ref=PLATFORM_SECRET_ADMIN_PASSWORD_HASH_REF,
+        encryption_key=encryption_key,
+        allow_environment_fallback=False,
+    )
+
+
+def validate_admin_credentials(*, session: Session, username: str, password: str) -> bool:
     settings = get_settings()
     valid_user = secrets.compare_digest(username, settings.admin_username)
-    valid_password = secrets.compare_digest(password, settings.admin_password)
-    return valid_user and valid_password
+    if not valid_user:
+        return False
+
+    password_hash = _resolve_admin_password_hash(session=session)
+    if password_hash:
+        return verify_password(password=password, password_hash=password_hash)
+    return secrets.compare_digest(password, settings.admin_password)
+
+
+def change_platform_admin_password(*, session: Session, username: str, current_password: str, new_password: str) -> None:
+    settings = get_settings()
+    if not validate_admin_credentials(session=session, username=username, password=current_password):
+        raise PermissionError("Current password is incorrect")
+    if len(new_password) < 8:
+        raise ValueError("New password must be at least eight characters")
+    encryption_key = settings.secrets_encryption_key.strip()
+    if not encryption_key:
+        raise RuntimeError("Platform password management is unavailable")
+    platform_secret_service.upsert_secret(
+        session=session,
+        secret_ref=PLATFORM_SECRET_ADMIN_PASSWORD_HASH_REF,
+        plaintext_value=hash_password(new_password),
+        encryption_key=encryption_key,
+    )
 
 
 def _admin_unauthorized(detail: str = "Invalid admin credentials") -> HTTPException:
@@ -166,7 +207,7 @@ def require_authenticated_principal(
         return _build_platform_admin_principal(username)
 
     if basic_credentials is not None:
-        if validate_admin_credentials(username=basic_credentials.username, password=basic_credentials.password):
+        if validate_admin_credentials(session=session, username=basic_credentials.username, password=basic_credentials.password):
             return _build_platform_admin_principal(basic_credentials.username)
         raise _admin_unauthorized()
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { getSession, SessionProvider, signIn, signOut, useSession } from "next-auth/react";
+import { SessionProvider, signIn, signOut, useSession } from "next-auth/react";
 
 import {
   readAuthenticatedPrincipal,
@@ -23,6 +23,7 @@ type AuthContextValue = {
   login: (input: AuthLoginInput) => Promise<void>;
   logout: () => Promise<void>;
   refreshPrincipal: () => Promise<void>;
+  applyPrincipal: (nextPrincipal: AuthenticatedPrincipalRecord | null) => void;
 };
 
 type SessionUserShape = Record<string, never>;
@@ -52,20 +53,29 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
     };
   }, [sessionRevoked, sessionUser, status]);
 
+  function normalizeAuthErrorMessage(message: string): string {
+    if (message === "CredentialsSignin" || message === "Invalid tenant credentials") {
+      return "Invalid credentials";
+    }
+    return message || "Invalid credentials";
+  }
+
+  function applyPrincipal(nextPrincipal: AuthenticatedPrincipalRecord | null): void {
+    setSessionRevoked(false);
+    setPrincipal(nextPrincipal);
+    setPrincipalReady(true);
+  }
+
   async function refreshPrincipal(nextCredentials: Credentials | null = credentials): Promise<void> {
     if (!nextCredentials) {
-      setPrincipal(null);
-      setPrincipalReady(true);
+      applyPrincipal(null);
       return;
     }
     try {
       const nextPrincipal = await readAuthenticatedPrincipal(nextCredentials);
-      setSessionRevoked(false);
-      setPrincipal(nextPrincipal);
-      setPrincipalReady(true);
+      applyPrincipal(nextPrincipal);
     } catch (error) {
-      setPrincipal(null);
-      setPrincipalReady(true);
+      applyPrincipal(null);
       if (error instanceof Error && /^(401|403):/.test(error.message)) {
         setSessionRevoked(true);
         await signOut({ redirect: false });
@@ -95,26 +105,30 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
       ready: status !== "loading",
       needsOnboarding: hasPendingOnboarding(principal),
       login: async ({ identifier, password }) => {
+        setPrincipal(null);
+        setPrincipalReady(false);
+        setSessionRevoked(false);
         const result = await signIn("credentials", {
           identifier: identifier.trim(),
           password,
-          redirect: false
+          redirect: false,
+          redirectTo: "/",
         });
         if (!result || result.error) {
-          throw new Error(result?.error || "Invalid credentials");
+          throw new Error(normalizeAuthErrorMessage(result?.error || "Invalid credentials"));
         }
-        setSessionRevoked(false);
-        const nextSession = await getSession();
-        const nextSessionUser = nextSession?.user as SessionUserShape | undefined;
-        const nextCredentials = nextSessionUser ? { apiBaseUrl: "" } : null;
-        await refreshPrincipal(nextCredentials);
+        if (typeof window !== "undefined") {
+          window.location.assign(result.url ?? "/");
+        }
       },
       logout: async () => {
         setSessionRevoked(false);
         setPrincipal(null);
-        await signOut({ redirect: false });
+        setPrincipalReady(false);
+        await signOut({ redirect: true, redirectTo: "/login" });
       },
-      refreshPrincipal
+      refreshPrincipal,
+      applyPrincipal,
     }),
     [credentials, principal, principalReady, status]
   );

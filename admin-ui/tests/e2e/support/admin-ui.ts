@@ -142,7 +142,7 @@ export async function mockCredentialSignIn(
     const principal = seed.principal;
     const redirectUrl =
       principal.principal_type === "platform_super_admin"
-        ? `${APP_BASE_URL}/tenants/select`
+        ? `${APP_BASE_URL}/dashboard`
         : principal.memberships[0]
           ? `${APP_BASE_URL}/tenants/${encodeURIComponent(principal.memberships[0].tenant_id)}/dashboard`
           : `${APP_BASE_URL}/tenants/select`;
@@ -350,6 +350,7 @@ export function makeDiscordIdentity(
   overrides: Partial<TenantDiscordIdentityRecord> = {},
 ): TenantDiscordIdentityRecord {
   return {
+    oauth_configured: true,
     linked: false,
     discord_user_id: null,
     discord_username: null,
