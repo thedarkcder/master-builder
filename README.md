@@ -25,6 +25,10 @@ export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=smtp
 export ORCHESTRATOR_EMAIL_FROM_ADDRESS=no-reply@masterbuilder.local
 export ORCHESTRATOR_SMTP_HOST=localhost
 export ORCHESTRATOR_SMTP_PORT=4205
+# Production email via Resend (HTTPS API, no SMTP): set provider to `resend`, add a Resend API key,
+# and use ORCHESTRATOR_EMAIL_FROM_ADDRESS on a domain you verified in the Resend dashboard.
+# export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=resend
+# export ORCHESTRATOR_RESEND_API_KEY=re_xxxxxxxx
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
 export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
