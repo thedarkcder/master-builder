@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     knowledge_jira_sync_lock_key: int = 947102033128
     knowledge_jira_sync_max_issues: int = 500
     knowledge_jira_sync_invalid_token_backoff_seconds: int = 21600
+    project_automation_lock_key: int = 947102033131
+    project_automation_poll_seconds: int = 30
+    project_automation_interval_seconds: int = 30
     workflow_orchestrated_run_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200

@@ -31,6 +31,7 @@ from orchestrator.storage.models import (
     ManagedSecret,
     PlatformSetting,
     Project,
+    ProjectAutomation,
     Run,
     RunLock,
     Tenant,
@@ -852,6 +853,122 @@ class AdminApiTests(unittest.TestCase):
             password_secret = session.get(ManagedSecret, f"project/tenant-a/{project_id}/APPLE_TEST_PASSWORD")
             self.assertIsNotNone(supabase_secret)
             self.assertIsNotNone(password_secret)
+
+    def test_project_automations_round_trip_and_stays_out_of_discord_config(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        project_id = projects_response.json()[0]["project_id"]
+
+        initial_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/automations",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(initial_response.status_code, 200)
+        self.assertEqual(initial_response.json()["automations"], [])
+
+        update_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/automations",
+            json={
+                "automations": [
+                    {
+                        "kind": "standup_voice_brief",
+                        "enabled": True,
+                        "timezone": "Europe/London",
+                        "days_of_week": [0, 1, 2, 3, 4],
+                        "local_time": "09:30",
+                        "delivery_text_channel_id": "12345",
+                        "voice_id": "alloy",
+                        "fallback_lookback_hours": 24,
+                    }
+                ],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(len(update_response.json()["automations"]), 1)
+        self.assertEqual(update_response.json()["automations"][0]["kind"], "standup_voice_brief")
+
+        repeat_response = self.client.get(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/automations",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(repeat_response.status_code, 200)
+        self.assertEqual(len(repeat_response.json()["automations"]), 1)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.get(Project, project_id)
+            self.assertIsNotNone(project)
+            assert project is not None
+            self.assertEqual(project.discord_config, {})
+            automation = (
+                session.query(ProjectAutomation)
+                .filter_by(project_id=project_id, tenant_id="tenant-a")
+                .one_or_none()
+            )
+            self.assertIsNotNone(automation)
+            assert automation is not None
+            self.assertTrue(automation.enabled)
+            self.assertEqual(automation.kind, "standup_voice_brief")
+            self.assertEqual(automation.delivery_text_channel_id, "12345")
+
+    def test_project_automations_validate_scoping_and_values(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_tenant.status_code, 201)
+
+        projects_response = self.client.get("/api/admin/tenants/tenant-a/projects", auth=("admin", "secret"))
+        self.assertEqual(projects_response.status_code, 200)
+        project_id = projects_response.json()[0]["project_id"]
+
+        second_payload = self._tenant_payload()
+        second_payload["name"] = "Tenant B"
+        second_payload["jira"]["connection_id"] = "conn-1"
+        second_create = self.client.post(
+            "/api/admin/tenants",
+            json=second_payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(second_create.status_code, 201)
+
+        invalid_payload_response = self.client.put(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/automations",
+            json={
+                "automations": [
+                    {
+                        "kind": "invalid_kind",
+                        "enabled": True,
+                        "timezone": "Europe/London",
+                        "days_of_week": [0],
+                        "local_time": "09:30",
+                        "delivery_text_channel_id": "12345",
+                        "fallback_lookback_hours": 24,
+                    }
+                ],
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(invalid_payload_response.status_code, 400)
+
+        scoping_response = self.client.get(
+            f"/api/admin/tenants/{second_create.json()['tenant_id']}/projects/{project_id}/automations",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(scoping_response.status_code, 404)
 
     def test_project_discord_enable_provisions_channel_when_missing(self) -> None:
         payload = self._tenant_payload()

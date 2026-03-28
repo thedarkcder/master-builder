@@ -12,11 +12,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   approveDiscordAllowlistRequest,
+  getProjectAutomations,
   getProject,
   listDiscordAllowlistRequests,
+  type ProjectAutomationExecutionRecord,
+  updateProjectAutomations,
   updateProject,
   type Credentials,
   type DiscordAllowlistRequestRecord,
+  type ProjectAutomationRecord,
   type ProjectRecord,
 } from "@/lib/api";
 
@@ -41,6 +45,10 @@ export function ProjectNotificationsContent({
   const [liveVoiceEnabled, setLiveVoiceEnabled] = useState(false);
   const [liveVoiceChannelId, setLiveVoiceChannelId] = useState("");
   const [linkedTextChannelId, setLinkedTextChannelId] = useState("");
+  const [automationDefinitions, setAutomationDefinitions] = useState<ProjectAutomationRecord[]>([]);
+  const [automationExecutions, setAutomationExecutions] = useState<ProjectAutomationExecutionRecord[]>([]);
+  const [automationBusy, setAutomationBusy] = useState(false);
+  const [automationStatusLine, setAutomationStatusLine] = useState("");
   const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
   const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
 
@@ -49,14 +57,20 @@ export function ProjectNotificationsContent({
     void (async () => {
       setBusy(true);
       try {
-        const payload = await getProject(credentials, tenantId, projectId);
-        const requests = await listDiscordAllowlistRequests(credentials, tenantId, projectId);
+        const [payload, automations, requests] = await Promise.all([
+          getProject(credentials, tenantId, projectId),
+          getProjectAutomations(credentials, tenantId, projectId),
+          listDiscordAllowlistRequests(credentials, tenantId, projectId),
+        ]);
         setProject(payload);
         setDiscordEnabled(Boolean(payload.discord));
         setNotifyEvents(payload.discord?.notify_events ?? []);
         setLiveVoiceEnabled(Boolean(payload.discord?.live_voice_enabled));
         setLiveVoiceChannelId(payload.discord?.live_voice_channel_id ?? "");
         setLinkedTextChannelId(payload.discord?.live_voice_linked_text_channel_id ?? "");
+        setAutomationDefinitions(automations.automations ?? []);
+        setAutomationExecutions((automations.automations ?? []).flatMap((automation) => automation.executions ?? []).slice(0, 20));
+        setAutomationStatusLine("");
         setAllowlistRequests(requests);
         setStatusLine("");
       } catch (error) {
@@ -71,6 +85,38 @@ export function ProjectNotificationsContent({
     setNotifyEvents((current) =>
       enabled ? Array.from(new Set([...current, eventValue])) : current.filter((v) => v !== eventValue)
     );
+  }
+
+  function updateAutomationField(index: number, updates: Partial<ProjectAutomationRecord>): void {
+    setAutomationDefinitions((current) =>
+      current.map((automation, currentIndex) => (currentIndex === index ? { ...automation, ...updates } : automation))
+    );
+  }
+
+  async function saveAutomations() {
+    if (!credentials || !project) return;
+    setAutomationBusy(true);
+    try {
+      const updated = await updateProjectAutomations(credentials, tenantId, projectId, {
+        automations: automationDefinitions.map((automation) => ({
+          kind: automation.kind,
+          enabled: automation.enabled,
+          timezone: automation.timezone,
+          days_of_week: automation.days_of_week,
+          local_time: automation.local_time,
+          delivery_text_channel_id: automation.delivery_text_channel_id,
+          voice_id: automation.voice_id,
+          fallback_lookback_hours: automation.fallback_lookback_hours,
+        })),
+      });
+      setAutomationDefinitions(updated.automations ?? []);
+      setAutomationExecutions((updated.automations ?? []).flatMap((automation) => automation.executions ?? []).slice(0, 20));
+      setAutomationStatusLine(`Saved ${updated.automations?.length ?? 0} automation configuration${(updated.automations?.length ?? 0) === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setAutomationStatusLine(`Save failed: ${(error as Error).message}`);
+    } finally {
+      setAutomationBusy(false);
+    }
   }
 
   async function save() {
@@ -207,6 +253,81 @@ export function ProjectNotificationsContent({
             <Button type="button" size="sm" onClick={() => void save()} disabled={busy || !project}>
               {busy ? "Saving…" : "Save Discord settings"}
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Project Automations */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Project Automations</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Configure scheduled standup/retro voice brief automations for this project.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {automationStatusLine ? (
+            <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
+              {automationStatusLine}
+            </p>
+          ) : null}
+          {automationDefinitions.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No automations configured yet. Save one from API to initialize this project.</p>
+          ) : (
+            <div className="space-y-3">
+              {automationDefinitions.map((automation, index) => (
+                <div key={automation.automation_id} className="rounded-md border p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium">{automation.kind}</p>
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-input"
+                        checked={automation.enabled}
+                        onChange={(event) => updateAutomationField(index, { enabled: event.target.checked })}
+                      />
+                      Enabled
+                    </label>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <Input value={automation.timezone} onChange={(event) => updateAutomationField(index, { timezone: event.target.value })} />
+                    <Input value={automation.local_time} onChange={(event) => updateAutomationField(index, { local_time: event.target.value })} />
+                    <Input
+                      value={automation.delivery_text_channel_id}
+                      onChange={(event) => updateAutomationField(index, { delivery_text_channel_id: event.target.value })}
+                    />
+                    <Input value={automation.voice_id ?? ""} onChange={(event) => updateAutomationField(index, { voice_id: event.target.value || null })} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3 border-t pt-4">
+            <p className="text-xs text-muted-foreground">
+              Automation executions are retained separately so admins can review recent project automation activity.
+            </p>
+            <Button type="button" size="sm" onClick={() => void saveAutomations()} disabled={automationBusy || !project}>
+              {automationBusy ? "Saving…" : "Save automations"}
+            </Button>
+          </div>
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Recent executions</p>
+            {automationExecutions.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No automation executions recorded for this project yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {automationExecutions.map((execution) => (
+                  <li key={execution.execution_id} className="rounded-md border bg-muted/20 p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium">{execution.event_type}</span>
+                      <span className="text-xs text-muted-foreground">{execution.status}</span>
+                    </div>
+                    {execution.message ? <p className="mt-1 text-xs text-muted-foreground">{execution.message}</p> : null}
+                    <p className="mt-1 text-xs text-muted-foreground">{execution.created_at}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </CardContent>
       </Card>

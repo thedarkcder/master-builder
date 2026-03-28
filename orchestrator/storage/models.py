@@ -68,6 +68,69 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ProjectAutomation(Base):
+    __tablename__ = "project_automations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "project_id", "kind", name="uq_project_automations_scope_kind"),
+        Index("ix_project_automations_due_scan", "enabled", "next_run_at"),
+    )
+
+    automation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    timezone: Mapped[str] = mapped_column(String(128), nullable=False)
+    days_of_week: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    local_time: Mapped[str] = mapped_column(String(8), nullable=False)
+    delivery_text_channel_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    voice_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fallback_lookback_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    last_successful_window_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProjectAutomationExecution(Base):
+    __tablename__ = "project_automation_executions"
+    __table_args__ = (
+        UniqueConstraint("automation_id", "scheduled_for", name="uq_project_automation_executions_automation_scheduled_for"),
+        UniqueConstraint("dedupe_key", name="uq_project_automation_executions_dedupe_key"),
+        Index("ix_project_automation_executions_due_scan", "status", "scheduled_for"),
+        Index("ix_project_automation_executions_automation_history", "automation_id", "scheduled_for"),
+    )
+
+    execution_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    automation_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("project_automations.automation_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    discord_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class JiraOAuthConnection(Base):
     __tablename__ = "jira_oauth_connections"
 
