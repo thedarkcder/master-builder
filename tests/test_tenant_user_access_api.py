@@ -181,6 +181,127 @@ class TenantUserAccessApiTests(unittest.TestCase):
         )
         self.assertEqual(login_response.status_code, 200, login_response.text)
 
+    def test_tenant_user_can_list_runs_for_their_workspace(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="tenant-user-visible-run",
+                    tenant_id=tenant_id,
+                    project_id=f"{tenant_id}-default",
+                    issue_key="TP-101",
+                    issue_summary="Tenant run",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="queued",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                )
+            )
+            session.commit()
+
+        response = self.client.get(
+            f"/api/admin/runs?tenant_id={tenant_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()[0]["run_id"], "tenant-user-visible-run")
+
+    def test_business_member_can_read_runs_without_extra_team_permissions(self) -> None:
+        registration = self._register()
+        tenant_id = registration["tenant"]["tenant_id"]
+        owner_token = self._login()
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="business-member-visible-run",
+                    tenant_id=tenant_id,
+                    project_id=f"{tenant_id}-default",
+                    issue_key="TP-102",
+                    issue_summary="Business member run",
+                    issue_description="desc",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    status="queued",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                )
+            )
+            session.commit()
+
+        with patch("orchestrator.core.invites.email_delivery.send_tenant_invite_email"):
+            invite_response = self.client.post(
+                f"/api/admin/tenants/{tenant_id}/invites",
+                json={
+                    "email": "runs-member@example.com",
+                    "full_name": "Runs Member",
+                    "role": "business_member",
+                    "team_ids": [],
+                    "mode_override": "non_technical",
+                },
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+        self.assertEqual(invite_response.status_code, 201, invite_response.text)
+        invite_token = invite_response.json()["invite_url"].split("token=", 1)[1]
+        self._accept_invite(token=invite_token)
+        member_token = self._login(email="runs-member@example.com")
+
+        list_response = self.client.get(
+            f"/api/admin/runs?tenant_id={tenant_id}&project_id={tenant_id}-default",
+            headers={"Authorization": f"Bearer {member_token}"},
+        )
+
+        self.assertEqual(list_response.status_code, 200, list_response.text)
+        self.assertEqual(list_response.json()[0]["run_id"], "business-member-visible-run")
+
+        detail_response = self.client.get(
+            "/api/admin/runs/business-member-visible-run",
+            headers={"Authorization": f"Bearer {member_token}"},
+        )
+
+        self.assertEqual(detail_response.status_code, 200, detail_response.text)
+        self.assertEqual(detail_response.json()["run_id"], "business-member-visible-run")
+
+    def test_tenant_user_runs_listing_requires_explicit_tenant_scope(self) -> None:
+        self._register()
+        token = self._login()
+
+        response = self.client.get(
+            "/api/admin/runs",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("tenant_id is required", response.json()["detail"])
+
+    def test_tenant_user_cannot_list_runs_for_other_workspace(self) -> None:
+        self._register(email="owner-a@example.com", tenant_name="Workspace A")
+        token = self._login(email="owner-a@example.com")
+        registration_b = self._register(email="owner-b@example.com", tenant_name="Workspace B")
+
+        response = self.client.get(
+            f"/api/admin/runs?tenant_id={registration_b['tenant']['tenant_id']}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertIn(response.status_code, (403, 404), response.text)
+
     def test_platform_super_admin_can_change_password(self) -> None:
         login_response = self.client.post(
             "/api/admin/auth/login",

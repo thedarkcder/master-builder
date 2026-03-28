@@ -15,6 +15,7 @@ function defaultRouteForSession(session: Session | null): string {
 export default auth((request: NextRequest & { auth: Session | null }) => {
   const { pathname } = request.nextUrl;
   const isPublicPath =
+    pathname === "/" ||
     pathname === "/login" ||
     pathname === "/register" ||
     pathname === "/forgot-password" ||

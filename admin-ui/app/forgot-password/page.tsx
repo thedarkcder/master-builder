@@ -31,7 +31,10 @@ export default function ForgotPasswordPage() {
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 px-4 py-8">
       <div className="relative w-full max-w-md rounded-2xl border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur-xl">
-        <h1 className="text-xl font-semibold text-white">Reset password</h1>
+        <Link href="/" className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
+          Back to home
+        </Link>
+        <h1 className="mt-6 text-xl font-semibold text-white">Reset password</h1>
         <p className="mt-2 text-sm text-slate-400">Enter your work email and we&apos;ll send a reset link.</p>
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>

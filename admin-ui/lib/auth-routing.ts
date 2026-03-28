@@ -6,12 +6,24 @@ export function getPlatformAdminHomeRoute(): string {
   return "/dashboard";
 }
 
+export function getPlatformStatusRoute(): string {
+  return "/status";
+}
+
 export function getWorkspaceSelectorRoute(): string {
   return "/tenants/select";
 }
 
+export function getTenantWorkspaceRoute(tenantId: string): string {
+  return `/${encodeURIComponent(tenantId)}`;
+}
+
 export function getTenantDashboardRoute(tenantId: string): string {
-  return `/tenants/${encodeURIComponent(tenantId)}/dashboard`;
+  return `${getTenantWorkspaceRoute(tenantId)}/dashboard`;
+}
+
+export function getTenantSettingsRoute(tenantId: string, section = "integrations"): string {
+  return `${getTenantWorkspaceRoute(tenantId)}/settings/${section}`;
 }
 
 export function getTenantSetupRoute(tenantId: string): string {
@@ -87,11 +99,17 @@ export function getTenantArchiveRedirectRoute(
 export function getTenantArchiveConfirmationRoute(
   principal: PrincipalLike | null | undefined,
   tenantId: string,
+  options?: { purgeAfterAt?: string | null },
 ): string {
   const destination = canAccessPlatformAdmin(principal) ? "selector" : "setup";
-  return `/tenants/${encodeURIComponent(tenantId)}/archived?destination=${destination}&next=${encodeURIComponent(
-    getTenantArchiveRedirectRoute(principal, tenantId),
-  )}`;
+  const params = new URLSearchParams({
+    destination,
+    next: getTenantArchiveRedirectRoute(principal, tenantId),
+  });
+  if (options?.purgeAfterAt) {
+    params.set("purge_after", options.purgeAfterAt);
+  }
+  return `${getTenantWorkspaceRoute(tenantId)}/archived?${params.toString()}`;
 }
 
 export function canAccessTechnicalSurface(

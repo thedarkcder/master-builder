@@ -19,6 +19,7 @@ from orchestrator.core.platform_secret_service import (
 )
 from orchestrator.core.tenant_access import (
     MODE_TECHNICAL,
+    VALID_ROLE_KEYS,
     compute_permission_snapshot,
     normalize_permission_key,
 )
@@ -268,4 +269,19 @@ def require_tenant_membership(*, principal: AuthenticatedPrincipal, tenant_id: s
     membership = principal.membership_for_tenant(tenant_id)
     if membership is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    return membership
+
+
+def require_tenant_workspace_access(
+    *,
+    principal: AuthenticatedPrincipal,
+    tenant_id: str,
+) -> TenantMembershipPrincipal | None:
+    if principal.is_platform_super_admin:
+        return None
+    membership = require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    if membership is None:
+        return None
+    if membership.role not in VALID_ROLE_KEYS:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient tenant permissions")
     return membership

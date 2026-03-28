@@ -1401,8 +1401,8 @@ export default function RunDetailPage() {
                   run
                     ? (
                         projectContextId
-                          ? `/tenants/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
-                          : `/tenants/${encodeURIComponent(run.tenant_id)}/runs`
+                          ? `/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
+                          : `/${encodeURIComponent(run.tenant_id)}/runs`
                       )
                     : "/dashboard"
                 }

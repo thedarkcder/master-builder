@@ -200,6 +200,67 @@ def test_create_knowledge_asset_extracts_source_agnostic_facts() -> None:
         assert all(fact.approval_state == "approved" for fact in facts)
 
 
+def test_create_knowledge_asset_keeps_long_generic_labels_with_safe_slot_name() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_fact_long_label.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="MAB",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            create_knowledge_asset(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                source_type="jira_issue",
+                title="Long fact label",
+                mime_type="text/plain",
+                source_ref="jira:GP-122",
+                text_content=(
+                    "Implemented GP-122 on branch run-gp-122-ed1554de-484b-46ed-831f-781376230734 "
+                    "and opened PR https://github.com/example/repo/pull/7.: Success."
+                ),
+            )
+
+            facts = session.query(KnowledgeFact).filter(KnowledgeFact.fact_type == "reference_fact").all()
+
+        assert facts
+        assert any(fact.slot_name == "reference_fact" for fact in facts)
+        assert all(len(fact.slot_name) <= 128 for fact in facts)
+        assert any("implemented_gp_122_on_branch_run_gp_122" in fact.fact_key for fact in facts)
+
+
 def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> None:
     with TemporaryDirectory() as temp_dir:
         database_url = f"sqlite:///{temp_dir}/knowledge_sync.db"
@@ -345,6 +406,89 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
             assert len(active_assets) == 2
             assert len(deleted_assets) == 1
             assert any(asset.source_type == "jira_comment" and "com.example.girlpower.stage" in str(asset.text_content) for asset in active_assets)
+
+
+def test_sync_project_knowledge_from_jira_handles_long_labeled_fact_lines() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_sync_long_fact.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            class _JiraClient:
+                def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
+                    start_at = int(kwargs.get("start_at", 0) or 0)
+                    if start_at > 0:
+                        return []
+                    return [SimpleNamespace(key="GP-122")]
+
+                def get_issue_detail(self, **_kwargs):
+                    return SimpleNamespace(
+                        key="GP-122",
+                        summary="Knowledge sync fact overflow",
+                        status="To Do",
+                        description=(
+                            "Implemented GP-122 on branch run-gp-122-ed1554de-484b-46ed-831f-781376230734 "
+                            "and opened PR https://github.com/example/repo/pull/7.: Success."
+                        ),
+                        labels=[],
+                    )
+
+                def list_issue_comments(self, **_kwargs):
+                    return []
+
+                def list_issue_attachments(self, **_kwargs):
+                    return []
+
+            result = sync_project_knowledge_from_jira(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                project_key="GP",
+                jira_client=_JiraClient(),
+                access_token="tok",
+                cloud_id="cloud",
+            )
+
+            facts = session.query(KnowledgeFact).filter(KnowledgeFact.fact_type == "reference_fact").all()
+
+        assert result.failed_assets == 0
+        assert facts
+        assert all(len(fact.slot_name) <= 128 for fact in facts)
+        assert any(fact.slot_name == "reference_fact" for fact in facts)
 
 
 def test_sync_project_knowledge_from_jira_with_pgvector_string_embeddings() -> None:

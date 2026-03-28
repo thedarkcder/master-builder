@@ -87,7 +87,7 @@ export function ProjectSetupWizard() {
         jira_project_key: jiraProjectKey.trim().toUpperCase(),
         policy_overrides: {},
       });
-      router.push(`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(created.project_id)}`);
+      router.push(`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(created.project_id)}`);
     } catch (error) {
       setStatusLine(`Create failed: ${(error as Error).message}`);
       setBusy(false);
@@ -106,7 +106,7 @@ export function ProjectSetupWizard() {
           <CardContent className="space-y-4 text-sm text-muted-foreground">
             <p>You do not have permission to create or edit projects in this workspace.</p>
             <Button asChild variant="outline" size="sm">
-              <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects`}>
+              <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
                 Back to Projects
               </Link>
@@ -122,7 +122,7 @@ export function ProjectSetupWizard() {
       {/* Back link */}
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-1">
-          <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects`}>
+          <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
             Back to Projects
           </Link>

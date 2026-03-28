@@ -52,7 +52,7 @@ export function ReviewStep({
         </Button>
         {tenantDisplayId ? (
           <Button variant="outline" asChild>
-            <Link href={`/tenants/${encodeURIComponent(tenantDisplayId)}/edit`}>Open workspace settings</Link>
+            <Link href={`/${encodeURIComponent(tenantDisplayId)}/settings`}>Open workspace settings</Link>
           </Button>
         ) : null}
       </div>

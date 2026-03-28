@@ -43,7 +43,7 @@ import {
   type ProjectRecord,
   type ProjectUpdatePayload
 } from "@/lib/api";
-import { getTenantArchiveConfirmationRoute } from "@/lib/auth-routing";
+import { canAccessPlatformAdmin, getTenantArchiveConfirmationRoute, getTenantSettingsRoute } from "@/lib/auth-routing";
 import { recordToFormValues } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
@@ -63,6 +63,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const params = useParams<{ tenantId: string }>();
   const searchParams = useSearchParams();
   const { credentials, principal, ready } = useAuth();
+  const isPlatformAdmin = canAccessPlatformAdmin(principal);
 
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,6 +82,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [projectsBusy, setProjectsBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveConfirmationName, setArchiveConfirmationName] = useState("");
   const [discordEnabled, setDiscordEnabled] = useState(false);
   const [discordServerId, setDiscordServerId] = useState("");
   const [discordOnboardingChannelId, setDiscordOnboardingChannelId] = useState("");
@@ -96,7 +98,8 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   }, [statusLine]);
 
   async function loadJiraWebhookDiagnostics() {
-    if (!credentials) {
+    if (!credentials || !isPlatformAdmin) {
+      setJiraWebhook(null);
       return;
     }
     try {
@@ -135,18 +138,39 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     setLoading(true);
     try {
       const payload = await getTenant(credentials, params.tenantId);
-      const modelCatalog = await listCodexModels(credentials);
       setTenant(payload);
-      setCodexModels(modelCatalog.models);
-      setGlobalCodexModel(modelCatalog.default_model);
-      setReasoningEfforts(modelCatalog.reasoning_efforts);
-      setGlobalCodexReasoningEffort(modelCatalog.default_reasoning_effort);
+
+      if (isPlatformAdmin) {
+        try {
+          const modelCatalog = await listCodexModels(credentials);
+          setCodexModels(modelCatalog.models);
+          setGlobalCodexModel(modelCatalog.default_model);
+          setReasoningEfforts(modelCatalog.reasoning_efforts);
+          setGlobalCodexReasoningEffort(modelCatalog.default_reasoning_effort);
+        } catch {
+          // Don't block tenant settings if platform model catalog is unavailable.
+          setCodexModels([]);
+          setGlobalCodexModel("");
+          setReasoningEfforts([]);
+          setGlobalCodexReasoningEffort("");
+        }
+      } else {
+        setCodexModels([]);
+        setGlobalCodexModel("");
+        setReasoningEfforts([]);
+        setGlobalCodexReasoningEffort("");
+      }
+
       setDiscordEnabled(Boolean(payload.discord));
       setDiscordServerId(payload.discord?.guild_id ?? "");
       setDiscordOnboardingChannelId(payload.discord?.onboarding_channel_id ?? "");
       setDiscordInviteExpirySeconds(String(payload.discord?.onboarding_invite_expires_in_seconds ?? 86400));
       setDiscordInviteMaxUses(String(payload.discord?.onboarding_invite_max_uses ?? 1));
-      await loadJiraWebhookDiagnostics();
+      if (isPlatformAdmin && (section === "jira" || section === "notifications")) {
+        await loadJiraWebhookDiagnostics();
+      } else {
+        setJiraWebhook(null);
+      }
       const loadedProjects = await listProjects(credentials, params.tenantId);
       setProjects(loadedProjects);
     } catch (error) {
@@ -160,7 +184,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     if (ready && credentials) {
       void loadTenant();
     }
-  }, [ready, credentials]);
+  }, [ready, credentials, isPlatformAdmin, section]);
 
   useEffect(() => {
     if (searchParams.get("github_install") === "success") {
@@ -210,12 +234,8 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       return;
     }
     const action = tenant.is_enabled ? "archive" : "unarchive";
-    const confirmed = window.confirm(
-      tenant.is_enabled
-        ? `Archive tenant '${tenant.tenant_id}'? This disables run intake and webhook processing.`
-        : `Unarchive tenant '${tenant.tenant_id}'?`
-    );
-    if (!confirmed) {
+    if (tenant.is_enabled && archiveConfirmationName.trim() !== tenant.name.trim()) {
+      setStatusLine(`Enter "${tenant.name}" to archive this workspace.`);
       return;
     }
     setArchiveBusy(true);
@@ -226,9 +246,15 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       setTenant(updated);
       setStatusLine(`Tenant ${action}d: ${updated.tenant_id}.`);
       if (!updated.is_enabled) {
-        router.push(getTenantArchiveConfirmationRoute(principal, updated.tenant_id));
+        setArchiveConfirmationName("");
+        router.push(
+          getTenantArchiveConfirmationRoute(principal, updated.tenant_id, {
+            purgeAfterAt: updated.purge_after_at,
+          }),
+        );
         return;
       }
+      setArchiveConfirmationName("");
     } catch (error) {
       setStatusLine(`Unable to ${action} tenant: ${(error as Error).message}`);
     } finally {
@@ -459,7 +485,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         </CardHeader>
         <CardContent>
           <Button asChild>
-            <Link href="/tenants">Back to Tenants</Link>
+            <Link href="/tenants/select">Back to Tenants</Link>
           </Button>
         </CardContent>
       </Card>
@@ -471,6 +497,8 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const jiraConnected = Boolean(tenant.jira.connection_id && tenant.jira.connection_id.trim());
   const jiraWebhookStatus = !jiraConnected
     ? { label: "not connected", detail: "Jira is not connected for this tenant." }
+    : !isPlatformAdmin
+      ? { label: "hidden", detail: "Webhook diagnostics are available from platform status." }
     : jiraWebhook?.last_error
       ? { label: "error", detail: jiraWebhook.last_error }
       : jiraWebhook?.recent_delivery_ok
@@ -486,26 +514,19 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
           };
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <CardTitle>Edit Tenant: {tenant.tenant_id}</CardTitle>
-            <Button
-              variant={tenant.is_enabled ? "secondary" : "outline"}
-              size="sm"
-              onClick={() => void handleArchiveToggle()}
-              disabled={archiveBusy}
-            >
-              {tenant.is_enabled ? "Archive Tenant" : "Unarchive Tenant"}
-            </Button>
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="space-y-1">
+            <h2 className="text-2xl font-semibold tracking-tight">{tenant.name}</h2>
+            <p className="text-sm text-muted-foreground">Configure integrations, delivery policy, and workspace operations.</p>
           </div>
-          <CardDescription>Configure integrations, policies, and webhook operations.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {statusLine ? <p className={cn("rounded-md border px-3 py-2 text-sm", statusClasses)}>{statusLine}</p> : null}
-        </CardContent>
-      </Card>
+          <div className="rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
+            {tenant.tenant_id}
+          </div>
+        </div>
+        {statusLine ? <p className={cn("rounded-md border px-3 py-2 text-sm", statusClasses)}>{statusLine}</p> : null}
+      </div>
 
       {section === "setup" ? (
         <Card>
@@ -522,13 +543,13 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             </ol>
             <div className="flex flex-wrap gap-2 border-t pt-3">
               <Button asChild variant="outline">
-                <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/secrets`}>
+                <Link href={`/${encodeURIComponent(tenant.tenant_id)}/secrets`}>
                   <KeyRound className="mr-2 h-4 w-4" />
                   Manage Secrets
                 </Link>
               </Button>
               <Button asChild variant="outline">
-                <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/integrations`}>Open Integrations</Link>
+                <Link href={getTenantSettingsRoute(tenant.tenant_id, "integrations")}>Open Integrations</Link>
               </Button>
             </div>
           </CardContent>
@@ -546,21 +567,21 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               <p className="font-medium">Jira</p>
               <p className="text-muted-foreground">Connect Jira OAuth and verify tenant board access.</p>
               <Button asChild variant="outline" size="sm">
-                <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/jira`}>Open Jira</Link>
+                <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Open Jira</Link>
               </Button>
             </div>
             <div className="space-y-2 rounded-md border p-3">
               <p className="font-medium">GitHub</p>
               <p className="text-muted-foreground">Install or reconnect GitHub App for this tenant.</p>
               <Button asChild variant="outline" size="sm">
-                <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/github`}>Open GitHub</Link>
+                <Link href={getTenantSettingsRoute(tenant.tenant_id, "github")}>Open GitHub</Link>
               </Button>
             </div>
             <div className="space-y-2 rounded-md border p-3">
               <p className="font-medium">Discord</p>
               <p className="text-muted-foreground">Manage notification and command settings for tenant channels.</p>
               <Button asChild variant="outline" size="sm">
-                <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/discord`}>Open Discord</Link>
+                <Link href={getTenantSettingsRoute(tenant.tenant_id, "discord")}>Open Discord</Link>
               </Button>
             </div>
           </CardContent>
@@ -589,7 +610,8 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 Disconnect Jira
               </Button>
             </div>
-            <div className="space-y-2 border-t pt-3">
+            {isPlatformAdmin ? (
+              <div className="space-y-2 border-t pt-3">
               <p className="font-medium">Webhook Lifecycle</p>
               <p>
                 <strong>Webhook URL:</strong> {jiraWebhook?.webhook_url ?? "Loading..."}
@@ -623,7 +645,8 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                   Reset Webhook
                 </Button>
               </div>
-            </div>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
@@ -767,32 +790,74 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       ) : null}
 
       {section === "config" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Tenant Configuration</CardTitle>
-            <CardDescription>Update identity and policy.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <TenantForm
-              mode="edit"
-              initialValues={recordToFormValues(tenant)}
-              onSubmit={handleSave}
-              submitting={saving}
-              codexModels={codexModels}
-              reasoningEfforts={reasoningEfforts}
-              globalCodexModel={globalCodexModel}
-              globalCodexReasoningEffort={globalCodexReasoningEffort}
-              visibleSections={{
-                identity: true,
-                jira: false,
-                github: false,
-                repository: false,
-                policy: true,
-                discord: false
-              }}
-            />
-          </CardContent>
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Workspace configuration</CardTitle>
+              <CardDescription>Update identity and policy.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TenantForm
+                mode="edit"
+                initialValues={recordToFormValues(tenant)}
+                onSubmit={handleSave}
+                submitting={saving}
+                codexModels={codexModels}
+                reasoningEfforts={reasoningEfforts}
+                globalCodexModel={globalCodexModel}
+                globalCodexReasoningEffort={globalCodexReasoningEffort}
+                visibleSections={{
+                  identity: true,
+                  jira: false,
+                  github: false,
+                  repository: false,
+                  policy: true,
+                  discord: false
+                }}
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="border-red-200 bg-red-50/40">
+            <CardHeader>
+              <CardTitle>Danger zone</CardTitle>
+              <CardDescription>
+                Archiving disables this workspace immediately and schedules permanent deletion in 60 days.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  Type <span className="font-medium text-foreground">{tenant.name}</span> to confirm.
+                </p>
+                <Input
+                  value={archiveConfirmationName}
+                  onChange={(event) => setArchiveConfirmationName(event.target.value)}
+                  placeholder={tenant.name}
+                  disabled={archiveBusy || !tenant.is_enabled}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="outline"
+                  className={tenant.is_enabled ? "border-red-300 bg-red-600 text-white hover:bg-red-700 hover:text-white" : undefined}
+                  onClick={() => void handleArchiveToggle()}
+                  disabled={
+                    archiveBusy ||
+                    (tenant.is_enabled && archiveConfirmationName.trim() !== tenant.name.trim())
+                  }
+                >
+                  {tenant.is_enabled ? "Archive workspace" : "Unarchive workspace"}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  {tenant.is_enabled
+                    ? "Archived workspaces move into the archived list and can be restored before purge."
+                    : `Scheduled purge: ${tenant.purge_after_at ?? "not scheduled"}`}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
 
       {section === "health" ? (
@@ -865,7 +930,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                   </div>
                   <span className="rounded-full border px-2 py-0.5 text-xs">{jiraWebhookStatus.label}</span>
                   <Button asChild size="sm" variant="outline">
-                    <Link href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/jira`}>Review</Link>
+                    <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Review</Link>
                   </Button>
                 </li>
               </ul>
