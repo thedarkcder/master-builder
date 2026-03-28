@@ -88,12 +88,45 @@ def _normalize_repaired_top_revisions(database_url: str) -> None:
         engine.dispose()
 
 
+def _repair_stamp_if_schema_ahead_of_version(database_url: str) -> None:
+    """Align alembic_version when DDL from a migration is present but the stamp lags.
+
+    Deploys can end up with schema effects from ``20260328_0045`` / ``20260328_0046``
+    while ``alembic_version`` still points at the parent revision (manual DDL, partial
+    recovery, or a race). Alembic then fails updating ``20260328_0045`` → ``20260328_0046``
+    because no row matches ``version_num = '20260328_0045'``.
+    """
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            inspector = inspect(connection)
+            if not _table_exists(inspector, "alembic_version"):
+                return
+            rows = [
+                str(value)
+                for value in connection.execute(
+                    text("SELECT version_num FROM alembic_version ORDER BY version_num")
+                ).scalars()
+            ]
+            if len(rows) != 1:
+                return
+            current = rows[0]
+            if current == "20260328_0044" and _table_exists(inspector, "worker_runtime_states"):
+                connection.execute(text("UPDATE alembic_version SET version_num = '20260328_0045'"))
+                current = "20260328_0045"
+            if current == "20260328_0045" and _table_exists(inspector, "platform_settings"):
+                connection.execute(text("UPDATE alembic_version SET version_num = '20260328_0046'"))
+    finally:
+        engine.dispose()
+
+
 def run_migrations(database_url: str | None = None) -> None:
     settings = get_settings()
     root = Path(__file__).resolve().parents[2]
     target_database_url = database_url or settings.database_url
 
     _normalize_repaired_top_revisions(target_database_url)
+    _repair_stamp_if_schema_ahead_of_version(target_database_url)
 
     config = Config(str(root / "alembic.ini"))
     # Keep application logging configuration intact; Alembic's default fileConfig
