@@ -219,3 +219,19 @@ class MigrationTests(unittest.TestCase):
                     }
                 },
             )
+
+    def test_run_migrations_accepts_database_stamped_with_merged_20260327_0043(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            run_migrations(database_url=database_url)
+
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("UPDATE alembic_version SET version_num = '20260327_0043'"))
+
+            run_migrations(database_url=database_url)
+
+            with engine.begin() as connection:
+                current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+            self.assertEqual(current_revision, "20260327_0043")
