@@ -7,6 +7,23 @@ from orchestrator.api.commands.executor_registry import get_tenant_command_execu
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 
 
+def _resolve_registered_executor():
+    executor = get_tenant_command_executor()
+    if executor is not None:
+        return executor
+    try:
+        from orchestrator.api.discord.ingress.executor import register_discord_command_executor
+    except Exception:  # noqa: BLE001
+        register_discord_command_executor = None
+    if register_discord_command_executor is not None:
+        try:
+            register_discord_command_executor()
+        except Exception:  # noqa: BLE001
+            pass
+        executor = get_tenant_command_executor()
+    return executor
+
+
 def _execute_registered_command(
     *,
     tenant_id: str,
@@ -16,7 +33,7 @@ def _execute_registered_command(
     require_ask_confirmation: bool = False,
     ingress_source: str = "discord",
 ) -> DiscordCommandResponse:
-    executor = get_tenant_command_executor()
+    executor = _resolve_registered_executor()
     if executor is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

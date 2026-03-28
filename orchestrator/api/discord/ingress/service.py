@@ -15,6 +15,7 @@ from orchestrator.core.communications.command_pipeline import CommandExecutionCo
 class DiscordIngressHandlers:
     simple: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
     ask: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
+    persona: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
     bug_gap: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
     issues: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
     run_control: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
@@ -55,6 +56,11 @@ def execute_tenant_command_ingress(
             "request": (handlers.simple,),
             "ask": (handlers.ask,),
             "pm": (handlers.ask,),
+            "architect": (handlers.persona,),
+            "engineer": (handlers.persona,),
+            "tester": (handlers.persona,),
+            "security": (handlers.persona,),
+            "reviewer": (handlers.persona,),
             "bug": (handlers.bug_gap,),
             "gap": (handlers.bug_gap,),
             "issues": (handlers.issues,),
@@ -79,13 +85,13 @@ def execute_tenant_command_ingress(
     try:
         response = execute_tenant_command(
             tenant_id=tenant_id,
-        payload=payload,
-        session=session,
-        defer_seed_issues=defer_seed_issues,
-        require_ask_confirmation=require_ask_confirmation,
-        ingress_source=ingress_source,
-        deps=runtime_deps,
-    )
+            payload=payload,
+            session=session,
+            defer_seed_issues=defer_seed_issues,
+            require_ask_confirmation=require_ask_confirmation,
+            ingress_source=ingress_source,
+            deps=runtime_deps,
+        )
         session.commit()
         return response
     except Exception:

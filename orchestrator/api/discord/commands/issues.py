@@ -22,7 +22,7 @@ def dispatch_issues_command(
     codex_working_dir: str,
     normalized_user_id: str,
     defer_seed_issues: bool,
-    seed_issues_with_codex: Callable[..., Any],
+    seed_parent_issues_with_codex: Callable[..., Any],
     find_seed_followup_context: Callable[..., Any],
     store_seed_followup_context: Callable[..., Any],
     clear_seed_followup_context: Callable[..., Any],
@@ -34,7 +34,7 @@ def dispatch_issues_command(
     if not arguments:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
+            detail="Usage: !issues seed <markdown batch brief> | !issues followup <answers>",
         )
     subcommand = arguments[0].strip().lower()
     if subcommand == "seed":
@@ -42,16 +42,16 @@ def dispatch_issues_command(
         if not prompt_markdown:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !issues seed <markdown spec>",
+                detail="Usage: !issues seed <markdown batch brief>",
             )
         if defer_seed_issues:
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message="Issue seeding started. I will reply in this thread with created issue links when done.",
+                message="PM batch seeding started. I will reply in this thread with parent issue links when done.",
                 data={"deferred": True, "prompt_markdown": prompt_markdown},
             )
-        message, data = seed_issues_with_codex(
+        message, data = seed_parent_issues_with_codex(
             session=session,
             tenant=tenant,
             prompt_markdown=prompt_markdown,
@@ -72,7 +72,7 @@ def dispatch_issues_command(
                 channel_ids=[payload.channel_id.strip()],
                 project_id=scoped_project_id or "",
                 project_key=str(data.get("project_key") or ""),
-                issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
+                issue_keys=[str(value) for value in data.get("all_parent_issue_keys", []) if str(value).strip()],
                 questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
                 prompt_markdown=str(data.get("prompt_markdown") or prompt_markdown),
             )
@@ -106,7 +106,7 @@ def dispatch_issues_command(
         if context is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="No pending issue-seed follow-up context was found for this channel",
+                detail="No pending PM batch follow-up context was found for this channel",
             )
         if validate_seed_followup_context is not None:
             is_valid, invalid_reason = validate_seed_followup_context(
@@ -123,16 +123,16 @@ def dispatch_issues_command(
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=(
-                        "No pending issue-seed follow-up context was found for this channel"
+                        "No pending PM batch follow-up context was found for this channel"
                         if not invalid_reason
-                        else f"Issue-seed follow-up context expired: {invalid_reason}"
+                        else f"PM batch follow-up context expired: {invalid_reason}"
                     ),
                 )
         context_user_id = str(context.get("user_id") or "").strip()
         if context_user_id and context_user_id != normalized_user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only the original requester can submit this issue-seed follow-up",
+                detail="Only the original requester can submit this PM batch follow-up",
             )
         original_prompt = str(context.get("prompt_markdown") or "").strip()
         context_questions = [
@@ -145,16 +145,16 @@ def dispatch_issues_command(
         )
         followup_prompt = (
             f"{original_prompt}\n\n"
-            "Additional clarification answers from follow-up conversation:\n"
+            "Additional PM clarification answers from follow-up conversation:\n"
             f"{followup_text}\n\n"
-            "Outstanding clarification questions were:\n"
+            "Outstanding PM clarification questions were:\n"
             f"{question_block}\n\n"
-            "Update existing Jira issues where possible. Do not create duplicates."
+            "Update existing PM parent Jira issues where possible. Do not create duplicates or engineering child tickets."
         )
         forced_issue_keys = [
             str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()
         ]
-        message, data = seed_issues_with_codex(
+        message, data = seed_parent_issues_with_codex(
             session=session,
             tenant=tenant,
             prompt_markdown=followup_prompt,
@@ -180,7 +180,7 @@ def dispatch_issues_command(
                 ),
                 project_id=str(context.get("project_id") or "").strip() or scoped_project_id or "",
                 project_key=str(data.get("project_key") or context.get("project_key") or ""),
-                issue_keys=[str(value) for value in data.get("all_issue_keys", []) if str(value).strip()],
+                issue_keys=[str(value) for value in data.get("all_parent_issue_keys", []) if str(value).strip()],
                 questions=[str(value) for value in data.get("questions", []) if str(value).strip()],
                 prompt_markdown=str(data.get("prompt_markdown") or followup_prompt),
             )
@@ -200,5 +200,5 @@ def dispatch_issues_command(
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Usage: !issues seed <markdown spec> | !issues followup <answers>",
+        detail="Usage: !issues seed <markdown batch brief> | !issues followup <answers>",
     )

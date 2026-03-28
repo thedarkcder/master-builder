@@ -4,7 +4,7 @@ from orchestrator.core.discord.commands_sync import build_discord_guild_commands
 
 
 class DiscordCommandSyncTests(unittest.TestCase):
-    def test_build_commands_includes_pm_ask_gap_bug_and_issues_seed(self) -> None:
+    def test_build_commands_include_pm_batch_seed_and_explicit_personas(self) -> None:
         commands = build_discord_guild_commands()
         command_names = {command.get("name") for command in commands}
         self.assertIn("ask", command_names)
@@ -12,6 +12,11 @@ class DiscordCommandSyncTests(unittest.TestCase):
         self.assertIn("gap", command_names)
         self.assertIn("bug", command_names)
         self.assertIn("issues", command_names)
+        self.assertIn("architect", command_names)
+        self.assertIn("engineer", command_names)
+        self.assertIn("tester", command_names)
+        self.assertIn("security", command_names)
+        self.assertIn("reviewer", command_names)
         self.assertIn("request", command_names)
         self.assertIn("reply", command_names)
 
@@ -20,6 +25,8 @@ class DiscordCommandSyncTests(unittest.TestCase):
         self.assertIsInstance(options, list)
         seed_option = next(option for option in options if option.get("name") == "seed")
         self.assertEqual(seed_option.get("type"), 1)
+        followup_option = next(option for option in options if option.get("name") == "followup")
+        self.assertEqual(followup_option.get("type"), 1)
 
         ask_command = next(command for command in commands if command.get("name") == "ask")
         ask_options = ask_command.get("options")
@@ -35,14 +42,19 @@ class DiscordCommandSyncTests(unittest.TestCase):
         pm_command = next(command for command in commands if command.get("name") == "pm")
         pm_options = pm_command.get("options")
         self.assertIsInstance(pm_options, list)
-        self.assertGreaterEqual(len(pm_options), 2)
+        self.assertEqual(len(pm_options), 1)
         self.assertEqual(pm_options[0].get("name"), "question")
         self.assertEqual(pm_options[0].get("required"), True)
-        action_option = next(option for option in pm_options if option.get("name") == "action")
-        self.assertEqual(action_option.get("required"), False)
-        self.assertIsInstance(action_option.get("choices"), list)
-        action_values = {choice.get("value") for choice in action_option["choices"]}
-        self.assertEqual(action_values, {"ask", "approve"})
+
+        for command_name in ("architect", "engineer", "tester", "security", "reviewer"):
+            persona_command = next(command for command in commands if command.get("name") == command_name)
+            persona_options = persona_command.get("options")
+            self.assertIsInstance(persona_options, list)
+            self.assertEqual(persona_options[0].get("name"), "question")
+            self.assertEqual(persona_options[0].get("required"), True)
+            issue_key_option = next(option for option in persona_options if option.get("name") == "issue_key")
+            self.assertEqual(issue_key_option.get("required"), False)
+            self.assertEqual(issue_key_option.get("autocomplete"), True)
 
         gap_command = next(command for command in commands if command.get("name") == "gap")
         gap_options = gap_command.get("options")

@@ -328,33 +328,20 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         return json.dumps(
             {
                 "project_key": "TP",
-                "parent_issue": {
-                    "summary": summary,
-                    "objective": "Clarify cross-account relink behavior.",
-                    "user_value": "Support and engineering share one product-level relink decision.",
-                    "recommendation": "Document the expected relink policy before implementation starts.",
-                    "scope_in": ["Device relink decision"],
-                    "scope_out": [],
-                    "acceptance_criteria": ["Policy is documented"],
-                    "ui_references": [],
-                    "success_outcomes": ["Stakeholders can review the product behavior without technical detail."],
-                    "dependencies": [],
-                    "risks": [],
-                    "open_questions": [],
-                    "labels": ["seeded", "pm-parent"],
-                    "issue_type": "Task",
-                },
-                "engineering_children": [
+                "issues": [
                     {
-                        "summary": f"{summary} implementation",
-                        "behavior_slice": "Persist and enforce the agreed relink decision in the application flow.",
-                        "technical_objective": "Implement the relink policy in the affected code path.",
-                        "implementation_plan": ["Update the relink workflow", "Add verification coverage"],
-                        "technical_dependencies": [],
+                        "summary": summary,
+                        "objective": "Clarify cross-account relink behavior.",
+                        "user_value": "Support and engineering share one product-level relink decision.",
+                        "recommendation": "Document the expected relink policy before implementation starts.",
+                        "scope_in": ["Device relink decision"],
+                        "scope_out": [],
+                        "acceptance_criteria": ["Policy is documented"],
+                        "ui_references": [],
+                        "success_outcomes": ["Stakeholders can review the product behavior without technical detail."],
                         "risks": [],
-                        "how_to_test": ["Run the relink workflow tests"],
-                        "done_criteria": ["Implementation matches the parent feature behavior"],
-                        "labels": ["engineering-child"],
+                        "open_questions": [],
+                        "labels": ["seeded", "pm-parent"],
                         "issue_type": "Task",
                     }
                 ],
@@ -449,10 +436,9 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["command"], "issues")
         self.assertIn("TP-301", body["message"])
-        self.assertIn("TP-302", body["message"])
-        self.assertEqual(body["data"]["created_issue_keys"], ["TP-301", "TP-302"])
+        self.assertEqual(body["data"]["created_parent_issue_keys"], ["TP-301"])
         self.assertEqual(queue.calls, 1)
-        self.assertEqual(len(fake_jira_client.create_calls), 2)
+        self.assertEqual(len(fake_jira_client.create_calls), 1)
         self.assertEqual(fake_jira_client.create_calls[0]["project_key"], "TP")
 
     def test_issues_seed_uses_project_scoped_codex_model_override(self) -> None:
@@ -588,8 +574,7 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
         body = response.json()
         self.assertTrue(body["ok"])
         self.assertIn("TP-302", body["message"])
-        self.assertIn("TP-303", body["message"])
-        self.assertEqual(body["data"]["created_issue_keys"], ["TP-302", "TP-303"])
+        self.assertEqual(body["data"]["created_parent_issue_keys"], ["TP-302"])
         self.assertEqual(queue.calls, 2)
 
     def test_issues_seed_returns_controlled_503_when_codex_empty_output_repeats(self) -> None:
@@ -608,7 +593,7 @@ class DiscordCommandProductionPathTests(unittest.TestCase):
             response = self._post_command("!issues seed draft a backlog item for relink policy")
 
         self.assertEqual(response.status_code, 503)
-        self.assertIn("Codex issue seeding is unavailable", response.json()["detail"])
+        self.assertIn("Codex PM batch seeding is unavailable", response.json()["detail"])
         self.assertIn("no last agent message", response.json()["detail"].lower())
         self.assertEqual(queue.calls, 2)
 

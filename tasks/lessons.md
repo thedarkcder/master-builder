@@ -39,3 +39,4 @@
 - When a user narrows config scope from tenant-level to platform-wide admin control, stop planning tenant policy/UI work immediately. Verify the existing platform admin surface first, and align the design to that control plane before expanding the schema.
 - When a merge exposes a missing compatibility seam, do not default to restoring the seam if it weakens the architecture. First check whether the behavior should instead flow through the canonical shared policy path, then update tests/helpers to use that path.
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.
+- In a multi-worktree repo, verify the active git branch before editing. If the user says the work belongs on a specific branch, switch to that exact worktree first instead of starting implementation in the current cwd and moving it later.
