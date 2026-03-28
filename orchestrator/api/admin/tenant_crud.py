@@ -1,11 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, Response, status
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
-from orchestrator.storage.models import Run, Tenant, TenantRunClaim
+from orchestrator.storage.models import (
+    ManagedSecret,
+    Project,
+    Run,
+    Tenant,
+    TenantInvite,
+    TenantMembership,
+    TenantRunClaim,
+    TenantTeam,
+    TenantTeamMembership,
+    TenantUser,
+    TenantUserCredential,
+    TenantUserDiscordIdentity,
+)
 
 
 def create_tenant(
@@ -26,6 +39,8 @@ def create_tenant(
         tenant_id=tenant_id,
         name=payload.name,
         is_enabled=payload.is_enabled,
+        archived_at=None,
+        purge_after_at=None,
         jira_config=with_preserved_jira_system_fields_fn(
             existing={},
             proposed=payload.jira.model_dump(),
@@ -79,6 +94,9 @@ def update_tenant(
 
     tenant.name = payload.name
     tenant.is_enabled = payload.is_enabled
+    if payload.is_enabled:
+        tenant.archived_at = None
+        tenant.purge_after_at = None
     tenant.jira_config = with_preserved_jira_system_fields_fn(
         existing=dict(tenant.jira_config),
         proposed=payload.jira.model_dump(exclude_unset=True),
@@ -101,18 +119,110 @@ def update_tenant(
     return tenant_to_schema_fn(tenant)
 
 
-def delete_tenant(*, session, tenant_id: str) -> Response:  # noqa: ANN001
+def _delete_tenant_owned_secrets(*, session, tenant_id: str) -> None:  # noqa: ANN001
+    session.execute(
+        delete(ManagedSecret).where(
+            (ManagedSecret.secret_ref.like(f"tenant/{tenant_id}/%"))
+            | (ManagedSecret.secret_ref.like(f"project/{tenant_id}/%"))
+        )
+    )
+
+
+def _delete_orphan_tenant_users(*, session, candidate_user_ids: list[str]) -> None:  # noqa: ANN001
+    if not candidate_user_ids:
+        return
+    for user_id in sorted(set(candidate_user_ids)):
+        has_remaining_membership = session.execute(
+            select(TenantMembership.membership_id).where(TenantMembership.user_id == user_id).limit(1)
+        ).scalar_one_or_none()
+        if has_remaining_membership is None:
+            credential = session.get(TenantUserCredential, user_id)
+            if credential is not None:
+                session.delete(credential)
+            discord_identity = session.get(TenantUserDiscordIdentity, user_id)
+            if discord_identity is not None:
+                session.delete(discord_identity)
+            tenant_user = session.get(TenantUser, user_id)
+            if tenant_user is not None:
+                session.delete(tenant_user)
+
+
+def _delete_tenant_and_owned_data(*, session, tenant_id: str) -> None:  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
+    affected_user_ids = list(
+        session.execute(
+            select(TenantMembership.user_id).where(TenantMembership.tenant_id == tenant_id)
+        ).scalars()
+    )
+    membership_ids = list(
+        session.execute(
+            select(TenantMembership.membership_id).where(TenantMembership.tenant_id == tenant_id)
+        ).scalars()
+    )
+    team_ids = list(
+        session.execute(select(TenantTeam.team_id).where(TenantTeam.tenant_id == tenant_id)).scalars()
+    )
     session.execute(delete(Run).where(Run.tenant_id == tenant_id))
+    session.execute(delete(TenantRunClaim).where(TenantRunClaim.tenant_id == tenant_id))
+    session.execute(delete(TenantInvite).where(TenantInvite.tenant_id == tenant_id))
+    if membership_ids:
+        session.execute(
+            delete(TenantTeamMembership).where(TenantTeamMembership.membership_id.in_(membership_ids))
+        )
+    if team_ids:
+        session.execute(delete(TenantTeamMembership).where(TenantTeamMembership.team_id.in_(team_ids)))
+    session.execute(delete(TenantTeam).where(TenantTeam.tenant_id == tenant_id))
+    session.execute(delete(Project).where(Project.tenant_id == tenant_id))
+    session.execute(delete(TenantMembership).where(TenantMembership.tenant_id == tenant_id))
+    _delete_tenant_owned_secrets(session=session, tenant_id=tenant_id)
     session.delete(tenant)
+    session.flush()
+    _delete_orphan_tenant_users(session=session, candidate_user_ids=affected_user_ids)
+
+
+def delete_tenant(*, session, tenant_id: str) -> Response:  # noqa: ANN001
+    _delete_tenant_and_owned_data(session=session, tenant_id=tenant_id)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def set_tenant_archive_state(*, session, tenant_id: str, is_enabled: bool, tenant_to_schema_fn):  # noqa: ANN001
+def set_tenant_archive_state(
+    *,
+    session,
+    tenant_id: str,
+    is_enabled: bool,
+    tenant_to_schema_fn,
+    archive_retention_days: int,
+):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.is_enabled = is_enabled
-    tenant.updated_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if is_enabled:
+        tenant.archived_at = None
+        tenant.purge_after_at = None
+    else:
+        tenant.archived_at = now
+        tenant.purge_after_at = now + timedelta(days=max(1, int(archive_retention_days)))
+    tenant.updated_at = now
     session.commit()
     session.refresh(tenant)
     return tenant_to_schema_fn(tenant)
+
+
+def purge_expired_archived_tenants(*, session, now: datetime | None = None) -> int:  # noqa: ANN001
+    effective_now = now or datetime.now(timezone.utc)
+    expired_tenant_ids = list(
+        session.execute(
+            select(Tenant.tenant_id).where(
+                Tenant.is_enabled.is_(False),
+                Tenant.purge_after_at.is_not(None),
+                Tenant.purge_after_at <= effective_now,
+            )
+        ).scalars()
+    )
+    if not expired_tenant_ids:
+        return 0
+    for tenant_id in expired_tenant_ids:
+        _delete_tenant_and_owned_data(session=session, tenant_id=tenant_id)
+    session.commit()
+    return len(expired_tenant_ids)

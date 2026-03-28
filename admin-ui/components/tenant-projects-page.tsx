@@ -84,7 +84,7 @@ export function TenantProjectsPage() {
           </Button>
           {allowProjectManagement ? (
             <Button asChild size="sm">
-              <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
+              <Link href={`/${encodeURIComponent(params.tenantId)}/projects/new`}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
                 Add project
               </Link>
@@ -148,7 +148,7 @@ export function TenantProjectsPage() {
             <p className="mt-1 text-sm text-muted-foreground">Create a project to start orchestrating runs in this workspace.</p>
             {allowProjectManagement ? (
               <Button asChild className="mt-4" size="sm">
-                <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
+                <Link href={`/${encodeURIComponent(params.tenantId)}/projects/new`}>
                   <Plus className="mr-1.5 h-3.5 w-3.5" />
                   Add project
                 </Link>
@@ -162,7 +162,7 @@ export function TenantProjectsPage() {
             {activeProjects.map((project) => (
               <li key={project.project_id}>
                 <Link
-                  href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(project.project_id)}`}
+                  href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(project.project_id)}`}
                   className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                 >
                   {/* Avatar */}

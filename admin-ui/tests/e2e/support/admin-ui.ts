@@ -144,7 +144,7 @@ export async function mockCredentialSignIn(
       principal.principal_type === "platform_super_admin"
         ? `${APP_BASE_URL}/dashboard`
         : principal.memberships[0]
-          ? `${APP_BASE_URL}/tenants/${encodeURIComponent(principal.memberships[0].tenant_id)}/dashboard`
+          ? `${APP_BASE_URL}/${encodeURIComponent(principal.memberships[0].tenant_id)}/dashboard`
           : `${APP_BASE_URL}/tenants/select`;
     await route.fulfill({
       status: 200,
@@ -171,6 +171,8 @@ export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord 
     tenant_id: "route25",
     name: "Route 25",
     is_enabled: true,
+    archived_at: null,
+    purge_after_at: null,
     jira: {
       connection_id: null,
       project_keys: ["ROUTE"],

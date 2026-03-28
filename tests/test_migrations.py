@@ -47,7 +47,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260327_0043"])
+        self.assertEqual(script.get_heads(), ["20260328_0045"])
 
     def test_run_migrations_repairs_legacy_stream_only_0040_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -107,7 +107,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260327_0043"])
+            self.assertEqual(versions, ["20260328_0045"])
 
     def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -151,7 +151,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260327_0043"])
+            self.assertEqual(versions, ["20260328_0045"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -187,6 +187,9 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("knowledge_jira_sync_runtime_states", inspector.get_table_names())
             self.assertIn("knowledge_jira_sync_project_states", inspector.get_table_names())
             self.assertIn("discord_command_sync_runtime_states", inspector.get_table_names())
+            self.assertIn("worker_runtime_states", inspector.get_table_names())
+            knowledge_fact_columns = {column["name"]: column for column in inspector.get_columns("knowledge_facts")}
+            self.assertEqual(getattr(knowledge_fact_columns["slot_name"]["type"], "length", None), 128)
 
     def test_initial_migration_uses_boolean_default_for_tenants_enabled(self) -> None:
         migration_file = (

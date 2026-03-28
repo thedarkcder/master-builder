@@ -84,6 +84,8 @@ export type TenantRecord = {
   tenant_id: string;
   name: string;
   is_enabled: boolean;
+  archived_at?: string | null;
+  purge_after_at?: string | null;
   jira: JiraConfig;
   github: GithubConfig;
   repos: ReposConfig;
@@ -380,6 +382,31 @@ export type KnowledgeJiraSyncRuntimeRecord = {
   service_instance_id: string | null;
   stale: boolean;
   projects: KnowledgeJiraSyncProjectStatusRecord[];
+};
+
+export type PlatformServiceStatusRecord = {
+  service_id: string;
+  label: string;
+  status: "healthy" | "degraded" | "idle" | "unavailable" | string;
+  summary: string;
+  updated_at: string | null;
+  capabilities: string[];
+  instances?: PlatformServiceInstanceRecord[];
+};
+
+export type PlatformServiceInstanceRecord = {
+  instance_id: string;
+  label: string;
+  status: "healthy" | "degraded" | "idle" | "unavailable" | "busy" | "stale" | "stopped" | string;
+  summary?: string | null;
+  last_heartbeat_at?: string | null;
+  updated_at: string | null;
+  capabilities: string[];
+  current_run_id?: string | null;
+};
+
+export type PlatformStatusRecord = {
+  services: PlatformServiceStatusRecord[];
 };
 
 export type JiraWebhookActionResult = {
@@ -1786,6 +1813,10 @@ export function getKnowledgeJiraSyncRuntimeStatus(
     credentials,
     "/api/admin/observability/knowledge-jira-sync"
   );
+}
+
+export function getPlatformStatus(credentials: Credentials): Promise<PlatformStatusRecord> {
+  return request<PlatformStatusRecord>(credentials, "/api/admin/status");
 }
 
 export function listRuns(

@@ -27,7 +27,12 @@ from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import RunEventRead, RunLogEventRead, RunRead, RunRerunRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.security import require_admin
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_admin,
+    require_authenticated_principal,
+    require_tenant_workspace_access,
+)
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.storage.models import Run, Tenant
 
@@ -50,9 +55,16 @@ def list_runs(
     to_time: datetime | None = Query(default=None, alias="to"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[RunRead]:
+    if not principal.is_platform_super_admin:
+        if not tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tenant_id is required for tenant-scoped run listing",
+            )
+        require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
     return list_runs_impl(
         session=session,
         tenant_id=tenant_id,
@@ -74,9 +86,14 @@ def list_runs(
 @router.get("/runs/{run_id}", response_model=RunRead)
 def get_run(
     run_id: str,
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> RunRead:
+    if not principal.is_platform_super_admin:
+        run = session.get(Run, run_id)
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=run.tenant_id)
     return get_run_impl(
         session=session,
         run_id=run_id,
@@ -125,9 +142,14 @@ def cancel_run(
 def list_run_events(
     run_id: str,
     limit: int = Query(default=200, ge=1, le=500),
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[RunEventRead]:
+    if not principal.is_platform_super_admin:
+        run = session.get(Run, run_id)
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=run.tenant_id)
     return list_run_events_impl(
         session=session,
         run_id=run_id,
@@ -143,9 +165,14 @@ def list_run_logs(
     limit: int = Query(default=200, ge=1, le=1000),
     before_recorded_at: datetime | None = Query(default=None),
     before_event_id: str | None = Query(default=None),
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[RunLogEventRead]:
+    if not principal.is_platform_super_admin:
+        run = session.get(Run, run_id)
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        require_tenant_workspace_access(principal=principal, tenant_id=run.tenant_id)
     return list_run_log_events_impl(
         session=session,
         run_id=run_id,
@@ -160,12 +187,14 @@ def list_run_logs(
 @router.get("/runs/{run_id}/events/stream")
 def stream_run_events(
     run_id: str,
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     run = session.get(Run, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if not principal.is_platform_super_admin:
+        require_tenant_workspace_access(principal=principal, tenant_id=run.tenant_id)
     return StreamingResponse(
         stream_run_events_ndjson_impl(
             session=session,

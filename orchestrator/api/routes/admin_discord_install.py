@@ -108,7 +108,7 @@ def discord_install_callback(
         )
     else:
         redirect_url = (
-            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/edit/discord"
+            f"{settings.admin_ui_base_url.rstrip('/')}/tenants/{quote(tenant.tenant_id, safe='')}/settings/discord"
             "?discord_install=success"
         )
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)

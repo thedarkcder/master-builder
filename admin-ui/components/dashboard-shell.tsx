@@ -25,7 +25,13 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth-provider";
 import { getRun, type TenantRecord, getTenant, listProjects, type ProjectRecord } from "@/lib/api";
-import { canAccessPlatformAdmin, canAccessTechnicalSurface, canManageTeam, getMembershipForTenant } from "@/lib/auth-routing";
+import {
+  canAccessPlatformAdmin,
+  canAccessTechnicalSurface,
+  canManageTeam,
+  getMembershipForTenant,
+  getTenantWorkspaceRoute,
+} from "@/lib/auth-routing";
 import { resolveRunRouteContext } from "@/lib/dashboard-paths";
 import {
   Sidebar,
@@ -49,6 +55,7 @@ type NavItem = {
 
 const globalNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/status", label: "Status", icon: Activity },
   { href: "/tenants/select", label: "Tenants", icon: Building2 },
   { href: "/secrets", label: "Secrets", icon: KeyRound }
 ];
@@ -84,6 +91,7 @@ type RunRouteCtx = ReturnType<typeof resolveRunRouteContext>;
 type DashboardNavPanelProps = {
   decodedTenantId: string | null;
   tenantDisplayName: string;
+  tenantBaseRoute: string | null;
   navItems: NavItem[];
   tenantProjects: ProjectRecord[];
   pathname: string;
@@ -98,6 +106,7 @@ type DashboardNavPanelProps = {
 function DashboardNavPanel({
   decodedTenantId,
   tenantDisplayName,
+  tenantBaseRoute,
   navItems,
   tenantProjects,
   pathname,
@@ -108,19 +117,18 @@ function DashboardNavPanel({
   onNavigate
 }: DashboardNavPanelProps) {
   const close = () => onNavigate?.();
-  const encodedTenantId = decodedTenantId ? encodeURIComponent(decodedTenantId) : null;
   const projectMenu = (
     <SidebarMenu>
       <SidebarMenuItem key={`projects-overview-${decodedTenantId}`}>
-        <SidebarMenuButton asChild isActive={pathname === `/tenants/${encodedTenantId}/projects`}>
-          <Link href={`/tenants/${encodedTenantId}/projects`} onClick={close}>
+        <SidebarMenuButton asChild isActive={tenantBaseRoute != null && pathname === `${tenantBaseRoute}/projects`}>
+          <Link href={`${tenantBaseRoute}/projects`} onClick={close}>
             <FolderKanban className="h-4 w-4 flex-shrink-0" />
             All projects
           </Link>
         </SidebarMenuButton>
       </SidebarMenuItem>
       {tenantProjects.map((project) => {
-        const projectHref = `/tenants/${encodedTenantId}/projects/${encodeURIComponent(project.project_id)}`;
+        const projectHref = `${tenantBaseRoute}/projects/${encodeURIComponent(project.project_id)}`;
         const active =
           pathname === projectHref ||
           pathname.startsWith(`${projectHref}/`) ||
@@ -265,12 +273,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
-  const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\//);
-  const projectMatch = pathname.match(/^\/tenants\/([^/]+)\/projects\/([^/]+)(?:\/|$)/);
+  const tenantMatch = pathname.match(
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\//,
+  );
+  const projectMatch = pathname.match(
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)(?:\/|$)/,
+  );
   const runContext = resolveRunRouteContext(pathname);
   const isWizardRoute =
     pathname.startsWith("/tenants/new") ||
-    /^\/tenants\/[^/]+\/projects\/new(\/|$)/.test(pathname);
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/new(\/|$)/.test(pathname);
   const [runTenantId, setRunTenantId] = useState<string | null>(null);
   const tenantId = tenantMatch ? tenantMatch[1] : runTenantId;
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
@@ -296,7 +308,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     const onboardingAllowed =
       pathname === "/get-started" ||
       pathname.startsWith("/tenants/new") ||
-      /^\/tenants\/[^/]+\/edit(\/|$)/.test(pathname);
+      /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname);
     if (ready && credentials && needsOnboarding && !onboardingAllowed) {
       router.replace("/get-started");
     }
@@ -369,7 +381,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to login...</main>;
   }
 
-  if (needsOnboarding && pathname !== "/get-started" && !pathname.startsWith("/tenants/new") && !/^\/tenants\/[^/]+\/edit(\/|$)/.test(pathname)) {
+  if (
+    needsOnboarding &&
+    pathname !== "/get-started" &&
+    !pathname.startsWith("/tenants/new") &&
+    !/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname)
+  ) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to onboarding...</main>;
   }
 
@@ -386,67 +403,67 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
-  const encodedTenantId = decodedTenantId ? encodeURIComponent(decodedTenantId) : null;
+  const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
   const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
   const tenantMembership = decodedTenantId ? getMembershipForTenant(principal, decodedTenantId) : null;
   const canManageWorkspaceTeam = decodedTenantId ? canManageTeam(principal, decodedTenantId) : false;
   const analyticsHref =
     decodedTenantId && !canAccessTechnicalSurface(principal, decodedTenantId)
-      ? `/tenants/${encodedTenantId}/analytics/business`
+      ? `${tenantBaseRoute}/analytics/business`
       : decodedTenantId
-        ? `/tenants/${encodedTenantId}/analytics/token-overview`
+        ? `${tenantBaseRoute}/analytics/token-overview`
         : null;
   const showSecretsNav = !decodedTenantId || canAccessPlatformAdmin(principal) || canAccessTechnicalSurface(principal, decodedTenantId);
 
   const tenantNavItems: NavItem[] = decodedTenantId
     ? [
         {
-          href: `/tenants/${encodedTenantId}/dashboard`,
+          href: `${tenantBaseRoute}/dashboard`,
           label: "Home",
           icon: LayoutDashboard,
-          matchPrefix: `/tenants/${encodedTenantId}/dashboard`
+          matchPrefix: `${tenantBaseRoute}/dashboard`
         },
         {
-          href: `/tenants/${encodedTenantId}/runs`,
+          href: `${tenantBaseRoute}/runs`,
           label: "Pipeline",
           icon: Activity,
-          matchPrefix: `/tenants/${encodedTenantId}/runs`
+          matchPrefix: `${tenantBaseRoute}/runs`
         },
         {
-          href: analyticsHref ?? `/tenants/${encodedTenantId}/analytics/token-overview`,
+          href: analyticsHref ?? `${tenantBaseRoute}/analytics/token-overview`,
           label: "Analytics",
           icon: BarChart3,
-          matchPrefix: `/tenants/${encodedTenantId}/analytics`
+          matchPrefix: `${tenantBaseRoute}/analytics`
         },
         ...(canManageWorkspaceTeam
           ? [
               {
-                href: `/tenants/${encodedTenantId}/team/members`,
+                href: `${tenantBaseRoute}/team/members`,
                 label: "Team",
                 icon: Users,
-                matchPrefix: `/tenants/${encodedTenantId}/team`
+                matchPrefix: `${tenantBaseRoute}/team`
               }
             ]
           : []),
         {
-          href: `/tenants/${encodedTenantId}/profile`,
+          href: `${tenantBaseRoute}/profile`,
           label: "Profile",
           icon: User,
-          matchPrefix: `/tenants/${encodedTenantId}/profile`
+          matchPrefix: `${tenantBaseRoute}/profile`
         },
         {
-          href: `/tenants/${encodedTenantId}/edit/integrations`,
+          href: `${tenantBaseRoute}/settings/integrations`,
           label: "Settings",
           icon: Settings2,
-          matchPrefix: `/tenants/${encodedTenantId}/edit`
+          matchPrefix: `${tenantBaseRoute}/settings`
         },
         ...(showSecretsNav
           ? [
               {
-                href: `/tenants/${encodedTenantId}/secrets`,
+                href: `${tenantBaseRoute}/secrets`,
                 label: "Secrets",
                 icon: KeyRound,
-                matchPrefix: `/tenants/${encodedTenantId}/secrets`
+                matchPrefix: `${tenantBaseRoute}/secrets`
               }
             ]
           : [])
@@ -459,6 +476,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const navPanelProps: DashboardNavPanelProps = {
     decodedTenantId,
     tenantDisplayName,
+    tenantBaseRoute,
     navItems,
     tenantProjects,
     pathname,

@@ -220,6 +220,8 @@ class TenantRead(BaseModel):
     tenant_id: str
     name: str
     is_enabled: bool
+    archived_at: datetime | None = None
+    purge_after_at: datetime | None = None
     jira: JiraConfig
     github: GithubConfig
     repos: ReposConfig
@@ -906,6 +908,30 @@ class PlatformObservabilityRead(BaseModel):
     active_runs: int
     failed_runs_last_24h: int
     run_duration: ObservabilityDurationStatsRead
+
+
+class PlatformServiceInstanceRead(BaseModel):
+    instance_id: str
+    label: str
+    status: str
+    summary: str
+    updated_at: datetime | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    active_run_count: int = 0
+
+
+class PlatformServiceStatusRead(BaseModel):
+    service_id: str
+    label: str
+    status: str
+    summary: str
+    updated_at: datetime | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    instances: list[PlatformServiceInstanceRead] = Field(default_factory=list)
+
+
+class PlatformStatusRead(BaseModel):
+    services: list[PlatformServiceStatusRead] = Field(default_factory=list)
 
 
 class TenantObservabilityRead(BaseModel):

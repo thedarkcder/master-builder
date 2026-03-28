@@ -10,6 +10,7 @@ from orchestrator.api.admin.observability_service import (
     project_observability as project_observability_impl,
     tenant_observability as tenant_observability_impl,
 )
+from orchestrator.api.admin.platform_status_service import platform_status as platform_status_impl
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as project_execution_metrics_impl,
 )
@@ -19,6 +20,7 @@ from orchestrator.api.schemas import (
     AgentActivityRead,
     AlertEvaluationRead,
     KnowledgeJiraSyncRuntimeRead,
+    PlatformStatusRead,
     PlatformObservabilityRead,
     ProjectExecutionMetricsRead,
     ProjectObservabilityRead,
@@ -26,6 +28,7 @@ from orchestrator.api.schemas import (
     TenantObservabilityRead,
 )
 from orchestrator.core.knowledge_jira_sync_runtime import get_knowledge_jira_sync_runtime_status
+from orchestrator.core.config import get_settings
 from orchestrator.core.security import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -97,6 +100,14 @@ def platform_observability(
     session: Session = Depends(get_session),
 ) -> PlatformObservabilityRead:
     return platform_observability_impl(session=session)
+
+
+@router.get("/status", response_model=PlatformStatusRead)
+def platform_status(
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> PlatformStatusRead:
+    return platform_status_impl(session=session, settings=get_settings())
 
 
 @router.get("/observability/knowledge-jira-sync", response_model=KnowledgeJiraSyncRuntimeRead)

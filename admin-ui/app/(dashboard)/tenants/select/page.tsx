@@ -1,14 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, ChevronRight, Plus, Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { canAccessPlatformAdmin, getDefaultAuthenticatedRoute, getTenantDashboardRoute } from "@/lib/auth-routing";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { listTenants, type TenantRecord } from "@/lib/api";
+
+const WORKSPACES_PER_PAGE = 6;
 
 function tenantInitials(name: string): string {
   const words = name.trim().split(/\s+/);
@@ -34,14 +37,45 @@ function tenantAvatarColor(id: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
+function formatPurgeDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export default function SelectTenantPage() {
   const router = useRouter();
   const { credentials, ready, principal, needsOnboarding } = useAuth();
   const [tenants, setTenants] = useState<TenantRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activePage, setActivePage] = useState(1);
+  const [archivedPage, setArchivedPage] = useState(1);
   const activeTenants = tenants.filter((tenant) => tenant.is_enabled);
   const archivedTenants = tenants.filter((tenant) => !tenant.is_enabled);
+  const activePageCount = Math.max(1, Math.ceil(activeTenants.length / WORKSPACES_PER_PAGE));
+  const archivedPageCount = Math.max(1, Math.ceil(archivedTenants.length / WORKSPACES_PER_PAGE));
+  const pagedActiveTenants = useMemo(
+    () =>
+      activeTenants.slice(
+        (activePage - 1) * WORKSPACES_PER_PAGE,
+        activePage * WORKSPACES_PER_PAGE,
+      ),
+    [activePage, activeTenants],
+  );
+  const pagedArchivedTenants = useMemo(
+    () =>
+      archivedTenants.slice(
+        (archivedPage - 1) * WORKSPACES_PER_PAGE,
+        archivedPage * WORKSPACES_PER_PAGE,
+      ),
+    [archivedPage, archivedTenants],
+  );
 
   async function loadTenants() {
     if (!credentials) return;
@@ -49,6 +83,8 @@ export default function SelectTenantPage() {
     try {
       const payload = await listTenants(credentials);
       setTenants(payload);
+      setActivePage(1);
+      setArchivedPage(1);
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(`Failed to load tenants: ${(error as Error).message}`);
@@ -67,6 +103,14 @@ export default function SelectTenantPage() {
   useEffect(() => {
     if (ready && credentials) void loadTenants();
   }, [ready, credentials]);
+
+  useEffect(() => {
+    setActivePage((current) => Math.min(current, activePageCount));
+  }, [activePageCount]);
+
+  useEffect(() => {
+    setArchivedPage((current) => Math.min(current, archivedPageCount));
+  }, [archivedPageCount]);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12">
@@ -124,7 +168,7 @@ export default function SelectTenantPage() {
                 </div>
               ) : (
                 <ul className="divide-y">
-                  {activeTenants.map((tenant) => (
+                  {pagedActiveTenants.map((tenant) => (
                     <li key={tenant.tenant_id}>
                       <Link
                         href={getTenantDashboardRoute(tenant.tenant_id)}
@@ -138,6 +182,11 @@ export default function SelectTenantPage() {
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium text-sm">{tenant.name}</p>
                           <p className="truncate text-xs text-muted-foreground">{tenant.tenant_id}</p>
+                          {formatPurgeDate(tenant.purge_after_at) ? (
+                            <p className="truncate text-xs text-muted-foreground">
+                              Deletes on {formatPurgeDate(tenant.purge_after_at)}
+                            </p>
+                          ) : null}
                         </div>
                         <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
                       </Link>
@@ -160,6 +209,34 @@ export default function SelectTenantPage() {
                   </li>
                 </ul>
               )}
+              {activeTenants.length > WORKSPACES_PER_PAGE ? (
+                <div className="flex items-center justify-between border-t px-4 py-3">
+                  <span className="text-xs text-muted-foreground">
+                    {activeTenants.length} active workspace{activeTenants.length === 1 ? "" : "s"} • Page {activePage} of{" "}
+                    {activePageCount}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => setActivePage((current) => Math.max(1, current - 1))}
+                      disabled={activePage <= 1}
+                    >
+                      ← Prev
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => setActivePage((current) => Math.min(activePageCount, current + 1))}
+                      disabled={activePage >= activePageCount}
+                    >
+                      Next →
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {archivedTenants.length > 0 ? (
@@ -171,10 +248,10 @@ export default function SelectTenantPage() {
                   </p>
                 </div>
                 <ul className="divide-y">
-                  {archivedTenants.map((tenant) => (
+                  {pagedArchivedTenants.map((tenant) => (
                     <li key={tenant.tenant_id}>
                       <Link
-                        href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/integrations`}
+                        href={`/${encodeURIComponent(tenant.tenant_id)}/settings/integrations`}
                         className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                       >
                         <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
@@ -191,6 +268,34 @@ export default function SelectTenantPage() {
                     </li>
                   ))}
                 </ul>
+                {archivedTenants.length > WORKSPACES_PER_PAGE ? (
+                  <div className="flex items-center justify-between border-t px-4 py-3">
+                    <span className="text-xs text-muted-foreground">
+                      {archivedTenants.length} archived workspace{archivedTenants.length === 1 ? "" : "s"} • Page{" "}
+                      {archivedPage} of {archivedPageCount}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => setArchivedPage((current) => Math.max(1, current - 1))}
+                        disabled={archivedPage <= 1}
+                      >
+                        ← Prev
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => setArchivedPage((current) => Math.min(archivedPageCount, current + 1))}
+                        disabled={archivedPage >= archivedPageCount}
+                      >
+                        Next →
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>

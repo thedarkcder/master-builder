@@ -31,6 +31,8 @@ class Tenant(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    purge_after_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     jira_config: Mapped[dict] = mapped_column(JSON, nullable=False)
     github_config: Mapped[dict] = mapped_column(JSON, nullable=False)
@@ -763,7 +765,7 @@ class KnowledgeFact(Base):
     fact_key: Mapped[str] = mapped_column(String(128), nullable=False, default="", index=True)
     fact_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
     approval_state: Mapped[str] = mapped_column(String(32), nullable=False, default="approved", index=True)
-    slot_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    slot_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     slot_value: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     is_inferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -835,6 +837,19 @@ class DiscordCommandSyncRuntimeState(Base):
     application_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     command_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     service_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class WorkerRuntimeState(Base):
+    __tablename__ = "worker_runtime_states"
+
+    service_instance_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    worker_mode: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    capabilities_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="starting", index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 

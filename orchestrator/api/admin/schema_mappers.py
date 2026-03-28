@@ -12,6 +12,8 @@ def tenant_to_schema(tenant: Tenant) -> TenantRead:
         tenant_id=tenant.tenant_id,
         name=tenant.name,
         is_enabled=tenant.is_enabled,
+        archived_at=tenant.archived_at,
+        purge_after_at=tenant.purge_after_at,
         jira=tenant.jira_config,
         github=tenant.github_config,
         repos=tenant.repos_config,

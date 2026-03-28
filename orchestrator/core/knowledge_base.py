@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 import hashlib
+import importlib
+import logging
 import math
 import mimetypes
 import os
@@ -58,6 +60,8 @@ _INLINE_CONFIGURATION_ALIASES: dict[str, tuple[str, ...]] = {
     "project_id": ("project id",),
 }
 _KNOWLEDGE_EMBEDDING_MODEL_DEFAULT = "BAAI/bge-small-en-v1.5"
+_REFERENCE_FACT_SLOT_NAME = "reference_fact"
+_SLOT_NAME_MAX_LENGTH = 128
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,15 @@ def _normalize_fact_key(value: str) -> str:
     return normalized[:128] or "fact"
 
 
+def _normalize_fact_slot_name(*, fact_type: str, slot_name: str | None, fact_key: str) -> str:
+    canonical_slot = normalize_slot_name(slot_name or "")
+    if canonical_slot:
+        return canonical_slot
+    if fact_type == "decision_slot":
+        return normalize_slot_name(fact_key) or _normalize_fact_key(fact_key)[:_SLOT_NAME_MAX_LENGTH] or "fact"
+    return _REFERENCE_FACT_SLOT_NAME
+
+
 def _classify_fact_type(*, label: str) -> str:
     normalized = str(label or "").strip().lower()
     for fact_type, keywords in _FACT_TYPE_KEYWORDS:
@@ -158,6 +171,11 @@ def extract_decision_facts(text: str) -> list[dict[str, Any]]:
         if dedupe_key in seen:
             return
         seen.add(dedupe_key)
+        resolved_slot_name = _normalize_fact_slot_name(
+            fact_type=fact_type,
+            slot_name=slot_name,
+            fact_key=clean_key,
+        )
         facts.append(
             {
                 "fact_type": fact_type,
@@ -165,7 +183,7 @@ def extract_decision_facts(text: str) -> list[dict[str, Any]]:
                 "fact_value": clean_value,
                 "confidence": confidence,
                 "is_inferred": is_inferred,
-                "slot_name": slot_name or normalize_slot_name(clean_key) or clean_key,
+                "slot_name": resolved_slot_name[:_SLOT_NAME_MAX_LENGTH],
                 "slot_value": clean_value,
                 "metadata_json": dict(metadata_json or {}),
             }
@@ -461,6 +479,7 @@ def _knowledge_text_embedding_model(local_files_only: bool | None = None):  # no
 
 
 def _build_knowledge_text_embedding_model(*, local_files_only: bool | None = None):  # noqa: ANN202
+    _suppress_known_onnxruntime_warning_noise()
     from fastembed import TextEmbedding  # type: ignore[import-not-found]
 
     kwargs: dict[str, Any] = {}
@@ -472,6 +491,20 @@ def _build_knowledge_text_embedding_model(*, local_files_only: bool | None = Non
         model_name=_knowledge_embedding_model_name(),
         **kwargs,
     )
+
+
+def _suppress_known_onnxruntime_warning_noise() -> None:
+    try:
+        onnxruntime = importlib.import_module("onnxruntime")
+    except Exception:  # noqa: BLE001
+        return
+    set_default_logger_severity = getattr(onnxruntime, "set_default_logger_severity", None)
+    if not callable(set_default_logger_severity):
+        return
+    try:
+        set_default_logger_severity(logging.ERROR)
+    except Exception:  # noqa: BLE001
+        return
 
 
 def _knowledge_embedding_model_name() -> str:

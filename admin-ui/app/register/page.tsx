@@ -49,6 +49,12 @@ export default function RegisterPage() {
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.22),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(59,130,246,0.22),_transparent_40%),linear-gradient(135deg,#0f172a,#111827,#1f2937)] px-4 py-8">
       <div className="relative w-full max-w-lg">
+        <div className="mb-6">
+          <Link href="/" className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
+            Back to home
+          </Link>
+        </div>
+
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500 shadow-[0_0_32px_rgba(245,158,11,0.45)] ring-1 ring-amber-300/30">
             <Rocket className="h-7 w-7 text-white" />

@@ -712,12 +712,14 @@ def archive_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
+    settings = get_settings()
     return set_tenant_archive_state_route_impl(
         session=session,
         tenant_id=tenant_id,
         is_enabled=False,
         set_tenant_archive_state_fn=set_tenant_archive_state_impl,
         tenant_to_schema_fn=tenant_to_schema,
+        archive_retention_days=settings.tenant_archive_retention_days,
     )
 
 
@@ -727,12 +729,14 @@ def unarchive_tenant(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantRead:
+    settings = get_settings()
     return set_tenant_archive_state_route_impl(
         session=session,
         tenant_id=tenant_id,
         is_enabled=True,
         set_tenant_archive_state_fn=set_tenant_archive_state_impl,
         tenant_to_schema_fn=tenant_to_schema,
+        archive_retention_days=settings.tenant_archive_retention_days,
     )
 
 

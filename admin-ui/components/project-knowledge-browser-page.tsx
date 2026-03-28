@@ -304,7 +304,7 @@ export function ProjectKnowledgeBrowserPage({
         <div>
           <p className="text-sm text-muted-foreground">
             <Link
-              href={`/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`}
+              href={`/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`}
               className="hover:underline"
             >
               Back to project

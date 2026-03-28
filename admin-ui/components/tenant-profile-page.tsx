@@ -152,7 +152,7 @@ export function TenantProfilePage({ section = "profile" }: { section?: "profile"
       return;
     }
     try {
-      const result = await startTenantDiscordLink(credentials, tenantId, `/tenants/${encodeURIComponent(tenantId)}/profile`);
+      const result = await startTenantDiscordLink(credentials, tenantId, `/${encodeURIComponent(tenantId)}/profile`);
       window.location.href = result.authorize_url;
     } catch (error) {
       setStatusLine(`Unable to start Discord link: ${(error as Error).message}`);

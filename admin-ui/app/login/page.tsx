@@ -72,6 +72,12 @@ export default function LoginPage() {
       </div>
 
       <div className="relative w-full max-w-md">
+        <div className="mb-6">
+          <Link href="/" className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
+            Back to home
+          </Link>
+        </div>
+
         {/* Logo + wordmark above card */}
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600 shadow-[0_0_32px_rgba(99,102,241,0.5)] ring-1 ring-indigo-400/30">

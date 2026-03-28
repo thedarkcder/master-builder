@@ -68,3 +68,14 @@
 - For destructive tenant-level actions, do not jump straight to an automatic redirect. Show a confirmation state with one explicit exit CTA, and make the browser test click that CTA before asserting the final destination.
 - If the action invalidates the current workspace shell, the confirmation must live on a standalone route outside that shell. Do not keep stale tenant navigation visible after archiving the workspace it belongs to.
 - When an entity is archived, do not make it disappear entirely if the operator still needs a recovery path. Move it into a clearly labeled archived section with the correct next action instead of pretending it no longer exists.
+- Long selector surfaces should page or window their lists. Do not let admin selectors grow into unbounded vertical dumps once test data or production data accumulates.
+- For tenant nav links, add at least one real-browser click test for the actual route transition. Mocked page assertions are not enough to prove sidebar navigation works in the live app.
+- Destructive admin actions must live in a dedicated danger zone, not in shared page headers. If archiving removes access to a tenant or project, require typed-name confirmation and test the real browser click path through the confirmation state.
+- When replacing a route contract, do not leave legacy redirects behind unless the requirement explicitly calls for them. Update every live caller and test to the new URL structure and delete the stale route tree in the same change.
+- For permission bugs, do not fork API contracts with temporary parallel endpoints. Keep one canonical endpoint and fix authorization rules there so UI routing and tests stay consistent.
+- When the product says API permissions are role/team-linked, do not stop at raw membership existence checks. Express the contract through a shared authorization helper tied to the membership model, then reuse that helper across every endpoint in that surface.
+
+- When a user asks for hosted service status, build a dedicated platform status surface. Do not reuse tenant settings or integration diagnostics for platform operations.
+- When a user asks to remove a URL segment and rejects legacy redirects, make it a real route-tree cutover: move the route files, update helpers/nav/tests together, and delete alias redirect behavior instead of hiding the old contract behind redirects.
+
+- When a bug report says the persona-specific live click path is still broken, do not rely on a nearby automated flow as proof. Reproduce that exact user journey in-browser, including the actual click target and expected visible data, before claiming the fix.

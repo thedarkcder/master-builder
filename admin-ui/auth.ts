@@ -118,6 +118,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     authorized({ auth, request }) {
       const pathname = request.nextUrl.pathname;
       const isPublicPath =
+        pathname === "/" ||
         pathname === "/login" ||
         pathname === "/forgot-password" ||
         pathname === "/reset-password" ||

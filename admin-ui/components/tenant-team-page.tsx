@@ -80,6 +80,7 @@ function summarizePermissions(permissionKeys: string[]): string {
 export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
   const params = useParams<{ tenantId: string }>();
   const { credentials, ready } = useAuth();
+  const tenantId = decodeURIComponent(params.tenantId);
 
   const [members, setMembers] = useState<TenantMemberRecord[]>([]);
   const [teams, setTeams] = useState<TenantTeamRecord[]>([]);
@@ -114,9 +115,9 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
     setLoading(true);
     try {
       const [nextMembers, nextTeams, nextInvites] = await Promise.all([
-        listTenantMembers(credentials, params.tenantId),
-        listTenantTeams(credentials, params.tenantId),
-        listTenantInvites(credentials, params.tenantId),
+        listTenantMembers(credentials, tenantId),
+        listTenantTeams(credentials, tenantId),
+        listTenantInvites(credentials, tenantId),
       ]);
       setMembers(nextMembers);
       setTeams(nextTeams);
@@ -132,7 +133,7 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
     if (ready && credentials) {
       void loadTeamData();
     }
-  }, [ready, credentials]);
+  }, [ready, credentials, tenantId]);
 
   async function handleCreateInvite() {
     if (!credentials) {
@@ -140,7 +141,7 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
     }
     setBusy(true);
     try {
-      await createTenantInvite(credentials, params.tenantId, {
+      await createTenantInvite(credentials, tenantId, {
         email: inviteEmail.trim(),
         full_name: inviteName.trim() || null,
         role: inviteRole,
@@ -165,7 +166,7 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
     }
     setBusy(true);
     try {
-      await createTenantTeam(credentials, params.tenantId, {
+      await createTenantTeam(credentials, tenantId, {
         name: newTeamName.trim(),
         description: newTeamDescription.trim() || null,
         permission_keys: newTeamPermissions,
@@ -192,7 +193,7 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
       : [...team.permission_keys, permissionKey];
     setBusy(true);
     try {
-      await updateTenantTeamRecord(credentials, params.tenantId, team.team_id, {
+      await updateTenantTeamRecord(credentials, tenantId, team.team_id, {
         name: team.name,
         description: team.description,
         permission_keys: nextPermissions,
@@ -215,7 +216,7 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
     }
     setBusy(true);
     try {
-      await updateTenantMemberRecord(credentials, params.tenantId, member.membership_id, {
+      await updateTenantMemberRecord(credentials, tenantId, member.membership_id, {
         role: (patch.role ?? member.role) as "tenant_admin" | "technical_member" | "business_member",
         team_ids: patch.team_ids ?? member.team_ids,
         mode_override: member.mode_override,
@@ -237,9 +238,9 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
     setBusy(true);
     try {
       if (action === "resend") {
-        await resendTenantInvite(credentials, params.tenantId, inviteId);
+        await resendTenantInvite(credentials, tenantId, inviteId);
       } else {
-        await revokeTenantInvite(credentials, params.tenantId, inviteId);
+        await revokeTenantInvite(credentials, tenantId, inviteId);
       }
       await loadTeamData();
       setStatusLine(`Invite ${action} complete.`);
