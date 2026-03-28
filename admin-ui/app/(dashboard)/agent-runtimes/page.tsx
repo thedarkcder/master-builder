@@ -130,7 +130,12 @@ export default function AgentRuntimesPage() {
       </div>
 
       {statusLine ? (
-        <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
+        <p
+          data-testid="agent-runtimes-status"
+          className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground"
+        >
+          {statusLine}
+        </p>
       ) : null}
 
       <Card>
@@ -170,10 +175,11 @@ export default function AgentRuntimesPage() {
                 const fallbackProfile = routing?.effective_defaults.role_routing[role] ?? "";
                 const effectiveProfileName = selectedProfile || fallbackProfile;
                 return (
-                  <TableRow key={role}>
+                  <TableRow key={role} data-testid={`agent-runtime-role-row-${role}`}>
                     <TableCell className="font-medium">{role}</TableCell>
                     <TableCell className="min-w-[240px]">
                       <select
+                        data-testid={`agent-runtime-role-select-${role}`}
                         className="h-9 w-full rounded border border-input bg-background px-3 text-sm"
                         value={selectedProfile}
                         onChange={(e) => setRoleRouting((current) => ({ ...current, [role]: e.target.value }))}
@@ -220,10 +226,11 @@ export default function AgentRuntimesPage() {
                 const fallbackProfile = routing?.effective_defaults.name_routing[agentName] ?? "";
                 const effectiveProfileName = selectedProfile || fallbackProfile;
                 return (
-                  <TableRow key={agentName}>
+                  <TableRow key={agentName} data-testid={`agent-runtime-name-row-${agentName}`}>
                     <TableCell className="font-medium">{agentName}</TableCell>
                     <TableCell className="min-w-[240px]">
                       <select
+                        data-testid={`agent-runtime-name-select-${agentName}`}
                         className="h-9 w-full rounded border border-input bg-background px-3 text-sm"
                         value={selectedProfile}
                         onChange={(e) => setNameRouting((current) => ({ ...current, [agentName]: e.target.value }))}

@@ -38,3 +38,4 @@
 - When a user narrows config scope from tenant-level to platform-wide admin control, stop planning tenant policy/UI work immediately. Verify the existing platform admin surface first, and align the design to that control plane before expanding the schema.
 - When a merge exposes a missing compatibility seam, do not default to restoring the seam if it weakens the architecture. First check whether the behavior should instead flow through the canonical shared policy path, then update tests/helpers to use that path.
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.
+- When a user explicitly says not to mock the backend for a browser flow, build the test against a real backend process and isolated test database; do not drift back to route mocking because existing Playwright helpers make it convenient.
