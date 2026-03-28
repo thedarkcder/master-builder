@@ -85,9 +85,11 @@ from orchestrator.core.security import (
     require_tenant_permission,
 )
 from orchestrator.core.tenant_access import (
-    ALL_PERMISSION_KEYS,
-    PERMISSION_MEMBERS_MANAGE,
-    PERMISSION_TEAMS_MANAGE,
+    KNOWN_PERMISSION_KEYS,
+    PERMISSION_PEOPLE_MANAGE,
+    PERMISSION_PROJECTS_MANAGE,
+    PERMISSION_WORKSPACE_MANAGE,
+    normalize_permission_keys,
 )
 from orchestrator.core.tenant_users import (
     create_team,
@@ -275,7 +277,7 @@ def update_tenant(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key="tenant.manage")
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
     return update_tenant_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -302,7 +304,7 @@ def create_tenant_invite(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_MEMBERS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
@@ -338,7 +340,7 @@ def get_tenant_invites(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_MEMBERS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
     return TenantInviteListRead(items=[_invite_to_schema_with_url(invite) for invite in list_invites(session=session, tenant_id=tenant_id)])
 
@@ -354,7 +356,7 @@ def resend_tenant_invite(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_MEMBERS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
     invite = get_invite(session=session, tenant_id=tenant_id, invite_id=invite_id)
     tenant = session.get(Tenant, tenant_id)
@@ -382,7 +384,7 @@ def revoke_tenant_invite(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_MEMBERS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
     invite = get_invite(session=session, tenant_id=tenant_id, invite_id=invite_id)
     if invite is None:
@@ -401,7 +403,7 @@ def get_tenant_teams(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_TEAMS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
     return [_team_to_schema(team) for team in list_teams(session=session, tenant_id=tenant_id)]
 
@@ -416,20 +418,21 @@ def create_tenant_team(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_TEAMS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
-    unknown_permissions = sorted(set(payload.permission_keys) - ALL_PERMISSION_KEYS)
+    unknown_permissions = sorted(set(payload.permission_keys) - KNOWN_PERMISSION_KEYS)
     if unknown_permissions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown permission keys: {', '.join(unknown_permissions)}",
         )
+    normalized_permission_keys = list(normalize_permission_keys(payload.permission_keys))
     team = create_team(
         session=session,
         tenant_id=tenant_id,
         name=payload.name,
         description=payload.description,
-        permission_keys=payload.permission_keys,
+        permission_keys=normalized_permission_keys,
     )
     session.commit()
     return _team_to_schema(team)
@@ -446,14 +449,15 @@ def update_tenant_team(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_TEAMS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
-    unknown_permissions = sorted(set(payload.permission_keys) - ALL_PERMISSION_KEYS)
+    unknown_permissions = sorted(set(payload.permission_keys) - KNOWN_PERMISSION_KEYS)
     if unknown_permissions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown permission keys: {', '.join(unknown_permissions)}",
         )
+    normalized_permission_keys = list(normalize_permission_keys(payload.permission_keys))
     try:
         team = update_team(
             session=session,
@@ -461,7 +465,7 @@ def update_tenant_team(
             team_id=team_id,
             name=payload.name,
             description=payload.description,
-            permission_keys=payload.permission_keys,
+            permission_keys=normalized_permission_keys,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -478,7 +482,7 @@ def get_tenant_members(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_MEMBERS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
     principals_by_id = {
         membership.membership_id: membership
@@ -511,7 +515,7 @@ def update_tenant_member(
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
-        permission_key=PERMISSION_MEMBERS_MANAGE,
+        permission_key=PERMISSION_PEOPLE_MANAGE,
     )
     ensure_team_ids_exist(session=session, tenant_id=tenant_id, team_ids=payload.team_ids)
     try:
@@ -735,9 +739,10 @@ def unarchive_tenant(
 @router.get("/tenants/{tenant_id}/projects", response_model=list[ProjectRead])
 def list_projects(
     tenant_id: str,
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[ProjectRead]:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
     return list_projects_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -749,9 +754,10 @@ def list_projects(
 def create_project(
     tenant_id: str,
     payload: ProjectCreate,
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
     return create_project_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -764,9 +770,10 @@ def create_project(
 def get_project(
     tenant_id: str,
     project_id: str,
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
     return get_project_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -780,9 +787,10 @@ def update_project(
     tenant_id: str,
     project_id: str,
     payload: ProjectUpdate,
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
     return update_project_route_impl(
         session=session,
         tenant_id=tenant_id,

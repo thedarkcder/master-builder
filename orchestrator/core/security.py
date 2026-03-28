@@ -19,8 +19,8 @@ from orchestrator.core.platform_secret_service import (
 )
 from orchestrator.core.tenant_access import (
     MODE_TECHNICAL,
-    PERMISSION_ANALYTICS_BUSINESS_VIEW,
     compute_permission_snapshot,
+    normalize_permission_key,
 )
 from orchestrator.api.dependencies import get_session
 from orchestrator.storage.models import (
@@ -230,10 +230,34 @@ def require_tenant_permission(
 ) -> TenantMembershipPrincipal | None:
     if principal.is_platform_super_admin:
         return None
+    normalized_permission_key = normalize_permission_key(permission_key)
+    if normalized_permission_key is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown tenant permission")
     membership = principal.membership_for_tenant(tenant_id)
     if membership is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    if permission_key not in membership.permission_keys:
+    if normalized_permission_key not in membership.permission_keys:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient tenant permissions")
+    return membership
+
+
+def require_any_tenant_permission(
+    *,
+    principal: AuthenticatedPrincipal,
+    tenant_id: str,
+    permission_keys: tuple[str, ...],
+) -> TenantMembershipPrincipal | None:
+    if principal.is_platform_super_admin:
+        return None
+    normalized_permission_keys = tuple(
+        normalized for normalized in (normalize_permission_key(permission_key) for permission_key in permission_keys) if normalized
+    )
+    if not normalized_permission_keys:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown tenant permissions")
+    membership = principal.membership_for_tenant(tenant_id)
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    if not any(permission_key in membership.permission_keys for permission_key in normalized_permission_keys):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient tenant permissions")
     return membership
 
@@ -244,6 +268,4 @@ def require_tenant_membership(*, principal: AuthenticatedPrincipal, tenant_id: s
     membership = principal.membership_for_tenant(tenant_id)
     if membership is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    if PERMISSION_ANALYTICS_BUSINESS_VIEW not in membership.permission_keys:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient tenant permissions")
     return membership

@@ -41,6 +41,7 @@ import {
   type RunRecord,
   type RunStatus,
 } from "@/lib/api";
+import { canManageProjects } from "@/lib/auth-routing";
 import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
 type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
@@ -196,7 +197,7 @@ function formatBoolean(value: boolean): string {
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
   const pathname = usePathname();
-  const { credentials, ready } = useAuth();
+  const { credentials, ready, principal } = useAuth();
 
   // Project state
   const [project, setProject] = useState<ProjectRecord | null>(null);
@@ -233,10 +234,26 @@ export function TenantProjectDetailsPage() {
     () => `project/${params.tenantId}/${params.projectId}/`,
     [params.tenantId, params.projectId]
   );
-  const activeTab = useMemo<Tab>(() => resolveProjectSection(pathname) ?? "overview", [pathname]);
+  const allowProjectManagement = canManageProjects(principal, params.tenantId);
+  const activeTab = useMemo<Tab>(() => {
+    const resolved = resolveProjectSection(pathname) ?? "overview";
+    if (allowProjectManagement) {
+      return resolved;
+    }
+    return resolved === "settings" || resolved === "notifications" || resolved === "secrets" ? "overview" : resolved;
+  }, [allowProjectManagement, pathname]);
+  const visibleTabs = useMemo(
+    () => (allowProjectManagement ? TABS : TABS.filter((tab) => tab.id === "overview" || tab.id === "runs")),
+    [allowProjectManagement],
+  );
 
   async function loadOptions() {
     if (!credentials) return;
+    if (!allowProjectManagement) {
+      setRepoOptions([]);
+      setJiraOptions([]);
+      return;
+    }
     try {
       const tenant = await getTenant(credentials, params.tenantId);
       const modelCatalog = await listCodexModels(credentials);
@@ -305,7 +322,7 @@ export function TenantProjectDetailsPage() {
 
   useEffect(() => {
     if (ready && credentials) void loadProject();
-  }, [ready, credentials, params.tenantId, params.projectId]);
+  }, [ready, credentials, params.tenantId, params.projectId, allowProjectManagement]);
 
   useEffect(() => {
     if (ready && credentials && project && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
@@ -586,7 +603,7 @@ export function TenantProjectDetailsPage() {
       {/* Underline tab bar */}
       <div className="border-b overflow-x-auto">
         <nav className="-mb-px flex min-w-max gap-1" aria-label="Project sections">
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <Link
               key={tab.id}
               href={buildProjectSectionPath(params.tenantId, params.projectId, tab.id)}
@@ -673,9 +690,11 @@ export function TenantProjectDetailsPage() {
                     <CardTitle className="text-base">Quick navigation</CardTitle>
                   </CardHeader>
                   <CardContent className="grid gap-2 sm:grid-cols-2">
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Settings</Link>
-                    </Button>
+                    {allowProjectManagement ? (
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Settings</Link>
+                      </Button>
+                    ) : null}
                     <Button asChild variant="outline" size="sm">
                       <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
                         Browse knowledge
@@ -686,12 +705,16 @@ export function TenantProjectDetailsPage() {
                         Add knowledge
                       </Link>
                     </Button>
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
-                    </Button>
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "secrets")}>Secrets</Link>
-                    </Button>
+                    {allowProjectManagement ? (
+                      <>
+                        <Button asChild variant="outline" size="sm">
+                          <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
+                        </Button>
+                        <Button asChild variant="outline" size="sm">
+                          <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "secrets")}>Secrets</Link>
+                        </Button>
+                      </>
+                    ) : null}
                   </CardContent>
                 </Card>
               </div>

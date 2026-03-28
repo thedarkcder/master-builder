@@ -61,3 +61,5 @@
 - A shared login screen must not prefill platform-admin credentials by default. Keep the identifier blank and let tests or fixtures supply admin input explicitly.
 - Do not surface platform-only actions or language inside tenant onboarding. Workspace setup for a newly registered tenant owner must stay tenant-scoped and never suggest platform secrets or super-admin concepts.
 - Do not double-constrain setup flows with both a narrow route wrapper and a narrow inner content shell. Major onboarding/workspace setup surfaces need room, and step rails must not repeat the same title and explanatory copy already shown in the main work area.
+- Team permissions must map to real, user-visible capabilities. Do not expose permission choices that unlock nothing, and do not hide basic workspace/project visibility behind elevated team permissions.
+- Keep tenant team permissions enterprise-simple. Prefer a small set of clear capability bundles such as workspace, people, projects, and technical access instead of long lists of low-level internal permission keys.

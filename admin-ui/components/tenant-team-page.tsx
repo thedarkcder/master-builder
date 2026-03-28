@@ -26,15 +26,10 @@ import {
 export type TenantTeamSection = "members" | "teams" | "invites";
 
 const TEAM_PERMISSION_OPTIONS = [
-  { key: "tenant.manage", label: "Workspace administration" },
-  { key: "members.manage", label: "Member management" },
-  { key: "teams.manage", label: "Team management" },
-  { key: "analytics.business.view", label: "Delivery analytics" },
-  { key: "analytics.technical.view", label: "Technical analytics" },
-  { key: "runs.business.view", label: "Delivery runs" },
-  { key: "runs.technical.view", label: "Technical runs" },
-  { key: "settings.business.view", label: "Business settings" },
-  { key: "settings.technical.view", label: "Technical settings" },
+  { key: "workspace.manage", label: "Manage workspace" },
+  { key: "people.manage", label: "Manage people" },
+  { key: "projects.manage", label: "Manage projects" },
+  { key: "technical.access", label: "Technical access" },
 ] as const;
 
 const ROLE_OPTIONS = [
@@ -74,7 +69,7 @@ function describeDiscordState(member: TenantMemberRecord): string {
 function summarizePermissions(permissionKeys: string[]): string {
   const labels = TEAM_PERMISSION_OPTIONS.filter((option) => permissionKeys.includes(option.key)).map((option) => option.label);
   if (labels.length === 0) {
-    return "No access selected";
+    return "Standard workspace access";
   }
   if (labels.length <= 3) {
     return labels.join(", ");
@@ -98,7 +93,7 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
   const [inviteTeamIds, setInviteTeamIds] = useState<string[]>([]);
   const [newTeamName, setNewTeamName] = useState("");
   const [newTeamDescription, setNewTeamDescription] = useState("");
-  const [newTeamPermissions, setNewTeamPermissions] = useState<string[]>(["analytics.business.view"]);
+  const [newTeamPermissions, setNewTeamPermissions] = useState<string[]>([]);
   const [showCreateTeamForm, setShowCreateTeamForm] = useState(false);
   const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
 
@@ -177,7 +172,7 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
       });
       setNewTeamName("");
       setNewTeamDescription("");
-      setNewTeamPermissions(["analytics.business.view"]);
+      setNewTeamPermissions([]);
       setShowCreateTeamForm(false);
       await loadTeamData();
       setStatusLine("Team created.");
@@ -405,7 +400,7 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
                       setShowCreateTeamForm(false);
                       setNewTeamName("");
                       setNewTeamDescription("");
-                      setNewTeamPermissions(["analytics.business.view"]);
+                      setNewTeamPermissions([]);
                     }}
                   >
                     Cancel

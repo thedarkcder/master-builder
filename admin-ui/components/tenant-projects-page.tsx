@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listProjects, type ProjectRecord } from "@/lib/api";
+import { canManageProjects } from "@/lib/auth-routing";
 
 function projectInitials(name: string): string {
   const words = name.trim().split(/\s+/);
@@ -37,7 +38,7 @@ function projectAvatarColor(id: string): string {
 
 export function TenantProjectsPage() {
   const params = useParams<{ tenantId: string }>();
-  const { credentials, ready } = useAuth();
+  const { credentials, ready, principal } = useAuth();
 
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [statusLine, setStatusLine] = useState("");
@@ -45,6 +46,7 @@ export function TenantProjectsPage() {
 
   const activeProjects = useMemo(() => projects.filter((p) => !p.is_archived), [projects]);
   const archivedProjects = useMemo(() => projects.filter((p) => p.is_archived), [projects]);
+  const allowProjectManagement = canManageProjects(principal, params.tenantId);
 
   async function loadDashboard({ silent = false }: { silent?: boolean } = {}) {
     if (!credentials) return;
@@ -77,12 +79,14 @@ export function TenantProjectsPage() {
             <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-          <Button asChild size="sm">
-            <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Add project
-            </Link>
-          </Button>
+          {allowProjectManagement ? (
+            <Button asChild size="sm">
+              <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Add project
+              </Link>
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -139,12 +143,14 @@ export function TenantProjectsPage() {
             </div>
             <p className="font-medium">No projects yet</p>
             <p className="mt-1 text-sm text-muted-foreground">Create your first project to start orchestrating runs.</p>
-            <Button asChild className="mt-4" size="sm">
-              <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Add project
-              </Link>
-            </Button>
+            {allowProjectManagement ? (
+              <Button asChild className="mt-4" size="sm">
+                <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
+                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  Add project
+                </Link>
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       ) : (
