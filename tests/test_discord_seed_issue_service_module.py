@@ -285,7 +285,7 @@ def test_seed_issues_normalizes_blank_parent_issue_type_to_project_supported_sto
     assert created[0].issue_type == "Story"
 
 
-def test_seed_issues_normalizes_multi_child_parent_to_epic_when_available() -> None:
+def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_children_exist() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []
 
@@ -321,7 +321,63 @@ def test_seed_issues_normalizes_multi_child_parent_to_epic_when_available() -> N
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
         build_codex_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(parent_issue_type="Feature", child_count=2),
+        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(parent_issue_type="", child_count=2),
+        codex_runtime_error_type=RuntimeError,
+        build_seed_issue_description_fn=lambda **_kwargs: {},
+        issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+            "client": _FakeClient(),
+            "access_token": "token",
+            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        },
+        select_seed_match_fn=lambda **_kwargs: None,
+    )
+
+    assert data["created_parent"] == "GP-1"
+    assert created[0].issue_type == "Story"
+
+
+def test_seed_issues_promotes_parent_to_epic_when_pm_brief_signals_initiative_scope() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+    created: list = []
+
+    class _FakeClient:
+        def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return ["Epic", "Story", "Task"]
+
+        def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return []
+
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            created.append(kwargs["issue"])
+            issue = kwargs["issue"]
+            if issue.parent_issue_key:
+                return JiraIssueCreateResult(key=f"GP-{len(created)}", issue_id=str(len(created)))
+            return JiraIssueCreateResult(key="GP-1", issue_id="1")
+
+        def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return {}
+
+    payload = _seed_payload(parent_issue_type="", child_count=2)
+    payload["parent_issue"]["summary"] = "Checkout recovery initiative"
+    payload["parent_issue"]["objective"] = "Coordinate a multi-story recovery initiative across checkout."
+
+    _, data = seed_issues_with_codex(
+        session=MagicMock(),
+        tenant=tenant,
+        prompt_markdown="seed issues",
+        scoped_project_id="project-a",
+        force_issue_keys=None,
+        allow_create=True,
+        scoped_project_keys=["GP"],
+        codex_working_dir="/tmp",
+        tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+        get_settings_fn=lambda: SimpleNamespace(),
+        build_codex_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_codex_fn=lambda **_kwargs: payload,
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),

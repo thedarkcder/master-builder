@@ -1533,8 +1533,72 @@ class JiraWebhookTests(unittest.TestCase):
         assert processed is not None
         self.assertEqual(processed.status, "done")
         seed_mock.assert_called_once()
+        self.assertTrue(seed_mock.call_args.kwargs["allow_create"])
         run_flow_mock.assert_not_called()
         self.assertGreaterEqual(comment_mock.call_count, 2)
+
+    def test_webhook_pm_parent_material_change_with_no_child_delta_is_successful_no_op(self) -> None:
+        payload = self._jira_issue_payload(issue_key="TP-953", labels=["pm-parent"], status_name="To Do")
+        payload["changelog"] = {"items": [{"field": "description", "fromString": "old", "toString": "new"}]}
+
+        class _FakeClient:
+            def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
+                jql = kwargs["jql"]
+                if 'parent = "TP-953"' in jql or 'labels = "parent-tp-953"' in jql:
+                    return [JiraIssuePreview(key="TP-954", summary="Refresh retry UI", status="To Do")]
+                return []
+
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                issue_key = kwargs["issue_id_or_key"]
+                if issue_key == "TP-953":
+                    return JiraIssueDetail(
+                        key="TP-953",
+                        summary="Checkout recovery",
+                        status="To Do",
+                        description="Objective\nRefresh checkout recovery behavior",
+                        labels=["pm-parent", "sync-current"],
+                    )
+                return JiraIssueDetail(
+                    key="TP-954",
+                    summary="Refresh retry UI",
+                    status="To Do",
+                    description="Technical Objective\nRefresh retry UI\nParent Feature Link\nTP-953: Checkout recovery",
+                    labels=["engineering-child", "parent-tp-953", "sync-current"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.core.worker.webhook_job_service.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_codex",
+                return_value=(
+                    "synced",
+                    {
+                        "updated_parent": "TP-953",
+                        "updated_children": [],
+                        "created_children": [],
+                        "requires_input": False,
+                        "parent_revision": "rev-123",
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ),
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)) as comment_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-953")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        parent_sync_comment = comment_mock.call_args_list[0].kwargs["comment"]
+        self.assertIn("No engineering child changes were required.", parent_sync_comment)
 
     def test_webhook_pm_parent_non_material_change_skips_child_sync(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-952", labels=["pm-parent"], status_name="To Do")
@@ -1765,6 +1829,213 @@ class JiraWebhookTests(unittest.TestCase):
         self.assertIsNotNone(context)
         assert context is not None
         self.assertEqual(context.status, "closed")
+
+    def test_webhook_parent_comment_resolution_allows_new_child_creation(self) -> None:
+        with self.session_factory() as session:
+            session.add(
+                FollowupContext(
+                    context_id="ctx-clarify-2",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    context_type="engineering_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id=None,
+                    issue_key="TP-955",
+                    request_id="engineering-clarification:TP-955",
+                    run_id=None,
+                    metadata_json={
+                        "affected_child_keys": ["TP-956"],
+                        "questions": [
+                            {
+                                "source_child_key": "TP-956",
+                                "original_question": "Should we also track manual fallback?",
+                                "stakeholder_question": "Should manual fallback be included in this feature?",
+                            }
+                        ],
+                    },
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-955", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-6"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Yes, include manual fallback and tracking."}],
+                    }
+                ],
+            },
+        }
+
+        class _FakeClient:
+            def get_issue_detail(self, **kwargs):  # noqa: ANN003
+                issue_key = kwargs["issue_id_or_key"]
+                if issue_key == "TP-955":
+                    return JiraIssueDetail(
+                        key="TP-955",
+                        summary="Checkout recovery",
+                        status="To Do",
+                        description="Objective\nCheckout recovery parent",
+                        labels=["pm-parent", "sync-blocked"],
+                    )
+                return JiraIssueDetail(
+                    key="TP-956",
+                    summary="Retry UI behavior",
+                    status="To Do",
+                    description="Technical Objective\nRetry UI\nParent Feature Link\nTP-955: Checkout recovery",
+                    labels=["engineering-child", "parent-tp-955", "sync-blocked"],
+                )
+
+        oauth_context = SimpleNamespace(
+            client=_FakeClient(),
+            access_token="tok",
+            connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        )
+        with (
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.tenant_jira_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_codex",
+                return_value=(
+                    "updated",
+                    {
+                        "updated_parent": "TP-955",
+                        "updated_children": ["TP-956"],
+                        "created_children": ["TP-957"],
+                        "requires_input": False,
+                        "parent_revision": "rev-456",
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ) as seed_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.post_jira_comment", return_value=(True, None)),
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-955")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertTrue(seed_mock.call_args.kwargs["allow_create"])
+
+    def test_webhook_parent_run_command_is_not_consumed_by_engineering_clarification_reply(self) -> None:
+        with self.session_factory() as session:
+            session.add(
+                FollowupContext(
+                    context_id="ctx-clarify-run",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    context_type="engineering_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id=None,
+                    issue_key="TP-970",
+                    request_id="engineering-clarification:TP-970",
+                    run_id=None,
+                    metadata_json={"affected_child_keys": ["TP-971"]},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-970", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-run"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "/mb run"}],
+                    }
+                ],
+            },
+        }
+
+        run_plan = SimpleNamespace(content={"reason": "comment_command_run"}, actions=())
+        with (
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow", return_value=run_plan) as run_flow_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_codex") as seed_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-970")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        run_flow_mock.assert_called_once()
+        seed_mock.assert_not_called()
+
+    def test_webhook_parent_retry_command_is_not_consumed_by_engineering_clarification_reply(self) -> None:
+        with self.session_factory() as session:
+            session.add(
+                FollowupContext(
+                    context_id="ctx-clarify-retry",
+                    tenant_id="tenant-webhook",
+                    project_id="project-1",
+                    context_type="engineering_clarification",
+                    status="active",
+                    channel_id=None,
+                    thread_channel_id=None,
+                    root_message_id=None,
+                    issue_key="TP-972",
+                    request_id="engineering-clarification:TP-972",
+                    run_id=None,
+                    metadata_json={"affected_child_keys": ["TP-973"]},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                    closed_at=None,
+                )
+            )
+            session.commit()
+
+        payload = self._jira_issue_payload(issue_key="TP-972", labels=["pm-parent"], status_name="To Do")
+        payload["webhookEvent"] = "comment_created"
+        payload["comment"] = {
+            "author": {"accountId": "jira-user-retry"},
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "/mb retry"}],
+                    }
+                ],
+            },
+        }
+
+        run_plan = SimpleNamespace(content={"reason": "comment_command_retry"}, actions=())
+        with (
+            patch("orchestrator.api.webhooks.jira_application.plan_jira_run_flow", return_value=run_plan) as run_flow_mock,
+            patch("orchestrator.api.webhooks.jira_parent_child_sync.seed_issues_with_codex") as seed_mock,
+        ):
+            response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
+            processed = self._process_one_webhook_job()
+
+        self._assert_jira_issue_event_queued(response, issue_key="TP-972")
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        run_flow_mock.assert_called_once()
+        seed_mock.assert_not_called()
 
     def test_webhook_project_not_mapped_does_not_process_decision_reply(self) -> None:
         payload = self._jira_issue_payload(issue_key="NOPE-1", status_name="To Do")
