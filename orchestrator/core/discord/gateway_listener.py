@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import threading
+from datetime import UTC, datetime
 from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
@@ -89,7 +90,7 @@ from orchestrator.core.voice import VoiceTranscriptionError, download_audio_byte
 from orchestrator.core.voice.tts import VoiceReplyError, synthesize_reply_audio
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Tenant
+from orchestrator.storage.models import Project, Tenant, TenantMembership, TenantUserDiscordIdentity
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 try:
@@ -102,6 +103,7 @@ logger = logging.getLogger("orchestrator.discord_gateway")
 
 DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 INTENT_GUILDS = 1 << 0
+INTENT_GUILD_MEMBERS = 1 << 1
 INTENT_GUILD_MESSAGES = 1 << 9
 INTENT_MESSAGE_CONTENT = 1 << 15
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
@@ -133,6 +135,7 @@ _ROOM_SINGLE_KEYS = (
 )
 _AUDIO_CONTENT_TYPE_PREFIX = "audio/"
 _AUDIO_FILENAME_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".mp4")
+_VOICE_MESSAGE_FLAG = 1 << 13
 
 
 def _ask_reply_components() -> list[dict]:
@@ -348,7 +351,7 @@ class DiscordGatewayListener:
                                 "op": 2,
                                 "d": {
                                     "token": bot_token,
-                                    "intents": INTENT_GUILDS | INTENT_GUILD_MESSAGES | INTENT_MESSAGE_CONTENT,
+                                    "intents": INTENT_GUILDS | INTENT_GUILD_MEMBERS | INTENT_GUILD_MESSAGES | INTENT_MESSAGE_CONTENT,
                                     "properties": {
                                         "os": "linux",
                                         "browser": "master-builder",
@@ -399,6 +402,10 @@ class DiscordGatewayListener:
 
                     if event_type == "MESSAGE_CREATE":
                         await asyncio.to_thread(self._handle_message_create, data, bot_token)
+                        continue
+
+                    if event_type == "GUILD_MEMBER_ADD":
+                        await asyncio.to_thread(self._handle_guild_member_add, data, bot_token)
             finally:
                 heartbeat_task.cancel()
                 try:
@@ -593,6 +600,89 @@ class DiscordGatewayListener:
             ),
             bot_token=bot_token,
         )
+
+    def _handle_guild_member_add(self, payload: dict, bot_token: str) -> None:
+        guild_id = str(payload.get("guild_id") or "").strip()
+        user_payload = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        discord_user_id = str(user_payload.get("id") or "").strip()
+        if not guild_id or not discord_user_id:
+            return
+
+        with self._session_factory() as session:
+            tenant = next(
+                (
+                    candidate
+                    for candidate in session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
+                    if str((candidate.discord_config or {}).get("guild_id") or "").strip() == guild_id
+                ),
+                None,
+            )
+            if tenant is None:
+                return
+
+            identity = session.execute(
+                select(TenantUserDiscordIdentity).where(TenantUserDiscordIdentity.discord_user_id == discord_user_id)
+            ).scalar_one_or_none()
+            if identity is None:
+                return
+
+            membership = session.execute(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant.tenant_id,
+                    TenantMembership.user_id == identity.user_id,
+                )
+            ).scalar_one_or_none()
+            if membership is None:
+                return
+
+            discord_state = dict(membership.discord_state or {})
+            discord_state["linked"] = True
+            discord_state["guild_joined"] = True
+            discord_state["guild_joined_at"] = datetime.now(UTC).isoformat()
+            current_status = str(discord_state.get("welcome_status") or "").strip().lower()
+            if current_status == "sent":
+                membership.discord_state = discord_state
+                membership.updated_at = datetime.now(UTC)
+                session.commit()
+                return
+
+            discord_state["welcome_status"] = "queued"
+            membership.discord_state = discord_state
+            membership.updated_at = datetime.now(UTC)
+            session.flush()
+
+            try:
+                audio = synthesize_reply_audio(
+                    settings=self._settings,
+                    text=f"Welcome to {tenant.name}. You're set up and ready to build with the team.",
+                )
+                client = DiscordApiClient(bot_token=bot_token)
+                dm_channel_id = client.create_dm_channel(user_id=discord_user_id)
+                client.post_message_with_attachment(
+                    channel_id=dm_channel_id,
+                    content=f"Welcome to {tenant.name}.",
+                    filename=audio.filename,
+                    file_bytes=audio.audio_bytes,
+                    content_type=audio.content_type,
+                    flags=_VOICE_MESSAGE_FLAG,
+                )
+                discord_state["welcome_status"] = "sent"
+                discord_state["welcome_sent_at"] = datetime.now(UTC).isoformat()
+                discord_state["last_failure_reason"] = None
+            except (DiscordApiError, VoiceReplyError, ValueError) as exc:
+                discord_state["welcome_status"] = "failed"
+                discord_state["last_failure_reason"] = str(exc)
+                logger.exception(
+                    "discord_gateway_welcome_dm_failed tenant_id=%s user_id=%s discord_user_id=%s error=%s",
+                    tenant.tenant_id,
+                    identity.user_id,
+                    discord_user_id,
+                    exc,
+                )
+
+            membership.discord_state = discord_state
+            membership.updated_at = datetime.now(UTC)
+            session.commit()
 
     def _transcribe_room_audio_attachment(
         self,

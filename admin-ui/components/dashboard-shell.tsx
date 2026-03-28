@@ -16,6 +16,8 @@ import {
   Menu,
   Settings2,
   SwitchCamera,
+  User,
+  Users,
   X,
   Zap
 } from "lucide-react";
@@ -24,6 +26,13 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth-provider";
 import { getRun, type TenantRecord, getTenant, listProjects, type ProjectRecord } from "@/lib/api";
+import {
+  canAccessPlatformAdmin,
+  canAccessTechnicalSurface,
+  canManageTeam,
+  getMembershipForTenant,
+  getTenantWorkspaceRoute,
+} from "@/lib/auth-routing";
 import { resolveRunRouteContext } from "@/lib/dashboard-paths";
 import {
   Sidebar,
@@ -47,6 +56,7 @@ type NavItem = {
 
 const globalNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/status", label: "Status", icon: Activity },
   { href: "/tenants/select", label: "Tenants", icon: Building2 },
   { href: "/agent-runtimes", label: "Agent Runtimes", icon: Bot },
   { href: "/secrets", label: "Secrets", icon: KeyRound }
@@ -83,6 +93,7 @@ type RunRouteCtx = ReturnType<typeof resolveRunRouteContext>;
 type DashboardNavPanelProps = {
   decodedTenantId: string | null;
   tenantDisplayName: string;
+  tenantBaseRoute: string | null;
   navItems: NavItem[];
   tenantProjects: ProjectRecord[];
   pathname: string;
@@ -97,6 +108,7 @@ type DashboardNavPanelProps = {
 function DashboardNavPanel({
   decodedTenantId,
   tenantDisplayName,
+  tenantBaseRoute,
   navItems,
   tenantProjects,
   pathname,
@@ -107,10 +119,39 @@ function DashboardNavPanel({
   onNavigate
 }: DashboardNavPanelProps) {
   const close = () => onNavigate?.();
+  const projectMenu = (
+    <SidebarMenu>
+      <SidebarMenuItem key={`projects-overview-${decodedTenantId}`}>
+        <SidebarMenuButton asChild isActive={tenantBaseRoute != null && pathname === `${tenantBaseRoute}/projects`}>
+          <Link href={`${tenantBaseRoute}/projects`} onClick={close}>
+            <FolderKanban className="h-4 w-4 flex-shrink-0" />
+            All projects
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      {tenantProjects.map((project) => {
+        const projectHref = `${tenantBaseRoute}/projects/${encodeURIComponent(project.project_id)}`;
+        const active =
+          pathname === projectHref ||
+          pathname.startsWith(`${projectHref}/`) ||
+          (Boolean(runContext.runId) && project.project_id === projectContextId);
+        return (
+          <SidebarMenuItem key={project.project_id}>
+            <SidebarMenuButton asChild isActive={active}>
+              <Link href={projectHref} onClick={close}>
+                <FolderKanban className="h-4 w-4 flex-shrink-0" />
+                {project.name}
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        );
+      })}
+    </SidebarMenu>
+  );
 
   return (
     <>
-      <SidebarHeader>
+      <SidebarHeader className="shrink-0">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary shadow-[0_0_12px_rgba(99,102,241,0.4)]">
@@ -136,9 +177,9 @@ function DashboardNavPanel({
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {decodedTenantId ? (
-          <div className="space-y-1">
+          <div className="flex min-h-0 flex-1 flex-col">
             <div className="mb-3 flex items-center gap-2 rounded-md px-3 py-2 bg-sidebar-accent/40">
               <div
                 className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-[10px] font-bold text-white ${tenantAvatarColor(decodedTenantId)}`}
@@ -148,7 +189,7 @@ function DashboardNavPanel({
               <span className="truncate text-xs font-medium text-sidebar-foreground">{tenantDisplayName}</span>
             </div>
 
-            <SidebarMenu>
+            <SidebarMenu className="shrink-0">
               {navItems.map((item) => {
                 const active = item.matchPrefix
                   ? pathname.startsWith(item.matchPrefix) &&
@@ -167,28 +208,25 @@ function DashboardNavPanel({
               })}
             </SidebarMenu>
 
-            <SidebarMenu className="mt-3">
-              <SidebarMenuLabel>Projects</SidebarMenuLabel>
-              <SidebarMenuItem key={`projects-overview-${decodedTenantId}`}>
-                <SidebarMenuButton asChild isActive={pathname === `/tenants/${decodedTenantId}/projects`}>
-                  <Link href={`/tenants/${decodedTenantId}/projects`} onClick={close}>
-                    <FolderKanban className="h-4 w-4 flex-shrink-0" />
-                    All projects
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              {tenantProjects.map((project) => {
-                const projectHref = `/tenants/${decodedTenantId}/projects/${encodeURIComponent(project.project_id)}`;
-                const active =
-                  pathname === projectHref ||
-                  pathname.startsWith(`${projectHref}/`) ||
-                  (Boolean(runContext.runId) && project.project_id === projectContextId);
+            <div className="mt-4 flex min-h-0 flex-1 flex-col">
+              <SidebarMenuLabel className="px-0">Projects</SidebarMenuLabel>
+              <div className="min-h-0 flex-1 overflow-y-auto pr-1">{projectMenu}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <SidebarMenu className="shrink-0">
+              <SidebarMenuLabel>Global</SidebarMenuLabel>
+              {navItems.map((item) => {
+                const active = item.matchPrefix
+                  ? pathname.startsWith(item.matchPrefix)
+                  : pathname === item.href || pathname.startsWith(`${item.href}/`);
                 return (
-                  <SidebarMenuItem key={project.project_id}>
+                  <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={active}>
-                      <Link href={projectHref} onClick={close}>
-                        <FolderKanban className="h-4 w-4 flex-shrink-0" />
-                        {project.name}
+                      <Link href={item.href} onClick={close}>
+                        <item.icon className="h-4 w-4 flex-shrink-0" />
+                        {item.label}
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -196,29 +234,10 @@ function DashboardNavPanel({
               })}
             </SidebarMenu>
           </div>
-        ) : (
-          <SidebarMenu>
-            <SidebarMenuLabel>Global</SidebarMenuLabel>
-            {navItems.map((item) => {
-              const active = item.matchPrefix
-                ? pathname.startsWith(item.matchPrefix)
-                : pathname === item.href || pathname.startsWith(`${item.href}/`);
-              return (
-                <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton asChild isActive={active}>
-                    <Link href={item.href} onClick={close}>
-                      <item.icon className="h-4 w-4 flex-shrink-0" />
-                      {item.label}
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              );
-            })}
-          </SidebarMenu>
         )}
       </SidebarContent>
 
-      <SidebarFooter>
+      <SidebarFooter className="mt-auto shrink-0 bg-sidebar">
         <div className="flex flex-wrap items-center gap-1">
           <ThemeToggle />
           <button
@@ -237,8 +256,7 @@ function DashboardNavPanel({
             className="flex min-h-10 items-center gap-2 rounded-md px-2 py-2 text-xs text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
             onClick={() => {
               close();
-              logout();
-              router.push("/login");
+              void logout();
             }}
           >
             <LogOut className="h-3.5 w-3.5 flex-shrink-0" />
@@ -253,13 +271,20 @@ function DashboardNavPanel({
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { credentials, ready, logout } = useAuth();
+  const { credentials, ready, logout, needsOnboarding, principal, principalReady } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
-  const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\//);
-  const projectMatch = pathname.match(/^\/tenants\/([^/]+)\/projects\/([^/]+)(?:\/|$)/);
+  const tenantMatch = pathname.match(
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\//,
+  );
+  const projectMatch = pathname.match(
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)(?:\/|$)/,
+  );
   const runContext = resolveRunRouteContext(pathname);
+  const isWizardRoute =
+    pathname.startsWith("/tenants/new") ||
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/new(\/|$)/.test(pathname);
   const [runTenantId, setRunTenantId] = useState<string | null>(null);
   const tenantId = tenantMatch ? tenantMatch[1] : runTenantId;
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
@@ -270,10 +295,26 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (ready && !credentials) {
-      logout();
       router.replace("/login");
     }
-  }, [credentials, logout, ready, router]);
+  }, [credentials, ready, router]);
+
+  useEffect(() => {
+    if (ready && credentials && principalReady && !principal) {
+      void logout();
+      router.replace("/login");
+    }
+  }, [credentials, logout, principal, principalReady, ready, router]);
+
+  useEffect(() => {
+    const onboardingAllowed =
+      pathname === "/get-started" ||
+      pathname.startsWith("/tenants/new") ||
+      /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname);
+    if (ready && credentials && needsOnboarding && !onboardingAllowed) {
+      router.replace("/get-started");
+    }
+  }, [credentials, needsOnboarding, pathname, ready, router]);
 
   useEffect(() => {
     if (!credentials || !runContext.runId) {
@@ -296,7 +337,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, [credentials, runContext.runId]);
 
   useEffect(() => {
-    if (!credentials || !tenantId) {
+    if (!credentials || !tenantId || isWizardRoute) {
       setTenant(null);
       return;
     }
@@ -305,10 +346,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       .then((t) => { if (!cancelled) setTenant(t); })
       .catch(() => { if (!cancelled) setTenant(null); });
     return () => { cancelled = true; };
-  }, [credentials, tenantId]);
+  }, [credentials, isWizardRoute, tenantId]);
 
   useEffect(() => {
-    if (!credentials || !tenantId) {
+    if (!credentials || !tenantId || isWizardRoute) {
       setTenantProjects([]);
       return;
     }
@@ -332,7 +373,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [credentials, tenantId]);
+  }, [credentials, isWizardRoute, tenantId]);
 
   if (!ready) {
     return <main className="p-8 text-sm text-muted-foreground">Loading session...</main>;
@@ -342,14 +383,19 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to login...</main>;
   }
 
-  const isWizardRoute =
-    pathname.startsWith("/tenants/new") ||
-    /^\/tenants\/[^/]+\/projects\/new(\/|$)/.test(pathname);
+  if (
+    needsOnboarding &&
+    pathname !== "/get-started" &&
+    !pathname.startsWith("/tenants/new") &&
+    !/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|dashboard(?:\/|$)|status(?:\/|$)|secrets(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/settings(\/|$)/.test(pathname)
+  ) {
+    return <main className="p-8 text-sm text-muted-foreground">Redirecting to onboarding...</main>;
+  }
 
   if (isWizardRoute) {
     return (
-      <div className="min-h-screen bg-background px-4 py-10">
-        <div className="mx-auto w-full max-w-3xl">{children}</div>
+      <div className="min-h-screen bg-background px-4 py-6 sm:px-6 sm:py-8">
+        <div className="mx-auto w-full max-w-[1320px]">{children}</div>
       </div>
     );
   }
@@ -359,39 +405,70 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
+  const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
+  const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
+  const tenantMembership = decodedTenantId ? getMembershipForTenant(principal, decodedTenantId) : null;
+  const canManageWorkspaceTeam = decodedTenantId ? canManageTeam(principal, decodedTenantId) : false;
+  const analyticsHref =
+    decodedTenantId && !canAccessTechnicalSurface(principal, decodedTenantId)
+      ? `${tenantBaseRoute}/analytics/business`
+      : decodedTenantId
+        ? `${tenantBaseRoute}/analytics/token-overview`
+        : null;
+  const showSecretsNav = !decodedTenantId || canAccessPlatformAdmin(principal) || canAccessTechnicalSurface(principal, decodedTenantId);
 
   const tenantNavItems: NavItem[] = decodedTenantId
     ? [
         {
-          href: `/tenants/${decodedTenantId}/dashboard`,
+          href: `${tenantBaseRoute}/dashboard`,
           label: "Home",
           icon: LayoutDashboard,
-          matchPrefix: `/tenants/${decodedTenantId}/dashboard`
+          matchPrefix: `${tenantBaseRoute}/dashboard`
         },
         {
-          href: `/tenants/${decodedTenantId}/runs`,
+          href: `${tenantBaseRoute}/runs`,
           label: "Pipeline",
           icon: Activity,
-          matchPrefix: `/tenants/${decodedTenantId}/runs`
+          matchPrefix: `${tenantBaseRoute}/runs`
         },
         {
-          href: `/tenants/${decodedTenantId}/analytics/token-overview`,
+          href: analyticsHref ?? `${tenantBaseRoute}/analytics/token-overview`,
           label: "Analytics",
           icon: BarChart3,
-          matchPrefix: `/tenants/${decodedTenantId}/analytics`
+          matchPrefix: `${tenantBaseRoute}/analytics`
+        },
+        ...(canManageWorkspaceTeam
+          ? [
+              {
+                href: `${tenantBaseRoute}/team/members`,
+                label: "Team",
+                icon: Users,
+                matchPrefix: `${tenantBaseRoute}/team`
+              }
+            ]
+          : []),
+        {
+          href: `${tenantBaseRoute}/profile`,
+          label: "Profile",
+          icon: User,
+          matchPrefix: `${tenantBaseRoute}/profile`
         },
         {
-          href: `/tenants/${decodedTenantId}/edit/integrations`,
+          href: `${tenantBaseRoute}/settings/integrations`,
           label: "Settings",
           icon: Settings2,
-          matchPrefix: `/tenants/${decodedTenantId}/edit`
+          matchPrefix: `${tenantBaseRoute}/settings`
         },
-        {
-          href: `/tenants/${decodedTenantId}/secrets`,
-          label: "Secrets",
-          icon: KeyRound,
-          matchPrefix: `/tenants/${decodedTenantId}/secrets`
-        }
+        ...(showSecretsNav
+          ? [
+              {
+                href: `${tenantBaseRoute}/secrets`,
+                label: "Secrets",
+                icon: KeyRound,
+                matchPrefix: `${tenantBaseRoute}/secrets`
+              }
+            ]
+          : [])
       ]
     : [];
 
@@ -401,6 +478,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const navPanelProps: DashboardNavPanelProps = {
     decodedTenantId,
     tenantDisplayName,
+    tenantBaseRoute,
     navItems,
     tenantProjects,
     pathname,

@@ -17,12 +17,16 @@ export function ReposStep({
   onRepositoryChange,
   onPolicyChange
 }: ReposStepProps) {
+  const runtimeMinutes = policy.max_runtime_minutes ?? 120;
+  const reviewLoops = policy.max_dev_test_review_loops ?? 2;
+  const concurrency = policy.max_concurrent_runs ?? 2;
+
   return (
-    <div className="space-y-3">
-      <div className="space-y-2">
-        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Repository</label>
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Repository</div>
         <select
-          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+          className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm"
           value={selectedRepoUrl}
           onChange={(event) => onRepositoryChange(event.target.value)}
           disabled={repositories.length === 0}
@@ -35,45 +39,52 @@ export function ReposStep({
           ))}
         </select>
       </div>
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="space-y-2">
-          <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Max runtime</label>
-          <Input
-            type="number"
-            value={String(policy.max_runtime_minutes)}
-            onChange={(event) =>
-              onPolicyChange({
-                ...policy,
-                max_runtime_minutes: Number(event.target.value || 0)
-              })
-            }
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Max loops</label>
-          <Input
-            type="number"
-            value={String(policy.max_dev_test_review_loops)}
-            onChange={(event) =>
-              onPolicyChange({
-                ...policy,
-                max_dev_test_review_loops: Number(event.target.value || 0)
-              })
-            }
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Max concurrency</label>
-          <Input
-            type="number"
-            value={String(policy.max_concurrent_runs)}
-            onChange={(event) =>
-              onPolicyChange({
-                ...policy,
-                max_concurrent_runs: Number(event.target.value || 0)
-              })
-            }
-          />
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-5 py-5">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Run limits</div>
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <div className="space-y-2">
+            <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Runtime</label>
+            <Input
+              type="number"
+              value={String(runtimeMinutes)}
+              onChange={(event) =>
+                onPolicyChange({
+                  ...policy,
+                  max_runtime_minutes: Number(event.target.value || 0)
+                })
+              }
+              className="h-12 rounded-2xl border-slate-200 bg-white"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Loops</label>
+            <Input
+              type="number"
+              value={String(reviewLoops)}
+              onChange={(event) =>
+                onPolicyChange({
+                  ...policy,
+                  max_dev_test_review_loops: Number(event.target.value || 0)
+                })
+              }
+              className="h-12 rounded-2xl border-slate-200 bg-white"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Concurrency</label>
+            <Input
+              type="number"
+              value={String(concurrency)}
+              onChange={(event) =>
+                onPolicyChange({
+                  ...policy,
+                  max_concurrent_runs: Number(event.target.value || 0)
+                })
+              }
+              className="h-12 rounded-2xl border-slate-200 bg-white"
+            />
+          </div>
         </div>
       </div>
     </div>
