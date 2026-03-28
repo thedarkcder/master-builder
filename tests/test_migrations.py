@@ -49,6 +49,39 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(duplicates, {})
         self.assertEqual(script.get_heads(), ["20260328_0049"])
 
+    def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
+        """Branch-specific migrations chained after staging merge head (20260328_0045)."""
+        versions_dir = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "storage"
+            / "migrations"
+            / "versions"
+        )
+        expected_chain = {
+            "20260328_0046_platform_settings.py": (
+                'revision = "20260328_0046"',
+                'down_revision = "20260328_0045"',
+            ),
+            "20260328_0047_followup_context_identity.py": (
+                'revision = "20260328_0047"',
+                'down_revision = "20260328_0046"',
+            ),
+            "20260328_0048_pm_interview_cases.py": (
+                'revision = "20260328_0048"',
+                'down_revision = "20260328_0047"',
+            ),
+            "20260328_0049_project_voice_automations.py": (
+                'revision = "20260328_0049"',
+                'down_revision = "20260328_0048"',
+            ),
+        }
+
+        for filename, expected_lines in expected_chain.items():
+            contents = (versions_dir / filename).read_text(encoding="utf-8")
+            for expected_line in expected_lines:
+                self.assertIn(expected_line, contents)
+
     def test_run_migrations_repairs_legacy_stream_only_0040_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
