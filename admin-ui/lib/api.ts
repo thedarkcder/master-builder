@@ -403,6 +403,7 @@ export type PlatformServiceInstanceRecord = {
   updated_at: string | null;
   capabilities: string[];
   current_run_id?: string | null;
+  active_run_count?: number;
 };
 
 export type PlatformStatusRecord = {
