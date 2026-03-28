@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
-from orchestrator.api.discord.shared.state import command_matches
+from orchestrator.api.discord.shared.state import command_matches, parse_command_text
 from orchestrator.core.communications import (
     DiscordAskWithThreadAction,
     DiscordInteractionFollowupAction,
@@ -120,6 +120,12 @@ async def run_discord_command_followup(
                         command_text=command_text,
                         command_params=command_params,
                     )
+                    followup_request_id: str | None = None
+                    response_followup_context_type: str | None = None
+                    try:
+                        command_name_hint, _ = parse_command_text(command_text)
+                    except HTTPException:
+                        command_name_hint = None
                     try:
                         command_response = deps.execute_command_ingress(
                             tenant_id=tenant_id,
@@ -134,6 +140,7 @@ async def run_discord_command_followup(
                             defer_seed_issues=False,
                             ingress_source="discord",
                         )
+                        command_name_hint = command_response.command
                         data = command_response.data if isinstance(command_response.data, dict) else {}
                         requires_confirmation = bool(data.get("requires_confirmation")) and command_response.command == "ask"
                         if requires_confirmation:
@@ -277,7 +284,7 @@ async def run_discord_command_followup(
                                     components=components,
                                     issue_key=issue_key,
                                     followup_context_type=_followup_context_type_for_message(
-                                        command_name=command_response.command,
+                                        command_name=command_name_hint,
                                         content=content,
                                         issue_key=issue_key,
                                         response_followup_context_type=response_followup_context_type,

@@ -45,6 +45,7 @@
 2026-03-28
 
 - When running Playwright against a Next app in a worktree, execute the test from the app directory or pass the explicit config file. Relative `page.goto()` calls only work if the runner actually loaded the correct `playwright.config.ts` and baseURL.
+- Before fixing CI or reviewing a PR in a multi-worktree repo, confirm both the active branch and the active worktree path. Do not assume the current cwd matches the branch the user named.
 - Migration fixes are not verified by SQLite-only Alembic tests alone. If the runtime path is Postgres via Docker startup, add regression checks for legacy version-table normalization and boolean/default DDL compatibility, then prove the real startup script reaches service readiness and `worker_started`.
 - When restructuring an admin access surface, verify all critical account-lifecycle actions remain available: invite, deactivate, role change, and password reset. Do not call the UI complete until those operator actions are present or explicitly deferred.
 - Do not surface raw permission keys, enum values, or internal identifiers in enterprise UI. Translate access models into plain-language labels and use real selectors for team assignment instead of asking users for IDs.
