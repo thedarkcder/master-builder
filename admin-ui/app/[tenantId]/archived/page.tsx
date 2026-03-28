@@ -1,11 +1,28 @@
 "use client";
 
+import { Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function ArchivedWorkspacePage() {
+  return (
+    <Suspense fallback={<ArchivedWorkspaceFallback />}>
+      <ArchivedWorkspacePageInner />
+    </Suspense>
+  );
+}
+
+function ArchivedWorkspaceFallback() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
+      <p className="text-sm text-muted-foreground">Loading…</p>
+    </div>
+  );
+}
+
+function ArchivedWorkspacePageInner() {
   const router = useRouter();
   const params = useParams<{ tenantId: string }>();
   const searchParams = useSearchParams();
