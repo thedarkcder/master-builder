@@ -14,6 +14,7 @@ from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_con
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.transport_runtime import (
     build_http_transport_action_executors,
+    execute_side_effect_action,
     execute_side_effect_ingress_result,
 )
 from orchestrator.api.webhooks.github_application import build_github_webhook_ingress_result
@@ -375,8 +376,8 @@ def _process_project_automation_job(
         )
         if plan.already_succeeded or plan.action is None:
             return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
-        execute_side_effect_ingress_result(
-            result=IngressResult(actions=(plan.action,)),
+        delivery = execute_side_effect_action(
+            action=plan.action,
             envelope=TransportEnvelope(
                 transport=WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
                 event_type=str(claimed_job.event_type or "project_automation"),
@@ -389,10 +390,14 @@ def _process_project_automation_job(
                 settings=settings,
             ),
         )
+        discord_message_id = str((delivery or {}).get("message_id") or "").strip()
+        if not discord_message_id:
+            raise RuntimeError("Project automation delivery did not return a Discord message id")
         mark_project_automation_execution_success(
             session=session,
             execution_id=plan.execution_id,
             window_end_at=plan.window_end_at,
+            discord_message_id=discord_message_id,
         )
         return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
     except Exception as exc:  # noqa: BLE001

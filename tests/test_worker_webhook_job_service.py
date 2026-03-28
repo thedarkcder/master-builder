@@ -235,7 +235,10 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                         window_end_at=datetime.now(timezone.utc),
                     ),
                 ),
-                patch("orchestrator.core.worker.webhook_job_service.execute_side_effect_ingress_result") as execute_side_effect,
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.execute_side_effect_action",
+                    return_value={"message_id": "discord-msg-1", "channel_id": "channel-automation"},
+                ) as execute_side_effect,
                 patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_success") as mark_success,
             ):
                 processed = process_next_webhook_job(session=session, settings=SimpleNamespace(), owner_id="worker-1")
@@ -243,6 +246,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertIsNotNone(processed)
             execute_side_effect.assert_called_once()
             mark_success.assert_called_once()
+            self.assertEqual(mark_success.call_args.kwargs["discord_message_id"], "discord-msg-1")
             self.assertEqual(session.get(WebhookJob, processed.job_id).status, "done")
 
     def test_project_automation_jobs_mark_failure_when_send_fails(self) -> None:

@@ -17,6 +17,7 @@ from orchestrator.core.communications.contracts import (
     CommunicationLink,
     DiscordAskWithThreadAction,
     DiscordChannelMessageAction,
+    DiscordChannelMessageWithAttachmentAction,
     DiscordInteractionResponseAction,
     DiscordSeedWithThreadAction,
     DiscordTenantNotificationAction,
@@ -38,6 +39,7 @@ from orchestrator.core.communications.contracts import (
 )
 from orchestrator.api.transport_runtime import (
     HttpTransportExecutor,
+    execute_side_effect_action,
     execute_http_ingress_result,
     execute_side_effect_ingress_result,
 )
@@ -230,6 +232,46 @@ class CommunicationContractsTests(unittest.TestCase):
 
         callback_sender.assert_called_once()
         client.post_message.assert_called_once_with(channel_id="c-1", content="hello", components=None)
+
+    def test_discord_transport_executor_returns_message_metadata_for_attachment_action(self) -> None:
+        client = MagicMock()
+        client.post_message_with_attachment.return_value = {"id": "discord-msg-1"}
+        executor = DiscordTransportExecutor(
+            bot_token="token",
+            client_factory=MagicMock(return_value=client),
+        )
+
+        result = executor.execute(
+            action=DiscordChannelMessageWithAttachmentAction(
+                channel_id="c-1",
+                content="hello",
+                filename="voice.wav",
+                file_bytes=b"wav",
+                content_type="audio/wav",
+            )
+        )
+
+        self.assertEqual(result, {"message_id": "discord-msg-1", "channel_id": "c-1"})
+
+    def test_execute_side_effect_action_returns_executor_metadata(self) -> None:
+        executor = MagicMock()
+        executor.execute.return_value = {"message_id": "discord-msg-1", "channel_id": "c-1"}
+
+        result = execute_side_effect_action(
+            action=GitHubIssueCommentReactionAction(
+                repo_full_name="org/repo",
+                comment_id=101,
+                content="eyes",
+            ),
+            envelope=TransportEnvelope(
+                transport="discord_gateway",
+                event_type="message_create",
+                request_id="req-3",
+            ),
+            transport_action_executors=(executor,),
+        )
+
+        self.assertEqual(result, {"message_id": "discord-msg-1", "channel_id": "c-1"})
 
     def test_discord_transport_executor_delegates_thread_style_actions_to_handler(self) -> None:
         handler = MagicMock()

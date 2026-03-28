@@ -7,6 +7,8 @@ import {
   DEFAULT_API_BASE_URL,
 } from "../../../lib/auth-constants";
 import type {
+  ProjectAutomationExecutionRecord,
+  ProjectAutomationRecord,
   ProjectRecord,
   RunEventRecord,
   RunLogEventRecord,
@@ -155,6 +157,49 @@ export function makeProject(overrides: Partial<ProjectRecord> = {}): ProjectReco
     is_archived: false,
     created_at: "2026-03-27T16:00:00Z",
     updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeProjectAutomationExecution(
+  overrides: Partial<ProjectAutomationExecutionRecord> = {},
+): ProjectAutomationExecutionRecord {
+  return {
+    execution_id: "exec-1",
+    automation_id: "automation-1",
+    scheduled_for: "2026-03-28T09:00:00Z",
+    window_start_at: "2026-03-28T08:00:00Z",
+    window_end_at: "2026-03-28T09:00:00Z",
+    status: "succeeded",
+    dedupe_key: "dedupe-1",
+    started_at: "2026-03-28T08:01:00Z",
+    completed_at: "2026-03-28T08:05:00Z",
+    discord_message_id: "9876543210",
+    last_error: null,
+    created_at: "2026-03-28T08:00:00Z",
+    updated_at: "2026-03-28T08:05:00Z",
+    ...overrides,
+  };
+}
+
+export function makeProjectAutomation(overrides: Partial<ProjectAutomationRecord> = {}): ProjectAutomationRecord {
+  return {
+    automation_id: "automation-1",
+    project_id: "example-default",
+    tenant_id: "example",
+    kind: "standup_voice_brief",
+    enabled: true,
+    timezone: "UTC",
+    days_of_week: [1, 2, 3, 4, 5],
+    local_time: "09:30",
+    delivery_text_channel_id: "123456789012345678",
+    voice_id: "alloy",
+    fallback_lookback_hours: 24,
+    last_successful_window_end_at: "2026-03-28T09:00:00Z",
+    next_run_at: "2026-03-29T09:30:00Z",
+    executions: [makeProjectAutomationExecution()],
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-28T08:05:00Z",
     ...overrides,
   };
 }
