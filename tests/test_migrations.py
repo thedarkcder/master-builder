@@ -186,17 +186,33 @@ class MigrationTests(unittest.TestCase):
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
             self.assertEqual(versions, ["20260328_0049"])
 
+    def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            self._alembic_upgrade(database_url, "20260328_0045")
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("UPDATE alembic_version SET version_num = '20260328_0044'"))
+
+            run_migrations(database_url=database_url)
+
+            with engine.begin() as connection:
+                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+            self.assertEqual(versions, ["20260328_0049"])
+
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
         fake_config.attributes = {}
         with (
             patch("orchestrator.storage.migrations._normalize_repaired_top_revisions") as normalize_mock,
+            patch("orchestrator.storage.migrations._repair_stamp_if_schema_ahead_of_version") as repair_mock,
             patch("orchestrator.storage.migrations.Config", return_value=fake_config),
             patch("orchestrator.storage.migrations.command.upgrade") as upgrade_mock,
         ):
             run_migrations(database_url="sqlite:///tmp/test.db")
 
         normalize_mock.assert_called_once_with("sqlite:///tmp/test.db")
+        repair_mock.assert_called_once_with("sqlite:///tmp/test.db")
         self.assertEqual(fake_config.attributes.get("configure_logger"), False)
         upgrade_mock.assert_called_once_with(fake_config, "head")
 
