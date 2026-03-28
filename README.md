@@ -24,7 +24,7 @@ export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
 export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=smtp
 export ORCHESTRATOR_EMAIL_FROM_ADDRESS=no-reply@masterbuilder.local
 export ORCHESTRATOR_SMTP_HOST=localhost
-export ORCHESTRATOR_SMTP_PORT=1025
+export ORCHESTRATOR_SMTP_PORT=4205
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
 export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
@@ -191,8 +191,8 @@ docker compose up --build
 
 API is exposed on `http://localhost:4000`.
 Postgres is exposed on `localhost:4402`.
-Mailpit SMTP is exposed on `localhost:1025`.
-Mailpit inbox UI is exposed on `http://localhost:8025`.
+Mailpit SMTP is exposed on `localhost:4205`.
+Mailpit inbox UI is exposed on `http://localhost:4206`.
 Admin UI (if running locally) is exposed on `http://localhost:4100`.
 Tailscale sidecar uses `TS_AUTHKEY` from your environment (required for tailnet auth).
 
@@ -200,7 +200,7 @@ For host-based API development, you can run only the local mail sink:
 ```bash
 docker compose up -d mailpit
 ```
-Then keep `ORCHESTRATOR_SMTP_HOST=localhost` and `ORCHESTRATOR_SMTP_PORT=1025` so invite and onboarding emails land in Mailpit instead of a real provider.
+Then keep `ORCHESTRATOR_SMTP_HOST=localhost` and `ORCHESTRATOR_SMTP_PORT=4205` so invite and onboarding emails land in Mailpit instead of a real provider.
 
 ### Worker build toolchains
 The worker image now includes:

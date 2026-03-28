@@ -6,12 +6,13 @@ import { useRouter } from "next/navigation";
 import { Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { credentials, ready, login, needsOnboarding } = useAuth();
+  const { credentials, ready, login, needsOnboarding, principal } = useAuth();
 
   const [identifier, setIdentifier] = useState("admin");
   const [password, setPassword] = useState("");
@@ -19,10 +20,10 @@ export default function LoginPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    if (ready && credentials) {
-      router.replace(needsOnboarding ? "/get-started" : "/dashboard");
+    if (ready && credentials && principal) {
+      router.replace(needsOnboarding ? "/get-started" : getDefaultAuthenticatedRoute(principal));
     }
-  }, [credentials, needsOnboarding, ready, router]);
+  }, [credentials, needsOnboarding, principal, ready, router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -33,7 +34,6 @@ export default function LoginPage() {
         identifier: identifier.trim(),
         password
       });
-      router.push("/dashboard");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid credentials";
       setErrorMessage(message);

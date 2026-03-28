@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo } from "react";
-import { useParams, usePathname, useRouter } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
 
@@ -19,28 +19,31 @@ const businessTabs = [
 export default function AnalyticsLayout({ children }: { children: React.ReactNode }) {
   const params = useParams<{ tenantId: string }>();
   const pathname = usePathname();
-  const router = useRouter();
   const { principal } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
   const membership = principal?.memberships.find((item) => item.tenant_id === tenantId);
   const isNonTechnical = membership?.effective_mode === "non_technical";
+  const businessHref = `/tenants/${encodeURIComponent(tenantId)}/analytics/business`;
   const tabs = useMemo(
     () => (isNonTechnical ? businessTabs : [...businessTabs, ...technicalTabs]),
     [isNonTechnical]
   );
 
   useEffect(() => {
-    if (isNonTechnical && pathname !== `/tenants/${tenantId}/analytics/business`) {
-      router.replace(`/tenants/${encodeURIComponent(tenantId)}/analytics/business`);
+    if (!isNonTechnical || pathname === businessHref) {
+      return;
     }
-  }, [isNonTechnical, pathname, router, tenantId]);
+    if (typeof window !== "undefined") {
+      window.location.replace(businessHref);
+    }
+  }, [businessHref, isNonTechnical, pathname]);
 
   return (
     <div className="space-y-0">
       <div className="mb-1">
         <h1 className="text-xl font-semibold">Analytics</h1>
         <p className="text-sm text-muted-foreground">
-          {isNonTechnical ? "Delivery progress, throughput, and recent completions." : "Delivery reporting plus token usage, trends, and stage diagnostics."}
+          {isNonTechnical ? "Delivery progress and recent completions." : "Delivery reporting plus token usage and diagnostics."}
         </p>
       </div>
       <div className="border-b overflow-x-auto">

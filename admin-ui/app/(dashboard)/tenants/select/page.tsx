@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ChevronRight, KeyRound, Plus, Zap } from "lucide-react";
+import { ChevronRight, Plus, Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { getTenantDashboardRoute } from "@/lib/auth-routing";
 import { Skeleton } from "@/components/ui/skeleton";
 import { listTenants, type TenantRecord } from "@/lib/api";
 
@@ -106,7 +107,7 @@ export default function SelectTenantPage() {
               {tenants.map((tenant) => (
                 <li key={tenant.tenant_id}>
                   <Link
-                    href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/integrations`}
+                    href={getTenantDashboardRoute(tenant.tenant_id)}
                     className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                   >
                     <div
@@ -139,17 +140,6 @@ export default function SelectTenantPage() {
               </li>
             </ul>
           )}
-        </div>
-
-        {/* Platform link */}
-        <div className="mt-4 text-center">
-          <Link
-            href="/secrets"
-            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <KeyRound className="h-3 w-3" />
-            Platform Secrets
-          </Link>
         </div>
       </div>
     </div>

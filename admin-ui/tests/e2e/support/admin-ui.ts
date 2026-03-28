@@ -2,9 +2,7 @@ import { encode } from "next-auth/jwt";
 import type { Page, Route } from "@playwright/test";
 
 import {
-  AUTH_COOKIE_KEY,
   AUTH_COOKIE_TTL_SECONDS,
-  AUTH_STORAGE_KEY,
   DEFAULT_API_BASE_URL,
 } from "../../../lib/auth-constants";
 import type {
@@ -49,33 +47,12 @@ type TenantSessionSeed = {
 };
 
 export async function seedAdminSession(page: Page, accessToken = ADMIN_ACCESS_TOKEN): Promise<void> {
-  await page.context().addCookies([
-    {
-      name: AUTH_COOKIE_KEY,
-      value: "1",
-      url: "http://localhost:4100",
-      sameSite: "Lax",
-    },
-  ]);
-  await page.addInitScript(
-    ({ storageKey, apiBaseUrl, token, authCookieKey, authCookieTtlSeconds }) => {
-      window.localStorage.setItem(
-        storageKey,
-        JSON.stringify({
-          apiBaseUrl,
-          accessToken: token,
-        }),
-      );
-      document.cookie = `${authCookieKey}=1; path=/; max-age=${authCookieTtlSeconds}; samesite=lax`;
-    },
-    {
-      storageKey: AUTH_STORAGE_KEY,
-      apiBaseUrl: DEFAULT_API_BASE_URL,
-      token: accessToken,
-      authCookieKey: AUTH_COOKIE_KEY,
-      authCookieTtlSeconds: AUTH_COOKIE_TTL_SECONDS,
-    },
-  );
+  await seedAuthenticatedSession(page, {
+    principal: makePlatformAdminPrincipal(),
+    accessToken,
+    userName: "admin",
+    userEmail: null,
+  });
 }
 
 export async function installAdminApiMocks(page: Page, handlers: AdminRouteHandler[]): Promise<void> {
@@ -123,6 +100,13 @@ export async function seedTenantSession(
   page: Page,
   { principal, accessToken = TENANT_ACCESS_TOKEN, userEmail, userName }: TenantSessionSeed,
 ): Promise<void> {
+  await seedAuthenticatedSession(page, { principal, accessToken, userEmail, userName });
+}
+
+async function seedAuthenticatedSession(
+  page: Page,
+  { principal, accessToken, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
   const token = await encode({
     secret: AUTH_SECRET,
     salt: AUTH_SESSION_COOKIE_SALT,
@@ -155,13 +139,20 @@ export async function mockCredentialSignIn(
 ): Promise<void> {
   await page.route(`${APP_BASE_URL}/api/auth/callback/credentials**`, async (route) => {
     await seedTenantSession(page, seed);
+    const principal = seed.principal;
+    const redirectUrl =
+      principal.principal_type === "platform_super_admin"
+        ? `${APP_BASE_URL}/tenants/select`
+        : principal.memberships[0]
+          ? `${APP_BASE_URL}/tenants/${encodeURIComponent(principal.memberships[0].tenant_id)}/dashboard`
+          : `${APP_BASE_URL}/tenants/select`;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         ok: true,
         status: 200,
-        url: `${APP_BASE_URL}/dashboard`,
+        url: redirectUrl,
       }),
     });
   });
@@ -337,6 +328,20 @@ export function makeTenantUserPrincipal(
     email: "person@example.com",
     full_name: "Person Example",
     memberships: [makeMembership()],
+    ...overrides,
+  };
+}
+
+export function makePlatformAdminPrincipal(
+  overrides: Partial<AuthenticatedPrincipalRecord> = {},
+): AuthenticatedPrincipalRecord {
+  return {
+    principal_type: "platform_super_admin",
+    username: "admin",
+    user_id: null,
+    email: null,
+    full_name: null,
+    memberships: [],
     ...overrides,
   };
 }
@@ -523,15 +528,15 @@ export async function mockRunDetailApis(
       plan: { pre_check: { outcome: "ready_for_agent" } },
       pr_url: null,
     });
-  await installAdminApiMocks(page, [
+  await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/admin/auth/me",
-      handler: (route) => fulfillJson(route, { username: "admin" }),
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
     },
     {
       method: "GET",
-      pathname: /^\/api\/admin\/runs\/[^/]+$/,
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+$/,
       handler: (route, url) => {
         const runId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
         if (runId === options.run.run_id) {
@@ -549,17 +554,17 @@ export async function mockRunDetailApis(
     },
     {
       method: "GET",
-      pathname: /^\/api\/admin\/runs\/[^/]+\/events$/,
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events$/,
       handler: (route) => fulfillJson(route, options.events ?? []),
     },
     {
       method: "GET",
-      pathname: /^\/api\/admin\/runs\/[^/]+\/logs$/,
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/logs$/,
       handler: (route) => fulfillJson(route, options.logs ?? []),
     },
     {
       method: "GET",
-      pathname: new RegExp(`^/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/runs/[^/]+/token-timeline$`),
+      pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/runs/[^/]+/token-timeline$`),
       handler: (route, url) => {
         const runId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
         if (runId === nextRun.run_id) {
@@ -570,17 +575,17 @@ export async function mockRunDetailApis(
     },
     {
       method: "GET",
-      pathname: `/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}`,
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}`,
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: `/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects`,
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects`,
       handler: (route) => fulfillJson(route, projects),
     },
     {
       method: "POST",
-      pathname: `/api/admin/runs/${encodeURIComponent(options.run.run_id)}/rerun`,
+      pathname: `/api/bff/api/admin/runs/${encodeURIComponent(options.run.run_id)}/rerun`,
       handler: async (route) => {
         const payload = JSON.parse(route.request().postData() ?? "{}") as RunRerunPayload;
         options.onRerun?.(payload);
@@ -594,7 +599,19 @@ async function installAuthSessionMock(
   page: Page,
   { principal, userEmail, userName }: TenantSessionSeed,
 ): Promise<void> {
+  let sessionActive = true;
+  await page.route(`${APP_BASE_URL}/api/auth/csrf**`, async (route) => {
+    await fulfillJson(route, { csrfToken: "playwright-csrf-token" });
+  });
+  await page.route(`${APP_BASE_URL}/api/auth/signout**`, async (route) => {
+    sessionActive = false;
+    await fulfillJson(route, { url: `${APP_BASE_URL}/login` });
+  });
   await page.route(`${APP_BASE_URL}/api/auth/session**`, async (route) => {
+    if (!sessionActive) {
+      await fulfillJson(route, null);
+      return;
+    }
     await fulfillJson(route, {
       user: {
         name: userName ?? principal.full_name ?? principal.username ?? principal.email ?? "Playwright User",

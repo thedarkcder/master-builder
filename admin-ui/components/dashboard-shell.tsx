@@ -253,7 +253,7 @@ function DashboardNavPanel({
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { credentials, ready, logout, needsOnboarding, principal } = useAuth();
+  const { credentials, ready, logout, needsOnboarding, principal, principalReady } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [tenantProjects, setTenantProjects] = useState<ProjectRecord[]>([]);
@@ -274,6 +274,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       router.replace("/login");
     }
   }, [credentials, logout, ready, router]);
+
+  useEffect(() => {
+    if (ready && credentials && principalReady && !principal) {
+      void logout();
+      router.replace("/login");
+    }
+  }, [credentials, logout, principal, principalReady, ready, router]);
 
   useEffect(() => {
     const onboardingAllowed =

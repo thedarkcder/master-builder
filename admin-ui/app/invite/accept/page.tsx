@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
+import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { acceptPublicInvite } from "@/lib/api";
@@ -11,17 +12,17 @@ import { acceptPublicInvite } from "@/lib/api";
 export default function AcceptInvitePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { credentials, ready, login, needsOnboarding } = useAuth();
+  const { credentials, ready, login, needsOnboarding, principal } = useAuth();
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (ready && credentials) {
-      router.replace(needsOnboarding ? "/get-started" : "/dashboard");
+    if (ready && credentials && principal) {
+      router.replace(needsOnboarding ? "/get-started" : getDefaultAuthenticatedRoute(principal));
     }
-  }, [credentials, needsOnboarding, ready, router]);
+  }, [credentials, needsOnboarding, principal, ready, router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -43,7 +44,6 @@ export default function AcceptInvitePage() {
         throw new Error("Invite acceptance succeeded but email was missing from the response.");
       }
       await login({ identifier: email, password });
-      router.replace("/get-started");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to accept invite");
     } finally {

@@ -9,10 +9,12 @@ import {
   makeInvite,
   makeMember,
   makeMembership,
+  makePlatformAdminPrincipal,
   makeTeam,
   makeTenant,
   makeTenantUserPrincipal,
   mockCredentialSignIn,
+  seedAdminSession,
   seedTenantSession,
 } from "./support/admin-ui";
 
@@ -78,21 +80,21 @@ test("registers a tenant admin and redirects into the setup onboarding flow", as
   await page.getByRole("button", { name: "Create workspace" }).click();
 
   await expect(page).toHaveURL(/\/get-started$/);
-  await expect(page.getByRole("heading", { name: "Set up your workspace before the team starts shipping." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Set up workspace" })).toBeVisible();
   await expect(page.getByText("Connect Jira and choose at least one project")).toBeVisible();
   await expect(page.getByRole("button", { name: "Finish setup" })).toBeDisabled();
 });
 
 test("accepts an invite and lands in the member onboarding flow", async ({ page }) => {
   const membership = makeMembership({
-    role: "business_member",
-    effective_mode: "non_technical",
+    role: "technical_member",
+    effective_mode: "technical",
     onboarding_kind: "member_join",
     onboarding_completed_at: null,
     first_signed_in_at: null,
     team_ids: ["delivery"],
   });
-  const principal = makeTenantUserPrincipal({
+  let principal = makeTenantUserPrincipal({
     email: "designer@example.com",
     full_name: "Design Partner",
     memberships: [membership],
@@ -130,6 +132,24 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
       handler: (route) => fulfillJson(route, principal),
     },
     {
+      method: "PUT",
+      pathname: "/api/bff/api/app/tenants/route25/me/settings",
+      handler: async (route) => {
+        const payload = JSON.parse(route.request().postData() ?? "{}") as { mode_override: "technical" | "non_technical" | null };
+        principal = makeTenantUserPrincipal({
+          ...principal,
+          memberships: [
+            makeMembership({
+              ...principal.memberships[0],
+              mode_override: payload.mode_override,
+              effective_mode: payload.mode_override ?? "technical",
+            }),
+          ],
+        });
+        await fulfillJson(route, principal);
+      },
+    },
+    {
       method: "GET",
       pathname: "/api/bff/api/admin/tenants/route25",
       handler: (route) => fulfillJson(route, tenant),
@@ -148,11 +168,19 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
   await page.getByRole("button", { name: "Accept invite" }).click();
 
   await expect(page).toHaveURL(/\/get-started$/);
-  await expect(page.getByRole("heading", { name: "Finish your team onboarding." })).toBeVisible();
-  await expect(page.getByText("business member")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Join workspace" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Confirm your details" })).toBeVisible();
+  await expect(page.getByText("technical member")).toBeVisible();
   await expect(page.getByText("delivery", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Continue to experience" }).click();
+  await expect(page.getByRole("heading", { name: "Select your experience" })).toBeVisible();
+  await page.getByRole("button", { name: "Business view" }).click();
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  await expect(page.getByRole("heading", { name: "Join Discord" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Link Discord" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Join Discord" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Open Discord invite" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Continue to finish" }).click();
+  await expect(page.getByRole("heading", { name: "Finish onboarding" })).toBeVisible();
 });
 
 test("redirects non-technical users away from technical analytics surfaces", async ({ page }) => {
@@ -201,6 +229,224 @@ test("redirects non-technical users away from technical analytics surfaces", asy
   await expect(page.getByRole("link", { name: "Token Overview" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Recent delivery timeline" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Secrets" })).toHaveCount(0);
+});
+
+test("lets a platform admin create a workspace through the setup wizard and blocks Jira step validation", async ({ page }) => {
+  const principal = makePlatformAdminPrincipal();
+  let tenantState = makeTenant({
+    tenant_id: "beta-workspace",
+    name: "Beta Workspace",
+    jira: { ...makeTenant().jira, connection_id: "jira-conn-123", project_keys: ["BETA"] },
+    github: { installation_id: "github-install-123", webhook_secret_ref: null },
+    repos: { github_repository: "https://github.com/thedarkcder/master-builder" },
+    discord: {
+      guild_id: "guild-123",
+      installed_at: "2026-03-27T11:00:00Z",
+      onboarding_channel_id: null,
+      onboarding_invite_expires_in_seconds: 86400,
+      onboarding_invite_max_uses: 1,
+      notify_events: [],
+    },
+  });
+
+  await seedAdminSession(page);
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/admin/jira/connect/start",
+      handler: (route) =>
+        fulfillJson(route, {
+          authorize_url: "http://localhost:4100/tenants/new/jira?jira_connection_id=jira-conn-123&jira_oauth=success",
+          expires_at: "2026-03-29T00:00:00Z",
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/jira/connections/jira-conn-123/projects",
+      handler: (route) => fulfillJson(route, [{ key: "BETA", name: "Beta Program" }]),
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/admin/tenants",
+      handler: (route) => fulfillJson(route, tenantState, 201),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/beta-workspace",
+      handler: (route) => fulfillJson(route, tenantState),
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/admin/tenants/beta-workspace/github/install/start",
+      handler: (route) => {
+        tenantState = makeTenant({
+          ...tenantState,
+          github: { installation_id: "github-install-123", webhook_secret_ref: null },
+        });
+        return fulfillJson(route, {
+          install_url: "http://localhost:4100/tenants/new/github?tenant_id=beta-workspace&github_install=success",
+          expires_at: "2026-03-29T00:00:00Z",
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/beta-workspace/github/repositories",
+      handler: (route) =>
+        fulfillJson(route, [
+          {
+            full_name: "thedarkcder/master-builder",
+            html_url: "https://github.com/thedarkcder/master-builder",
+            default_branch: "main",
+            private: true,
+          },
+        ]),
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/admin/tenants/beta-workspace/discord/install/start",
+      handler: (route) => {
+        tenantState = makeTenant({
+          ...tenantState,
+          discord: {
+            guild_id: "guild-123",
+            installed_at: "2026-03-27T11:00:00Z",
+            onboarding_channel_id: null,
+            onboarding_invite_expires_in_seconds: 86400,
+            onboarding_invite_max_uses: 1,
+            notify_events: [],
+          },
+        });
+        return fulfillJson(route, {
+          install_url: "http://localhost:4100/tenants/new/discord?tenant_id=beta-workspace&discord_install=success",
+          expires_at: "2026-03-29T00:00:00Z",
+        });
+      },
+    },
+    {
+      method: "PUT",
+      pathname: "/api/bff/api/admin/tenants/beta-workspace",
+      handler: async (route) => {
+        const payload = JSON.parse(route.request().postData() ?? "{}") as {
+          name: string;
+          repos: { github_repository: string | null };
+          discord: {
+            onboarding_channel_id?: string | null;
+            onboarding_invite_expires_in_seconds?: number | null;
+            onboarding_invite_max_uses?: number | null;
+          } | null;
+        };
+        tenantState = makeTenant({
+          ...tenantState,
+          name: payload.name,
+          repos: payload.repos,
+          discord: payload.discord
+            ? {
+                ...tenantState.discord!,
+                onboarding_channel_id: payload.discord.onboarding_channel_id ?? null,
+                onboarding_invite_expires_in_seconds:
+                  payload.discord.onboarding_invite_expires_in_seconds ?? tenantState.discord?.onboarding_invite_expires_in_seconds ?? null,
+                onboarding_invite_max_uses:
+                  payload.discord.onboarding_invite_max_uses ?? tenantState.discord?.onboarding_invite_max_uses ?? null,
+              }
+            : null,
+        });
+        await fulfillJson(route, tenantState);
+      },
+    },
+  ]);
+
+  await page.goto("/tenants/new/basics");
+  await page.getByPlaceholder("Tenant Demo").fill("Beta Workspace");
+  await page.getByRole("button", { name: /^Next$/ }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/new\/jira$/);
+  await page.getByRole("button", { name: /^Next$/ }).click();
+  await expect(page.getByText("Connect Jira before continuing.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Connect Jira" }).click();
+  await expect(page).toHaveURL(/jira_connection_id=jira-conn-123/);
+  await page.getByRole("button", { name: "Load Jira Projects" }).click();
+  await page.getByRole("button", { name: /^Next$/ }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/new\/github$/);
+  await page.getByRole("button", { name: "Install GitHub App" }).click();
+  await expect(page).toHaveURL(/github_install=success/);
+  await page.getByRole("button", { name: /^Next$/ }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/new\/discord$/);
+  await page.getByRole("button", { name: /(Reinstall|Install) Discord Bot/ }).click();
+  await expect(page).toHaveURL(/discord_install=success/);
+  await page.getByLabel("Onboarding channel ID").fill("channel-789");
+  await page.getByRole("button", { name: /^Next$/ }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/new\/repos$/);
+  await expect(page.locator("select").first()).toContainText("thedarkcder/master-builder");
+  await page.getByRole("button", { name: /^Next$/ }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/new\/review$/);
+  await page.getByRole("button", { name: "Save Tenant" }).click();
+  await expect(page.getByText("Saved tenant beta-workspace.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open Tenant Editor" })).toBeVisible();
+});
+
+test("opens the tenant workspace from the selector for tenant users", async ({ page }) => {
+  const membership = makeMembership({
+    tenant_id: "route25",
+    role: "business_member",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+    effective_mode: "non_technical",
+  });
+  const principal = makeTenantUserPrincipal({
+    email: "member@example.com",
+    memberships: [membership],
+  });
+  const tenant = makeTenant({
+    tenant_id: "route25",
+    name: "Route 25",
+    experience: { default_mode: "non_technical" },
+  });
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants",
+      handler: (route) => fulfillJson(route, [tenant]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25/projects",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25/delivery-summary",
+      handler: (route) => fulfillJson(route, makeDeliverySummary()),
+    },
+  ]);
+
+  await page.goto("/tenants/select");
+  await page.getByRole("link", { name: /Route 25/ }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/route25\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "Route 25" })).toBeVisible();
+  await expect(page.getByText("Tenant workspace overview.")).toBeVisible();
 });
 
 test("lets tenant admins manage team settings from dedicated Team tabs", async ({ page }) => {
