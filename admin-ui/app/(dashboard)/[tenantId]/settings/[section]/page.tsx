@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 
 import { TenantEditPage } from "@/components/tenant-edit-page";
@@ -23,5 +24,9 @@ export default async function TenantSettingsSectionPage({
   if (!ALLOWED.includes(section as Section)) {
     notFound();
   }
-  return <TenantEditPage section={section as Section} />;
+  return (
+    <Suspense fallback={<div className="p-8 text-muted-foreground">Loading…</div>}>
+      <TenantEditPage section={section as Section} />
+    </Suspense>
+  );
 }
