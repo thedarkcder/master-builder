@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin.route_helpers import jira_oauth_client, refresh_jira_connection_tokens
+from orchestrator.api.jira_oauth.service import execute_jira_operation_with_refresh_retry
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.knowledge_base import sync_project_knowledge_from_jira
 from orchestrator.core.knowledge_jira_sync_status import (
@@ -24,7 +24,7 @@ from orchestrator.core.project_policy import resolve_effective_policy
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import JiraOAuthConnection, KnowledgeJiraSyncProjectState, KnowledgeSource, Project, Tenant
 from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
-from orchestrator.tools.jira_oauth_models import JiraOAuthError
+from orchestrator.tools.jira_oauth_models import JiraOAuthAuthRequiredError, JiraOAuthError, JiraOAuthHttpError
 
 try:
     import psycopg
@@ -187,15 +187,16 @@ class KnowledgeJiraSyncRuntime:
             existing_project_status = existing_status.get((project.tenant_id, project.project_id))
             if (
                 existing_project_status is not None
-                and existing_project_status.failure_category == "invalid_refresh_token"
+                and existing_project_status.failure_category in {"invalid_refresh_token", "auth_required"}
                 and existing_project_status.next_retry_at is not None
                 and existing_project_status.next_retry_at > now
             ):
                 logger.info(
-                    "knowledge_jira_sync_project_skipped tenant_id=%s project_id=%s jira_project_key=%s reason=invalid_refresh_token_backoff next_retry_at=%s",
+                    "knowledge_jira_sync_project_skipped tenant_id=%s project_id=%s jira_project_key=%s reason=%s_backoff next_retry_at=%s",
                     project.tenant_id,
                     project.project_id,
                     project.jira_project_key,
+                    existing_project_status.failure_category,
                     existing_project_status.next_retry_at.isoformat(),
                 )
                 continue
@@ -234,7 +235,7 @@ class KnowledgeJiraSyncRuntime:
                             int(getattr(self._settings, "knowledge_jira_sync_invalid_token_backoff_seconds", 21600)),
                         )
                     )
-                    if category == "invalid_refresh_token"
+                    if category in {"invalid_refresh_token", "auth_required"}
                     else None
                 )
                 self._write_project_status(
@@ -247,7 +248,7 @@ class KnowledgeJiraSyncRuntime:
                     next_retry_at=next_retry_at,
                     consecutive_failures=(existing_project_status.consecutive_failures + 1) if existing_project_status else 1,
                 )
-                if category == "invalid_refresh_token":
+                if category in {"invalid_refresh_token", "auth_required"}:
                     logger.error(
                         "knowledge_jira_sync_project_degraded tenant_id=%s project_id=%s jira_project_key=%s category=%s next_retry_at=%s error=%s",
                         project.tenant_id,
@@ -278,28 +279,28 @@ class KnowledgeJiraSyncRuntime:
             connection = session.get(JiraOAuthConnection, project.connection_id)
             if connection is None:
                 raise KnowledgeJiraSyncDependencyFailure("Jira OAuth connection record not found.")
-            access_token = refresh_jira_connection_tokens(
-                session,
-                connection=connection,
-                settings=self._settings,
-                tenant_id=project.tenant_id,
-            )
-            client = jira_oauth_client(
-                session=session,
-                settings=self._settings,
-                tenant_id=project.tenant_id,
-                project_id=project.project_id,
-            )
+            cloud_id = connection.cloud_id
+
+        def _operation(session: Session, jira_client, access_token: str):  # noqa: ANN001
             return sync_project_knowledge_from_jira(
                 session=session,
                 tenant_id=project.tenant_id,
                 project_id=project.project_id,
                 project_key=project.jira_project_key,
-                jira_client=client,
+                jira_client=jira_client,
                 access_token=access_token,
-                cloud_id=connection.cloud_id,
+                cloud_id=cloud_id,
                 max_issues=max(1, int(getattr(self._settings, "knowledge_jira_sync_max_issues", 500))),
             )
+
+        return execute_jira_operation_with_refresh_retry(
+            session_factory=self._session_factory,
+            settings=self._settings,
+            connection_id=project.connection_id,
+            operation=_operation,
+            tenant_id=project.tenant_id,
+            project_id=project.project_id,
+        )
 
     def _list_sync_projects(self, session: Session) -> list[_SyncProject]:
         tenants = {
@@ -443,10 +444,16 @@ class KnowledgeJiraSyncRuntime:
 
 
 def _classify_project_failure(exc: Exception) -> str:
+    if isinstance(exc, JiraOAuthAuthRequiredError):
+        return "auth_required"
+    if isinstance(exc, JiraOAuthHttpError) and exc.status_code in {401, 403}:
+        return "auth_required"
     if isinstance(exc, JiraOAuthError):
         message = str(exc).lower()
         if "refresh_token is invalid" in message or "unauthorized_client" in message:
             return "invalid_refresh_token"
+        if "(401)" in message or "(403)" in message:
+            return "auth_required"
         return "sync_request_failed"
     if isinstance(exc, KnowledgeJiraSyncDependencyFailure):
         return "dependency_failure"

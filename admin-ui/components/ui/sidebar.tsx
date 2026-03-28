@@ -14,7 +14,7 @@ export function Sidebar({ className, ...props }: ComponentProps<"aside">) {
   return (
     <aside
       className={cn(
-        "hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex md:w-[240px] md:min-w-[240px] md:max-w-[240px]",
+        "hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:h-screen md:w-[240px] md:min-w-[240px] md:max-w-[240px]",
         className
       )}
       {...props}
@@ -35,7 +35,7 @@ export function SidebarFooter({ className, ...props }: ComponentProps<"div">) {
 }
 
 export function SidebarInset({ className, ...props }: ComponentProps<"main">) {
-  return <main className={cn("flex-1 min-w-0", className)} {...props} />;
+  return <main className={cn("flex-1 min-w-0 md:ml-[240px]", className)} {...props} />;
 }
 
 export function SidebarMenu({ className, ...props }: ComponentProps<"ul">) {

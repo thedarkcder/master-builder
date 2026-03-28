@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from orchestrator.api.main import create_app
+from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
 from orchestrator.api.admin.project_normalization import resolve_project_discord_channel_name
 from orchestrator.core.config import get_settings
 from orchestrator.core.agent_observability import (
@@ -22,7 +23,29 @@ from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeChunk, KnowledgeFact, KnowledgeSource, ManagedSecret, Project, Run, RunLock, Tenant, TenantRunClaim
+from orchestrator.storage.models import (
+    DiscordCommandSyncRuntimeState,
+    JiraOAuthConnection,
+    KnowledgeAsset,
+    KnowledgeChunk,
+    KnowledgeFact,
+    KnowledgeJiraSyncRuntimeState,
+    KnowledgeSource,
+    ManagedSecret,
+    Project,
+    Run,
+    RunLock,
+    Tenant,
+    TenantMembership,
+    TenantInvite,
+    TenantRunClaim,
+    TenantTeam,
+    TenantTeamMembership,
+    TenantUser,
+    TenantUserCredential,
+    TenantUserDiscordIdentity,
+    WorkerRuntimeState,
+)
 from orchestrator.tools.github_app import InstallationRepository
 
 
@@ -1947,6 +1970,87 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(len(list_response.json()), 0)
 
+    def test_delete_tenant_removes_orphan_users_and_tenant_scoped_secrets(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            now = datetime.now(timezone.utc)
+            user = TenantUser(
+                user_id="user-1",
+                email="owner@example.com",
+                full_name="Owner Example",
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(user)
+            session.add(
+                TenantUserCredential(
+                    user_id="user-1",
+                    password_hash="hash",
+                    password_updated_at=now,
+                    must_change_password=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                TenantMembership(
+                    membership_id="membership-1",
+                    tenant_id="tenant-a",
+                    user_id="user-1",
+                    role="tenant_admin",
+                    mode_override=None,
+                    onboarding_kind="tenant_admin_setup",
+                    first_signed_in_at=None,
+                    onboarding_completed_at=now,
+                    onboarding_version=None,
+                    discord_state={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                ManagedSecret(
+                    secret_ref="tenant/tenant-a/GITHUB_TOKEN",
+                    value_encrypted=encrypt_value(
+                        plaintext="secret",
+                        encryption_key=os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"],
+                    ),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                ManagedSecret(
+                    secret_ref="project/tenant-a/project-1/API_KEY",
+                    value_encrypted=encrypt_value(
+                        plaintext="secret",
+                        encryption_key=os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"],
+                    ),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        delete_response = self.client.delete("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(delete_response.status_code, 204)
+
+        with session_factory() as session:
+            self.assertIsNone(session.get(Tenant, "tenant-a"))
+            self.assertIsNone(session.get(TenantUser, "user-1"))
+            self.assertIsNone(session.get(TenantUserCredential, "user-1"))
+            self.assertIsNone(session.get(ManagedSecret, "tenant/tenant-a/GITHUB_TOKEN"))
+            self.assertIsNone(session.get(ManagedSecret, "project/tenant-a/project-1/API_KEY"))
+
     def test_archive_and_unarchive_tenant(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
@@ -1963,6 +2067,11 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(archive_response.status_code, 200)
         self.assertFalse(archive_response.json()["is_enabled"])
+        self.assertIsNotNone(archive_response.json()["archived_at"])
+        self.assertIsNotNone(archive_response.json()["purge_after_at"])
+        archived_at = datetime.fromisoformat(archive_response.json()["archived_at"].replace("Z", "+00:00"))
+        purge_after_at = datetime.fromisoformat(archive_response.json()["purge_after_at"].replace("Z", "+00:00"))
+        self.assertEqual((purge_after_at - archived_at).days, 60)
 
         unarchive_response = self.client.post(
             "/api/admin/tenants/tenant-a/unarchive",
@@ -1970,6 +2079,207 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(unarchive_response.status_code, 200)
         self.assertTrue(unarchive_response.json()["is_enabled"])
+        self.assertIsNone(unarchive_response.json()["archived_at"])
+        self.assertIsNone(unarchive_response.json()["purge_after_at"])
+
+    def test_purge_expired_archived_tenant_deletes_owned_data(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            now = datetime.now(timezone.utc)
+            user = TenantUser(
+                user_id="user-1",
+                email="owner@example.com",
+                full_name="Owner Example",
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(user)
+            session.add(
+                TenantUserCredential(
+                    user_id="user-1",
+                    password_hash="hash",
+                    password_updated_at=now,
+                    must_change_password=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                TenantUserDiscordIdentity(
+                    user_id="user-1",
+                    discord_user_id="discord-user-1",
+                    discord_username="owner",
+                    discord_global_name="Owner Example",
+                    discord_avatar_hash=None,
+                    linked_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                TenantMembership(
+                    membership_id="membership-1",
+                    tenant_id="tenant-a",
+                    user_id="user-1",
+                    role="tenant_admin",
+                    mode_override=None,
+                    onboarding_kind="tenant_admin_setup",
+                    first_signed_in_at=None,
+                    onboarding_completed_at=now,
+                    onboarding_version=None,
+                    discord_state={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                TenantTeam(
+                    team_id="team-1",
+                    tenant_id="tenant-a",
+                    name="Operations",
+                    description="Ops access",
+                    permission_keys=["workspace.manage"],
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                TenantTeamMembership(
+                    team_membership_id="team-membership-1",
+                    team_id="team-1",
+                    membership_id="membership-1",
+                    created_at=now,
+                )
+            )
+            session.add(
+                TenantInvite(
+                    invite_id="invite-1",
+                    tenant_id="tenant-a",
+                    email="invitee@example.com",
+                    full_name="Invitee Example",
+                    role="business_member",
+                    team_ids=["team-1"],
+                    mode_override=None,
+                    status="pending",
+                    invite_token_hash="invite-hash-1",
+                    invited_by_user_id="user-1",
+                    accepted_by_user_id=None,
+                    expires_at=now + timedelta(days=7),
+                    accepted_at=None,
+                    revoked_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                ManagedSecret(
+                    secret_ref="tenant/tenant-a/GITHUB_TOKEN",
+                    value_encrypted=encrypt_value(
+                        plaintext="secret",
+                        encryption_key=os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"],
+                    ),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                ManagedSecret(
+                    secret_ref="project/tenant-a/project-1/API_KEY",
+                    value_encrypted=encrypt_value(
+                        plaintext="secret",
+                        encryption_key=os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"],
+                    ),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-1",
+                    tenant_id="tenant-a",
+                    project_id=None,
+                    issue_key="TP-1",
+                    issue_summary="Test run",
+                    issue_description=None,
+                    repo_url=None,
+                    branch=None,
+                    pr_url=None,
+                    dev_session_id=None,
+                    pm_session_id=None,
+                    orchestrated_session_id=None,
+                    dedupe_scope="issue_execution",
+                    status="queued",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=None,
+                    last_heartbeat_at=None,
+                    worker_service_instance_id=None,
+                    finished_at=None,
+                )
+            )
+            session.commit()
+
+        archive_response = self.client.post(
+            "/api/admin/tenants/tenant-a/archive",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        purge_after_at = datetime.fromisoformat(archive_response.json()["purge_after_at"].replace("Z", "+00:00"))
+
+        with session_factory() as session:
+            purged = purge_expired_archived_tenants(
+                session=session,
+                now=purge_after_at + timedelta(seconds=1),
+            )
+        self.assertEqual(purged, 1)
+
+        with session_factory() as session:
+            self.assertIsNone(session.get(Tenant, "tenant-a"))
+            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
+            self.assertIsNone(session.get(TenantUser, "user-1"))
+            self.assertIsNone(session.get(TenantUserCredential, "user-1"))
+            self.assertIsNone(session.get(TenantUserDiscordIdentity, "user-1"))
+            self.assertIsNone(session.get(TenantTeam, "team-1"))
+            self.assertIsNone(session.get(TenantInvite, "invite-1"))
+            self.assertIsNone(session.get(ManagedSecret, "tenant/tenant-a/GITHUB_TOKEN"))
+            self.assertIsNone(session.get(ManagedSecret, "project/tenant-a/project-1/API_KEY"))
+            self.assertIsNone(session.get(Run, "run-1"))
+
+    def test_purge_expired_archived_tenant_respects_retention_window(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        archive_response = self.client.post(
+            "/api/admin/tenants/tenant-a/archive",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        purge_after_at = datetime.fromisoformat(archive_response.json()["purge_after_at"].replace("Z", "+00:00"))
+        session_factory = create_session_factory(self.database_url)
+
+        with session_factory() as session:
+            purged = purge_expired_archived_tenants(
+                session=session,
+                now=purge_after_at - timedelta(seconds=1),
+            )
+        self.assertEqual(purged, 0)
+
+        still_present = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(still_present.status_code, 200)
 
     def test_create_tenant_allows_empty_project_keys(self) -> None:
         payload = self._tenant_payload()
@@ -2063,7 +2373,7 @@ class AdminApiTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(callback_response.status_code, 302)
-        self.assertIn("/tenants/tenant-a/edit?github_install=success", callback_response.headers.get("location", ""))
+        self.assertIn("/tenants/tenant-a/settings/github?github_install=success", callback_response.headers.get("location", ""))
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
@@ -2331,7 +2641,7 @@ class AdminApiTests(unittest.TestCase):
 
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenants/tenant-a/edit?jira_oauth=success&jira_connection_id=",
+            "/tenants/tenant-a/settings/jira?jira_oauth=success&jira_connection_id=",
             callback_response.headers.get("location", ""),
         )
         self.assertIn("jira_webhook=ok", callback_response.headers.get("location", ""))
@@ -3610,6 +3920,147 @@ class AdminApiTests(unittest.TestCase):
         self.assertFalse(payload["stale"])
         self.assertEqual(len(payload["projects"]), 1)
         self.assertEqual(payload["projects"][0]["failure_category"], "invalid_refresh_token")
+
+    def test_admin_platform_status_reports_hosted_services(self) -> None:
+        os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux,macos"
+        get_settings.cache_clear()
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="example",
+                    name="example",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    experience_config={},
+                    setup_state={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="example-default",
+                    tenant_id="example",
+                    name="example Default",
+                    github_repository="github.com/example/example",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-1",
+                    agent_id="worker-agent-a",
+                    worker_mode="runs",
+                    capabilities_json=["linux"],
+                    state="busy",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-2",
+                    agent_id="worker-agent-b",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    state="idle",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-1",
+                    tenant_id="example",
+                    project_id="example-default",
+                    issue_key="GP-1",
+                    issue_summary="Issue",
+                    issue_description=None,
+                    repo_url=None,
+                    branch=None,
+                    pr_url=None,
+                    dev_session_id=None,
+                    pm_session_id=None,
+                    orchestrated_session_id=None,
+                    dedupe_scope="issue_execution",
+                    status="running",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    worker_service_instance_id="worker-1",
+                    finished_at=None,
+                )
+            )
+            session.add(
+                KnowledgeJiraSyncRuntimeState(
+                    runtime_name="knowledge-jira-sync",
+                    state="running",
+                    enabled=True,
+                    database_backend="sqlite",
+                    started_at=now,
+                    stopped_at=None,
+                    last_pass_started_at=now,
+                    last_pass_finished_at=now,
+                    last_heartbeat_at=now,
+                    leader_acquired=True,
+                    service_instance_id="sync-1",
+                    updated_at=now,
+                )
+            )
+            session.add(
+                DiscordCommandSyncRuntimeState(
+                    runtime_name="discord-command-sync",
+                    synced=True,
+                    healthy=True,
+                    interaction_ingress_ready=True,
+                    bot_token_configured=True,
+                    guild_id_configured=True,
+                    last_attempt_at=now,
+                    last_success_at=now,
+                    last_failure_reason=None,
+                    last_error=None,
+                    guild_id="guild-123",
+                    application_id="app-123",
+                    command_count=7,
+                    service_instance_id="discord-1",
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [service["service_id"] for service in payload["services"]],
+            ["api", "workers", "knowledge_jira_sync", "discord_commands"],
+        )
+        worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
+        self.assertEqual(worker_service["status"], "healthy")
+        self.assertEqual(worker_service["capabilities"], ["Linux", "macOS"])
+        instances_by_id = {instance["instance_id"]: instance for instance in worker_service["instances"]}
+        self.assertEqual(instances_by_id["worker-1"]["status"], "busy")
+        self.assertEqual(instances_by_id["worker-1"]["active_run_count"], 1)
+        self.assertEqual(instances_by_id["worker-2"]["status"], "idle")
+        self.assertEqual(instances_by_id["worker-2"]["capabilities"], ["macOS"])
 
 
 if __name__ == "__main__":

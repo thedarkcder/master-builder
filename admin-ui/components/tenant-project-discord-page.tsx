@@ -293,7 +293,7 @@ export function TenantProjectDiscordPage() {
           </h1>
         </div>
         <Button asChild variant="outline" size="sm">
-          <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}`}>
+          <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}`}>
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
             Back to Project
           </Link>

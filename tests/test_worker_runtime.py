@@ -4,8 +4,14 @@ import asyncio
 import logging
 import threading
 import unittest
+from datetime import datetime, timezone
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
+from orchestrator.storage.migrations import run_migrations
+from orchestrator.storage.models import Run, WorkerRuntimeState
 
 
 class _FakeConn:
@@ -357,6 +363,7 @@ class WorkerTests(unittest.TestCase):
             agent_id="worker-test",
         )
         listener = MagicMock()
+        purge_mock = MagicMock()
 
         async def _wait_for_wake_or_stop(*, wake_event: asyncio.Event, stop_event: asyncio.Event) -> None:
             _ = stop_event
@@ -375,6 +382,9 @@ class WorkerTests(unittest.TestCase):
         async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
             await stop_event.wait()
 
+        async def _archived_tenant_purge_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
         with (
             patch.object(worker_module, "get_settings", return_value=fake_settings),
             patch.object(worker_module, "configure_logging"),
@@ -387,11 +397,14 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
             patch.object(worker_module, "_recover_worker_run_health_once") as recovery_mock,
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "_purge_archived_tenants_once", new=purge_mock),
+            patch.object(worker_module, "_run_archived_tenant_purge_loop", new=_archived_tenant_purge_loop),
             patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
         ):
             asyncio.run(worker_module.run_worker(mode="runs"))
 
         recovery_mock.assert_called_once()
+        purge_mock.assert_called_once()
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
 
@@ -660,6 +673,99 @@ class WorkerTests(unittest.TestCase):
                 asyncio.run(worker_module.run_worker())
 
         listener.stop.assert_called_once()
+
+
+class WorkerRuntimeRegistryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self.database_url = f"sqlite:///{self.temp_dir.name}/worker_runtime.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=self.database_url)
+        reset_db_engine_cache()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+        reset_db_engine_cache()
+
+    def test_worker_runtime_registration_refresh_and_stop(self) -> None:
+        import orchestrator.worker as worker_module
+
+        session_factory = create_session_factory(self.database_url)
+        settings = SimpleNamespace(worker_capabilities="linux,macos")
+        service_instance_id = "node-a:1234"
+
+        worker_module._register_worker_runtime_once(
+            session_factory=session_factory,
+            settings=settings,
+            agent_id="worker-a",
+            service_instance_id=service_instance_id,
+            worker_mode=worker_module.WORKER_MODE_RUNS,
+        )
+
+        with session_factory() as session:
+            row = session.get(WorkerRuntimeState, service_instance_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "starting")
+            self.assertEqual(row.capabilities_json, ["linux", "macos"])
+
+        now = datetime.now(timezone.utc)
+        with session_factory() as session:
+            session.add(
+                Run(
+                    run_id="run-1",
+                    tenant_id="tenant-1",
+                    project_id=None,
+                    issue_key="GP-1",
+                    issue_summary="Issue",
+                    issue_description=None,
+                    repo_url=None,
+                    branch=None,
+                    pr_url=None,
+                    dev_session_id=None,
+                    pm_session_id=None,
+                    orchestrated_session_id=None,
+                    dedupe_scope="issue_execution",
+                    status="running",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    worker_service_instance_id=service_instance_id,
+                    finished_at=None,
+                )
+            )
+            session.commit()
+
+        worker_module._refresh_worker_runtime_once(
+            session_factory=session_factory,
+            settings=settings,
+            agent_id="worker-a",
+            service_instance_id=service_instance_id,
+            worker_mode=worker_module.WORKER_MODE_RUNS,
+        )
+
+        with session_factory() as session:
+            row = session.get(WorkerRuntimeState, service_instance_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "busy")
+            self.assertIsNotNone(row.last_heartbeat_at)
+
+        worker_module._stop_worker_runtime_once(
+            session_factory=session_factory,
+            settings=settings,
+            agent_id="worker-a",
+            service_instance_id=service_instance_id,
+            worker_mode=worker_module.WORKER_MODE_RUNS,
+        )
+
+        with session_factory() as session:
+            row = session.get(WorkerRuntimeState, service_instance_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.state, "stopped")
 
 
 class MainEntryTests(unittest.TestCase):

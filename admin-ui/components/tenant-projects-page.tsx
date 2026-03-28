@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listProjects, type ProjectRecord } from "@/lib/api";
+import { canManageProjects } from "@/lib/auth-routing";
 
 function projectInitials(name: string): string {
   const words = name.trim().split(/\s+/);
@@ -37,7 +38,7 @@ function projectAvatarColor(id: string): string {
 
 export function TenantProjectsPage() {
   const params = useParams<{ tenantId: string }>();
-  const { credentials, ready } = useAuth();
+  const { credentials, ready, principal } = useAuth();
 
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [statusLine, setStatusLine] = useState("");
@@ -45,6 +46,7 @@ export function TenantProjectsPage() {
 
   const activeProjects = useMemo(() => projects.filter((p) => !p.is_archived), [projects]);
   const archivedProjects = useMemo(() => projects.filter((p) => p.is_archived), [projects]);
+  const allowProjectManagement = canManageProjects(principal, params.tenantId);
 
   async function loadDashboard({ silent = false }: { silent?: boolean } = {}) {
     if (!credentials) return;
@@ -52,7 +54,10 @@ export function TenantProjectsPage() {
     try {
       const loaded = await listProjects(credentials, params.tenantId);
       setProjects(loaded);
-      if (!silent) setStatusLine(`Loaded ${loaded.length} project(s).`);
+      if (!silent) {
+        const activeCount = loaded.filter((project) => !project.is_archived).length;
+        setStatusLine(`Loaded ${activeCount} active project(s).`);
+      }
     } catch (error) {
       setStatusLine(`Failed to load projects: ${(error as Error).message}`);
     } finally {
@@ -77,12 +82,14 @@ export function TenantProjectsPage() {
             <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-          <Button asChild size="sm">
-            <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Add project
-            </Link>
-          </Button>
+          {allowProjectManagement ? (
+            <Button asChild size="sm">
+              <Link href={`/${encodeURIComponent(params.tenantId)}/projects/new`}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Add project
+              </Link>
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -131,29 +138,31 @@ export function TenantProjectsPage() {
       </div>
 
       {/* Project list */}
-      {projects.length === 0 ? (
+      {activeProjects.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted mb-4">
               <FolderKanban className="h-6 w-6 text-muted-foreground" />
             </div>
-            <p className="font-medium">No projects yet</p>
-            <p className="mt-1 text-sm text-muted-foreground">Create your first project to start orchestrating runs.</p>
-            <Button asChild className="mt-4" size="sm">
-              <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Add project
-              </Link>
-            </Button>
+            <p className="font-medium">No active projects</p>
+            <p className="mt-1 text-sm text-muted-foreground">Create a project to start orchestrating runs in this workspace.</p>
+            {allowProjectManagement ? (
+              <Button asChild className="mt-4" size="sm">
+                <Link href={`/${encodeURIComponent(params.tenantId)}/projects/new`}>
+                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  Add project
+                </Link>
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       ) : (
         <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
           <ul className="divide-y">
-            {projects.map((project) => (
+            {activeProjects.map((project) => (
               <li key={project.project_id}>
                 <Link
-                  href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(project.project_id)}`}
+                  href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(project.project_id)}`}
                   className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                 >
                   {/* Avatar */}

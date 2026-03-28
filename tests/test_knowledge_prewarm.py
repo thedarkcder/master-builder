@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sys
 import unittest
 from unittest.mock import patch
 
 from orchestrator.core.config import Settings
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
+from orchestrator.core.knowledge_base import _suppress_known_onnxruntime_warning_noise
 
 
 class KnowledgePrewarmTests(unittest.TestCase):
@@ -34,6 +36,18 @@ class KnowledgePrewarmTests(unittest.TestCase):
 
         prewarm_mock.assert_called_once_with(local_files_only=True)
         self.assertEqual(result.embedding_model, "BAAI/bge-small-en-v1.5")
+
+    def test_suppress_known_onnxruntime_warning_noise_is_safe_without_runtime(self) -> None:
+        with patch.dict(sys.modules, {"onnxruntime": None}):
+            _suppress_known_onnxruntime_warning_noise()
+
+    def test_suppress_known_onnxruntime_warning_noise_lowers_logger_severity_when_available(self) -> None:
+        fake_runtime = unittest.mock.Mock()
+
+        with patch.dict(sys.modules, {"onnxruntime": fake_runtime}):
+            _suppress_known_onnxruntime_warning_noise()
+
+        fake_runtime.set_default_logger_severity.assert_called_once()
 
 
 if __name__ == "__main__":

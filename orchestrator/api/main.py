@@ -17,6 +17,9 @@ from orchestrator.api.routes.admin_discord_commands import (
 from orchestrator.api.routes.admin_discord_allowlist import (
     router as admin_discord_allowlist_router,
 )
+from orchestrator.api.routes.admin_discord_install import (
+    router as admin_discord_install_router,
+)
 from orchestrator.api.routes.admin_github import router as admin_github_router
 from orchestrator.api.routes.admin_jira import router as admin_jira_router
 from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_router
@@ -27,6 +30,7 @@ from orchestrator.api.routes.admin_runs import router as admin_runs_router
 from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
 from orchestrator.api.routes.admin_tenants import router as admin_tenants_router
 from orchestrator.api.routes.admin_tokens import router as admin_tokens_router
+from orchestrator.api.routes.app_auth import router as app_auth_router
 from orchestrator.api.routes.discord import router as discord_router
 from orchestrator.api.routes.runs import router as runs_router
 from orchestrator.api.routes.webhook import router as webhook_router
@@ -205,12 +209,14 @@ def create_app() -> FastAPI:
     app.include_router(admin_codex_router)
     app.include_router(admin_discord_commands_router)
     app.include_router(admin_discord_allowlist_router)
+    app.include_router(admin_discord_install_router)
     app.include_router(admin_github_router)
     app.include_router(admin_jira_router)
     app.include_router(admin_ready_router)
     app.include_router(admin_release_router)
     app.include_router(admin_secrets_router)
     app.include_router(admin_tokens_router)
+    app.include_router(app_auth_router)
     app.include_router(discord_router)
     app.include_router(runs_router)
     app.include_router(webhook_router)
