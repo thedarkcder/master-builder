@@ -1,3 +1,12 @@
+"""
+Email delivery abstraction: SMTP (dev/Mailpit) or Resend (HTTPS API).
+
+Tenant invites and password resets call :func:`deliver_email` with a normalized
+:class:`EmailMessagePayload`. Switch providers via ``ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER``
+(``smtp`` | ``resend``). Resend requires ``ORCHESTRATOR_RESEND_API_KEY`` and a
+``from`` address on a domain verified in the Resend dashboard.
+"""
+
 from __future__ import annotations
 
 import json
@@ -13,6 +22,8 @@ from orchestrator.core.config import Settings, get_settings
 
 
 logger = logging.getLogger(__name__)
+
+_RESEND_API_URL = "https://api.resend.com/emails"
 
 
 class EmailDeliveryError(RuntimeError):
@@ -71,13 +82,15 @@ class SmtpEmailDeliveryProvider(EmailDeliveryProvider):
 
 
 class ResendEmailDeliveryProvider(EmailDeliveryProvider):
+    """Send mail through `Resend <https://resend.com/docs/api-reference/emails/send-email>`_."""
+
     def __init__(self, *, settings: Settings) -> None:
         self._settings = settings
 
     def send(self, payload: EmailMessagePayload) -> None:
         if not self._settings.resend_api_key.strip():
             raise EmailDeliveryError("Resend API key is missing")
-        body = {
+        body: dict[str, object] = {
             "from": _format_from_header(settings=self._settings),
             "to": [payload.to_email],
             "subject": payload.subject,
@@ -85,26 +98,65 @@ class ResendEmailDeliveryProvider(EmailDeliveryProvider):
         }
         if payload.html_body:
             body["html"] = payload.html_body
-        if self._settings.email_reply_to:
-            body["reply_to"] = self._settings.email_reply_to
+        reply_to = self._settings.email_reply_to.strip()
+        if reply_to:
+            body["reply_to"] = reply_to
         request = Request(
-            url="https://api.resend.com/emails",
+            url=_RESEND_API_URL,
             method="POST",
             data=json.dumps(body).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self._settings.resend_api_key}",
+                "Authorization": f"Bearer {self._settings.resend_api_key.strip()}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
         )
         try:
             with urlopen(request, timeout=30) as response:
-                response.read()
+                raw = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8")
-            raise EmailDeliveryError(f"Resend delivery failed ({exc.code}): {error_body}") from exc
+            raise EmailDeliveryError(
+                f"Resend delivery failed ({exc.code}): {_format_resend_error_body(error_body)}",
+            ) from exc
         except URLError as exc:
             raise EmailDeliveryError(f"Resend delivery failed: {exc}") from exc
+
+        resend_id = _parse_resend_success_id(raw)
+        if resend_id:
+            logger.info("resend_email_accepted id=%s to=%s", resend_id, payload.to_email)
+        else:
+            logger.info("resend_email_sent to=%s", payload.to_email)
+
+
+def _format_resend_error_body(raw: str) -> str:
+    raw = raw.strip()
+    if not raw:
+        return "(empty response body)"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    message = data.get("message")
+    if isinstance(message, str) and message:
+        return message
+    if isinstance(message, list):
+        parts = [str(item) for item in message if item]
+        if parts:
+            return "; ".join(parts)
+    return raw
+
+
+def _parse_resend_success_id(raw: str) -> str | None:
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    rid = data.get("id")
+    return str(rid) if rid else None
 
 
 def build_email_delivery_provider(*, settings: Settings | None = None) -> EmailDeliveryProvider:

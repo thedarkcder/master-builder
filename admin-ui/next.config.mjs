@@ -7,9 +7,15 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const nextConfig = {
   reactStrictMode: true,
   outputFileTracingRoot: projectRoot,
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "lh3.googleusercontent.com",
+        pathname: "/aida-public/**"
+      }
+    ]
+  }
 };
 
 export default nextConfig;
