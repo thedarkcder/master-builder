@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
+from typing import Any
 from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 
@@ -73,7 +74,7 @@ def execute_http_ingress_result(
             if response_action is None:
                 response_action = action
             continue
-        _execute_side_effect_action(
+        execute_side_effect_action(
             action=action,
             envelope=envelope,
             transport_action_executors=executor_tuple,
@@ -106,7 +107,7 @@ def execute_side_effect_ingress_result(
     )
     for action in result.actions:
         try:
-            _execute_side_effect_action(
+            execute_side_effect_action(
                 action=action,
                 envelope=envelope,
                 transport_action_executors=executor_tuple,
@@ -117,16 +118,16 @@ def execute_side_effect_ingress_result(
             raise
 
 
-def _execute_side_effect_action(
+def execute_side_effect_action(
     *,
     action: TransportAction,
     envelope: TransportEnvelope | None,
     transport_action_executors: tuple[TransportActionExecutor, ...],
-) -> None:
+) -> dict[str, Any] | None:
     last_unsupported_error: Exception | None = None
     for executor in transport_action_executors:
         try:
-            executor.execute(action=action)
+            result = executor.execute(action=action)
             _log_transport_runtime_event(
                 "transport_action_executed",
                 envelope=envelope,
@@ -134,7 +135,7 @@ def _execute_side_effect_action(
                 executor_type=type(executor).__name__,
                 outcome="success",
             )
-            return
+            return result if isinstance(result, dict) else None
         except RuntimeError as exc:
             if "Unsupported" in str(exc):
                 last_unsupported_error = exc

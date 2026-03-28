@@ -24,6 +24,99 @@ import {
   type ProjectRecord,
 } from "@/lib/api";
 
+const PROJECT_AUTOMATION_KIND_STANDUP = "standup_voice_brief";
+const PROJECT_AUTOMATION_KIND_RETRO = "retro_voice_brief";
+const PROJECT_AUTOMATION_WEEKDAYS = [
+  { value: 0, label: "Sun" },
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+];
+
+type AutomationExecutionRow = ProjectAutomationExecutionRecord & {
+  automation_kind: string;
+  automation_label: string;
+};
+
+function getBrowserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function getAutomationLabel(kind: string): string {
+  if (kind === PROJECT_AUTOMATION_KIND_STANDUP) {
+    return "Standup voice brief";
+  }
+  if (kind === PROJECT_AUTOMATION_KIND_RETRO) {
+    return "Retro voice brief";
+  }
+  return kind;
+}
+
+function createAutomationDraft(kind: string, overrides: Partial<ProjectAutomationRecord> = {}): ProjectAutomationRecord {
+  const timestamp = new Date().toISOString();
+  const timezone = getBrowserTimezone();
+  const common = {
+    automation_id: `draft-${kind}`,
+    project_id: "",
+    tenant_id: "",
+    kind,
+    enabled: false,
+    timezone,
+    days_of_week: kind === PROJECT_AUTOMATION_KIND_STANDUP ? [1, 2, 3, 4, 5] : [5],
+    local_time: kind === PROJECT_AUTOMATION_KIND_STANDUP ? "09:30" : "16:00",
+    delivery_text_channel_id: "",
+    voice_id: null,
+    fallback_lookback_hours: kind === PROJECT_AUTOMATION_KIND_STANDUP ? 24 : 168,
+    last_successful_window_end_at: null,
+    next_run_at: timestamp,
+    executions: [],
+    created_at: timestamp,
+    updated_at: timestamp,
+  } satisfies ProjectAutomationRecord;
+  return { ...common, ...overrides, automation_id: overrides.automation_id ?? common.automation_id };
+}
+
+function defaultAutomationDrafts(): ProjectAutomationRecord[] {
+  return [
+    createAutomationDraft(PROJECT_AUTOMATION_KIND_STANDUP),
+    createAutomationDraft(PROJECT_AUTOMATION_KIND_RETRO),
+  ];
+}
+
+function automationKindMap(automations: ProjectAutomationRecord[]): Map<string, string> {
+  return new Map(automations.map((automation) => [automation.automation_id, automation.kind]));
+}
+
+function flattenAutomationExecutions(automations: ProjectAutomationRecord[]): AutomationExecutionRow[] {
+  const kindByAutomationId = automationKindMap(automations);
+  return automations
+    .flatMap((automation) =>
+      (automation.executions ?? []).map((execution) => ({
+        ...execution,
+        automation_kind: automation.kind,
+        automation_label: getAutomationLabel(automation.kind),
+      })),
+    )
+    .sort((left, right) => {
+      const leftTime = new Date(left.scheduled_for).getTime();
+      const rightTime = new Date(right.scheduled_for).getTime();
+      if (rightTime !== leftTime) {
+        return rightTime - leftTime;
+      }
+      return (kindByAutomationId.get(right.automation_id) ?? right.automation_kind).localeCompare(
+        kindByAutomationId.get(left.automation_id) ?? left.automation_kind,
+      );
+    })
+    .slice(0, 20);
+}
+
+function isDraftAutomation(automation: ProjectAutomationRecord): boolean {
+  return automation.automation_id.startsWith("draft-");
+}
+
 // ─── Extracted content component (used as a tab in the project detail page) ────
 
 type ProjectNotificationsContentProps = {
@@ -46,11 +139,11 @@ export function ProjectNotificationsContent({
   const [liveVoiceChannelId, setLiveVoiceChannelId] = useState("");
   const [linkedTextChannelId, setLinkedTextChannelId] = useState("");
   const [automationDefinitions, setAutomationDefinitions] = useState<ProjectAutomationRecord[]>([]);
-  const [automationExecutions, setAutomationExecutions] = useState<ProjectAutomationExecutionRecord[]>([]);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationStatusLine, setAutomationStatusLine] = useState("");
   const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
   const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
+  const automationExecutions = flattenAutomationExecutions(automationDefinitions);
 
   useEffect(() => {
     if (!credentials) return;
@@ -68,8 +161,8 @@ export function ProjectNotificationsContent({
         setLiveVoiceEnabled(Boolean(payload.discord?.live_voice_enabled));
         setLiveVoiceChannelId(payload.discord?.live_voice_channel_id ?? "");
         setLinkedTextChannelId(payload.discord?.live_voice_linked_text_channel_id ?? "");
-        setAutomationDefinitions(automations.automations ?? []);
-        setAutomationExecutions((automations.automations ?? []).flatMap((automation) => automation.executions ?? []).slice(0, 20));
+        const loadedAutomations = automations.automations ?? [];
+        setAutomationDefinitions(loadedAutomations.length > 0 ? loadedAutomations : defaultAutomationDrafts());
         setAutomationStatusLine("");
         setAllowlistRequests(requests);
         setStatusLine("");
@@ -84,6 +177,20 @@ export function ProjectNotificationsContent({
   function toggleNotifyEvent(eventValue: string, enabled: boolean): void {
     setNotifyEvents((current) =>
       enabled ? Array.from(new Set([...current, eventValue])) : current.filter((v) => v !== eventValue)
+    );
+  }
+
+  function updateAutomationDaysOfWeek(index: number, dayValue: number, checked: boolean): void {
+    setAutomationDefinitions((current) =>
+      current.map((automation, currentIndex) => {
+        if (currentIndex !== index) {
+          return automation;
+        }
+        const nextDays = checked
+          ? Array.from(new Set([...automation.days_of_week, dayValue])).sort((left, right) => left - right)
+          : automation.days_of_week.filter((day) => day !== dayValue);
+        return { ...automation, days_of_week: nextDays };
+      })
     );
   }
 
@@ -109,8 +216,8 @@ export function ProjectNotificationsContent({
           fallback_lookback_hours: automation.fallback_lookback_hours,
         })),
       });
-      setAutomationDefinitions(updated.automations ?? []);
-      setAutomationExecutions((updated.automations ?? []).flatMap((automation) => automation.executions ?? []).slice(0, 20));
+      const savedAutomations = updated.automations ?? [];
+      setAutomationDefinitions(savedAutomations.length > 0 ? savedAutomations : defaultAutomationDrafts());
       setAutomationStatusLine(`Saved ${updated.automations?.length ?? 0} automation configuration${(updated.automations?.length ?? 0) === 1 ? "" : "s"}.`);
     } catch (error) {
       setAutomationStatusLine(`Save failed: ${(error as Error).message}`);
@@ -271,14 +378,21 @@ export function ProjectNotificationsContent({
               {automationStatusLine}
             </p>
           ) : null}
-          {automationDefinitions.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No automations configured yet. Save one from API to initialize this project.</p>
-          ) : (
-            <div className="space-y-3">
-              {automationDefinitions.map((automation, index) => (
-                <div key={automation.automation_id} className="rounded-md border p-3 space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium">{automation.kind}</p>
+          <div className="space-y-3">
+            {automationDefinitions.map((automation, index) => {
+              const automationId = automation.automation_id || `automation-${index}`;
+              const isDraft = isDraftAutomation(automation);
+              return (
+                <div
+                  key={automationId}
+                  data-testid={`project-automation-${automation.kind}`}
+                  className="rounded-md border p-4 space-y-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">{getAutomationLabel(automation.kind)}</p>
+                      <p className="text-xs text-muted-foreground">{isDraft ? "Draft automation" : automation.automation_id}</p>
+                    </div>
                     <label className="flex items-center gap-2 text-xs">
                       <input
                         type="checkbox"
@@ -289,19 +403,96 @@ export function ProjectNotificationsContent({
                       Enabled
                     </label>
                   </div>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <Input value={automation.timezone} onChange={(event) => updateAutomationField(index, { timezone: event.target.value })} />
-                    <Input value={automation.local_time} onChange={(event) => updateAutomationField(index, { local_time: event.target.value })} />
-                    <Input
-                      value={automation.delivery_text_channel_id}
-                      onChange={(event) => updateAutomationField(index, { delivery_text_channel_id: event.target.value })}
-                    />
-                    <Input value={automation.voice_id ?? ""} onChange={(event) => updateAutomationField(index, { voice_id: event.target.value || null })} />
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground" htmlFor={`${automationId}-timezone`}>
+                        Timezone
+                      </label>
+                      <Input
+                        id={`${automationId}-timezone`}
+                        value={automation.timezone}
+                        onChange={(event) => updateAutomationField(index, { timezone: event.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground" htmlFor={`${automationId}-local-time`}>
+                        Local time
+                      </label>
+                      <Input
+                        id={`${automationId}-local-time`}
+                        value={automation.local_time}
+                        onChange={(event) => updateAutomationField(index, { local_time: event.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label
+                        className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                        htmlFor={`${automationId}-channel`}
+                      >
+                        Delivery text channel ID
+                      </label>
+                      <Input
+                        id={`${automationId}-channel`}
+                        value={automation.delivery_text_channel_id}
+                        onChange={(event) => updateAutomationField(index, { delivery_text_channel_id: event.target.value })}
+                        placeholder="123456789012345678"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground" htmlFor={`${automationId}-voice`}>
+                        Voice ID
+                      </label>
+                      <Input
+                        id={`${automationId}-voice`}
+                        value={automation.voice_id ?? ""}
+                        onChange={(event) => updateAutomationField(index, { voice_id: event.target.value || null })}
+                        placeholder="alloy"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label
+                        className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                        htmlFor={`${automationId}-lookback`}
+                      >
+                        Fallback lookback hours
+                      </label>
+                      <Input
+                        id={`${automationId}-lookback`}
+                        type="number"
+                        min={1}
+                        value={automation.fallback_lookback_hours}
+                        onChange={(event) =>
+                          updateAutomationField(index, { fallback_lookback_hours: Number(event.target.value) || 0 })
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Days of week</p>
+                    <div className="flex flex-wrap gap-2">
+                      {PROJECT_AUTOMATION_WEEKDAYS.map((day) => {
+                        const checked = automation.days_of_week.includes(day.value);
+                        return (
+                          <label
+                            key={`${automationId}-${day.value}`}
+                            className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-input"
+                              checked={checked}
+                              onChange={(event) => updateAutomationDaysOfWeek(index, day.value, event.target.checked)}
+                            />
+                            <span>{day.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            })}
+          </div>
           <div className="flex items-center justify-between gap-3 border-t pt-4">
             <p className="text-xs text-muted-foreground">
               Automation executions are retained separately so admins can review recent project automation activity.
@@ -317,13 +508,24 @@ export function ProjectNotificationsContent({
             ) : (
               <ul className="space-y-2">
                 {automationExecutions.map((execution) => (
-                  <li key={execution.execution_id} className="rounded-md border bg-muted/20 p-3 text-sm">
+                  <li
+                    key={execution.execution_id}
+                    data-testid={`project-automation-execution-${execution.execution_id}`}
+                    className="rounded-md border bg-muted/20 p-3 text-sm"
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-medium">{execution.event_type}</span>
+                      <div>
+                        <span className="font-medium">{execution.automation_label}</span>
+                        <p className="text-xs text-muted-foreground">{execution.automation_id}</p>
+                      </div>
                       <span className="text-xs text-muted-foreground">{execution.status}</span>
                     </div>
-                    {execution.message ? <p className="mt-1 text-xs text-muted-foreground">{execution.message}</p> : null}
-                    <p className="mt-1 text-xs text-muted-foreground">{execution.created_at}</p>
+                    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                      <p>Scheduled for: {execution.scheduled_for}</p>
+                      <p>Completed at: {execution.completed_at ?? "not completed yet"}</p>
+                      <p>Discord message ID: {execution.discord_message_id ?? "not recorded"}</p>
+                      {execution.last_error ? <p className="text-destructive">Last error: {execution.last_error}</p> : null}
+                    </div>
                   </li>
                 ))}
               </ul>

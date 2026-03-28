@@ -41,3 +41,6 @@
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.
 - In a multi-worktree repo, verify the active git branch before editing. If the user says the work belongs on a specific branch, switch to that exact worktree first instead of starting implementation in the current cwd and moving it later.
 - When a user points out that context matching is being "drip fed" across weaker fallbacks, treat that as an architectural bug, not just a resolver bug. Replace staged channel/message fallback with one composite lookup that evaluates every available identifier together and refuses ambiguous matches safely.
+2026-03-28
+
+- When running Playwright against a Next app in a worktree, execute the test from the app directory or pass the explicit config file. Relative `page.goto()` calls only work if the runner actually loaded the correct `playwright.config.ts` and baseURL.

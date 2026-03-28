@@ -46,6 +46,25 @@ def _format_jql_timestamp(value: datetime) -> str:
     return _to_utc(value).strftime("%Y-%m-%d %H:%M")
 
 
+def _parse_timestamp(value: str | None) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return datetime.fromisoformat(normalized.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _in_window(*, value: str | None, start: datetime, end: datetime) -> datetime | None:
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return None
+    if start <= parsed <= end:
+        return parsed
+    return None
+
+
 def _collect_jira_facts(
     *,
     session: Session,
@@ -86,7 +105,7 @@ def _collect_github_facts(
 ) -> dict[str, Any]:
     repo_full_name = _to_repo_full_name(project.github_repository)
     if not repo_full_name:
-        return {"repo": "", "open_pr_count": 0, "prs_in_window": []}
+        return {"repo": "", "pull_request_count": 0, "prs_in_window": []}
     try:
         client = github_client_from_tenant_config(
             tenant.github_config or {},
@@ -103,33 +122,82 @@ def _collect_github_facts(
                 encryption_key=settings.secrets_encryption_key,
             ),
         )
-        prs = client.list_open_pull_requests(repo_full_name=repo_full_name, limit=50)
+        prs = client.list_pull_requests(repo_full_name=repo_full_name, state="all", limit=50)
     except Exception:
-        return {"repo": repo_full_name, "open_pr_count": 0, "prs_in_window": []}
+        return {"repo": repo_full_name, "pull_request_count": 0, "prs_in_window": []}
     start = _to_utc(window_start_at)
     end = _to_utc(window_end_at)
     in_window: list[dict[str, Any]] = []
     for pr in prs:
-        updated_at_raw = str(pr.updated_at or "").strip()
-        if not updated_at_raw:
+        created_at = _in_window(value=pr.created_at, start=start, end=end)
+        updated_at = _in_window(value=pr.updated_at, start=start, end=end)
+        closed_at = _in_window(value=pr.closed_at, start=start, end=end)
+        merged_at = _in_window(value=pr.merged_at, start=start, end=end)
+        if not any((created_at, updated_at, closed_at, merged_at)):
             continue
-        try:
-            updated = datetime.fromisoformat(updated_at_raw.replace("Z", "+00:00")).astimezone(UTC)
-        except ValueError:
-            continue
-        if start <= updated <= end:
-            in_window.append(
+        reviews = []
+        for review in client.list_pull_request_reviews(repo_full_name=repo_full_name, pr_number=pr.number):
+            submitted_at = _in_window(value=review.submitted_at, start=start, end=end)
+            if submitted_at is None:
+                continue
+            reviews.append(
                 {
-                    "number": pr.number,
-                    "title": pr.title,
-                    "state": pr.state,
-                    "url": pr.html_url,
-                    "updated_at": updated.isoformat(),
+                    "review_id": review.review_id,
+                    "state": review.state,
+                    "submitted_at": submitted_at.isoformat(),
+                    "user_login": review.user_login,
                 }
             )
+        review_comments = []
+        for comment in client.list_pull_request_review_comments(repo_full_name=repo_full_name, pr_number=pr.number):
+            created = _in_window(value=comment.created_at, start=start, end=end)
+            if created is None:
+                continue
+            review_comments.append(
+                {
+                    "comment_id": comment.comment_id,
+                    "created_at": created.isoformat(),
+                    "path": comment.path,
+                    "line": comment.line,
+                    "state": comment.state,
+                    "user_login": comment.user_login,
+                }
+            )
+        issue_comments = []
+        for comment in client.list_pull_request_issue_comments(repo_full_name=repo_full_name, pr_number=pr.number):
+            created = _in_window(value=comment.created_at, start=start, end=end)
+            if created is None:
+                continue
+            issue_comments.append(
+                {
+                    "comment_id": comment.comment_id,
+                    "created_at": created.isoformat(),
+                    "user_login": comment.user_login,
+                }
+            )
+        if not any((created_at, updated_at, closed_at, merged_at, reviews, review_comments, issue_comments)):
+            continue
+        in_window.append(
+            {
+                "number": pr.number,
+                "title": pr.title,
+                "state": pr.state,
+                "url": pr.html_url,
+                "created_at": created_at.isoformat() if created_at is not None else None,
+                "updated_at": updated_at.isoformat() if updated_at is not None else None,
+                "closed_at": closed_at.isoformat() if closed_at is not None else None,
+                "merged_at": merged_at.isoformat() if merged_at is not None else None,
+                "review_count": len(reviews),
+                "review_comment_count": len(review_comments),
+                "issue_comment_count": len(issue_comments),
+                "reviews": reviews,
+                "review_comments": review_comments,
+                "issue_comments": issue_comments,
+            }
+        )
     return {
         "repo": repo_full_name,
-        "open_pr_count": len(prs),
+        "pull_request_count": len(in_window),
         "prs_in_window": in_window,
     }
 

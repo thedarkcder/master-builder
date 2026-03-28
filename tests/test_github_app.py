@@ -18,6 +18,7 @@ from orchestrator.tools.github_app import (
     PullRequestDetails,
     PullRequestFileChange,
     PullRequestInlineCommentDraft,
+    PullRequestReviewComment,
     PullRequestResult,
     PullRequestSummary,
     WorkflowCheckSuite,
@@ -839,6 +840,62 @@ class GitHubAppClientTests(unittest.TestCase):
             with self.assertRaisesRegex(GitHubApiError, "response was not a list"):
                 client.list_open_pull_requests(repo_full_name="example/repo")
 
+    def test_list_pull_requests_supports_all_states_and_parses_lifecycle_timestamps(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        responses = [
+            {
+                "token": "inst_token_9b",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            [
+                {
+                    "number": 124,
+                    "title": "Release cleanup",
+                    "state": "closed",
+                    "html_url": "https://github.com/example/repo/pull/124",
+                    "created_at": "2026-02-12T09:00:00Z",
+                    "updated_at": "2026-02-14T17:00:00Z",
+                    "closed_at": "2026-02-14T17:00:00Z",
+                    "merged_at": "2026-02-14T16:58:00Z",
+                    "head": {"ref": "release/cleanup"},
+                    "base": {"ref": "main"},
+                }
+            ],
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            pull_requests = client.list_pull_requests(repo_full_name="example/repo", state="all", limit=10)
+
+        self.assertEqual(
+            pull_requests,
+            [
+                PullRequestSummary(
+                    number=124,
+                    title="Release cleanup",
+                    state="closed",
+                    html_url="https://github.com/example/repo/pull/124",
+                    head_ref="release/cleanup",
+                    base_ref="main",
+                    created_at="2026-02-12T09:00:00Z",
+                    updated_at="2026-02-14T17:00:00Z",
+                    closed_at="2026-02-14T17:00:00Z",
+                    merged_at="2026-02-14T16:58:00Z",
+                )
+            ],
+        )
+
     def test_find_open_pull_request_matches_head_and_base(self) -> None:
         config = GitHubAppConfig(
             app_id="12345",
@@ -933,6 +990,39 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(created.body, "reply")
         self.assertEqual(updated.body, "updated reply")
         self.assertEqual(request_json.call_count, 2)
+
+    def test_list_pull_request_review_comments_parses_created_at(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value=[
+                {
+                    "id": 3001,
+                    "body": "Consider renaming this",
+                    "path": "src/app.py",
+                    "line": 42,
+                    "state": "commented",
+                    "created_at": "2026-03-27T12:30:00Z",
+                    "user": {"login": "reviewer"},
+                }
+            ],
+        ):
+            comments = client.list_pull_request_review_comments(repo_full_name="example/repo", pr_number=21)
+
+        self.assertEqual(
+            comments[0],
+            PullRequestReviewComment(
+                comment_id=3001,
+                body="Consider renaming this",
+                path="src/app.py",
+                line=42,
+                state="commented",
+                created_at="2026-03-27T12:30:00Z",
+                user_login="reviewer",
+            ),
+        )
 
     def test_add_issue_and_review_comment_reactions(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")

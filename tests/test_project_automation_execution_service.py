@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from orchestrator.core.project_automation_execution_service import (
     mark_project_automation_execution_failure,
+    mark_project_automation_execution_success,
     prepare_project_automation_execution,
 )
 from orchestrator.core.project_automation_service import (
@@ -117,3 +118,57 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
                 execution_id="missing",
                 error="boom",
             )
+
+    def test_mark_success_persists_discord_message_id(self) -> None:
+        now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
+        with self.session_factory() as session:
+            project = session.get(Project, "route25-default")
+            tenant = session.get(Tenant, "route25")
+            assert project is not None
+            assert tenant is not None
+            automation = upsert_project_automation(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                payload=ProjectAutomationWrite(
+                    kind=PROJECT_AUTOMATION_KIND_STANDUP,
+                    enabled=True,
+                    timezone="UTC",
+                    days_of_week=(5,),
+                    local_time="09:00",
+                    delivery_text_channel_id="999",
+                    voice_id=None,
+                    fallback_lookback_hours=24,
+                ),
+                now=now,
+            )
+            execution = ProjectAutomationExecution(
+                execution_id="exec-success-1",
+                automation_id=automation.automation_id,
+                scheduled_for=now,
+                window_start_at=now.replace(hour=8),
+                window_end_at=now,
+                status="running",
+                dedupe_key="dedupe-success-1",
+                started_at=now,
+                completed_at=None,
+                discord_message_id=None,
+                last_error=None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(execution)
+            session.commit()
+
+            mark_project_automation_execution_success(
+                session=session,
+                execution_id=execution.execution_id,
+                window_end_at=now,
+                discord_message_id="discord-msg-123",
+            )
+
+            refreshed = session.get(ProjectAutomationExecution, execution.execution_id)
+
+        assert refreshed is not None
+        self.assertEqual(refreshed.status, "succeeded")
+        self.assertEqual(refreshed.discord_message_id, "discord-msg-123")

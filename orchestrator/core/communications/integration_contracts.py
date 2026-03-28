@@ -23,5 +23,5 @@ class CapabilityProvider(Protocol):
 
 
 class TransportActionExecutor(Protocol):
-    def execute(self, *, action: TransportAction) -> None:
+    def execute(self, *, action: TransportAction) -> object | None:
         ...
