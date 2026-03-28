@@ -1,27 +1,43 @@
-import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import type { Session } from "next-auth";
 
-import { AUTH_COOKIE_KEY } from "@/lib/auth-constants";
+import { auth } from "@/auth";
+import type { AuthenticatedPrincipalRecord } from "@/lib/api";
+import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 
-export function middleware(request: NextRequest) {
+function defaultRouteForSession(session: Session | null): string {
+  return getDefaultAuthenticatedRoute(
+    ((session?.user ?? {}) as { principal?: AuthenticatedPrincipalRecord }).principal,
+  );
+}
+
+export default auth((request: NextRequest & { auth: Session | null }) => {
   const { pathname } = request.nextUrl;
-  const hasSession = Boolean(request.cookies.get(AUTH_COOKIE_KEY)?.value);
-  const isPublicPath = pathname === "/login" || pathname === "/privacy";
+  const isPublicPath =
+    pathname === "/" ||
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname === "/forgot-password" ||
+    pathname === "/reset-password" ||
+    pathname === "/privacy" ||
+    pathname.startsWith("/invite/accept");
+  const session = request.auth;
 
   if (pathname.startsWith("/_next") || pathname === "/favicon.ico") {
     return NextResponse.next();
   }
 
-  if (pathname === "/login" && hasSession) {
-    return NextResponse.redirect(new URL("/tenants", request.url));
-  }
-
-  if (!isPublicPath && !hasSession) {
+  if (!session && !isPublicPath) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
+  if (session && (pathname === "/login" || pathname === "/register")) {
+    return NextResponse.redirect(new URL(defaultRouteForSession(session), request.url));
+  }
+
   return NextResponse.next();
-}
+});
 
 export const config = {
   matcher: ["/((?!api).*)"]

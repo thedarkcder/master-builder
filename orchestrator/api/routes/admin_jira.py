@@ -33,7 +33,14 @@ from orchestrator.api.schemas import (
     JiraWebhookDiagnosticsRead,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.security import require_admin
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_admin,
+    require_any_tenant_permission,
+    require_authenticated_principal,
+    require_tenant_permission,
+)
+from orchestrator.core.tenant_access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
 from orchestrator.storage.models import JiraOAuthConnection, Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -43,9 +50,13 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 def start_jira_connect(
     return_to: str = Query(default="wizard", pattern="^(wizard|edit)$"),
     tenant_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
-    _: str = Depends(require_admin),
 ) -> JiraConnectStart:
+    if principal.is_platform_super_admin:
+        require_admin(principal=principal)
+    elif tenant_id:
+        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
     return build_jira_connect_start_impl(
         return_to=return_to,
         tenant_id=tenant_id,
@@ -80,9 +91,18 @@ def jira_connect_callback(
 @router.get("/jira/connections/{connection_id}/projects", response_model=list[JiraProjectRead])
 def list_jira_projects_for_connection(
     connection_id: str,
-    _: str = Depends(require_admin),
+    tenant_id: str | None = Query(default=None),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[JiraProjectRead]:
+    if principal.is_platform_super_admin:
+        require_admin(principal=principal)
+    elif tenant_id:
+        require_any_tenant_permission(
+            principal=principal,
+            tenant_id=tenant_id,
+            permission_keys=(PERMISSION_WORKSPACE_MANAGE, PERMISSION_PROJECTS_MANAGE),
+        )
     return list_jira_projects_for_connection_impl(
         session=session,
         connection_id=connection_id,

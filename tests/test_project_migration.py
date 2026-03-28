@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from datetime import datetime, timezone
@@ -8,7 +9,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -38,43 +39,125 @@ class ProjectMigrationTests(unittest.TestCase):
         config.set_main_option("sqlalchemy.url", self.database_url)
         command.upgrade(config, revision)
 
+    def _insert_legacy_tenant(
+        self,
+        *,
+        tenant_id: str,
+        name: str,
+        jira_config: dict[str, object],
+        github_config: dict[str, object],
+        repos_config: dict[str, object],
+        policy_config: dict[str, object],
+        discord_config: dict[str, object] | None,
+        created_at: datetime,
+        updated_at: datetime,
+    ) -> None:
+        session_factory = create_session_factory(database_url=self.database_url)
+        with session_factory() as session:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO tenants (
+                        tenant_id, name, is_enabled, jira_config, github_config, repos_config,
+                        policy_config, discord_config, created_at, updated_at
+                    ) VALUES (
+                        :tenant_id, :name, :is_enabled, :jira_config, :github_config, :repos_config,
+                        :policy_config, :discord_config, :created_at, :updated_at
+                    )
+                    """
+                ),
+                {
+                    "tenant_id": tenant_id,
+                    "name": name,
+                    "is_enabled": True,
+                    "jira_config": json.dumps(jira_config),
+                    "github_config": json.dumps(github_config),
+                    "repos_config": json.dumps(repos_config),
+                    "policy_config": json.dumps(policy_config),
+                    "discord_config": json.dumps(discord_config) if discord_config is not None else None,
+                    "created_at": created_at.isoformat(),
+                    "updated_at": updated_at.isoformat(),
+                },
+            )
+            session.commit()
+
+    def _insert_legacy_project(
+        self,
+        *,
+        project_id: str,
+        tenant_id: str,
+        name: str,
+        github_repository: str,
+        jira_project_key: str,
+        discord_config: dict[str, object] | None,
+        created_at: datetime,
+        updated_at: datetime,
+    ) -> None:
+        session_factory = create_session_factory(database_url=self.database_url)
+        with session_factory() as session:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO projects (
+                        project_id, tenant_id, name, github_repository, jira_project_key,
+                        policy_overrides, environment, secret_refs, discord_config, is_archived,
+                        created_at, updated_at
+                    ) VALUES (
+                        :project_id, :tenant_id, :name, :github_repository, :jira_project_key,
+                        :policy_overrides, :environment, :secret_refs, :discord_config, :is_archived,
+                        :created_at, :updated_at
+                    )
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "tenant_id": tenant_id,
+                    "name": name,
+                    "github_repository": github_repository,
+                    "jira_project_key": jira_project_key,
+                    "policy_overrides": json.dumps({}),
+                    "environment": json.dumps({}),
+                    "secret_refs": json.dumps({}),
+                    "discord_config": json.dumps(discord_config) if discord_config is not None else None,
+                    "is_archived": False,
+                    "created_at": created_at.isoformat(),
+                    "updated_at": updated_at.isoformat(),
+                },
+            )
+            session.commit()
+
     def test_project_migration_backfills_default_project_from_existing_tenant(self) -> None:
         self._alembic_upgrade("20260207_0006")
         session_factory = create_session_factory(database_url=self.database_url)
         now = datetime.now(timezone.utc)
-        with session_factory() as session:
-            session.add(
-                Tenant(
-                    tenant_id="tenant-one",
-                    name="Tenant One",
-                    is_enabled=True,
-                    jira_config={
-                        "project_keys": ["ABC"],
-                        "ready_statuses": ["Ready for Agent"],
-                    },
-                    github_config={
-                        "mode": "github_app",
-                        "installation_id": "123",
-                    },
-                    repos_config={
-                        "github_repository": "https://github.com/example/project-one",
-                    },
-                    policy_config={
-                        "allow_jira_transitions": False,
-                        "allow_pr_creation": True,
-                        "allow_label_mutations": True,
-                        "max_runtime_minutes": 30,
-                        "max_dev_test_review_loops": 2,
-                        "max_concurrent_runs": 2,
-                        "allowed_commands": [],
-                        "require_agents_md": False,
-                    },
-                    discord_config=None,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.commit()
+        self._insert_legacy_tenant(
+            tenant_id="tenant-one",
+            name="Tenant One",
+            jira_config={
+                "project_keys": ["ABC"],
+                "ready_statuses": ["Ready for Agent"],
+            },
+            github_config={
+                "mode": "github_app",
+                "installation_id": "123",
+            },
+            repos_config={
+                "github_repository": "https://github.com/example/project-one",
+            },
+            policy_config={
+                "allow_jira_transitions": False,
+                "allow_pr_creation": True,
+                "allow_label_mutations": True,
+                "max_runtime_minutes": 30,
+                "max_dev_test_review_loops": 2,
+                "max_concurrent_runs": 2,
+                "allowed_commands": [],
+                "require_agents_md": False,
+            },
+            discord_config=None,
+            created_at=now,
+            updated_at=now,
+        )
 
         self._alembic_upgrade("head")
 
@@ -100,51 +183,40 @@ class ProjectMigrationTests(unittest.TestCase):
         self._alembic_upgrade("20260209_0011")
         session_factory = create_session_factory(database_url=self.database_url)
         now = datetime.now(timezone.utc)
-        with session_factory() as session:
-            session.add(
-                Tenant(
-                    tenant_id="tenant-threads",
-                    name="Tenant Threads",
-                    is_enabled=True,
-                    jira_config={"project_keys": ["THR"], "ready_statuses": ["To Do"]},
-                    github_config={"mode": "github_app", "installation_id": "123"},
-                    repos_config={"github_repository": "https://github.com/example/threads"},
-                    policy_config={
-                        "allow_jira_transitions": False,
-                        "allow_pr_creation": True,
-                        "allow_label_mutations": True,
-                        "max_runtime_minutes": 30,
-                        "max_dev_test_review_loops": 2,
-                        "max_concurrent_runs": 2,
-                        "allowed_commands": [],
-                        "require_agents_md": False,
-                    },
-                    discord_config={
-                        "channel_id": "discord-main",
-                        "ask_thread_channel_ids": ["discord-ask-thread-1"],
-                        "seed_followup_thread_channel_ids": ["discord-seed-thread-1"],
-                    },
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.add(
-                Project(
-                    project_id="tenant-threads-default",
-                    tenant_id="tenant-threads",
-                    name="threads",
-                    github_repository="https://github.com/example/threads",
-                    jira_project_key="THR",
-                    policy_overrides={},
-                    environment={},
-                    secret_refs={},
-                    discord_config={"channel_id": "discord-main"},
-                    is_archived=False,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.commit()
+        self._insert_legacy_tenant(
+            tenant_id="tenant-threads",
+            name="Tenant Threads",
+            jira_config={"project_keys": ["THR"], "ready_statuses": ["To Do"]},
+            github_config={"mode": "github_app", "installation_id": "123"},
+            repos_config={"github_repository": "https://github.com/example/threads"},
+            policy_config={
+                "allow_jira_transitions": False,
+                "allow_pr_creation": True,
+                "allow_label_mutations": True,
+                "max_runtime_minutes": 30,
+                "max_dev_test_review_loops": 2,
+                "max_concurrent_runs": 2,
+                "allowed_commands": [],
+                "require_agents_md": False,
+            },
+            discord_config={
+                "channel_id": "discord-main",
+                "ask_thread_channel_ids": ["discord-ask-thread-1"],
+                "seed_followup_thread_channel_ids": ["discord-seed-thread-1"],
+            },
+            created_at=now,
+            updated_at=now,
+        )
+        self._insert_legacy_project(
+            project_id="tenant-threads-default",
+            tenant_id="tenant-threads",
+            name="threads",
+            github_repository="https://github.com/example/threads",
+            jira_project_key="THR",
+            discord_config={"channel_id": "discord-main"},
+            created_at=now,
+            updated_at=now,
+        )
 
         self._alembic_upgrade("head")
 
@@ -164,73 +236,56 @@ class ProjectMigrationTests(unittest.TestCase):
         self._alembic_upgrade("20260209_0011")
         session_factory = create_session_factory(database_url=self.database_url)
         now = datetime.now(timezone.utc)
-        with session_factory() as session:
-            session.add(
-                Tenant(
-                    tenant_id="tenant-multi-threads",
-                    name="Tenant Multi Threads",
-                    is_enabled=True,
-                    jira_config={"project_keys": ["APP", "API"], "ready_statuses": ["To Do"]},
-                    github_config={"mode": "github_app", "installation_id": "123"},
-                    repos_config={"github_repository": "https://github.com/example/multi"},
-                    policy_config={
-                        "allow_jira_transitions": False,
-                        "allow_pr_creation": True,
-                        "allow_label_mutations": True,
-                        "max_runtime_minutes": 30,
-                        "max_dev_test_review_loops": 2,
-                        "max_concurrent_runs": 2,
-                        "allowed_commands": [],
-                        "require_agents_md": False,
-                    },
-                    discord_config={
-                        "channel_id": "discord-main",
-                        "ask_thread_channel_ids": ["discord-app-thread", "discord-unmapped-thread"],
-                        "seed_followup_thread_channel_ids": ["discord-seed-thread", "discord-unmapped-seed-thread"],
-                        "seed_followups": [
-                            {
-                                "channel_ids": ["discord-app-thread", "discord-seed-thread"],
-                                "issue_keys": ["APP-12"],
-                            }
-                        ],
-                    },
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.add(
-                Project(
-                    project_id="tenant-multi-threads-app",
-                    tenant_id="tenant-multi-threads",
-                    name="app",
-                    github_repository="https://github.com/example/multi-app",
-                    jira_project_key="APP",
-                    policy_overrides={},
-                    environment={},
-                    secret_refs={},
-                    discord_config={"channel_id": "discord-app"},
-                    is_archived=False,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.add(
-                Project(
-                    project_id="tenant-multi-threads-api",
-                    tenant_id="tenant-multi-threads",
-                    name="api",
-                    github_repository="https://github.com/example/multi-api",
-                    jira_project_key="API",
-                    policy_overrides={},
-                    environment={},
-                    secret_refs={},
-                    discord_config={"channel_id": "discord-api"},
-                    is_archived=False,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.commit()
+        self._insert_legacy_tenant(
+            tenant_id="tenant-multi-threads",
+            name="Tenant Multi Threads",
+            jira_config={"project_keys": ["APP", "API"], "ready_statuses": ["To Do"]},
+            github_config={"mode": "github_app", "installation_id": "123"},
+            repos_config={"github_repository": "https://github.com/example/multi"},
+            policy_config={
+                "allow_jira_transitions": False,
+                "allow_pr_creation": True,
+                "allow_label_mutations": True,
+                "max_runtime_minutes": 30,
+                "max_dev_test_review_loops": 2,
+                "max_concurrent_runs": 2,
+                "allowed_commands": [],
+                "require_agents_md": False,
+            },
+            discord_config={
+                "channel_id": "discord-main",
+                "ask_thread_channel_ids": ["discord-app-thread", "discord-unmapped-thread"],
+                "seed_followup_thread_channel_ids": ["discord-seed-thread", "discord-unmapped-seed-thread"],
+                "seed_followups": [
+                    {
+                        "channel_ids": ["discord-app-thread", "discord-seed-thread"],
+                        "issue_keys": ["APP-12"],
+                    }
+                ],
+            },
+            created_at=now,
+            updated_at=now,
+        )
+        self._insert_legacy_project(
+            project_id="tenant-multi-threads-app",
+            tenant_id="tenant-multi-threads",
+            name="app",
+            github_repository="https://github.com/example/multi-app",
+            jira_project_key="APP",
+            discord_config={"channel_id": "discord-app"},
+            created_at=now,
+            updated_at=now,
+        )
+        self._insert_legacy_project(
+            project_id="tenant-multi-threads-api",
+            tenant_id="tenant-multi-threads",
+            name="api",
+            github_repository="https://github.com/example/multi-api",
+            jira_project_key="API",
+            discord_config={"channel_id": "discord-api"},
+            created_at=now,
+            updated_at=now,
+        )
 
         self._alembic_upgrade("head")
 

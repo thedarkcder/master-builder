@@ -101,8 +101,6 @@ def _build_resumed_run_bootstrap(
         plan={"trigger_context": trigger_context},
         **bootstrap_kwargs,
     )
-
-
 def _resume_target_for_run(*, run: Run, stage: str) -> HumanInputResumeTarget:
     normalized_stage = str(stage or "").strip().lower()
     if normalized_stage == "pm":
