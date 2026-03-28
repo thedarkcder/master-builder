@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from orchestrator.api.discord.seed.issue_service import seed_issues_with_codex
+from orchestrator.api.discord.seed.issue_service import seed_issues_with_codex, seed_parent_issues_with_codex
 from orchestrator.tools.jira_oauth import JiraIssueCreateResult, JiraOAuthError
 
 
@@ -60,6 +60,49 @@ def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", 
         "engineering_children": children,
         "questions": [],
     }
+
+
+def _planning_package(*, planning_state: str, child_issues: list[dict] | None = None) -> dict:
+    children = child_issues if child_issues is not None else _seed_payload()["engineering_children"]
+    return {
+        "planning_state": planning_state,
+        "specialist_outputs": {
+            "engineering": {
+                "findings": ["Architectural boundaries should stay modular."],
+                "recommendations": ["Use a dedicated planning package before Jira write."],
+                "required_tasks": ["Implement shared planning package merge"],
+                "open_behavior_questions": [],
+                "acceptance_impacts": ["Parent stays PM-only until planning completes."],
+            },
+            "security": {
+                "findings": ["Security review must be explicit."],
+                "recommendations": ["Keep sensitive data out of the parent brief."],
+                "required_tasks": ["Add security verification child"],
+                "open_behavior_questions": [],
+                "acceptance_impacts": ["Security tasks should stay technical."],
+            },
+            "testing": {
+                "findings": ["Test coverage must prove the gate."],
+                "recommendations": ["Add regression coverage for the handoff."],
+                "required_tasks": ["Add planning-to-Jira regression tests"],
+                "open_behavior_questions": [],
+                "acceptance_impacts": ["Child creation waits for planning completion."],
+            },
+        },
+        "child_issues": children,
+    }
+
+
+def _adf_text(value: object) -> str:
+    if isinstance(value, dict):
+        if isinstance(value.get("text"), str):
+            return value["text"]
+        parts = [_adf_text(item) for item in value.get("content", []) if item is not None]
+        return "\n".join(part for part in parts if part)
+    if isinstance(value, list):
+        parts = [_adf_text(item) for item in value if item is not None]
+        return "\n".join(part for part in parts if part)
+    return ""
 
 
 def test_seed_issues_scopes_allowed_project_keys() -> None:
@@ -391,3 +434,190 @@ def test_seed_issues_promotes_parent_to_epic_when_pm_brief_signals_initiative_sc
 
     assert data["created_parent"] == "GP-1"
     assert created[0].issue_type == "Epic"
+
+
+def test_seed_parent_issues_rejects_incomplete_pm_status_before_jira_write() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+    create_issue_mock = MagicMock()
+
+    class _FakeClient:
+        def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return ["Story", "Task"]
+
+        def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return []
+
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            create_issue_mock(kwargs)
+            return JiraIssueCreateResult(key="GP-1", issue_id="1")
+
+        def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    with __import__("pytest").raises(HTTPException) as exc_ctx:
+        seed_parent_issues_with_codex(
+            session=MagicMock(),
+            tenant=tenant,
+            prompt_markdown="pm batch",
+            scoped_project_id="project-a",
+            force_issue_keys=None,
+            allow_create=True,
+            scoped_project_keys=["GP"],
+            codex_working_dir="/tmp",
+            tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+            get_settings_fn=lambda: SimpleNamespace(),
+            build_codex_runtime_fn=lambda **_kwargs: object(),
+            plan_pm_parent_issues_with_codex_fn=lambda **_kwargs: {
+                "project_key": "GP",
+                "issues": [_seed_payload()["parent_issue"]],
+                "questions": [],
+                "pm_status": "drafting",
+            },
+            codex_runtime_error_type=RuntimeError,
+            issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+            tenant_jira_oauth_context_fn=lambda **_kwargs: {
+                "client": _FakeClient(),
+                "access_token": "token",
+                "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+            },
+            select_seed_match_fn=lambda **_kwargs: None,
+            pm_status="drafting",
+        )
+
+    assert exc_ctx.value.status_code == 409
+    assert "PM interview is not ready to write Jira parent issues yet" in str(exc_ctx.value.detail)
+    assert create_issue_mock.call_count == 0
+
+
+def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_pm_complete() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+    created: list = []
+
+    class _FakeClient:
+        def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return ["Epic", "Story", "Task", "Issue"]
+
+        def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return []
+
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            created.append(kwargs["issue"])
+            issue = kwargs["issue"]
+            return JiraIssueCreateResult(key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1")
+
+        def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return {}
+
+    message, data = seed_issues_with_codex(
+        session=MagicMock(),
+        tenant=tenant,
+        prompt_markdown="seed issues",
+        scoped_project_id="project-a",
+        force_issue_keys=None,
+        allow_create=True,
+        scoped_project_keys=["GP"],
+        codex_working_dir="/tmp",
+        tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+        get_settings_fn=lambda: SimpleNamespace(),
+        build_codex_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
+        codex_runtime_error_type=RuntimeError,
+        build_seed_issue_description_fn=lambda **_kwargs: {},
+        issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+            "client": _FakeClient(),
+            "access_token": "token",
+            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        },
+        select_seed_match_fn=lambda **_kwargs: None,
+        pm_status="pm_completed",
+        planning_package=_planning_package(planning_state="planning_drafting"),
+    )
+
+    assert "Specialist planning is not complete yet" in message
+    assert data["pm_status"] == "pm_completed"
+    assert data["planning_state"] == "planning_drafting"
+    assert data["children_sync_status"] == "planning_blocked"
+    assert data["created_parent"] == "GP-1"
+    assert data["created_children"] == []
+    assert len(created) == 1
+    parent_description = _adf_text(created[0].description)
+    assert "PM status: pm_completed" in parent_description
+    assert "Planning state: planning_drafting" in parent_description
+
+
+def test_seed_issues_merges_planning_package_context_into_child_ticket_descriptions() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-a")
+    created: list = []
+
+    class _FakeClient:
+        def list_project_issue_types_for_create(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return ["Epic", "Story", "Task", "Issue"]
+
+        def search_issues_by_jql(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return []
+
+        def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
+            created.append(kwargs["issue"])
+            issue = kwargs["issue"]
+            return JiraIssueCreateResult(key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1")
+
+        def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+        def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return {}
+
+    _, data = seed_issues_with_codex(
+        session=MagicMock(),
+        tenant=tenant,
+        prompt_markdown="seed issues",
+        scoped_project_id="project-a",
+        force_issue_keys=None,
+        allow_create=True,
+        scoped_project_keys=["GP"],
+        codex_working_dir="/tmp",
+        tenant_project_keys_fn=lambda **_kwargs: ["GP"],
+        get_settings_fn=lambda: SimpleNamespace(),
+        build_codex_runtime_fn=lambda **_kwargs: object(),
+        plan_seed_issues_with_codex_fn=lambda **_kwargs: _seed_payload(),
+        codex_runtime_error_type=RuntimeError,
+        build_seed_issue_description_fn=lambda **_kwargs: {},
+        issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
+        tenant_jira_oauth_context_fn=lambda **_kwargs: {
+            "client": _FakeClient(),
+            "access_token": "token",
+            "connection": SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        },
+        select_seed_match_fn=lambda **_kwargs: None,
+        pm_status="pm_completed",
+        planning_package=_planning_package(
+            planning_state="planning_completed",
+            child_issues=[
+                {
+                    "summary": "Implement checkout planner merge",
+                    "issue_type": "Sub-task",
+                    "behavior_slice": "Merge the specialist outputs into one child plan.",
+                    "technical_objective": "Combine specialist recommendations into the Jira child draft.",
+                    "implementation_plan": ["Load specialist outputs", "Build merged child description"],
+                    "technical_dependencies": ["Planning package schema"],
+                    "risks": ["Descriptions may grow too large"],
+                    "how_to_test": ["Assert merged planning context appears in the child description"],
+                    "done_criteria": ["Child ticket reflects specialist planning context"],
+                    "labels": ["engineering"],
+                }
+            ],
+        ),
+    )
+
+    assert data["children_sync_status"] == "children_current"
+    assert data["created_children"] == ["GP-2"]
+    assert len(created) == 2
+    child_description = _adf_text(created[1].description)
+    assert "Specialist Planning Context" in child_description
+    assert "Engineering Findings: Architectural boundaries should stay modular." in child_description
+    assert "Security Findings: Security review must be explicit." in child_description
+    assert "Testing Recommendations: Add regression coverage for the handoff." in child_description

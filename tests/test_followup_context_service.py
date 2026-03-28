@@ -7,11 +7,13 @@ import pytest
 
 from orchestrator.core.followup_context_service import (
     close_followup_contexts,
+    FOLLOWUP_CONTEXT_PM_INTERVIEW,
     resolve_discord_command_subject_key,
     resolve_discord_interaction_subject_scope,
     resolve_issue_followup_context,
     resolve_followup_context,
     resolve_followup_context_match,
+    resolve_followup_reaction,
     upsert_followup_context,
 )
 from orchestrator.storage.models import FollowupContext
@@ -270,6 +272,34 @@ class FollowupContextServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(subject_key, "discord_channel:route25:discord-channel-1")
+
+    def test_resolve_followup_reaction_routes_pm_interview_replies_with_request_id(self) -> None:
+        with self.session_factory() as session:
+            context = upsert_followup_context(
+                session=session,
+                tenant_id="route25",
+                project_id="route25-default",
+                context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+                channel_id="discord-channel-1",
+                thread_channel_id="thread-1",
+                request_id="pm-req-1",
+                owner_user_id="u-1",
+                origin_command="pm",
+            )
+            session.commit()
+
+            reaction = resolve_followup_reaction(
+                raw_text="simple share link only",
+                source_ref="discord-message-1",
+                followup_context=context,
+                room_mode=False,
+            )
+
+            self.assertIsNotNone(reaction)
+            assert reaction is not None
+            self.assertEqual(reaction.kind, "command")
+            self.assertEqual(reaction.command_text, "!pm simple share link only")
+            self.assertEqual(reaction.command_params, {"request_id": "pm-req-1"})
 
     def test_resolve_interaction_subject_scope_fresh_application_command_ignores_active_followups(self) -> None:
         with self.session_factory() as session:

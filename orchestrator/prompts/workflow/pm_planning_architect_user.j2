@@ -1,0 +1,20 @@
+Stage: pm-planning-architect
+Parent issue key: {{ parent_issue_key }}
+Parent summary: {{ parent_summary }}
+Parent description: {{ parent_description }}
+Parent brief JSON: {{ product_brief_json }}
+Project keys: {{ project_keys_json }}
+Related issues JSON: {{ related_issues_json }}
+Status counts JSON: {{ status_counts_json }}
+GitHub context JSON: {{ github_context_json }}
+Recent conversation context JSON: {{ conversation_history_json }}
+
+Focus on architecture and decomposition.
+Prefer the smallest set of child tasks that gives a sound design.
+If the feature is underspecified, ask the narrowest missing behavior question and include a short example in the question text.
+Return strict JSON only with keys:
+- findings
+- recommendations
+- required_tasks
+- open_behavior_questions
+- acceptance_impacts

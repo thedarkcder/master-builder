@@ -32,6 +32,7 @@ def build_discord_ingress_dependencies(
     normalize_discord_attachments_fn,
     create_discord_bug_issue_fn,
     seed_parent_issues_with_codex_fn,
+    seed_issues_with_codex_fn,
     find_seed_followup_context_fn,
     store_seed_followup_context_fn,
     clear_seed_followup_context_fn,
@@ -75,6 +76,7 @@ def build_discord_ingress_dependencies(
             store_ask_history_entry=store_ask_history_entry_fn,
             ask_board_message=ask_board_message_fn,
             seed_parent_issues_with_codex=seed_parent_issues_with_codex_fn,
+            seed_issues_with_codex=seed_issues_with_codex_fn,
             scoped_project_keys=list(ctx.scope.project_keys),
             scoped_project_id=ctx.scope.project_id,
             codex_working_dir=resolve_codex_working_dir_fn(

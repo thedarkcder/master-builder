@@ -953,7 +953,11 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         payload = command_mock.call_args.kwargs["payload"]
         self.assertEqual(payload.command, "!pm Summarize the deployment blockers")
         self.assertEqual(payload.command_params, {"room_mode": "true", "room_source": "voice_note"})
-        client_cls.return_value.post_message.assert_not_called()
+        client_cls.return_value.post_message.assert_called_once_with(
+            channel_id="tenant-chat-1",
+            content="ok",
+            components=None,
+        )
         build_voice_reply.assert_called_once()
         self.assertEqual(build_voice_reply.call_args.kwargs["text"], "Deployment is blocked on the worker image rebuild.")
         self.assertEqual(build_voice_reply.call_args.kwargs["persona_id"], "pm")

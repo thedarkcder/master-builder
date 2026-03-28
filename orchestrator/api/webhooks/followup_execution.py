@@ -30,10 +30,21 @@ ISSUE_KEY_IN_TEXT_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 THREAD_POSTED_ACK_TEXT = "Posted response in a follow-up thread."
 
 
-def _followup_context_type_for_message(*, command_name: str | None, content: str, issue_key: str | None) -> str:
+def _followup_context_type_for_message(
+    *,
+    command_name: str | None,
+    content: str,
+    issue_key: str | None,
+    response_followup_context_type: str | None = None,
+) -> str:
     normalized_command_name = str(command_name or "").strip().lower()
     normalized_content = str(content or "").strip()
     normalized_issue_key = str(issue_key or "").strip().upper()
+    normalized_response_followup_context_type = str(response_followup_context_type or "").strip().lower()
+    if normalized_response_followup_context_type:
+        return normalized_response_followup_context_type
+    if normalized_command_name == "pm":
+        return "pm_interview"
     if normalized_issue_key and (
         normalized_command_name == "reply"
         or "Decision Gate still needs clarification for `" in normalized_content
@@ -149,6 +160,8 @@ async def run_discord_command_followup(
                                 command_response=command_response,
                             )
                             raw_issue_key = str(data.get("issue_key") or "").strip().upper()
+                            followup_request_id = str(data.get("request_id") or "").strip() or None
+                            response_followup_context_type = str(data.get("followup_context_type") or "").strip() or None
                             if ISSUE_KEY_PATTERN.fullmatch(raw_issue_key):
                                 issue_key = raw_issue_key
                             if command_response.command == "reply" and bool(data.get("recheck_required")):
@@ -165,6 +178,7 @@ async def run_discord_command_followup(
                                             components=components,
                                             issue_key=issue_key,
                                             followup_context_type="ask_thread",
+                                            request_id=followup_request_id,
                                         )
                                     )
                                     sent_to_thread = True
@@ -263,10 +277,12 @@ async def run_discord_command_followup(
                                     components=components,
                                     issue_key=issue_key,
                                     followup_context_type=_followup_context_type_for_message(
-                                        command_name=None,
+                                        command_name=command_response.command,
                                         content=content,
                                         issue_key=issue_key,
+                                        response_followup_context_type=response_followup_context_type,
                                     ),
+                                    request_id=followup_request_id,
                                 )
                             )
                             sent_to_thread = True

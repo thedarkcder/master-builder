@@ -1116,33 +1116,36 @@ class DiscordCommandApiTests(unittest.TestCase):
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
-                "orchestrator.api.discord.commands.ask.answer_pm_question_with_codex",
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
                 return_value={
-                    "message": "PM guidance",
+                    "message": (
+                        "What kind of rollout narrative do you need?\n"
+                        "Examples: executive launch summary, customer-facing changelog, or support handoff."
+                    ),
                     "brief": {
                         "objective": "Improve checkout recovery",
+                        "user_value": "Customers recover from checkout failures more clearly.",
+                        "target_user": "",
+                        "primary_journey": "",
+                        "acceptance_criteria": [],
+                        "ui_references": [],
+                        "constraints": [],
+                        "success_outcomes": [],
                         "recommendation": "Ship in one sprint",
                         "scope_in": ["Retry flow"],
                         "scope_out": ["Payments provider migration"],
                         "risks": ["Missing telemetry"],
                         "open_questions": ["Fallback copy approval"],
-                        "next_steps": ["Draft implementation tickets"],
+                        "next_steps": ["Clarify the intended rollout audience."],
                     },
+                    "status": "question_pending",
+                    "ready_to_write": False,
                 },
-            ) as answer_mock,
+            ) as plan_mock,
             patch(
                 "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
-                return_value=(
-                    "PM parent issue upsert complete. Updated 1: TP-20. Created 0: none.",
-                    {
-                        "created_parent_issue_keys": [],
-                        "updated_parent_issue_keys": ["TP-20"],
-                        "created_parent_issue_links": [],
-                        "updated_parent_issue_links": ["https://master-builder.atlassian.net/browse/TP-20"],
-                        "all_parent_issue_keys": ["TP-20"],
-                    },
-                ),
-            ),
+                side_effect=AssertionError("Incomplete PM interview should not seed Jira"),
+            ) as seed_mock,
         ):
             command_response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1156,11 +1159,14 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         self.assertTrue(command_response.ok)
         self.assertEqual(command_response.command, "pm")
-        self.assertIn("PM guidance", command_response.message)
+        self.assertIn("Examples:", command_response.message)
         self.assertTrue(command_response.data["pm_mode"])
+        self.assertEqual(command_response.data["followup_context_type"], "pm_interview")
         self.assertIn("product_brief_markdown", command_response.data)
-        self.assertEqual(command_response.data["parent_issue_key"], "TP-20")
-        self.assertEqual(answer_mock.call_args.kwargs["action"], "ask")
+        self.assertNotIn("parent_issue_key", command_response.data)
+        self.assertFalse(command_response.data["ready_to_write"])
+        seed_mock.assert_not_called()
+        self.assertEqual(plan_mock.call_args.kwargs["request_text"], "shape a rollout narrative for TP-20")
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
@@ -1169,9 +1175,49 @@ class DiscordCommandApiTests(unittest.TestCase):
             self.assertTrue(history)
             latest_entry = history[-1]
             self.assertTrue(str(latest_entry.get("question") or "").startswith("pm "))
-            self.assertEqual(latest_entry.get("answer"), "PM guidance")
+            self.assertIn("Examples:", str(latest_entry.get("answer") or ""))
 
     def test_pm_command_creates_parent_issue_and_returns_parent_metadata(self) -> None:
+        planning_result = SimpleNamespace(
+            planning_state="planning_completed",
+            required_tasks=("Implement retry telemetry", "Add fallback UX validation"),
+            findings=("Telemetry coverage must be explicit.",),
+            recommendations=("Keep the first cut focused on customer-visible recovery.",),
+            acceptance_impacts=("Acceptance criteria must mention fallback UX.",),
+            open_behavior_questions=(),
+            stages=(
+                SimpleNamespace(
+                    planning_state="engineering_planning",
+                    to_payload=lambda: {
+                        "findings": ["Split telemetry and UX work."],
+                        "recommendations": ["One child ticket per implementation slice."],
+                        "required_tasks": ["Implement retry telemetry"],
+                        "open_behavior_questions": [],
+                        "acceptance_impacts": ["Telemetry needs explicit coverage."],
+                    },
+                ),
+                SimpleNamespace(
+                    planning_state="security_planning",
+                    to_payload=lambda: {
+                        "findings": ["Protect retry events from abuse."],
+                        "recommendations": ["Add misuse checks."],
+                        "required_tasks": ["Add fallback UX validation"],
+                        "open_behavior_questions": [],
+                        "acceptance_impacts": ["Security validation is required."],
+                    },
+                ),
+                SimpleNamespace(
+                    planning_state="test_planning",
+                    to_payload=lambda: {
+                        "findings": ["Regression coverage is required."],
+                        "recommendations": ["Automate the failure-recovery path."],
+                        "required_tasks": [],
+                        "open_behavior_questions": [],
+                        "acceptance_impacts": ["Tests should cover visible recovery."],
+                    },
+                ),
+            ),
+        )
         with (
             self.session_factory() as session,
             patch(
@@ -1180,12 +1226,21 @@ class DiscordCommandApiTests(unittest.TestCase):
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
-                "orchestrator.api.discord.commands.ask.answer_pm_question_with_codex",
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
                 return_value={
-                    "message": "Approved product brief.",
+                    "message": "The PM brief is complete and ready for parent creation.",
                     "brief": {
                         "objective": "Ship checkout recovery",
                         "user_value": "Customers recover cleanly from checkout failures.",
+                        "target_user": "Customers experiencing checkout failure",
+                        "primary_journey": "Retry after a failed checkout",
+                        "acceptance_criteria": [
+                            "Customers can retry checkout from the failure state",
+                            "Fallback UX explains what to do next",
+                        ],
+                        "ui_references": ["Checkout failure screen"],
+                        "constraints": ["Use the existing checkout system"],
+                        "success_outcomes": ["Higher recovery rate from checkout failures"],
                         "recommendation": "Focus on the customer-visible fallback first.",
                         "scope_in": ["Retry telemetry", "Fallback UX"],
                         "scope_out": ["Provider migration"],
@@ -1193,8 +1248,10 @@ class DiscordCommandApiTests(unittest.TestCase):
                         "open_questions": [],
                         "next_steps": ["Review the parent feature with product"],
                     },
+                    "status": "ready_to_write",
+                    "ready_to_write": True,
                 },
-            ) as answer_mock,
+            ) as plan_mock,
             patch(
                 "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
                 return_value=(
@@ -1208,6 +1265,22 @@ class DiscordCommandApiTests(unittest.TestCase):
                     },
                 ),
             ) as seed_mock,
+            patch(
+                "orchestrator.api.discord.commands.ask.run_specialist_planning_fanout",
+                return_value=planning_result,
+            ) as planning_mock,
+            patch(
+                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                return_value=(
+                    "Issue upsert complete. Parent: TP-501. Created 2: TP-502, TP-503.",
+                    {
+                        "parent_issue_key": "TP-501",
+                        "created_children": ["TP-502", "TP-503"],
+                        "updated_children": [],
+                        "children_sync_status": "children_current",
+                    },
+                ),
+            ) as seed_children_mock,
         ):
             command_response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1223,10 +1296,16 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(command_response.command, "pm")
         self.assertEqual(command_response.data["parent_issue_key"], "TP-501")
         self.assertEqual(command_response.data["created_parent_issue_keys"], ["TP-501"])
+        self.assertEqual(command_response.data["created_children"], ["TP-502", "TP-503"])
+        self.assertEqual(command_response.data["followup_context_type"], "pm_interview")
+        self.assertTrue(command_response.data["ready_to_write"])
         self.assertIn("## Approved Product Brief", str(command_response.data["product_brief_markdown"]))
         self.assertIn("PM parent issue upsert complete", command_response.message)
-        self.assertEqual(answer_mock.call_args.kwargs["action"], "ask")
+        self.assertIn("Issue upsert complete", command_response.message)
+        self.assertEqual(plan_mock.call_args.kwargs["request_text"], "final handoff for TP-20 checkout reliability")
         seed_mock.assert_called_once()
+        planning_mock.assert_called_once()
+        seed_children_mock.assert_called_once()
 
     def test_pm_approve_is_rejected(self) -> None:
         response = self.client.post(
@@ -1308,19 +1387,26 @@ class DiscordCommandApiTests(unittest.TestCase):
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
-                "orchestrator.api.discord.commands.ask.answer_voice_room_turn",
-                return_value=SimpleNamespace(
-                    message="We should keep the MVP to transcription and routing.",
-                    brief={},
-                    persona_id="architect",
-                    persona_role="Architect",
-                    persona_name="Soren",
-                    persona_voice_id="echo",
-                    router_confidence=0.92,
-                    router_reason="The user is asking about system shape and tradeoffs.",
-                    room_config={"persona_names": {"architect": "Soren"}, "persona_voices": {"architect": "echo"}},
-                ),
-            ) as room_mock,
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                return_value={
+                    "message": (
+                        "What kind of PM outcome do you need here?\n"
+                        "Examples: customer-facing feature brief, internal product spec, or rollout plan."
+                    ),
+                    "brief": {
+                        "objective": "Shape the MVP for transcription and routing.",
+                        "user_value": "Stakeholders can align on the first release.",
+                        "recommendation": "Clarify the intended PM artifact first.",
+                        "scope_in": ["Transcription", "Routing"],
+                        "scope_out": ["Full architecture design"],
+                        "risks": ["The product brief is still too broad."],
+                        "open_questions": ["What decision should the PM help make next?"],
+                        "next_steps": ["Continue the PM interview in the room thread."],
+                    },
+                    "status": "question_pending",
+                    "ready_to_write": False,
+                },
+            ) as plan_mock,
         ):
             command_response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1336,10 +1422,12 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertTrue(command_response.ok)
         self.assertEqual(command_response.command, "pm")
         self.assertTrue(command_response.data["room_mode"])
-        self.assertEqual(command_response.data["persona_id"], "architect")
-        self.assertEqual(command_response.data["persona_name"], "Soren")
-        self.assertEqual(command_response.data["router"]["confidence"], 0.92)
-        room_mock.assert_called_once()
+        self.assertTrue(command_response.data["voice_mode"])
+        self.assertEqual(command_response.data["persona_id"], "pm")
+        self.assertEqual(command_response.data["persona_name"], "PM")
+        self.assertEqual(command_response.data["followup_context_type"], "pm_interview")
+        self.assertIn("Examples:", command_response.message)
+        plan_mock.assert_called_once()
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
@@ -1348,7 +1436,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             self.assertTrue(history)
             latest_entry = history[-1]
             self.assertTrue(str(latest_entry.get("question") or "").startswith("room "))
-            self.assertEqual(latest_entry.get("answer"), "architect: We should keep the MVP to transcription and routing.")
+            self.assertTrue(str(latest_entry.get("answer") or "").startswith("pm: "))
 
     def test_pm_voice_mode_routes_to_persona_runtime_with_channel_local_history(self) -> None:
         with (
@@ -1359,19 +1447,26 @@ class DiscordCommandApiTests(unittest.TestCase):
             ),
             patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
-                "orchestrator.api.discord.commands.ask.answer_voice_room_turn",
-                return_value=SimpleNamespace(
-                    message="We should add session expiry and audit trails.",
-                    brief={},
-                    persona_id="security",
-                    persona_role="Security",
-                    persona_name="June",
-                    persona_voice_id="echo",
-                    router_confidence=0.95,
-                    router_reason="The note is about auth and controls.",
-                    room_config={"persona_names": {"security": "June"}, "persona_voices": {"security": "echo"}},
-                ),
-            ) as room_mock,
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                return_value={
+                    "message": (
+                        "What product decision do you need to make about session security?\n"
+                        "Examples: customer-facing requirement, scope boundary, or rollout constraint."
+                    ),
+                    "brief": {
+                        "objective": "Clarify the product requirement for session security.",
+                        "user_value": "Stakeholders understand the expected security behavior.",
+                        "recommendation": "Stay product-level until the PM brief is complete.",
+                        "scope_in": ["Session security requirement"],
+                        "scope_out": ["Detailed security design"],
+                        "risks": ["The ask mixes product and implementation concerns."],
+                        "open_questions": ["Which user-visible behavior matters most?"],
+                        "next_steps": ["Continue the PM interview with one focused answer."],
+                    },
+                    "status": "question_pending",
+                    "ready_to_write": False,
+                },
+            ) as plan_mock,
         ):
             command_response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1388,11 +1483,12 @@ class DiscordCommandApiTests(unittest.TestCase):
         self.assertEqual(command_response.command, "pm")
         self.assertFalse(command_response.data["room_mode"])
         self.assertTrue(command_response.data["voice_mode"])
-        self.assertEqual(command_response.data["persona_id"], "security")
-        self.assertEqual(command_response.data["persona_name"], "June")
-        self.assertEqual(command_response.data["router"]["confidence"], 0.95)
-        room_mock.assert_called_once()
-        self.assertEqual(room_mock.call_args.kwargs["history"], [{"question": "voice earlier", "answer": "security: older reply"}])
+        self.assertEqual(command_response.data["persona_id"], "pm")
+        self.assertEqual(command_response.data["persona_name"], "PM")
+        self.assertEqual(command_response.data["followup_context_type"], "pm_interview")
+        self.assertIn("Examples:", command_response.message)
+        plan_mock.assert_called_once()
+        self.assertEqual(plan_mock.call_args.kwargs["history"], [{"question": "voice earlier", "answer": "security: older reply"}])
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
@@ -1401,7 +1497,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             self.assertTrue(history)
             latest_entry = history[-1]
             self.assertTrue(str(latest_entry.get("question") or "").startswith("voice "))
-            self.assertEqual(latest_entry.get("answer"), "security: We should add session expiry and audit trails.")
+            self.assertTrue(str(latest_entry.get("answer") or "").startswith("pm: "))
 
     def test_ask_command_returns_board_answer(self) -> None:
         with (

@@ -130,6 +130,7 @@ def send_discord_ask_response_with_thread(
     components: list[dict] | None = None,
     issue_key: str | None = None,
     followup_context_type: str = "ask_thread",
+    request_id: str | None = None,
     discord_api_client_fn,
     project_ask_thread_channel_ids_for_tenant_fn,
     resolve_project_for_channel_fn,
@@ -144,17 +145,25 @@ def send_discord_ask_response_with_thread(
     normalized_issue_key = normalize_issue_key(issue_key)
 
     def _persist_followup_context(*, project, root_channel_id: str, target_thread_channel_id: str, root_message_id: str | None) -> None:
+        normalized_followup_context_type = str(followup_context_type or "ask_thread").strip() or "ask_thread"
+        if normalized_followup_context_type == "pm_interview":
+            origin_command = "pm"
+        elif normalized_followup_context_type == "ask_thread":
+            origin_command = "ask"
+        else:
+            origin_command = normalized_followup_context_type
         upsert_followup_context(
             session=session,
             tenant_id=tenant.tenant_id,
             project_id=str(getattr(project, "project_id", "") or "").strip() or None,
-            context_type=str(followup_context_type or "ask_thread").strip() or "ask_thread",
+            context_type=normalized_followup_context_type,
             channel_id=root_channel_id,
             thread_channel_id=target_thread_channel_id,
             root_message_id=root_message_id,
             owner_user_id=user_id,
-            origin_command="ask" if followup_context_type == "ask_thread" else followup_context_type,
+            origin_command=origin_command,
             issue_key=normalized_issue_key,
+            request_id=str(request_id or "").strip() or None,
         )
 
     if channel_id in ask_thread_channel_ids:
@@ -220,9 +229,12 @@ def send_discord_ask_response_with_thread(
     )
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
+    intro_message = "Continue here with follow-up questions."
+    if str(followup_context_type or "").strip().lower() == "pm_interview":
+        intro_message = "Continue here with PM follow-up questions."
     client.post_message(
         channel_id=thread_channel_id,
-        content=f"<@{user_id}> Continue here with follow-up questions.",
+        content=f"<@{user_id}> {intro_message}",
     )
 
 
