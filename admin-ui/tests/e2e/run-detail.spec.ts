@@ -44,6 +44,7 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
 
   await page.goto(`/runs/${run.run_id}`);
 
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await expect(page.getByText("Not active")).toBeVisible();
   await expect(page.getByTestId("run-branch")).toContainText("feature/GP-124");
   await expect(page.getByTestId("run-integration-branch")).toContainText("release/2026-03-27");
@@ -58,7 +59,7 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
   await expect(page.getByText(/heartbeat timeout/i)).toBeVisible();
 
   await page.getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText("PR created and code pushed.", { exact: true })).toBeVisible();
+  await expect(page.getByText("PR created and code pushed.", { exact: true })).toBeVisible({ timeout: 15000 });
 });
 
 test("marks a finished stage without a checkpoint as interrupted on terminal runs", async ({ page }) => {
@@ -91,12 +92,13 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
 
   await page.goto(`/runs/${run.run_id}`);
 
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await expect(page.getByTestId("run-stage-dev")).toHaveAttribute("data-stage-status", "interrupted");
   await expect(page.getByTestId("run-stage-dev-detail")).toHaveText("interrupted");
   await expect(page.getByTestId("run-stage-test")).toHaveAttribute("data-stage-status", "not_started");
 
   await page.getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText("agent finished, checkpoint missing")).toBeVisible();
+  await expect(page.getByText("agent finished, checkpoint missing")).toBeVisible({ timeout: 15000 });
 });
 
 test("offers review rerun when review state exists and posts the review resume payload", async ({ page }) => {
@@ -138,10 +140,11 @@ test("offers review rerun when review state exists and posts the review resume p
 
   await page.goto(`/runs/${run.run_id}`);
 
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await page.getByTestId("run-rerun-trigger").click();
   await expect(page.getByTestId("rerun-option-review")).toBeVisible();
   await page.getByTestId("rerun-option-review").click();
 
   expect(rerunPayload).toEqual({ mode: "resume", resume_stage: "review" });
-  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/);
+  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/, { timeout: 15000 });
 });

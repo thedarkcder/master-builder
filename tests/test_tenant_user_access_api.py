@@ -366,7 +366,7 @@ class TenantUserAccessApiTests(unittest.TestCase):
             json={
                 "name": "Product Ops",
                 "description": "Business reporting and delivery tracking",
-                "permission_keys": ["analytics.business.view", "runs.business.view"],
+                "permission_keys": ["projects.manage"],
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -374,7 +374,7 @@ class TenantUserAccessApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201, response.text)
         payload = response.json()
         self.assertEqual(payload["name"], "Product Ops")
-        self.assertEqual(payload["permission_keys"], ["analytics.business.view", "runs.business.view"])
+        self.assertEqual(payload["permission_keys"], ["projects.manage"])
 
     def test_tenant_admin_can_list_and_update_members(self) -> None:
         registration = self._register()
@@ -386,7 +386,7 @@ class TenantUserAccessApiTests(unittest.TestCase):
             json={
                 "name": "Engineering",
                 "description": "Technical access",
-                "permission_keys": ["analytics.technical.view", "runs.technical.view"],
+                "permission_keys": ["technical.access"],
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -417,6 +417,68 @@ class TenantUserAccessApiTests(unittest.TestCase):
         self.assertEqual(payload["role"], "technical_member")
         self.assertEqual(payload["team_ids"], [team_id])
         self.assertEqual(payload["mode_override"], "technical")
+
+    def test_business_member_can_list_projects_but_cannot_create_projects(self) -> None:
+        registration = self._register()
+        tenant_id = registration["tenant"]["tenant_id"]
+        owner_token = self._login()
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+
+        with session_factory() as session:
+            session.add(
+                Project(
+                    project_id=f"{tenant_id}-web",
+                    tenant_id=tenant_id,
+                    name="Route Web",
+                    github_repository="https://github.com/example/route-web",
+                    jira_project_key="WEB",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        with patch("orchestrator.core.invites.email_delivery.send_tenant_invite_email"):
+            invite_response = self.client.post(
+                f"/api/admin/tenants/{tenant_id}/invites",
+                json={
+                    "email": "member@example.com",
+                    "full_name": "Member Example",
+                    "role": "business_member",
+                    "team_ids": [],
+                    "mode_override": "non_technical",
+                },
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+        self.assertEqual(invite_response.status_code, 201, invite_response.text)
+        token = invite_response.json()["invite_url"].split("token=", 1)[1]
+        self._accept_invite(token=token)
+        member_token = self._login(email="member@example.com")
+
+        list_response = self.client.get(
+            f"/api/admin/tenants/{tenant_id}/projects",
+            headers={"Authorization": f"Bearer {member_token}"},
+        )
+        self.assertEqual(list_response.status_code, 200, list_response.text)
+        self.assertGreaterEqual(len(list_response.json()), 1)
+
+        forbidden_response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/projects",
+            json={
+                "name": "Forbidden",
+                "github_repository": "https://github.com/example/forbidden",
+                "jira_project_key": "NOPE",
+                "policy_overrides": {},
+            },
+            headers={"Authorization": f"Bearer {member_token}"},
+        )
+        self.assertEqual(forbidden_response.status_code, 403, forbidden_response.text)
 
     def test_tenant_admin_can_resend_and_revoke_invites(self) -> None:
         registration = self._register()

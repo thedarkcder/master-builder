@@ -43,8 +43,20 @@ export function canManageTeam(
     return true;
   }
   const membership = getMembershipForTenant(principal, tenantId);
+  return Boolean(membership?.permission_keys.includes("people.manage"));
+}
+
+export function canManageProjects(
+  principal: PrincipalLike | null | undefined,
+  tenantId: string,
+): boolean {
+  if (canAccessPlatformAdmin(principal)) {
+    return true;
+  }
+  const membership = getMembershipForTenant(principal, tenantId);
   return Boolean(
-    membership?.permission_keys.includes("members.manage") || membership?.permission_keys.includes("teams.manage"),
+    membership?.permission_keys.includes("projects.manage") ||
+      membership?.permission_keys.includes("workspace.manage"),
   );
 }
 
@@ -56,7 +68,7 @@ export function canAccessTechnicalSurface(
     return true;
   }
   const membership = getMembershipForTenant(principal, tenantId);
-  return membership?.effective_mode === "technical";
+  return Boolean(membership?.permission_keys.includes("technical.access")) && membership?.effective_mode === "technical";
 }
 
 function getPendingMembership(

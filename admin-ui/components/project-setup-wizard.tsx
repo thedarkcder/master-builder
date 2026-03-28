@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { createProject, getTenant, listGitHubRepositories, listJiraProjects } from "@/lib/api";
+import { canManageProjects } from "@/lib/auth-routing";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -23,7 +24,7 @@ const STEPS = [
 export function ProjectSetupWizard() {
   const params = useParams<{ tenantId: string }>();
   const router = useRouter();
-  const { credentials, ready } = useAuth();
+  const { credentials, ready, principal } = useAuth();
 
   const [step, setStep] = useState<Step>(1);
   const [busy, setBusy] = useState(false);
@@ -33,6 +34,7 @@ export function ProjectSetupWizard() {
   const [jiraProjectKey, setJiraProjectKey] = useState("");
   const [repoOptions, setRepoOptions] = useState<string[]>([]);
   const [jiraOptions, setJiraOptions] = useState<string[]>([]);
+  const allowProjectManagement = canManageProjects(principal, params.tenantId);
 
   async function loadOptions(auth = credentials) {
     if (!auth) return;
@@ -69,6 +71,10 @@ export function ProjectSetupWizard() {
 
   async function create() {
     if (!credentials) return;
+    if (!allowProjectManagement) {
+      setStatusLine("You do not have permission to create projects.");
+      return;
+    }
     if (!name.trim() || !githubRepository.trim() || !jiraProjectKey.trim()) {
       setStatusLine("Name, GitHub repository, and Jira project are required.");
       return;
@@ -89,6 +95,27 @@ export function ProjectSetupWizard() {
   }
 
   const currentStepDef = STEPS[step - 1];
+
+  if (ready && credentials && !allowProjectManagement) {
+    return (
+      <div className="mx-auto w-full max-w-xl space-y-6 py-8">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Project setup unavailable</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm text-muted-foreground">
+            <p>You do not have permission to create or edit projects in this workspace.</p>
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects`}>
+                <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
+                Back to Projects
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-xl space-y-6 py-8">

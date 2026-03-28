@@ -134,9 +134,7 @@ export default function GetStartedPage() {
   const canCompleteAdminSetup = Boolean(jiraReady && githubReady && discordReady);
   const memberDiscordJoined = Boolean(pendingMembership.discord_state?.guild_joined);
   const canChooseTechnicalExperience =
-    pendingMembership.permission_keys.includes("analytics.technical.view") ||
-    pendingMembership.permission_keys.includes("runs.technical.view") ||
-    pendingMembership.permission_keys.includes("settings.technical.view");
+    pendingMembership.permission_keys.includes("technical.access");
   const activeStepIndex = memberSteps.findIndex((step) => step.key === memberStep);
   const teamList = pendingMembership.team_ids.length > 0 ? pendingMembership.team_ids.join(", ") : "Not assigned";
   const hasCompletedDiscordStep = memberDiscordJoined || discordInviteOpened;

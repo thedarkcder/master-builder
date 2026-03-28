@@ -468,6 +468,92 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
   await expect(page.getByText("Tenant workspace overview.")).toBeVisible();
 });
 
+test("lets standard tenant users open Projects without showing project-management actions", async ({ page }) => {
+  const membership = makeMembership({
+    tenant_id: "route25",
+    role: "business_member",
+    effective_mode: "non_technical",
+    permission_keys: [],
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+  });
+  const principal = makeTenantUserPrincipal({
+    email: "member@example.com",
+    full_name: "Member Example",
+    memberships: [membership],
+  });
+  const tenant = makeTenant({
+    tenant_id: "route25",
+    name: "Route 25",
+    experience: { default_mode: "non_technical" },
+  });
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25/projects",
+      handler: (route) =>
+        fulfillJson(route, [
+          {
+            project_id: "route-web",
+            tenant_id: "route25",
+            name: "Route Web",
+            github_repository: "https://github.com/example/route-web",
+            jira_project_key: "WEB",
+            is_archived: false,
+            policy_overrides: {},
+            effective_policy: {
+              allow_pr_creation: true,
+              allow_jira_transitions: false,
+              allow_code_reviews: true,
+              allow_pr_remediation: true,
+              allow_manual_pr_fix_requests: true,
+              allow_label_mutations: true,
+              allow_auto_merge: false,
+              max_dev_test_review_loops: 2,
+              max_pr_auto_remediation_loops: 5,
+              max_concurrent_runs: 2,
+              allowed_commands: [],
+              require_agents_md: false,
+              knowledge_base_enabled: true,
+              knowledge_auto_answer_mode: "aggressive",
+              codex_model: null,
+              codex_reasoning_effort: null,
+            },
+            environment: {},
+            secret_refs: {},
+            discord: null,
+            created_at: "2026-03-27T16:00:00Z",
+            updated_at: "2026-03-27T16:00:00Z",
+          },
+        ]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25/delivery-summary",
+      handler: (route) => fulfillJson(route, makeDeliverySummary()),
+    },
+  ]);
+
+  await page.goto("/tenants/route25/projects");
+
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  await expect(page.locator('a[href="/tenants/route25/projects/route-web"]').last()).toBeVisible();
+  await expect(page.getByRole("link", { name: "All projects" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Add project" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add project" })).toHaveCount(0);
+});
+
 test("lets platform super admins see team navigation and security controls inside a workspace", async ({ page }) => {
   const principal = makePlatformAdminPrincipal();
   const tenant = makeTenant({
@@ -662,7 +748,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
   await expect(page.getByText("Create groups and decide what each team can access.")).toBeVisible();
   await expect(page.getByPlaceholder("Team name")).toHaveCount(0);
   await page.getByRole("button", { name: "New team" }).click();
-  await expect(page.getByRole("button", { name: "Workspace administration" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Manage workspace" }).first()).toBeVisible();
   await expect(page.getByText("tenant.manage")).toHaveCount(0);
   await page.getByPlaceholder("Team name").fill("Ops");
   await page.getByPlaceholder("Description").fill("Ops and enablement");
@@ -689,7 +775,7 @@ test("hides team navigation for invited users without team-management access", a
     tenant_id: "route25",
     role: "business_member",
     effective_mode: "non_technical",
-    permission_keys: ["analytics.business.view", "runs.business.view"],
+    permission_keys: [],
     onboarding_completed_at: "2026-03-27T16:30:00Z",
   });
   const principal = makeTenantUserPrincipal({
@@ -959,10 +1045,11 @@ test("resumes the wizard on the Discord step after a successful install callback
 
   await page.goto("/tenants/new/discord?tenant_id=route25&discord_install=success");
 
-  await expect(page.getByText("Discord bot install completed. Confirm the onboarding channel and invite settings.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Install Discord" })).toBeVisible();
+  await expect(page.getByText("Workspace ready for Discord install")).toBeVisible();
   await expect(page.getByText("Guild ID:")).toContainText("guild-123");
 
-  await page.getByLabel("Onboarding channel ID").fill("channel-789");
+  await page.getByLabel("Invite channel").fill("channel-789");
   await page.getByRole("button", { name: /^Next$/ }).click();
 
   await expect(page).toHaveURL(/\/tenants\/new\/repos$/);

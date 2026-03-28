@@ -10,49 +10,38 @@ ROLE_BUSINESS_MEMBER = "business_member"
 MODE_TECHNICAL = "technical"
 MODE_NON_TECHNICAL = "non_technical"
 
-PERMISSION_TENANT_MANAGE = "tenant.manage"
-PERMISSION_MEMBERS_MANAGE = "members.manage"
-PERMISSION_TEAMS_MANAGE = "teams.manage"
-PERMISSION_ANALYTICS_BUSINESS_VIEW = "analytics.business.view"
-PERMISSION_ANALYTICS_TECHNICAL_VIEW = "analytics.technical.view"
-PERMISSION_RUNS_BUSINESS_VIEW = "runs.business.view"
-PERMISSION_RUNS_TECHNICAL_VIEW = "runs.technical.view"
-PERMISSION_SETTINGS_BUSINESS_VIEW = "settings.business.view"
-PERMISSION_SETTINGS_TECHNICAL_VIEW = "settings.technical.view"
+PERMISSION_WORKSPACE_MANAGE = "workspace.manage"
+PERMISSION_PEOPLE_MANAGE = "people.manage"
+PERMISSION_PROJECTS_MANAGE = "projects.manage"
+PERMISSION_TECHNICAL_ACCESS = "technical.access"
+
+LEGACY_PERMISSION_ALIASES: dict[str, str | None] = {
+    "tenant.manage": PERMISSION_WORKSPACE_MANAGE,
+    "members.manage": PERMISSION_PEOPLE_MANAGE,
+    "teams.manage": PERMISSION_PEOPLE_MANAGE,
+    "analytics.business.view": None,
+    "runs.business.view": None,
+    "settings.business.view": None,
+    "analytics.technical.view": PERMISSION_TECHNICAL_ACCESS,
+    "runs.technical.view": PERMISSION_TECHNICAL_ACCESS,
+    "settings.technical.view": PERMISSION_TECHNICAL_ACCESS,
+}
 
 ALL_PERMISSION_KEYS = frozenset(
     {
-        PERMISSION_TENANT_MANAGE,
-        PERMISSION_MEMBERS_MANAGE,
-        PERMISSION_TEAMS_MANAGE,
-        PERMISSION_ANALYTICS_BUSINESS_VIEW,
-        PERMISSION_ANALYTICS_TECHNICAL_VIEW,
-        PERMISSION_RUNS_BUSINESS_VIEW,
-        PERMISSION_RUNS_TECHNICAL_VIEW,
-        PERMISSION_SETTINGS_BUSINESS_VIEW,
-        PERMISSION_SETTINGS_TECHNICAL_VIEW,
+        PERMISSION_WORKSPACE_MANAGE,
+        PERMISSION_PEOPLE_MANAGE,
+        PERMISSION_PROJECTS_MANAGE,
+        PERMISSION_TECHNICAL_ACCESS,
     }
 )
 
+KNOWN_PERMISSION_KEYS = frozenset(set(ALL_PERMISSION_KEYS) | set(LEGACY_PERMISSION_ALIASES))
+
 ROLE_PERMISSION_KEYS: dict[str, frozenset[str]] = {
     ROLE_TENANT_ADMIN: ALL_PERMISSION_KEYS,
-    ROLE_TECHNICAL_MEMBER: frozenset(
-        {
-            PERMISSION_ANALYTICS_BUSINESS_VIEW,
-            PERMISSION_ANALYTICS_TECHNICAL_VIEW,
-            PERMISSION_RUNS_BUSINESS_VIEW,
-            PERMISSION_RUNS_TECHNICAL_VIEW,
-            PERMISSION_SETTINGS_BUSINESS_VIEW,
-            PERMISSION_SETTINGS_TECHNICAL_VIEW,
-        }
-    ),
-    ROLE_BUSINESS_MEMBER: frozenset(
-        {
-            PERMISSION_ANALYTICS_BUSINESS_VIEW,
-            PERMISSION_RUNS_BUSINESS_VIEW,
-            PERMISSION_SETTINGS_BUSINESS_VIEW,
-        }
-    ),
+    ROLE_TECHNICAL_MEMBER: frozenset({PERMISSION_TECHNICAL_ACCESS}),
+    ROLE_BUSINESS_MEMBER: frozenset(),
 }
 
 VALID_ROLE_KEYS = frozenset(ROLE_PERMISSION_KEYS.keys())
@@ -70,6 +59,22 @@ def get_role_permission_keys(role: str) -> frozenset[str]:
     return ROLE_PERMISSION_KEYS.get(role, frozenset())
 
 
+def normalize_permission_key(permission_key: str) -> str | None:
+    normalized = str(permission_key).strip()
+    if normalized in ALL_PERMISSION_KEYS:
+        return normalized
+    return LEGACY_PERMISSION_ALIASES.get(normalized)
+
+
+def normalize_permission_keys(permission_keys: list[str]) -> tuple[str, ...]:
+    normalized: set[str] = set()
+    for permission_key in permission_keys:
+        mapped = normalize_permission_key(permission_key)
+        if mapped is not None:
+            normalized.add(mapped)
+    return tuple(sorted(normalized))
+
+
 def compute_permission_snapshot(
     *,
     tenant_default_mode: str,
@@ -78,9 +83,9 @@ def compute_permission_snapshot(
     team_permission_keys: list[str],
 ) -> TenantPermissionSnapshot:
     merged = set(get_role_permission_keys(membership_role))
-    merged.update(permission for permission in team_permission_keys if permission in ALL_PERMISSION_KEYS)
+    merged.update(normalize_permission_keys(team_permission_keys))
     requested_mode = membership_mode_override or tenant_default_mode or MODE_TECHNICAL
-    if PERMISSION_ANALYTICS_TECHNICAL_VIEW not in merged and PERMISSION_RUNS_TECHNICAL_VIEW not in merged:
+    if PERMISSION_TECHNICAL_ACCESS not in merged:
         effective_mode = MODE_NON_TECHNICAL
     else:
         effective_mode = requested_mode if requested_mode in VALID_MODE_KEYS else MODE_TECHNICAL

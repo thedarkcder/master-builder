@@ -13,10 +13,9 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.passwords import hash_password, verify_password
 from orchestrator.core.tenant_access import (
-    PERMISSION_ANALYTICS_TECHNICAL_VIEW,
-    PERMISSION_RUNS_TECHNICAL_VIEW,
     MODE_NON_TECHNICAL,
     MODE_TECHNICAL,
+    PERMISSION_TECHNICAL_ACCESS,
     ROLE_BUSINESS_MEMBER,
     ROLE_TENANT_ADMIN,
     VALID_MODE_KEYS,
@@ -571,11 +570,7 @@ def update_membership_mode_override(
     if mode_override is not None and mode_override not in VALID_MODE_KEYS:
         raise ValueError("Invalid tenant mode override")
     normalized_mode_override = mode_override
-    if mode_override == MODE_TECHNICAL and (
-        PERMISSION_ANALYTICS_TECHNICAL_VIEW not in permission_keys
-        and PERMISSION_RUNS_TECHNICAL_VIEW not in permission_keys
-        and role == ROLE_BUSINESS_MEMBER
-    ):
+    if mode_override == MODE_TECHNICAL and PERMISSION_TECHNICAL_ACCESS not in permission_keys and role == ROLE_BUSINESS_MEMBER:
         normalized_mode_override = None
     membership.mode_override = normalized_mode_override
     membership.updated_at = utcnow()

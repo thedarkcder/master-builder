@@ -20,6 +20,7 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_permission,
 )
+from orchestrator.core.tenant_access import PERMISSION_WORKSPACE_MANAGE
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -39,7 +40,7 @@ def start_discord_install(
     if principal.is_platform_super_admin:
         require_admin(principal=principal)
     else:
-        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key="tenant.manage")
+        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
 
     client_id = settings.discord_oauth_client_id.strip()
     if not client_id:
