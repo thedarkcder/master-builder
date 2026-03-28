@@ -22,3 +22,4 @@ coverage/
 *.egg
 *.egg-info/
 admin-ui/tsconfig.tsbuildinfo
+mcp.json
