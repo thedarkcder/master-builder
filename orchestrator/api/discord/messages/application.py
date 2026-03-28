@@ -23,6 +23,7 @@ class DiscordMessageIngressDeps:
     transcribe_audio_attachment: object
     load_pending_human_input_request: object
     resume_run_from_human_input_reply: object
+    resolve_followup_context_match: object
     resolve_followup_context: object
     resolve_followup_reaction: object
     execute_tenant_discord_command: object
@@ -189,12 +190,26 @@ def build_discord_message_ingress_result(
         return IngressResult()
 
     root_message_id = _root_message_id_from_payload(payload)
-    followup_context = deps.resolve_followup_context(
+    followup_resolution = deps.resolve_followup_context_match(
         session=session,
         tenant_id=tenant.tenant_id,
         channel_id=channel_id,
         root_message_id=root_message_id,
+        user_id=user_id,
     )
+    if str(getattr(followup_resolution, "status", "") or "") == "ambiguous":
+        return IngressResult(
+            actions=(
+                discord_channel_message_action(
+                    channel_id=channel_id,
+                    content=(
+                        f"<@{user_id}> I found multiple active follow-up contexts for that reply. "
+                        "Continue in the correct thread or clean up the stale follow-up first."
+                    ),
+                ),
+            )
+        )
+    followup_context = getattr(followup_resolution, "context", None)
     reaction = deps.resolve_followup_reaction(
         raw_text=content,
         source_ref=str(payload.get("id") or "").strip() or None,
@@ -234,6 +249,17 @@ def build_discord_message_ingress_result(
             return IngressResult(
                 actions=(discord_channel_message_action(channel_id=channel_id, content=message_content),),
             )
+
+    if reaction is None and not content.startswith("!") and not ((channel_id in room_channel_ids) or voice_note_reply_requested):
+        _log_ignored_message(
+            deps=deps,
+            reason="plain_text_without_followup_context",
+            payload=payload,
+            channel_id=channel_id,
+            user_id=user_id,
+            content=content,
+        )
+        return IngressResult()
 
     command_text = content
     command_params = None

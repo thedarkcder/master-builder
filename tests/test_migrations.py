@@ -62,6 +62,21 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertNotIn('server_default=sa.text("1")', contents)
 
+    def test_followup_context_identity_migration_adds_explicit_routing_columns(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            run_migrations(database_url=database_url)
+
+            engine = create_engine(database_url)
+            inspector = inspect(engine)
+
+            followup_columns = {column["name"] for column in inspector.get_columns("followup_contexts")}
+            followup_indexes = {index["name"] for index in inspector.get_indexes("followup_contexts")}
+
+            self.assertIn("owner_user_id", followup_columns)
+            self.assertIn("origin_command", followup_columns)
+            self.assertIn("ix_followup_contexts_tenant_status_owner", followup_indexes)
+
     def test_decision_state_migration_is_idempotent_when_tables_already_exist(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"

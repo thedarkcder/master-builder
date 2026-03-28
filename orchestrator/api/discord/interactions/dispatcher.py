@@ -22,6 +22,7 @@ class DiscordInteractionDispatchDeps:
     find_focused_discord_option: Callable[[object], tuple[str, str] | None]
     discord_issue_autocomplete_choices: Callable[..., list[dict]]
     resolve_thread_channel_for_reply: Callable[..., str]
+    resolve_followup_context_match: Callable[..., object]
     resolve_followup_context: Callable[..., object | None]
     resolve_followup_reaction: Callable[..., object | None]
     run_discord_ask_confirmation_followup: Callable[..., object]
@@ -235,12 +236,22 @@ def _handle_modal_submit(*, payload: dict, session, deps: DiscordInteractionDisp
     tenant = deps.find_tenant_for_discord_channel(session=session, channel_id=effective_channel_id)
     followup_context = None
     if tenant is not None:
-        followup_context = deps.resolve_followup_context(
+        resolution = deps.resolve_followup_context_match(
             session=session,
             tenant_id=tenant.tenant_id,
             channel_id=effective_channel_id,
             root_message_id=reply_to_message_id,
+            user_id=user_id,
         )
+        if str(getattr(resolution, "status", "") or "") == "ambiguous":
+            return deps.interaction_response(
+                content=(
+                    "I found multiple active follow-up contexts for that reply. "
+                    "Continue in the correct thread or clean up the stale follow-up first."
+                ),
+                ephemeral=True,
+            )
+        followup_context = getattr(resolution, "context", None)
     reaction = deps.resolve_followup_reaction(
         raw_text=question,
         source_ref=reply_to_message_id,

@@ -152,6 +152,8 @@ def send_discord_ask_response_with_thread(
             channel_id=root_channel_id,
             thread_channel_id=target_thread_channel_id,
             root_message_id=root_message_id,
+            owner_user_id=user_id,
+            origin_command="ask" if followup_context_type == "ask_thread" else followup_context_type,
             issue_key=normalized_issue_key,
         )
 
@@ -253,6 +255,8 @@ def send_discord_seed_followup_with_thread(
             context_type="seed_followup",
             channel_id=channel_id,
             thread_channel_id=channel_id,
+            owner_user_id=user_id,
+            origin_command="issues",
             request_id=str(request_id or "").strip() or None,
             metadata={
                 "request_id": str(request_id or "").strip() or None,
@@ -307,6 +311,8 @@ def send_discord_seed_followup_with_thread(
         channel_id=channel_id,
         thread_channel_id=thread_channel_id,
         root_message_id=posted_message_id,
+        owner_user_id=user_id,
+        origin_command="issues",
         request_id=str(request_id or "").strip() or None,
         metadata={
             "request_id": str(request_id or "").strip() or None,

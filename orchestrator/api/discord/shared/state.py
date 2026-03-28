@@ -410,6 +410,8 @@ def store_seed_followup_context(
         context_type=FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
         channel_id=root_channel_id,
         thread_channel_id=thread_channel_id,
+        owner_user_id=user_id.strip() or None,
+        origin_command="issues",
         request_id=normalized_request_id,
         metadata=metadata,
     )

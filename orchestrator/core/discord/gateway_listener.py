@@ -36,6 +36,7 @@ from orchestrator.api.discord.interactions.auth import (
 )
 from orchestrator.api.discord.interactions.dispatcher import DiscordInteractionDispatchDeps
 from orchestrator.api.discord.interactions.followup import (
+    _resolve_followup_context_match as _interaction_resolve_followup_context_match,
     _resolve_followup_context as _interaction_resolve_followup_context,
     _resolve_followup_reaction as _interaction_resolve_followup_reaction,
     _resolve_thread_channel_for_reply as _interaction_resolve_thread_channel_for_reply,
@@ -74,7 +75,11 @@ from orchestrator.core.discord.personas import (
     format_voice_room_persona_label,
 )
 from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.followup_context_service import resolve_followup_context, resolve_followup_reaction
+from orchestrator.core.followup_context_service import (
+    resolve_followup_context,
+    resolve_followup_context_match,
+    resolve_followup_reaction,
+)
 from orchestrator.core.run_human_input_service import pending_human_input_for_request_id, resume_run_from_human_input_reply
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
@@ -424,6 +429,7 @@ class DiscordGatewayListener:
             find_focused_discord_option=_find_focused_discord_option,
             discord_issue_autocomplete_choices=_discord_issue_autocomplete_choices,
             resolve_thread_channel_for_reply=_interaction_resolve_thread_channel_for_reply,
+            resolve_followup_context_match=_interaction_resolve_followup_context_match,
             resolve_followup_context=_interaction_resolve_followup_context,
             resolve_followup_reaction=_interaction_resolve_followup_reaction,
             run_discord_ask_confirmation_followup=_run_discord_ask_confirmation_followup,
@@ -447,6 +453,7 @@ class DiscordGatewayListener:
             ),
             load_pending_human_input_request=pending_human_input_for_request_id,
             resume_run_from_human_input_reply=resume_run_from_human_input_reply,
+            resolve_followup_context_match=resolve_followup_context_match,
             resolve_followup_context=resolve_followup_context,
             resolve_followup_reaction=resolve_followup_reaction,
             execute_tenant_discord_command=execute_tenant_discord_command,

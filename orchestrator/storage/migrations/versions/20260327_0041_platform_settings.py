@@ -17,7 +17,14 @@ branch_labels = None
 depends_on = None
 
 
+def _table_exists(table_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return table_name in inspector.get_table_names()
+
+
 def upgrade() -> None:
+    if _table_exists("platform_settings"):
+        return
     op.create_table(
         "platform_settings",
         sa.Column("setting_key", sa.String(length=128), nullable=False),
@@ -29,4 +36,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not _table_exists("platform_settings"):
+        return
     op.drop_table("platform_settings")

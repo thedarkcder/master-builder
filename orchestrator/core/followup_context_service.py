@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import FollowupContext
@@ -30,6 +30,13 @@ class FollowupReaction:
     request_id: str | None = None
 
 
+@dataclass(frozen=True)
+class FollowupContextResolution:
+    status: str
+    context: FollowupContext | None = None
+    matches: tuple[FollowupContext, ...] = ()
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -43,6 +50,8 @@ def upsert_followup_context(
     channel_id: str | None = None,
     thread_channel_id: str | None = None,
     root_message_id: str | None = None,
+    owner_user_id: str | None = None,
+    origin_command: str | None = None,
     issue_key: str | None = None,
     request_id: str | None = None,
     run_id: str | None = None,
@@ -56,6 +65,8 @@ def upsert_followup_context(
     normalized_thread_channel_id = str(thread_channel_id or "").strip() or None
     normalized_channel_id = str(channel_id or "").strip() or None
     normalized_root_message_id = str(root_message_id or "").strip() or None
+    normalized_owner_user_id = str(owner_user_id or "").strip() or None
+    normalized_origin_command = str(origin_command or "").strip().lower() or None
     normalized_issue_key = str(issue_key or "").strip().upper() or None
     normalized_request_id = str(request_id or "").strip() or None
     normalized_run_id = str(run_id or "").strip() or None
@@ -75,13 +86,8 @@ def upsert_followup_context(
         identifier_filters.append(FollowupContext.request_id == normalized_request_id)
     if normalized_root_message_id:
         identifier_filters.append(FollowupContext.root_message_id == normalized_root_message_id)
-    if normalized_channel_id:
-        identifier_filters.append(
-            and_(
-                FollowupContext.channel_id == normalized_channel_id,
-                FollowupContext.thread_channel_id.is_(None),
-            )
-        )
+    if normalized_issue_key:
+        identifier_filters.append(FollowupContext.issue_key == normalized_issue_key)
     existing = None
     if identifier_filters:
         existing = (
@@ -104,6 +110,8 @@ def upsert_followup_context(
             channel_id=normalized_channel_id,
             thread_channel_id=normalized_thread_channel_id,
             root_message_id=normalized_root_message_id,
+            owner_user_id=normalized_owner_user_id,
+            origin_command=normalized_origin_command,
             issue_key=normalized_issue_key,
             request_id=normalized_request_id,
             run_id=normalized_run_id,
@@ -120,6 +128,8 @@ def upsert_followup_context(
     existing.channel_id = normalized_channel_id
     existing.thread_channel_id = normalized_thread_channel_id
     existing.root_message_id = normalized_root_message_id
+    existing.owner_user_id = normalized_owner_user_id
+    existing.origin_command = normalized_origin_command
     existing.issue_key = normalized_issue_key
     existing.request_id = normalized_request_id
     existing.run_id = normalized_run_id
@@ -129,47 +139,106 @@ def upsert_followup_context(
     return existing
 
 
+def resolve_followup_context_match(
+    *,
+    session: Session,
+    tenant_id: str,
+    channel_id: str,
+    root_message_id: str | None = None,
+    request_id: str | None = None,
+    user_id: str | None = None,
+    allowed_context_types: set[str] | None = None,
+) -> FollowupContextResolution:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_channel_id = str(channel_id or "").strip()
+    normalized_root_message_id = str(root_message_id or "").strip() or None
+    normalized_request_id = str(request_id or "").strip() or None
+    normalized_user_id = str(user_id or "").strip() or None
+    normalized_context_types = {
+        str(value).strip()
+        for value in (allowed_context_types or set())
+        if str(value).strip()
+    }
+    if not normalized_tenant_id or not normalized_channel_id:
+        return FollowupContextResolution(status="no_match")
+
+    identifier_filters = []
+    if normalized_request_id:
+        identifier_filters.append(FollowupContext.request_id == normalized_request_id)
+    if normalized_root_message_id:
+        identifier_filters.append(FollowupContext.root_message_id == normalized_root_message_id)
+    identifier_filters.append(FollowupContext.thread_channel_id == normalized_channel_id)
+    if not identifier_filters:
+        return FollowupContextResolution(status="no_match")
+
+    query = select(FollowupContext).where(
+        FollowupContext.tenant_id == normalized_tenant_id,
+        FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
+        or_(*identifier_filters),
+    )
+    if normalized_context_types:
+        query = query.where(FollowupContext.context_type.in_(normalized_context_types))
+    rows = session.execute(query.order_by(FollowupContext.updated_at.desc())).scalars().all()
+    if not rows:
+        return FollowupContextResolution(status="no_match")
+
+    scored_rows: list[tuple[int, datetime, FollowupContext]] = []
+    for row in rows:
+        if normalized_request_id and str(getattr(row, "request_id", "") or "").strip() != normalized_request_id:
+            continue
+        if normalized_root_message_id and str(getattr(row, "root_message_id", "") or "").strip() != normalized_root_message_id:
+            continue
+        if not normalized_root_message_id and str(getattr(row, "thread_channel_id", "") or "").strip() != normalized_channel_id:
+            continue
+        if normalized_user_id:
+            row_owner_user_id = str(getattr(row, "owner_user_id", "") or "").strip()
+            if row_owner_user_id and row_owner_user_id != normalized_user_id:
+                continue
+
+        score = 0
+        if normalized_request_id:
+            score += 100
+        if normalized_root_message_id:
+            score += 80
+        if str(getattr(row, "thread_channel_id", "") or "").strip() == normalized_channel_id:
+            score += 60
+        if str(getattr(row, "channel_id", "") or "").strip() == normalized_channel_id:
+            score += 20
+        if normalized_user_id and str(getattr(row, "owner_user_id", "") or "").strip() == normalized_user_id:
+            score += 10
+        scored_rows.append((score, getattr(row, "updated_at", _now()), row))
+
+    if not scored_rows:
+        return FollowupContextResolution(status="no_match")
+
+    scored_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    top_score = scored_rows[0][0]
+    top_rows = tuple(row for score, _updated_at, row in scored_rows if score == top_score)
+    if len(top_rows) > 1:
+        return FollowupContextResolution(status="ambiguous", matches=top_rows)
+    return FollowupContextResolution(status="matched", context=top_rows[0], matches=top_rows)
+
+
 def resolve_followup_context(
     *,
     session: Session,
     tenant_id: str,
     channel_id: str,
     root_message_id: str | None = None,
+    request_id: str | None = None,
+    user_id: str | None = None,
+    allowed_context_types: set[str] | None = None,
 ) -> FollowupContext | None:
-    normalized_tenant_id = str(tenant_id or "").strip()
-    normalized_channel_id = str(channel_id or "").strip()
-    normalized_root_message_id = str(root_message_id or "").strip() or None
-    if not normalized_tenant_id or not normalized_channel_id:
-        return None
-
-    for predicate in (
-        FollowupContext.thread_channel_id == normalized_channel_id,
-        FollowupContext.root_message_id == normalized_root_message_id if normalized_root_message_id else None,
-        FollowupContext.channel_id == normalized_channel_id,
-    ):
-        if predicate is None:
-            continue
-        rows = (
-            session.execute(
-                select(FollowupContext)
-                .where(
-                    FollowupContext.tenant_id == normalized_tenant_id,
-                    FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
-                    predicate,
-                )
-                .order_by(FollowupContext.updated_at.desc())
-            )
-            .scalars()
-            .all()
-        )
-        if not rows:
-            continue
-        if len(rows) > 1:
-            raise ValueError(
-                f"Multiple active follow-up contexts match tenant={normalized_tenant_id} channel={normalized_channel_id}"
-            )
-        return rows[0]
-    return None
+    resolution = resolve_followup_context_match(
+        session=session,
+        tenant_id=tenant_id,
+        channel_id=channel_id,
+        root_message_id=root_message_id,
+        request_id=request_id,
+        user_id=user_id,
+        allowed_context_types=allowed_context_types,
+    )
+    return resolution.context if resolution.status == "matched" else None
 
 
 def resolve_discord_command_subject_key(
@@ -183,15 +252,6 @@ def resolve_discord_command_subject_key(
     normalized_channel_id = str(channel_id or "").strip() or None
     normalized_user_id = str(user_id or "").strip()
     if normalized_channel_id:
-        context = resolve_followup_context(
-            session=session,
-            tenant_id=normalized_tenant_id,
-            channel_id=normalized_channel_id,
-        )
-        if context is not None:
-            context_id = str(getattr(context, "context_id", "") or "").strip()
-            if context_id:
-                return f"discord_followup:{context_id}"
         return f"discord_channel:{normalized_tenant_id}:{normalized_channel_id}"
     return f"discord_user:{normalized_tenant_id}:{normalized_user_id}"
 
@@ -223,16 +283,18 @@ def resolve_discord_interaction_subject_scope(
         if isinstance(message, dict):
             root_message_id = str(message.get("id") or "").strip() or None
 
-    if tenant_id and channel_id:
-        context = resolve_followup_context(
+    interaction_type = payload.get("type")
+    if interaction_type in {3, 5} and tenant_id and channel_id:
+        resolution = resolve_followup_context_match(
             session=session,
             tenant_id=tenant_id,
             channel_id=channel_id,
             root_message_id=root_message_id,
+            user_id=user_id,
         )
-        if context is not None:
-            project_id = str(getattr(context, "project_id", "") or "").strip() or None
-            context_id = str(getattr(context, "context_id", "") or "").strip()
+        if resolution.status == "matched" and resolution.context is not None:
+            project_id = str(getattr(resolution.context, "project_id", "") or "").strip() or None
+            context_id = str(getattr(resolution.context, "context_id", "") or "").strip()
             if context_id:
                 return tenant_id, project_id, f"discord_followup:{context_id}"
     if tenant_id and channel_id:
