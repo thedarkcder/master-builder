@@ -581,6 +581,15 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "is_archived": False,
                 },
             ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/automations",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/automations",
+                auth=admin,
+                json={"automations": []},
+            ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
                 path="/api/admin/tenants/route25/projects/route25-default/knowledge/assets",
                 auth=admin,

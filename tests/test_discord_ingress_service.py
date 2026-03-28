@@ -15,6 +15,7 @@ def _deps() -> DiscordIngressDependencies:
     handlers = DiscordIngressHandlers(
         simple=MagicMock(),
         ask=MagicMock(),
+        persona=MagicMock(),
         bug_gap=MagicMock(),
         issues=MagicMock(),
         run_control=MagicMock(),

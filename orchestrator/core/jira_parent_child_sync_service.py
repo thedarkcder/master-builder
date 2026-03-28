@@ -134,8 +134,8 @@ def _material_parent_changed_fields(*, payload: dict[str, Any], extract_changed_
     changed_fields = extract_changed_fields_fn(payload)
     material: list[str] = []
     seen: set[str] = set()
-    for field in changed_fields:
-        normalized = str(field or "").strip().casefold()
+    for changed_field in changed_fields:
+        normalized = str(changed_field or "").strip().casefold()
         if normalized in {"status", "labels"}:
             continue
         if normalized in _PARENT_SYNC_MATERIAL_FIELDS or normalized in {"summary", "description"}:
