@@ -17,6 +17,7 @@ type AuthLoginInput = {
 type AuthContextValue = {
   credentials: Credentials | null;
   principal: AuthenticatedPrincipalRecord | null;
+  principalReady: boolean;
   ready: boolean;
   needsOnboarding: boolean;
   login: (input: AuthLoginInput) => Promise<void>;
@@ -38,35 +39,51 @@ function hasPendingOnboarding(principal: AuthenticatedPrincipalRecord | null): b
 function AuthProviderInner({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();
   const [principal, setPrincipal] = useState<AuthenticatedPrincipalRecord | null>(null);
+  const [principalReady, setPrincipalReady] = useState(false);
+  const [sessionRevoked, setSessionRevoked] = useState(false);
   const sessionUser = session?.user as SessionUserShape | undefined;
 
   const credentials = useMemo<Credentials | null>(() => {
-    if (!sessionUser || status !== "authenticated") {
+    if (!sessionUser || status !== "authenticated" || sessionRevoked) {
       return null;
     }
     return {
       apiBaseUrl: ""
     };
-  }, [sessionUser, status]);
+  }, [sessionRevoked, sessionUser, status]);
 
   async function refreshPrincipal(nextCredentials: Credentials | null = credentials): Promise<void> {
     if (!nextCredentials) {
       setPrincipal(null);
+      setPrincipalReady(true);
       return;
     }
     try {
       const nextPrincipal = await readAuthenticatedPrincipal(nextCredentials);
+      setSessionRevoked(false);
       setPrincipal(nextPrincipal);
-    } catch {
+      setPrincipalReady(true);
+    } catch (error) {
       setPrincipal(null);
+      setPrincipalReady(true);
+      if (error instanceof Error && /^(401|403):/.test(error.message)) {
+        setSessionRevoked(true);
+        await signOut({ redirect: false });
+        if (typeof window !== "undefined") {
+          window.location.replace("/login");
+        }
+      }
     }
   }
 
   useEffect(() => {
     if (status !== "authenticated") {
+      setSessionRevoked(false);
+      setPrincipalReady(false);
       setPrincipal(null);
       return;
     }
+    setPrincipalReady(false);
     void refreshPrincipal();
   }, [credentials, status]);
 
@@ -74,6 +91,7 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
     () => ({
       credentials,
       principal,
+      principalReady,
       ready: status !== "loading",
       needsOnboarding: hasPendingOnboarding(principal),
       login: async ({ identifier, password }) => {
@@ -85,18 +103,20 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
         if (!result || result.error) {
           throw new Error(result?.error || "Invalid credentials");
         }
+        setSessionRevoked(false);
         const nextSession = await getSession();
         const nextSessionUser = nextSession?.user as SessionUserShape | undefined;
         const nextCredentials = nextSessionUser ? { apiBaseUrl: "" } : null;
         await refreshPrincipal(nextCredentials);
       },
       logout: async () => {
+        setSessionRevoked(false);
         setPrincipal(null);
         await signOut({ redirect: false });
       },
       refreshPrincipal
     }),
-    [credentials, principal, status]
+    [credentials, principal, principalReady, status]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

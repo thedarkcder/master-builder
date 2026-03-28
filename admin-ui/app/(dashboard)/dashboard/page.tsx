@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,7 +53,7 @@ function StatCard({ label, value, sub, icon, iconBg }: StatCardProps) {
 }
 
 export default function DashboardPage() {
-  const { credentials, ready } = useAuth();
+  const { credentials, ready, principal } = useAuth();
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -84,8 +85,19 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
+    if (ready && credentials && principal?.principal_type === "tenant_user") {
+      window.location.replace(getDefaultAuthenticatedRoute(principal));
+      return;
+    }
+  }, [credentials, principal, ready]);
+
+  useEffect(() => {
     if (ready && credentials) void loadDashboard();
-  }, [ready, credentials]);
+  }, [ready, credentials, principal?.principal_type]);
+
+  if (principal?.principal_type === "tenant_user") {
+    return <main className="p-8 text-sm text-muted-foreground">Redirecting to workspace...</main>;
+  }
 
   const statsData = useMemo(() => {
     if (!stats) return [];

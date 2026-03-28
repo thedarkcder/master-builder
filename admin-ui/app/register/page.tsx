@@ -6,13 +6,14 @@ import { useRouter } from "next/navigation";
 import { Rocket } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { registerTenantAdministrator } from "@/lib/api";
 
 export default function RegisterPage() {
   const router = useRouter();
-  const { credentials, ready, needsOnboarding, login } = useAuth();
+  const { credentials, ready, needsOnboarding, login, principal } = useAuth();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [tenantName, setTenantName] = useState("");
@@ -21,10 +22,10 @@ export default function RegisterPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    if (ready && credentials) {
-      router.replace(needsOnboarding ? "/get-started" : "/dashboard");
+    if (ready && credentials && principal) {
+      router.replace(needsOnboarding ? "/get-started" : getDefaultAuthenticatedRoute(principal));
     }
-  }, [credentials, needsOnboarding, ready, router]);
+  }, [credentials, needsOnboarding, principal, ready, router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -38,7 +39,6 @@ export default function RegisterPage() {
         tenant_name: tenantName.trim()
       });
       await login({ identifier: email.trim(), password });
-      router.push("/get-started");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to create workspace");
     } finally {

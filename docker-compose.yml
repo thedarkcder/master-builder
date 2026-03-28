@@ -20,8 +20,8 @@ services:
     image: axllent/mailpit:v1.27.5
     container_name: master-builder-mailpit
     ports:
-      - "1025:1025"
-      - "8025:8025"
+      - "4205:1025"
+      - "4206:8025"
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8025 || exit 1"]
       interval: 10s

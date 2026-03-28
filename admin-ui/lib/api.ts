@@ -910,6 +910,47 @@ function parseResponseBody(text: string): unknown {
   }
 }
 
+function stringifyErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object") {
+          const record = item as { msg?: unknown; loc?: unknown };
+          const message = typeof record.msg === "string" ? record.msg : null;
+          const location = Array.isArray(record.loc)
+            ? record.loc
+                .map((part) => String(part))
+                .filter(Boolean)
+                .join(".")
+            : null;
+          if (message && location) {
+            return `${location}: ${message}`;
+          }
+          return message;
+        }
+        return null;
+      })
+      .filter((value): value is string => Boolean(value));
+    if (messages.length > 0) {
+      return messages.join("; ");
+    }
+  }
+  if (detail && typeof detail === "object") {
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return "Unexpected error";
+    }
+  }
+  return "Unexpected error";
+}
+
 async function request<T>(
   credentials: Credentials,
   path: string,
@@ -930,7 +971,7 @@ async function request<T>(
   if (!response.ok) {
     const detail =
       typeof body === "object" && body && "detail" in body
-        ? String((body as { detail: unknown }).detail)
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
         : response.statusText;
     throw new Error(`${response.status}: ${detail}`);
   }
@@ -962,7 +1003,7 @@ export async function authenticateAdmin(input: AdminLoginInput): Promise<Credent
   if (!response.ok) {
     const detail =
       typeof body === "object" && body && "detail" in body
-        ? String((body as { detail: unknown }).detail)
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
         : response.statusText;
     throw new Error(`${response.status}: ${detail}`);
   }
@@ -994,7 +1035,7 @@ export async function registerTenantAdministrator(
   if (!response.ok) {
     const detail =
       typeof body === "object" && body && "detail" in body
-        ? String((body as { detail: unknown }).detail)
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
         : response.statusText;
     throw new Error(`${response.status}: ${detail}`);
   }
@@ -1022,7 +1063,7 @@ export async function acceptPublicInvite(
   if (!response.ok) {
     const detail =
       typeof body === "object" && body && "detail" in body
-        ? String((body as { detail: unknown }).detail)
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
         : response.statusText;
     throw new Error(`${response.status}: ${detail}`);
   }

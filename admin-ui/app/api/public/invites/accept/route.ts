@@ -24,12 +24,13 @@ export async function POST(request: NextRequest) {
     redirect: "manual",
   });
 
+  const body = await response.text();
   const proxiedHeaders = new Headers();
   const responseContentType = response.headers.get("content-type");
   if (responseContentType) {
     proxiedHeaders.set("Content-Type", responseContentType);
   }
-  return new NextResponse(response.body, {
+  return new NextResponse(body, {
     status: response.status,
     headers: proxiedHeaders,
   });

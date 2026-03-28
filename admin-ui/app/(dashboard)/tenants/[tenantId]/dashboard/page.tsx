@@ -7,7 +7,6 @@ import {
   Activity,
   BarChart3,
   CheckCircle2,
-  Circle,
   ExternalLink,
   RefreshCw,
   Settings2,
@@ -20,7 +19,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getTenant, listRuns, type RunRecord, type TenantRecord } from "@/lib/api";
+import {
+  getTenant,
+  getTenantDeliverySummary,
+  listRuns,
+  type DeliverySummaryRecord,
+  type RunRecord,
+  type TenantRecord,
+} from "@/lib/api";
 
 type ConnectionIndicatorProps = {
   label: string;
@@ -43,11 +49,18 @@ function ConnectionIndicator({ label, connected, detail }: ConnectionIndicatorPr
 
 export default function TenantDashboardPage() {
   const params = useParams<{ tenantId: string }>();
-  const { credentials, ready } = useAuth();
+  const { credentials, principal, ready } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
+  const membership = principal?.memberships.find((entry) => entry.tenant_id === tenantId) ?? null;
+  const isPlatformAdmin = principal?.principal_type === "platform_super_admin";
+  const analyticsHref =
+    membership?.effective_mode === "non_technical" && !isPlatformAdmin
+      ? `/tenants/${encodeURIComponent(tenantId)}/analytics/business`
+      : `/tenants/${encodeURIComponent(tenantId)}/analytics/token-overview`;
 
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [deliverySummary, setDeliverySummary] = useState<DeliverySummaryRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -56,13 +69,19 @@ export default function TenantDashboardPage() {
     setLoading(true);
     setErrorMessage(null);
     try {
-      const [tenantPayload, runsPayload] = await Promise.all([
-        getTenant(credentials, params.tenantId),
-        listRuns(credentials, { tenantId: params.tenantId })
-      ]);
+      const tenantPayload = await getTenant(credentials, params.tenantId);
       setTenant(tenantPayload);
-      const orderedRuns = [...runsPayload].sort((a, b) => b.created_at.localeCompare(a.created_at));
-      setRuns(orderedRuns.slice(0, 8));
+
+      if (isPlatformAdmin) {
+        const runsPayload = await listRuns(credentials, { tenantId: params.tenantId });
+        const orderedRuns = [...runsPayload].sort((a, b) => b.created_at.localeCompare(a.created_at));
+        setRuns(orderedRuns.slice(0, 8));
+        setDeliverySummary(null);
+      } else {
+        const summaryPayload = await getTenantDeliverySummary(credentials, params.tenantId);
+        setDeliverySummary(summaryPayload);
+        setRuns([]);
+      }
     } catch (error) {
       setErrorMessage(`Failed to load tenant dashboard: ${(error as Error).message}`);
     } finally {
@@ -72,7 +91,12 @@ export default function TenantDashboardPage() {
 
   useEffect(() => {
     if (ready && credentials) void loadData();
-  }, [ready, credentials, params.tenantId]);
+  }, [ready, credentials, params.tenantId, principal?.principal_type]);
+
+  const quickActionLabel = isPlatformAdmin ? "View Pipeline" : "Delivery";
+  const quickActionDetail = isPlatformAdmin ? "All runs & execution logs" : "Recent work & progress";
+  const timeline = deliverySummary?.timeline ?? [];
+  const summary = deliverySummary?.summary ?? null;
 
   return (
     <div className="space-y-6">
@@ -132,20 +156,20 @@ export default function TenantDashboardPage() {
 
       {/* Quick actions */}
       <div className="grid gap-3 sm:grid-cols-3">
-        <Link href={`/tenants/${encodeURIComponent(tenantId)}/runs`}>
+        <Link href={isPlatformAdmin ? `/tenants/${encodeURIComponent(tenantId)}/runs` : analyticsHref}>
           <Card className="cursor-pointer transition-shadow hover:shadow-md">
             <CardContent className="flex items-center gap-3 p-4">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
                 <Activity className="h-4 w-4 text-primary" />
               </div>
               <div>
-                <p className="text-sm font-medium">View Pipeline</p>
-                <p className="text-xs text-muted-foreground">All runs & execution logs</p>
+                <p className="text-sm font-medium">{quickActionLabel}</p>
+                <p className="text-xs text-muted-foreground">{quickActionDetail}</p>
               </div>
             </CardContent>
           </Card>
         </Link>
-        <Link href={`/tenants/${encodeURIComponent(tenantId)}/analytics/token-overview`}>
+        <Link href={analyticsHref}>
           <Card className="cursor-pointer transition-shadow hover:shadow-md">
             <CardContent className="flex items-center gap-3 p-4">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-info/10">
@@ -153,7 +177,11 @@ export default function TenantDashboardPage() {
               </div>
               <div>
                 <p className="text-sm font-medium">Analytics</p>
-                <p className="text-xs text-muted-foreground">Token usage & trends</p>
+                <p className="text-xs text-muted-foreground">
+                  {isPlatformAdmin || membership?.effective_mode === "technical"
+                    ? "Token usage & trends"
+                    : "Delivery progress & trends"}
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -173,13 +201,50 @@ export default function TenantDashboardPage() {
         </Link>
       </div>
 
-      {/* Recent runs */}
+      {!isPlatformAdmin && summary ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Completed</p>
+              <p className="mt-2 text-2xl font-semibold">{summary.completed_count}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">In Review</p>
+              <p className="mt-2 text-2xl font-semibold">{summary.in_review_count}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Blocked</p>
+              <p className="mt-2 text-2xl font-semibold">{summary.blocked_count}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Queued</p>
+              <p className="mt-2 text-2xl font-semibold">{summary.queued_count}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Cycle Time</p>
+              <p className="mt-2 text-2xl font-semibold">
+                {summary.median_cycle_time_hours == null ? "—" : `${summary.median_cycle_time_hours}h`}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      {/* Recent activity */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-          <CardTitle className="text-base">Recent Runs</CardTitle>
+          <CardTitle className="text-base">{isPlatformAdmin ? "Recent Runs" : "Recent Delivery"}</CardTitle>
           <Button asChild variant="ghost" size="sm">
             <Link
-              href={`/tenants/${encodeURIComponent(tenantId)}/runs`}
+              href={isPlatformAdmin ? `/tenants/${encodeURIComponent(tenantId)}/runs` : analyticsHref}
               className="text-xs text-muted-foreground hover:text-foreground"
             >
               View all →
@@ -191,46 +256,76 @@ export default function TenantDashboardPage() {
             <div className="space-y-2 px-6 pb-6">
               {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
             </div>
-          ) : runs.length === 0 ? (
-            <p className="px-6 pb-6 text-sm text-muted-foreground">No runs found for this tenant.</p>
+          ) : isPlatformAdmin ? (
+            runs.length === 0 ? (
+              <p className="px-6 pb-6 text-sm text-muted-foreground">No runs found for this tenant.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Run</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>PR</TableHead>
+                    <TableHead>Created</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {runs.map((run) => (
+                    <TableRow key={run.run_id}>
+                      <TableCell className="font-medium">
+                        <Link
+                          className="text-primary hover:underline"
+                          href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
+                        >
+                          {run.issue_key || run.issue_summary?.slice(0, 40) || run.run_id}
+                        </Link>
+                      </TableCell>
+                      <TableCell><StatusBadge status={run.status} /></TableCell>
+                      <TableCell>
+                        {run.pr_url ? (
+                          <Link
+                            href={run.pr_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                          >
+                            Open PR <ExternalLink className="h-3 w-3" />
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {new Date(run.created_at).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )
+          ) : timeline.length === 0 ? (
+            <p className="px-6 pb-6 text-sm text-muted-foreground">No recent delivery activity yet.</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Run</TableHead>
+                  <TableHead>Work Item</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>PR</TableHead>
-                  <TableHead>Created</TableHead>
+                  <TableHead>Completed</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {runs.map((run) => (
-                  <TableRow key={run.run_id}>
+                {timeline.map((item) => (
+                  <TableRow key={item.run_id}>
                     <TableCell className="font-medium">
-                      <Link
-                        className="text-primary hover:underline"
-                        href={`/tenants/${encodeURIComponent(tenantId)}/runs/${encodeURIComponent(run.run_id)}`}
-                      >
-                        {run.issue_key || run.issue_summary?.slice(0, 40) || run.run_id}
-                      </Link>
+                      <div className="flex flex-col gap-0.5">
+                        <span>{item.issue_key}</span>
+                        <span className="text-xs text-muted-foreground">{item.issue_summary}</span>
+                      </div>
                     </TableCell>
-                    <TableCell><StatusBadge status={run.status} /></TableCell>
-                    <TableCell>
-                      {run.pr_url ? (
-                        <Link
-                          href={run.pr_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                        >
-                          Open PR <ExternalLink className="h-3 w-3" />
-                        </Link>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm">
-                      {new Date(run.created_at).toLocaleString()}
+                    <TableCell><StatusBadge status={item.status} /></TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {item.completed_at ? new Date(item.completed_at).toLocaleString() : "—"}
                     </TableCell>
                   </TableRow>
                 ))}
