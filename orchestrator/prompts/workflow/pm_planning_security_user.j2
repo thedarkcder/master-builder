@@ -1,0 +1,20 @@
+Stage: pm-planning-security
+Parent issue key: {{ parent_issue_key }}
+Parent summary: {{ parent_summary }}
+Parent description: {{ parent_description }}
+Parent brief JSON: {{ product_brief_json }}
+Project keys: {{ project_keys_json }}
+Related issues JSON: {{ related_issues_json }}
+Status counts JSON: {{ status_counts_json }}
+GitHub context JSON: {{ github_context_json }}
+Recent conversation context JSON: {{ conversation_history_json }}
+
+Focus on trust boundaries, data handling, abuse cases, and permission checks.
+Prefer concrete safeguards and security-oriented tasks.
+If the feature is underspecified, ask the narrowest missing behavior question and include a short example in the question text.
+Return strict JSON only with keys:
+- findings
+- recommendations
+- required_tasks
+- open_behavior_questions
+- acceptance_impacts

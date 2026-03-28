@@ -47,6 +47,8 @@ def seed_issues_with_codex(
     allow_empty_children: bool = False,
     scoped_project_keys: list[str] | None = None,
     codex_working_dir: str = "",
+    pm_status: str | None = None,
+    planning_package: dict | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
     return _seed_issues_with_codex_impl(
         session=session,
@@ -73,6 +75,8 @@ def seed_issues_with_codex(
         tenant_jira_oauth_context_fn=jira_runtime.tenant_jira_oauth_context,
         select_seed_match_fn=select_seed_match,
         allow_empty_children=allow_empty_children,
+        pm_status=pm_status,
+        planning_package=planning_package,
     )
 
 
@@ -86,6 +90,7 @@ def seed_parent_issues_with_codex(
     allow_create: bool = True,
     scoped_project_keys: list[str] | None = None,
     codex_working_dir: str = "",
+    pm_status: str | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
     return _seed_parent_issues_with_codex_impl(
         session=session,
@@ -110,6 +115,7 @@ def seed_parent_issues_with_codex(
         issue_key_pattern=ISSUE_KEY_PATTERN,
         tenant_jira_oauth_context_fn=jira_runtime.tenant_jira_oauth_context,
         select_seed_match_fn=select_seed_match,
+        pm_status=pm_status,
     )
 
 

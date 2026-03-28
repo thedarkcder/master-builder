@@ -7,12 +7,13 @@ from fastapi import HTTPException
 
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.communications import (
+    DiscordAskWithThreadAction,
     DiscordChannelMessageAction,
+    DiscordThreadReplyAction,
     IngressResult,
     TransportAction,
 )
-
-
+from orchestrator.core.followup_context_service import FollowupReaction
 @dataclass(frozen=True)
 class DiscordMessageIngressDeps:
     find_tenant_for_channel: object
@@ -208,15 +209,37 @@ def build_discord_message_ingress_result(
                     ),
                 ),
             )
-        )
-    followup_context = getattr(followup_resolution, "context", None)
-    reaction = deps.resolve_followup_reaction(
-        raw_text=content,
-        source_ref=str(payload.get("id") or "").strip() or None,
-        followup_context=followup_context,
-        room_mode=(channel_id in room_channel_ids) or voice_note_reply_requested,
-        room_source=room_source_mode,
     )
+    followup_context = getattr(followup_resolution, "context", None)
+    followup_context_type = str(getattr(followup_context, "context_type", "") or "").strip().lower()
+    voice_note_pm_command_text = f"!pm {content}" if voice_note_reply_requested and not content.startswith("!") else None
+    voice_note_pm_command_params = (
+        {
+            "room_mode": "true",
+            "room_source": room_source_mode,
+        }
+        if voice_note_reply_requested
+        else None
+    )
+    if followup_context_type == "pm_interview" and not content.startswith("!"):
+        reaction = FollowupReaction(
+            kind="command",
+            command_text=f"!pm {content}",
+        )
+    elif voice_note_pm_command_text is not None:
+        reaction = FollowupReaction(
+            kind="command",
+            command_text=voice_note_pm_command_text,
+            command_params=voice_note_pm_command_params,
+        )
+    else:
+        reaction = deps.resolve_followup_reaction(
+            raw_text=content,
+            source_ref=str(payload.get("id") or "").strip() or None,
+            followup_context=followup_context,
+            room_mode=(channel_id in room_channel_ids) or voice_note_reply_requested,
+            room_source=room_source_mode,
+        )
     if reaction is not None and getattr(reaction, "kind", "") == "human_input":
         request = deps.load_pending_human_input_request(
             session=session,
@@ -270,6 +293,7 @@ def build_discord_message_ingress_result(
 
     message_content = f"<@{user_id}> Command failed due to an internal error."
     components: list[dict] | None = None
+    pm_thread_action: DiscordAskWithThreadAction | DiscordThreadReplyAction | None = None
     should_send_room_voice_reply = False
     room_voice_reply_text: str | None = None
     room_voice_reply_persona_id: str | None = None
@@ -298,6 +322,28 @@ def build_discord_message_ingress_result(
             issue_key_pattern=deps.issue_key_pattern,
         )
         data = command_response.data if isinstance(command_response.data, dict) else {}
+        pm_interview_mode = bool(data.get("pm_mode")) and command_response.command == "pm"
+        if pm_interview_mode:
+            pm_followup_context_type = str(data.get("followup_context_type") or "pm_interview").strip() or "pm_interview"
+            if followup_context_type == "pm_interview":
+                pm_thread_action = DiscordThreadReplyAction(
+                    tenant_id=tenant.tenant_id,
+                    channel_id=channel_id,
+                    reply_to_message_id=message_correlation_id or channel_id,
+                    content=message_content,
+                    components=components,
+                )
+            else:
+                pm_thread_action = DiscordAskWithThreadAction(
+                    tenant_id=tenant.tenant_id,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    content=message_content,
+                    components=components,
+                    issue_key=str(data.get("issue_key") or "").strip() or None,
+                    followup_context_type=pm_followup_context_type,
+                    request_id=str(data.get("request_id") or "").strip() or None,
+                )
         if (
             command_response.command == "ask"
             and bool(data.get("requires_confirmation"))
@@ -367,6 +413,16 @@ def build_discord_message_ingress_result(
         message_content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
 
     actions: list[TransportAction] = []
+    if pm_thread_action is not None:
+        actions.append(pm_thread_action)
+    else:
+        actions.append(
+            discord_channel_message_action(
+                channel_id=channel_id,
+                content=message_content,
+                components=components,
+            )
+        )
     if voice_note_reply_requested and should_send_room_voice_reply and room_voice_reply_text:
         voice_action, voice_error = deps.build_room_voice_reply_action(
             user_id=user_id,
@@ -402,14 +458,6 @@ def build_discord_message_ingress_result(
                     )
                 )
         return IngressResult(actions=tuple(actions))
-
-    actions.append(
-        discord_channel_message_action(
-            channel_id=channel_id,
-            content=message_content,
-            components=components,
-        )
-    )
     if should_send_room_voice_reply and room_voice_reply_text:
         voice_action, voice_error = deps.build_room_voice_reply_action(
             user_id=user_id,

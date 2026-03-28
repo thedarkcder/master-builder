@@ -316,6 +316,7 @@ def _send_discord_ask_response_with_thread(
     components: list[dict] | None = None,
     issue_key: str | None = None,
     followup_context_type: str = "ask_thread",
+    request_id: str | None = None,
     discord_api_client_fn=None,
     project_ask_thread_channel_ids_for_tenant_fn=None,
     resolve_project_for_channel_fn=None,
@@ -332,6 +333,7 @@ def _send_discord_ask_response_with_thread(
         components=components,
         issue_key=issue_key,
         followup_context_type=followup_context_type,
+        request_id=request_id,
         discord_api_client_fn=discord_api_client_fn or _discord_api_client,
         project_ask_thread_channel_ids_for_tenant_fn=(
             project_ask_thread_channel_ids_for_tenant_fn or _project_ask_thread_channel_ids_for_tenant

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from re import Pattern
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -12,14 +13,24 @@ from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandRespon
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
 from orchestrator.core.codex_agents import (
     answer_board_question_with_codex,
-    answer_pm_question_with_codex,
     plan_discord_ask_intent_with_codex,
 )
 from orchestrator.core.codex_invocation import CodexInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime as _legacy_build_codex_runtime
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord.persona_room import answer_voice_room_turn
+from orchestrator.core.pm_interview_service import (
+    PM_INTERVIEW_STATUS_PM_COMPLETED,
+    PM_INTERVIEW_STATUS_READY_TO_WRITE,
+    assess_pm_interview_brief,
+    format_pm_interview_question,
+    mark_pm_interview_case_completed,
+    normalize_pm_interview_evidence,
+    plan_pm_interview_with_codex,
+    resolve_pm_interview_case,
+    upsert_pm_interview_case,
+)
+from orchestrator.core.specialist_planning import SpecialistPlanningRequest, run_specialist_planning_fanout
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -135,6 +146,68 @@ def _voice_turn_history_answer(*, answer: str, persona_id: str) -> str:
     return f"{prefix}: {compact}".strip()
 
 
+def _pm_request_id(*, command_params: dict[str, str]) -> str:
+    existing = str(command_params.get("request_id") or "").strip()
+    return existing or uuid4().hex
+
+
+def _extract_pm_interview_evidence(
+    *,
+    question: str,
+    attachments: list[dict[str, str]] | None,
+    github_context: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = [
+        {
+            "evidence_id": uuid4().hex,
+            "evidence_type": "stakeholder_answer",
+            "summary": question,
+            "content": question,
+            "metadata": {},
+        }
+    ]
+    for attachment in attachments or []:
+        source_ref = str(attachment.get("url") or "").strip() or None
+        filename = str(attachment.get("filename") or "").strip() or None
+        if not source_ref and not filename:
+            continue
+        evidence.append(
+            {
+                "evidence_id": uuid4().hex,
+                "evidence_type": "file",
+                "source_ref": source_ref,
+                "title": filename,
+                "summary": filename or source_ref,
+                "metadata": {
+                    "filename": filename,
+                    "content_type": str(attachment.get("content_type") or "").strip() or None,
+                },
+            }
+        )
+    for token in question.split():
+        normalized = str(token).strip().rstrip(").,!?")
+        if normalized.startswith(("http://", "https://")):
+            evidence.append(
+                {
+                    "evidence_id": uuid4().hex,
+                    "evidence_type": "link",
+                    "source_ref": normalized,
+                    "summary": normalized,
+                    "metadata": {},
+                }
+            )
+    if isinstance(github_context, dict) and github_context:
+        evidence.append(
+            {
+                "evidence_id": uuid4().hex,
+                "evidence_type": "context",
+                "summary": "GitHub/product context",
+                "metadata": {"context": github_context},
+            }
+        )
+    return evidence
+
+
 def dispatch_ask_command(
     *,
     session: Session,
@@ -154,6 +227,7 @@ def dispatch_ask_command(
     store_ask_history_entry: Callable[..., Any],
     ask_board_message: Callable[..., Any],
     seed_parent_issues_with_codex: Callable[..., Any] | None,
+    seed_issues_with_codex: Callable[..., Any] | None,
     scoped_project_keys: list[str],
     scoped_project_id: str | None,
     codex_working_dir: str,
@@ -213,143 +287,55 @@ def dispatch_ask_command(
             project_keys=normalized_project_keys,
         )
         scoped_project = session.get(Project, scoped_project_id) if scoped_project_id else None
-        project_discord_config = scoped_project.discord_config if scoped_project is not None else {}
-        if is_routed_voice_mode:
-            linked_text_channel_id = str(command_params.get("linked_text_channel_id") or "").strip() or None
-            voice_channel_id = str(command_params.get("voice_channel_id") or "").strip() or None
-            room_source_mode = str(command_params.get("room_source") or "text").strip().lower() or "text"
-            history_owner = scoped_project if scoped_project is not None else tenant
-            room_history = _history_context
-            room_id = None
-            if is_voice_room_mode:
-                room_id = _room_history_service.resolve_room_id(
-                    room_id=str(command_params.get("room_id") or "").strip() or None,
-                    channel_id=normalized_channel_id,
-                    linked_text_channel_id=linked_text_channel_id,
-                    voice_channel_id=voice_channel_id,
-                )
-                room_history = _room_history_service.recent_room_history(
-                    discord_config=getattr(history_owner, "discord_config", None),
-                    room_id=room_id,
-                    channel_id=normalized_channel_id,
-                    linked_text_channel_id=linked_text_channel_id,
-                    voice_channel_id=voice_channel_id,
-                )
-            try:
-                voice_room_result = answer_voice_room_turn(
-                    runtime=runtime,
-                    runtime_for_selector=lambda selector: build_runtime_for_selector(
-                        session=session,
-                        settings=settings,
-                        tenant_id=tenant.tenant_id,
-                        project_id=scoped_project_id,
-                        selector=selector,
-                        agent_role="pm" if selector == "discord.voice_room_pm" else None,
-                        agent_name="voice_room_pm" if selector == "discord.voice_room_pm" else None,
-                    ),
-                    transcript=question,
-                    project_keys=normalized_project_keys,
-                    issues=issues,
-                    status_counts=status_counts,
-                    invocation_context=CodexInvocationContext(
-                        channel="discord",
-                        tenant_id=tenant.tenant_id,
-                        project_id=scoped_project_id,
-                        command="pm",
-                        stage="voice-room",
-                        working_dir=codex_working_dir,
-                        issue_key=normalized_issue_key,
-                    ),
-                    history=room_history,
-                    github_context=github_context,
-                    tenant_discord_config=getattr(tenant, "discord_config", None) or {},
-                    project_discord_config=project_discord_config or {},
-                )
-            except CodexRuntimeError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=f"Codex voice room assistant is unavailable: {exc}",
-                ) from exc
-
-            store_ask_history_entry(
-                session=session,
-                tenant=tenant,
-                user_id=normalized_user_id,
+        linked_text_channel_id = str(command_params.get("linked_text_channel_id") or "").strip() or None
+        voice_channel_id = str(command_params.get("voice_channel_id") or "").strip() or None
+        room_source_mode = str(command_params.get("room_source") or "text").strip().lower() or "text"
+        history_owner = scoped_project if scoped_project is not None else tenant
+        room_history = _history_context
+        room_id = None
+        if is_voice_room_mode:
+            room_id = _room_history_service.resolve_room_id(
+                room_id=str(command_params.get("room_id") or "").strip() or None,
                 channel_id=normalized_channel_id,
-                question=_voice_turn_history_question(question=question, room_mode=is_voice_room_mode),
-                answer=_voice_turn_history_answer(
-                    answer=voice_room_result.message,
-                    persona_id=voice_room_result.persona_id,
-                ),
-                issue_key=normalized_issue_key,
-                status_name=requested_status,
+                linked_text_channel_id=linked_text_channel_id,
+                voice_channel_id=voice_channel_id,
             )
-            if is_voice_room_mode:
-                updated_room_config, _ = _room_history_service.append_room_history_entry(
-                    discord_config=getattr(history_owner, "discord_config", None),
-                    room_id=room_id,
-                    channel_id=normalized_channel_id,
-                    linked_text_channel_id=linked_text_channel_id,
-                    voice_channel_id=voice_channel_id,
-                    speaker_type="user",
-                    source_mode=room_source_mode,
-                    text=question,
-                    user_id=normalized_user_id,
-                    issue_key=normalized_issue_key,
-                    status_name=requested_status,
-                )
-                updated_room_config, _ = _room_history_service.append_room_history_entry(
-                    discord_config=updated_room_config,
-                    room_id=room_id,
-                    channel_id=normalized_channel_id,
-                    linked_text_channel_id=linked_text_channel_id,
-                    voice_channel_id=voice_channel_id,
-                    speaker_type="persona",
-                    source_mode=room_source_mode,
-                    text=voice_room_result.message,
-                    persona_id=voice_room_result.persona_id,
-                    issue_key=normalized_issue_key,
-                    status_name=requested_status,
-                    metadata={
-                        "router_confidence": voice_room_result.router_confidence,
-                        "router_reason": voice_room_result.router_reason,
-                    },
-                )
-                history_owner.discord_config = dict(updated_room_config)
-                if hasattr(history_owner, "updated_at"):
-                    history_owner.updated_at = datetime.now(timezone.utc)
-                session.commit()
-            return DiscordCommandResponse(
-                ok=True,
-                command="pm",
-                message=voice_room_result.message,
-                data={
-                    "pm_mode": True,
-                    "room_mode": is_voice_room_mode,
-                    "voice_mode": True,
-                    "question": question,
-                    "issue_key": normalized_issue_key,
-                    "status": requested_status,
-                    "status_counts": status_counts,
-                    "issues": issues,
-                    "brief": voice_room_result.brief,
-                    "persona_id": voice_room_result.persona_id,
-                    "persona_role": voice_room_result.persona_role,
-                    "persona_name": voice_room_result.persona_name,
-                    "persona_voice_id": voice_room_result.persona_voice_id,
-                    "room_config": voice_room_result.room_config,
-                    "router": {
-                        "persona": voice_room_result.persona_id,
-                        "confidence": voice_room_result.router_confidence,
-                        "reason": voice_room_result.router_reason,
-                    },
-                },
+            room_history = _room_history_service.recent_room_history(
+                discord_config=getattr(history_owner, "discord_config", None),
+                room_id=room_id,
+                channel_id=normalized_channel_id,
+                linked_text_channel_id=linked_text_channel_id,
+                voice_channel_id=voice_channel_id,
             )
-        try:
-            pm_payload = answer_pm_question_with_codex(
-                runtime=runtime,
+
+        request_id = _pm_request_id(command_params=command_params)
+        existing_case = resolve_pm_interview_case(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            request_id=request_id,
+        )
+        existing_brief = getattr(existing_case, "brief_json", None) or {}
+        existing_evidence = list(getattr(existing_case, "evidence_json", None) or [])
+        current_assessment = assess_pm_interview_brief(
+            brief=existing_brief,
+            evidence=existing_evidence,
+            status_hint=str(getattr(existing_case, "status", "") or "").strip() or None,
+        )
+        new_evidence = normalize_pm_interview_evidence(
+            _extract_pm_interview_evidence(
                 question=question,
-                action="ask",
+                attachments=payload.attachments,
+                github_context=github_context,
+            )
+        )
+        try:
+            pm_payload = plan_pm_interview_with_codex(
+                runtime=runtime,
+                request_text=question,
+                brief=existing_brief,
+                evidence=[*existing_evidence, *new_evidence],
+                missing_slots=current_assessment.missing_slots,
+                next_question=current_assessment.next_question,
                 project_keys=normalized_project_keys,
                 issues=issues,
                 status_counts=status_counts,
@@ -358,78 +344,283 @@ def dispatch_ask_command(
                     tenant_id=tenant.tenant_id,
                     project_id=scoped_project_id,
                     command="pm",
-                    stage="answer",
+                    stage="interview",
                     working_dir=codex_working_dir,
                     issue_key=normalized_issue_key,
                 ),
-                history=_history_context,
+                history=room_history if is_routed_voice_mode else _history_context,
                 github_context=github_context,
             )
         except CodexRuntimeError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Codex board assistant is unavailable: {exc}",
+                detail=f"Codex PM interview assistant is unavailable: {exc}",
             ) from exc
-        message = str(pm_payload.get("message") or "").strip()
+
         brief = pm_payload.get("brief")
         if not isinstance(brief, dict):
             brief = {}
+        message = str(pm_payload.get("message") or "").strip()
+        final_assessment = assess_pm_interview_brief(
+            brief=brief,
+            evidence=[*existing_evidence, *new_evidence],
+            status_hint=str(pm_payload.get("status") or "").strip() or None,
+        )
+        question_history = [
+            {
+                "speaker": "user",
+                "text": question,
+                "request_id": request_id,
+            },
+            {
+                "speaker": "pm",
+                "text": message,
+                "request_id": request_id,
+                "status": final_assessment.status,
+            },
+        ]
+        interview_case = upsert_pm_interview_case(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=scoped_project_id,
+            request_id=request_id,
+            source_kind="voice_note" if room_source_mode == "voice_note" else "command",
+            channel_id=normalized_channel_id,
+            thread_channel_id=normalized_channel_id if str(command_params.get("request_id") or "").strip() else None,
+            root_message_id=str(command_params.get("root_message_id") or "").strip() or None,
+            owner_user_id=normalized_user_id,
+            parent_issue_key=str(getattr(existing_case, "parent_issue_key", "") or "").strip() or None,
+            source_text=question,
+            status=final_assessment.status,
+            brief=final_assessment.brief.to_payload(),
+            evidence=[item.to_payload() for item in new_evidence],
+            question_history=question_history,
+            current_question=final_assessment.next_question,
+            next_question=final_assessment.next_question,
+            notes={"room_source": room_source_mode} if is_routed_voice_mode else {},
+        )
 
         store_ask_history_entry(
             session=session,
             tenant=tenant,
             user_id=normalized_user_id,
             channel_id=normalized_channel_id,
-            question=_pm_history_question(question=question),
-            answer=_pm_history_answer(message),
+            question=(
+                _voice_turn_history_question(question=question, room_mode=is_voice_room_mode)
+                if is_routed_voice_mode
+                else _pm_history_question(question=question)
+            ),
+            answer=(
+                _voice_turn_history_answer(answer=message, persona_id="pm")
+                if is_routed_voice_mode
+                else _pm_history_answer(message)
+            ),
             issue_key=normalized_issue_key,
             status_name=requested_status,
         )
+        if is_voice_room_mode:
+            updated_room_config, _ = _room_history_service.append_room_history_entry(
+                discord_config=getattr(history_owner, "discord_config", None),
+                room_id=room_id,
+                channel_id=normalized_channel_id,
+                linked_text_channel_id=linked_text_channel_id,
+                voice_channel_id=voice_channel_id,
+                speaker_type="user",
+                source_mode=room_source_mode,
+                text=question,
+                user_id=normalized_user_id,
+                issue_key=normalized_issue_key,
+                status_name=requested_status,
+            )
+            updated_room_config, _ = _room_history_service.append_room_history_entry(
+                discord_config=updated_room_config,
+                room_id=room_id,
+                channel_id=normalized_channel_id,
+                linked_text_channel_id=linked_text_channel_id,
+                voice_channel_id=voice_channel_id,
+                speaker_type="persona",
+                source_mode=room_source_mode,
+                text=message,
+                persona_id="pm",
+                issue_key=normalized_issue_key,
+                status_name=requested_status,
+            )
+            history_owner.discord_config = dict(updated_room_config)
+            if hasattr(history_owner, "updated_at"):
+                history_owner.updated_at = datetime.now(timezone.utc)
+
         product_brief_markdown = _pm_brief_markdown(
             question=question,
             message=message,
-            brief=brief,
+            brief=final_assessment.brief.to_payload(),
         )
         response_data: dict[str, Any] = {
             "pm_mode": True,
+            "followup_context_type": "pm_interview",
+            "request_id": request_id,
             "question": question,
             "issue_key": normalized_issue_key,
             "status": requested_status,
             "status_counts": status_counts,
             "issues": issues,
-            "brief": brief,
+            "brief": final_assessment.brief.to_payload(),
             "product_brief_markdown": product_brief_markdown,
+            "interview_status": final_assessment.status,
+            "missing_slots": list(final_assessment.missing_slots),
+            "next_question": final_assessment.next_question.to_payload() if final_assessment.next_question is not None else None,
+            "next_question_examples": list(final_assessment.next_question.examples) if final_assessment.next_question is not None else [],
+            "ready_to_write": final_assessment.ready_to_write,
+            "persona_id": "pm",
+            "persona_role": "Product Manager",
+            "persona_name": "PM",
+            "room_mode": is_voice_room_mode,
+            "voice_mode": is_routed_voice_mode,
+            "room_config": getattr(history_owner, "discord_config", None) if is_voice_room_mode else None,
         }
-        if seed_parent_issues_with_codex is not None:
-            seed_message, seed_data = seed_parent_issues_with_codex(
+        if not final_assessment.ready_to_write:
+            return DiscordCommandResponse(
+                ok=True,
+                command="pm",
+                message=message or format_pm_interview_question(final_assessment.next_question),
+                data=response_data,
+            )
+
+        scoped_pm_project_keys = _resolve_pm_project_keys(
+            project_keys=normalized_project_keys,
+            issue_key=normalized_issue_key,
+        )
+        if seed_parent_issues_with_codex is None:
+            return DiscordCommandResponse(
+                ok=True,
+                command="pm",
+                message=message,
+                data=response_data,
+            )
+        parent_seed_message, parent_seed_data = seed_parent_issues_with_codex(
+            session=session,
+            tenant=tenant,
+            prompt_markdown=product_brief_markdown,
+            scoped_project_id=scoped_project_id,
+            scoped_project_keys=scoped_pm_project_keys,
+            codex_working_dir=codex_working_dir,
+            pm_status=PM_INTERVIEW_STATUS_READY_TO_WRITE,
+        )
+        parent_issue_key = str(
+            (list(parent_seed_data.get("all_parent_issue_keys", [])) or [None])[0] or getattr(interview_case, "parent_issue_key", "") or ""
+        ).strip() or None
+        response_data.update(
+            {
+                "parent_issue_key": parent_issue_key,
+                "created_parent_issue_keys": list(parent_seed_data.get("created_parent_issue_keys", [])),
+                "updated_parent_issue_keys": list(parent_seed_data.get("updated_parent_issue_keys", [])),
+                "created_parent_issue_links": list(parent_seed_data.get("created_parent_issue_links", [])),
+                "updated_parent_issue_links": list(parent_seed_data.get("updated_parent_issue_links", [])),
+                "all_parent_issue_keys": list(parent_seed_data.get("all_parent_issue_keys", [])),
+            }
+        )
+
+        planning_message = ""
+        planning_state = None
+        planning_package: dict[str, Any] | None = None
+        if parent_issue_key and seed_issues_with_codex is not None:
+            planning_request = SpecialistPlanningRequest(
+                tenant_id=tenant.tenant_id,
+                project_id=scoped_project_id,
+                parent_issue_key=parent_issue_key,
+                parent_summary=str(final_assessment.brief.objective or question).strip() or question,
+                parent_description=product_brief_markdown,
+                product_brief=final_assessment.brief.to_payload(),
+                project_keys=tuple(scoped_pm_project_keys),
+                related_issues=tuple(issues),
+                status_counts=status_counts,
+                github_context=github_context,
+                conversation_history=tuple(room_history if is_routed_voice_mode else _history_context),
+                working_dir=codex_working_dir,
+            )
+            planning_result = run_specialist_planning_fanout(
+                runtime=runtime,
+                request=planning_request,
+                runtime_for_selector=lambda selector: build_runtime_for_selector(
+                    session=session,
+                    settings=settings,
+                    tenant_id=tenant.tenant_id,
+                    project_id=scoped_project_id,
+                    selector=selector,
+                ),
+            )
+            planning_state = planning_result.planning_state
+            stage_payloads = {}
+            stage_name_map = {
+                "engineering_planning": "engineering",
+                "security_planning": "security",
+                "test_planning": "testing",
+            }
+            for stage in planning_result.stages:
+                stage_payloads[stage_name_map.get(stage.planning_state, stage.planning_state)] = stage.to_payload()
+            child_issues = [
+                {
+                    "summary": task,
+                    "behavior_slice": final_assessment.brief.objective or question,
+                    "technical_objective": task,
+                    "implementation_plan": [task],
+                    "technical_dependencies": list(planning_result.acceptance_impacts[:3]),
+                    "risks": list(planning_result.findings[:3]),
+                    "how_to_test": [f"Verify '{task}' satisfies the parent feature acceptance criteria."],
+                    "done_criteria": [f"'{task}' is implemented and validated against the parent feature."],
+                    "labels": ["engineering"],
+                }
+                for task in planning_result.required_tasks
+            ]
+            planning_package = {
+                "planning_state": planning_result.planning_state,
+                "specialist_outputs": stage_payloads,
+                "child_issues": child_issues,
+            }
+            issue_seed_message, issue_seed_data = seed_issues_with_codex(
                 session=session,
                 tenant=tenant,
                 prompt_markdown=product_brief_markdown,
+                force_issue_keys=[parent_issue_key],
+                allow_create=True,
                 scoped_project_id=scoped_project_id,
-                scoped_project_keys=_resolve_pm_project_keys(
-                    project_keys=normalized_project_keys,
-                    issue_key=normalized_issue_key,
-                ),
+                scoped_project_keys=scoped_pm_project_keys,
                 codex_working_dir=codex_working_dir,
+                pm_status=PM_INTERVIEW_STATUS_PM_COMPLETED,
+                planning_package=planning_package,
             )
-            all_parent_issue_keys = list(seed_data.get("all_parent_issue_keys", []))
-            response_data.update(
-                {
-                    "parent_issue_key": all_parent_issue_keys[0] if all_parent_issue_keys else None,
-                    "created_parent_issue_keys": list(seed_data.get("created_parent_issue_keys", [])),
-                    "updated_parent_issue_keys": list(seed_data.get("updated_parent_issue_keys", [])),
-                    "created_parent_issue_links": list(seed_data.get("created_parent_issue_links", [])),
-                    "updated_parent_issue_links": list(seed_data.get("updated_parent_issue_links", [])),
-                    "all_parent_issue_keys": all_parent_issue_keys,
+            response_data.update(issue_seed_data)
+            response_data["planning_package"] = planning_package
+            planning_message = issue_seed_message
+            if planning_result.planning_state == "planning_completed":
+                mark_pm_interview_case_completed(
+                    session=session,
+                    tenant_id=tenant.tenant_id,
+                    request_id=request_id,
+                    parent_issue_key=parent_issue_key,
+                    notes={"planning_state": planning_state},
+                )
+                interview_case.status = PM_INTERVIEW_STATUS_PM_COMPLETED
+            elif planning_result.open_behavior_questions:
+                interview_case.status = "question_pending"
+                interview_case.current_question_json = {
+                    "slot_key": "planning",
+                    "question": planning_result.open_behavior_questions[0],
+                    "examples": [],
                 }
-            )
-            if seed_message:
-                message = f"{message}\n\n{seed_message}"
+                interview_case.next_question_json = dict(interview_case.current_question_json)
+                interview_case.missing_slots_json = ["planning"]
+                interview_case.updated_at = datetime.now(timezone.utc)
 
+        response_data["planning_state"] = planning_state
+        combined_message = message
+        if parent_seed_message:
+            combined_message = f"{combined_message}\n\n{parent_seed_message}".strip()
+        if planning_message:
+            combined_message = f"{combined_message}\n\n{planning_message}".strip()
         return DiscordCommandResponse(
             ok=True,
             command="pm",
-            message=message,
+            message=combined_message,
             data=response_data,
         )
 

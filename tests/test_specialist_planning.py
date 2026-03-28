@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from orchestrator.core.specialist_planning import (
+    PLANNING_STATE_BLOCKED,
+    PLANNING_STATE_COMPLETED,
+    PLANNING_STATE_ENGINEERING,
+    PLANNING_STATE_SECURITY,
+    PLANNING_STATE_TEST,
+    SpecialistPlanningRequest,
+    run_specialist_planning_fanout,
+)
+
+
+class SpecialistPlanningTests(unittest.TestCase):
+    def _request(self) -> SpecialistPlanningRequest:
+        return SpecialistPlanningRequest(
+            tenant_id="tenant-1",
+            project_id="project-1",
+            parent_issue_key="PM-42",
+            parent_summary="Share the app with friends",
+            parent_description="PM-complete product brief",
+            product_brief={
+                "objective": "Let users share the app with friends",
+                "user_value": "Users invite friends and expand adoption",
+                "acceptance_criteria": [
+                    "Users can share from Profile",
+                    "The link opens the store if the app is not installed",
+                ],
+                "scope_in": ["Share entry point", "Invite link"],
+                "scope_out": ["Referral rewards"],
+                "open_questions": [],
+            },
+            project_keys=("MAB",),
+            related_issues=({"key": "MAB-19", "summary": "Auth session refresh"},),
+            status_counts={"To Do": 2},
+            github_context={"repos": ["acme/app"]},
+            conversation_history=({"question": "What do friends receive?", "answer": "A store link"},),
+            working_dir="/tmp/workspace",
+        )
+
+    def test_fanout_runs_all_specialists_and_aggregates_completed_state(self) -> None:
+        request = self._request()
+        selectors: list[str] = []
+        prompts: list[tuple[str, dict[str, object]]] = []
+
+        def _runtime_for_selector(selector: str):  # noqa: ANN001
+            selectors.append(selector)
+            return SimpleNamespace(selector=selector)
+
+        def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
+            prompts.append((template_name, kwargs))
+            return template_name
+
+        def _invoke_codex_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+            _ = (system_prompt, user_prompt, runtime)
+            if context.stage == PLANNING_STATE_ENGINEERING:
+                return {
+                    "findings": ["Architecture should split invite creation from delivery"],
+                    "recommendations": ["Use a dedicated invite service"],
+                    "required_tasks": ["Build invite service", "Persist invite state"],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": ["Invite flow works from Profile"],
+                }
+            if context.stage == PLANNING_STATE_SECURITY:
+                return {
+                    "findings": ["Invite links should not reveal raw user IDs"],
+                    "recommendations": ["Sign links and verify expiry"],
+                    "required_tasks": ["Add signed invite tokens"],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": ["Unauthorized reuse is blocked"],
+                }
+            return {
+                "findings": ["Need coverage for expired and malformed links"],
+                "recommendations": ["Add regression tests for both cases"],
+                "required_tasks": ["Add expired-link test", "Add malformed-link test"],
+                "open_behavior_questions": [],
+                "acceptance_impacts": ["Acceptance criteria remain testable"],
+            }
+
+        with (
+            patch("orchestrator.core.specialist_planning.render_prompt", side_effect=_render_prompt),
+            patch("orchestrator.core.specialist_planning.invoke_codex_json", side_effect=_invoke_codex_json),
+        ):
+            result = run_specialist_planning_fanout(
+                runtime=SimpleNamespace(),
+                request=request,
+                runtime_for_selector=_runtime_for_selector,
+            )
+
+        self.assertEqual(
+            selectors,
+            [
+                "workflow.pm_planning_architect",
+                "workflow.pm_planning_security",
+                "workflow.pm_planning_tester",
+            ],
+        )
+        self.assertEqual(result.planning_state, PLANNING_STATE_COMPLETED)
+        self.assertEqual(
+            [stage.planning_state for stage in result.stages],
+            [PLANNING_STATE_ENGINEERING, PLANNING_STATE_SECURITY, PLANNING_STATE_TEST],
+        )
+        self.assertFalse(any(stage.blocked for stage in result.stages))
+        self.assertIn("Architecture should split invite creation from delivery", result.findings)
+        self.assertIn("Use a dedicated invite service", result.recommendations)
+        self.assertIn("Add signed invite tokens", result.required_tasks)
+        self.assertIn("Invite flow works from Profile", result.acceptance_impacts)
+        self.assertEqual(result.open_behavior_questions, ())
+        self.assertIsNone(result.block_reason)
+        self.assertTrue(prompts)
+        first_prompt_name, first_prompt_context = prompts[0]
+        self.assertEqual(first_prompt_name, "workflow/pm_planning_architect_system.j2")
+        self.assertEqual(first_prompt_context, {})
+        user_prompt_name, user_prompt_context = prompts[1]
+        self.assertEqual(user_prompt_name, "workflow/pm_planning_architect_user.j2")
+        self.assertEqual(user_prompt_context["parent_issue_key"], "PM-42")
+        self.assertIn("Let users share the app with friends", user_prompt_context["product_brief_json"])
+
+    def test_open_questions_block_planning_but_still_run_all_stages(self) -> None:
+        request = self._request()
+
+        def _invoke_codex_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+            _ = (system_prompt, user_prompt, runtime)
+            if context.stage == PLANNING_STATE_ENGINEERING:
+                return {
+                    "findings": ["Architecture is straightforward"],
+                    "recommendations": ["Proceed with a service boundary"],
+                    "required_tasks": ["Add invite service"],
+                    "open_behavior_questions": [],
+                    "acceptance_impacts": ["Share entry point exists"],
+                }
+            if context.stage == PLANNING_STATE_SECURITY:
+                return {
+                    "findings": ["Share target is unclear"],
+                    "recommendations": ["Clarify whether this is invite, referral, or social share"],
+                    "required_tasks": [],
+                    "open_behavior_questions": [
+                        "Is this a simple invite link or a referral system? Examples: invite-only link, reward-based referral."
+                    ],
+                    "acceptance_impacts": ["Security model depends on the share type"],
+                }
+            return {
+                "findings": ["Testing depends on the share type"],
+                "recommendations": ["Hold test automation until the share behavior is clarified"],
+                "required_tasks": ["Draft negative-path test matrix"],
+                "open_behavior_questions": [],
+                "acceptance_impacts": ["Validation scope depends on the share type"],
+            }
+
+        with (
+            patch("orchestrator.core.specialist_planning.render_prompt", return_value="prompt"),
+            patch("orchestrator.core.specialist_planning.invoke_codex_json", side_effect=_invoke_codex_json),
+        ):
+            result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=request)
+
+        self.assertEqual(result.planning_state, PLANNING_STATE_BLOCKED)
+        self.assertEqual(result.blocked_stage_states, (PLANNING_STATE_SECURITY,))
+        self.assertEqual(len(result.stages), 3)
+        self.assertTrue(result.stages[1].blocked)
+        self.assertIn(
+            "Is this a simple invite link or a referral system?",
+            result.open_behavior_questions[0],
+        )
+        self.assertIn("security_planning", result.block_reason or "")
+        self.assertIn("Share entry point exists", result.acceptance_impacts)
+
+    def test_prompt_templates_render_structured_contracts(self) -> None:
+        from pathlib import Path
+
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        for prompt_name in (
+            "pm_planning_architect_system.j2",
+            "pm_planning_security_system.j2",
+            "pm_planning_tester_system.j2",
+            "pm_planning_architect_user.j2",
+            "pm_planning_security_user.j2",
+            "pm_planning_tester_user.j2",
+        ):
+            prompt_text = (prompts_dir / prompt_name).read_text(encoding="utf-8")
+            self.assertIn("Return strict JSON only with keys", prompt_text)
+            self.assertIn("findings", prompt_text)
+            self.assertIn("recommendations", prompt_text)
+            self.assertIn("required_tasks", prompt_text)
+            self.assertIn("open_behavior_questions", prompt_text)
+            self.assertIn("acceptance_impacts", prompt_text)
+
+
+if __name__ == "__main__":
+    unittest.main()

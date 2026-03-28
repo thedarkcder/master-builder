@@ -37,6 +37,8 @@ def build_parent_feature_description(
     open_questions: list[str],
     parent_revision: str,
     sync_status: str,
+    pm_status: str | None = None,
+    planning_state: str | None = None,
 ) -> dict:
     content = [
         _heading("Objective"),
@@ -59,6 +61,13 @@ def build_parent_feature_description(
         _bullet_list(dependencies_and_risks if dependencies_and_risks else ["No explicit dependencies or risks were provided"]),
         _heading("Open Questions"),
         _bullet_list(open_questions if open_questions else ["No open questions remain"]),
+        _heading("PM Handoff"),
+        _bullet_list(
+            [
+                f"PM status: {pm_status.strip()}" if isinstance(pm_status, str) and pm_status.strip() else "PM status was not provided",
+                f"Planning state: {planning_state.strip()}" if isinstance(planning_state, str) and planning_state.strip() else "Planning state was not provided",
+            ]
+        ),
         _heading("Good To Do Checklist"),
         _bullet_list(
             [
@@ -89,6 +98,8 @@ def build_engineering_child_description(
     how_to_test: list[str],
     done_criteria: list[str],
     dependencies_and_risks: list[str],
+    specialist_summary: list[str] | None = None,
+    planning_state: str | None = None,
 ) -> dict:
     content = [
         _heading("Technical Objective"),
@@ -105,6 +116,10 @@ def build_engineering_child_description(
         _bullet_list(done_criteria if done_criteria else ["Done criteria were not provided"]),
         _heading("Technical Dependencies / Risks"),
         _bullet_list(dependencies_and_risks if dependencies_and_risks else ["No explicit technical dependencies or risks were provided"]),
+        _heading("Specialist Planning Context"),
+        _bullet_list(specialist_summary if specialist_summary else ["No specialist planning context was provided"]),
+        _heading("Planning State"),
+        _bullet_list([planning_state.strip() if isinstance(planning_state, str) and planning_state.strip() else "Planning state was not provided"]),
         _heading("Synced From Parent Revision"),
         _bullet_list([parent_revision or "unknown"]),
         _heading("Notes / Links"),

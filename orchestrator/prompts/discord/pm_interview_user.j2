@@ -1,0 +1,21 @@
+Stage: pm-interview
+Request: {{ request_text }}
+Current brief: {{ brief_json }}
+Evidence: {{ evidence_json }}
+Missing slots: {{ missing_slots_json }}
+Next question: {{ next_question_json }}
+Next question examples: {{ next_question_examples_json }}
+Projects: {{ project_keys_json }}
+Status counts: {{ status_counts_json }}
+GitHub context: {{ github_context_json }}
+Recent conversation context: {{ history_json }}
+Issues (sample): {{ issues_json }}
+
+Output contract:
+- Ask one question only when information is missing.
+- Include examples directly under the question.
+- Prefer the smallest missing product decision first.
+- Reuse evidence, files, links, or discovered product context before asking again.
+- Keep the response product-first and parent-feature oriented.
+- Do not include implementation details or child-ticket planning.
+- Return the updated brief in JSON form.

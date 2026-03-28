@@ -18,6 +18,7 @@ FOLLOWUP_CONTEXT_DECISION_GATE = "decision_gate"
 FOLLOWUP_CONTEXT_ASK_THREAD = "ask_thread"
 FOLLOWUP_CONTEXT_SEED_FOLLOWUP = "seed_followup"
 FOLLOWUP_CONTEXT_ROOM_PM = "room_pm"
+FOLLOWUP_CONTEXT_PM_INTERVIEW = "pm_interview"
 FOLLOWUP_CONTEXT_HUMAN_INPUT = "human_input"
 FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION = "engineering_clarification"
 
@@ -408,6 +409,14 @@ def resolve_followup_reaction(
             return FollowupReaction(
                 kind="command",
                 command_text=f"!issues followup {normalized_text}",
+                command_params={
+                    "request_id": str(followup_context.request_id or "").strip(),
+                },
+            )
+        if followup_context.context_type == FOLLOWUP_CONTEXT_PM_INTERVIEW:
+            return FollowupReaction(
+                kind="command",
+                command_text=f"!pm {normalized_text}",
                 command_params={
                     "request_id": str(followup_context.request_id or "").strip(),
                 },

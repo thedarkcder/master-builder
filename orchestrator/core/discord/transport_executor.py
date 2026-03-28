@@ -91,6 +91,7 @@ class DiscordThreadActionHandler:
                     components=action.components,
                     issue_key=action.issue_key,
                     followup_context_type=action.followup_context_type,
+                    request_id=action.request_id,
                     discord_api_client_fn=self._discord_api_client,
                     project_ask_thread_channel_ids_for_tenant_fn=project_ask_thread_channel_ids_for_tenant,
                     resolve_project_for_channel_fn=resolve_project_for_channel,

@@ -21,9 +21,13 @@ SEED_FOLLOWUP_CONTEXT_MAX_AGE = timedelta(hours=24)
 _MAX_ENGINEERING_CHILDREN = 12
 _PM_PARENT_LABEL = "pm-parent"
 _ENGINEERING_CHILD_LABEL = "engineering-child"
+_PM_COMPLETE_LABEL = "pm-complete"
+_PLANNING_COMPLETE_LABEL = "planning-complete"
 _SYNC_CURRENT_LABEL = "sync-current"
 _SYNC_STALE_LABEL = "sync-stale"
 _SYNC_BLOCKED_LABEL = "sync-blocked"
+_PM_COMPLETE_STATUSES = {"ready_to_write", "pm_completed"}
+_PLANNING_COMPLETE_STATUSES = {"planning_completed"}
 _PARENT_MULTI_STORY_HINTS = (
     "multi-story",
     "multi story",
@@ -118,9 +122,102 @@ def _sync_label(sync_status: str) -> str:
     normalized = str(sync_status or "").strip().lower()
     if normalized == "children_current":
         return _SYNC_CURRENT_LABEL
-    if normalized == "sync_blocked":
+    if normalized in {"sync_blocked", "planning_blocked"}:
         return _SYNC_BLOCKED_LABEL
     return _SYNC_STALE_LABEL
+
+
+def _normalized_status(value: object) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_pm_complete(pm_status: object) -> bool:
+    return _normalized_status(pm_status) in _PM_COMPLETE_STATUSES
+
+
+def _is_planning_complete(planning_state: object) -> bool:
+    return _normalized_status(planning_state) in _PLANNING_COMPLETE_STATUSES
+
+
+def _string_list_from_stage(*, stage_name: str, field_name: str, raw_value: object) -> list[str]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Planning package stage '{stage_name}' has invalid '{field_name}' (expected list of strings)",
+        )
+    values: list[str] = []
+    for entry in raw_value:
+        if not isinstance(entry, str):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Planning package stage '{stage_name}' has invalid item type",
+            )
+        text = entry.strip()
+        if text:
+            values.append(text)
+    return values
+
+
+def _planning_stage_summary_lines(*, stage_name: str, raw_stage: object) -> list[str]:
+    if raw_stage is None:
+        return []
+    if not isinstance(raw_stage, dict):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Planning package stage '{stage_name}' must be an object",
+        )
+    lines: list[str] = []
+    for field_name, label in (
+        ("findings", "Findings"),
+        ("recommendations", "Recommendations"),
+        ("required_tasks", "Required tasks"),
+        ("open_behavior_questions", "Open behavior questions"),
+        ("acceptance_impacts", "Acceptance impacts"),
+    ):
+        values = _string_list_from_stage(stage_name=stage_name, field_name=field_name, raw_value=raw_stage.get(field_name))
+        if values:
+            lines.append(f"{stage_name.title()} {label}: {'; '.join(values)}")
+    return lines
+
+
+def _normalize_planning_package(raw_planning_package: object) -> dict[str, Any]:
+    if raw_planning_package is None:
+        return {}
+    if not isinstance(raw_planning_package, dict):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning package must be an object",
+        )
+    specialist_outputs = raw_planning_package.get("specialist_outputs")
+    if specialist_outputs is not None and not isinstance(specialist_outputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Planning package specialist_outputs must be an object",
+        )
+    child_issues = raw_planning_package.get("child_issues")
+    if child_issues is None:
+        child_issues = raw_planning_package.get("recommended_child_tickets")
+    if child_issues is None:
+        child_issues = raw_planning_package.get("engineering_children")
+    planning_state = _normalized_status(raw_planning_package.get("planning_state") or raw_planning_package.get("state"))
+    summary_lines: list[str] = []
+    if isinstance(specialist_outputs, dict):
+        for stage_name in ("engineering", "security", "testing"):
+            summary_lines.extend(
+                _planning_stage_summary_lines(
+                    stage_name=stage_name,
+                    raw_stage=specialist_outputs.get(stage_name),
+                )
+            )
+    if not isinstance(child_issues, list):
+        child_issues = []
+    return {
+        "planning_state": planning_state,
+        "specialist_summary": summary_lines,
+        "child_issues": child_issues,
+    }
 
 
 def _compute_parent_revision(parent_issue: dict[str, Any]) -> str:
@@ -577,7 +674,14 @@ def _parse_engineering_children(
     return children
 
 
-def _build_parent_issue_input(*, parent_issue: dict[str, Any], parent_revision: str, sync_status: str) -> JiraIssueCreateInput:
+def _build_parent_issue_input(
+    *,
+    parent_issue: dict[str, Any],
+    parent_revision: str,
+    sync_status: str,
+    pm_status: str | None = None,
+    planning_state: str | None = None,
+) -> JiraIssueCreateInput:
     return JiraIssueCreateInput(
         summary=parent_issue["summary"],
         description=build_parent_feature_description(
@@ -593,10 +697,14 @@ def _build_parent_issue_input(*, parent_issue: dict[str, Any], parent_revision: 
             open_questions=parent_issue["open_questions"],
             parent_revision=parent_revision,
             sync_status=sync_status,
+            pm_status=pm_status,
+            planning_state=planning_state,
         ),
         labels=_dedupe_labels(
             parent_issue["labels"],
             [_PM_PARENT_LABEL, _sync_label(sync_status)],
+            [_PM_COMPLETE_LABEL] if _is_pm_complete(pm_status) else [],
+            [_PLANNING_COMPLETE_LABEL] if _is_planning_complete(planning_state) else [],
         ),
         issue_type=parent_issue["issue_type"],
     )
@@ -610,6 +718,9 @@ def _build_child_issue_input(
     parent_revision: str,
     sync_status: str,
     use_subtask: bool,
+    specialist_summary: list[str] | None = None,
+    planning_state: str | None = None,
+    pm_status: str | None = None,
 ) -> JiraIssueCreateInput:
     parent_label = _normalize_label(parent_issue_key, prefix="parent-")
     return JiraIssueCreateInput(
@@ -624,10 +735,14 @@ def _build_child_issue_input(
             how_to_test=child_issue["how_to_test"],
             done_criteria=child_issue["done_criteria"],
             dependencies_and_risks=[*child_issue["technical_dependencies"], *child_issue["risks"]],
+            specialist_summary=specialist_summary,
+            planning_state=planning_state,
         ),
         labels=_dedupe_labels(
             child_issue["labels"],
             [_ENGINEERING_CHILD_LABEL, parent_label, _sync_label(sync_status)],
+            [_PM_COMPLETE_LABEL] if _is_pm_complete(pm_status) else [],
+            [_PLANNING_COMPLETE_LABEL] if _is_planning_complete(planning_state) else [],
         ),
         issue_type=child_issue["issue_type"] if use_subtask else child_issue["fallback_issue_type"],
         parent_issue_key=parent_issue_key if use_subtask else None,
@@ -694,6 +809,8 @@ def seed_issues_with_codex(
     tenant_jira_oauth_context_fn,
     select_seed_match_fn,
     allow_empty_children: bool = False,
+    pm_status: str | None = None,
+    planning_package: dict[str, Any] | None = None,
 ):  # noqa: ANN001
     del build_seed_issue_description_fn
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
@@ -742,16 +859,36 @@ def seed_issues_with_codex(
 
     normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
     clarification_questions = _parse_questions(plan_payload.get("questions"))
+    effective_pm_status = _normalized_status(pm_status or plan_payload.get("pm_status") or plan_payload.get("interview_status"))
+    if pm_status is not None and not _is_pm_complete(effective_pm_status):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="PM interview is not ready to write Jira issues yet",
+        )
+    effective_planning_package = _normalize_planning_package(
+        planning_package
+        if planning_package is not None
+        else plan_payload.get("planning_package") or plan_payload.get("specialist_planning")
+    )
+    planning_package_supplied = planning_package is not None or "planning_package" in plan_payload or "specialist_planning" in plan_payload
+    planning_state = effective_planning_package.get("planning_state") or ""
+    specialist_summary = list(effective_planning_package.get("specialist_summary") or [])
+    child_issue_drafts = effective_planning_package.get("child_issues")
+    if child_issue_drafts is None:
+        child_issue_drafts = plan_payload.get("engineering_children")
+    allow_empty_child_drafts = allow_empty_children or planning_package_supplied
+    planning_blocked = planning_package_supplied and not _is_planning_complete(planning_state)
+    planning_state_for_description = planning_state or ("planning_blocked" if planning_blocked else None)
     parent_issue = _parse_parent_issue(
         raw_parent=plan_payload.get("parent_issue"),
         force_issue_keys=normalized_force_issue_keys,
         issue_key_pattern=issue_key_pattern,
     )
     engineering_children = _parse_engineering_children(
-        raw_children=plan_payload.get("engineering_children"),
+        raw_children=child_issue_drafts,
         force_issue_keys=normalized_force_issue_keys,
         issue_key_pattern=issue_key_pattern,
-        allow_empty_children=allow_empty_children,
+        allow_empty_children=allow_empty_child_drafts,
     )
     parent_revision = _compute_parent_revision(parent_issue)
 
@@ -771,11 +908,13 @@ def seed_issues_with_codex(
     try:
         all_project_issues = _project_issue_catalog(oauth=oauth, project_key=project_key)
         matched_issue_keys: set[str] = set()
-        parent_sync_status = "children_syncing"
+        parent_sync_status = "planning_blocked" if planning_blocked else "children_syncing"
         parent_issue_input = _build_parent_issue_input(
             parent_issue=parent_issue,
             parent_revision=parent_revision,
             sync_status=parent_sync_status,
+            pm_status=effective_pm_status or None,
+            planning_state=planning_state_for_description,
         )
         parent_issue_key, parent_created, parent_updated = _upsert_issue(
             oauth=oauth,
@@ -791,6 +930,70 @@ def seed_issues_with_codex(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Parent issue could not be matched and issue creation is disabled",
+            )
+
+        if planning_blocked:
+            parent_final_input = _build_parent_issue_input(
+                parent_issue=parent_issue,
+                parent_revision=parent_revision,
+                sync_status=parent_sync_status,
+                pm_status=effective_pm_status or None,
+                planning_state=planning_state_for_description,
+            )
+            oauth["client"].update_issue_fields(
+                access_token=oauth["access_token"],
+                cloud_id=oauth["cloud_id"],
+                issue_id_or_key=parent_issue_key,
+                summary=parent_final_input.summary,
+                description=parent_final_input.description,
+                labels=parent_final_input.labels,
+            )
+            parent_updated = not parent_created
+            updated_issue_keys = [parent_issue_key] if parent_updated else []
+            created_issue_keys = [parent_issue_key] if parent_created else []
+            message = (
+                "Issue upsert complete. "
+                f"Parent: {format_issue_markdown_list(issue_keys=[parent_issue_key], browse_base_url=browse_base_url)}. "
+                f"Updated {len(updated_issue_keys)}: "
+                f"{format_issue_markdown_list(issue_keys=updated_issue_keys, browse_base_url=browse_base_url)}. "
+                f"Created {len(created_issue_keys)}: "
+                f"{format_issue_markdown_list(issue_keys=created_issue_keys, browse_base_url=browse_base_url)}."
+            )
+            message = (
+                f"{message}\n\nSpecialist planning is not complete yet, so engineering child tickets were not created. "
+                "Once the planning package is complete, refresh this parent issue to create the child tickets."
+            )
+            return (
+                message,
+                {
+                    "project_key": project_key,
+                    "requires_input": bool(clarification_questions),
+                    "questions": clarification_questions,
+                    "prompt_markdown": prompt_markdown,
+                    "parent_issue_key": parent_issue_key,
+                    "parent_revision": parent_revision,
+                    "pm_status": effective_pm_status or None,
+                    "planning_state": planning_state_for_description,
+                    "planning_summary": specialist_summary,
+                    "children_sync_status": "planning_blocked",
+                    "stale_child_keys": [],
+                    "updated_parent": parent_issue_key if parent_updated else None,
+                    "created_parent": parent_issue_key if parent_created else None,
+                    "updated_children": [],
+                    "created_children": [],
+                    "updated_issue_keys": updated_issue_keys,
+                    "updated_issue_links": build_issue_url_list(
+                        issue_keys=updated_issue_keys,
+                        browse_base_url=browse_base_url,
+                    ),
+                    "created_issue_keys": created_issue_keys,
+                    "created_issue_links": build_issue_url_list(
+                        issue_keys=created_issue_keys,
+                        browse_base_url=browse_base_url,
+                    ),
+                    "all_issue_keys": [parent_issue_key],
+                    "errors": [],
+                },
             )
 
         child_catalog = _child_issue_catalog(
@@ -813,6 +1016,9 @@ def seed_issues_with_codex(
                 parent_revision=parent_revision,
                 sync_status=final_sync_status,
                 use_subtask=True,
+                specialist_summary=specialist_summary,
+                planning_state=planning_state_for_description,
+                pm_status=effective_pm_status or None,
             )
             child_key: str | None = None
             child_created = False
@@ -838,6 +1044,9 @@ def seed_issues_with_codex(
                     parent_revision=parent_revision,
                     sync_status=final_sync_status,
                     use_subtask=False,
+                    specialist_summary=specialist_summary,
+                    planning_state=planning_state_for_description,
+                    pm_status=effective_pm_status or None,
                 )
                 child_key, child_created, child_updated = _upsert_issue(
                     oauth=oauth,
@@ -870,6 +1079,8 @@ def seed_issues_with_codex(
             parent_issue=parent_issue,
             parent_revision=parent_revision,
             sync_status=final_sync_status,
+            pm_status=effective_pm_status or None,
+            planning_state=planning_state_for_description,
         )
         oauth["client"].update_issue_fields(
             access_token=oauth["access_token"],
@@ -929,6 +1140,9 @@ def seed_issues_with_codex(
             "prompt_markdown": prompt_markdown,
             "parent_issue_key": parent_issue_key,
             "parent_revision": parent_revision,
+            "pm_status": effective_pm_status or None,
+            "planning_state": planning_state_for_description,
+            "planning_summary": specialist_summary,
             "children_sync_status": final_sync_status,
             "stale_child_keys": stale_child_keys if final_sync_status != "children_current" else [],
             "updated_parent": parent_issue_key if parent_updated else None,
@@ -969,6 +1183,7 @@ def seed_parent_issues_with_codex(
     issue_key_pattern,
     tenant_jira_oauth_context_fn,
     select_seed_match_fn,
+    pm_status: str | None = None,
 ):  # noqa: ANN001
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
     normalized_scoped_project_keys = [
@@ -1016,6 +1231,12 @@ def seed_parent_issues_with_codex(
 
     normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
     clarification_questions = _parse_questions(plan_payload.get("questions"))
+    effective_pm_status = _normalized_status(pm_status or plan_payload.get("pm_status") or plan_payload.get("interview_status"))
+    if pm_status is not None and not _is_pm_complete(effective_pm_status):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="PM interview is not ready to write Jira parent issues yet",
+        )
     parent_issues = _parse_parent_issue_drafts(
         raw_issues=plan_payload.get("issues"),
         force_issue_keys=normalized_force_issue_keys,
@@ -1049,6 +1270,7 @@ def seed_parent_issues_with_codex(
                 parent_issue=parent_issue,
                 parent_revision=parent_revision,
                 sync_status="children_stale",
+                pm_status=effective_pm_status or None,
             )
             parent_key, parent_created, parent_updated = _upsert_issue(
                 oauth=oauth,
@@ -1124,6 +1346,7 @@ def seed_parent_issues_with_codex(
                 browse_base_url=browse_base_url,
             ),
             "all_issue_keys": all_parent_issue_keys,
+            "pm_status": effective_pm_status or None,
             "errors": [],
         },
     )
