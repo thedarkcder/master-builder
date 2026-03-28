@@ -47,6 +47,7 @@ from orchestrator.api.discord.shared.followup_format import (
     resolve_tenant_jira_browse_base_url,
 )
 from orchestrator.core.followup_context_service import (
+    resolve_followup_context_match as _resolve_followup_context_match_impl,
     resolve_followup_context as _resolve_followup_context_impl,
     resolve_followup_reaction as _resolve_followup_reaction_impl,
 )
@@ -154,6 +155,27 @@ def _resolve_followup_context(
         tenant_id=tenant_id,
         channel_id=channel_id,
         root_message_id=root_message_id,
+    )
+
+
+def _resolve_followup_context_match(
+    *,
+    session: Session,
+    tenant_id: str,
+    channel_id: str,
+    root_message_id: str | None = None,
+    request_id: str | None = None,
+    user_id: str | None = None,
+    allowed_context_types: set[str] | None = None,
+):
+    return _resolve_followup_context_match_impl(
+        session=session,
+        tenant_id=tenant_id,
+        channel_id=channel_id,
+        root_message_id=root_message_id,
+        request_id=request_id,
+        user_id=user_id,
+        allowed_context_types=allowed_context_types,
     )
 
 

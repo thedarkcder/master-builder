@@ -21,6 +21,7 @@ from orchestrator.api.discord.interactions.dispatcher import (
     dispatch_discord_interaction,
 )
 from orchestrator.api.discord.interactions.followup import (
+    _resolve_followup_context_match,
     _resolve_followup_context,
     _resolve_followup_reaction,
     _resolve_thread_channel_for_reply,
@@ -99,6 +100,7 @@ def build_default_discord_interaction_dispatch_deps(*, task_scheduler, logger) -
         find_focused_discord_option=_find_focused_discord_option,
         discord_issue_autocomplete_choices=_discord_issue_autocomplete_choices,
         resolve_thread_channel_for_reply=_resolve_thread_channel_for_reply,
+        resolve_followup_context_match=_resolve_followup_context_match,
         resolve_followup_context=_resolve_followup_context,
         resolve_followup_reaction=_resolve_followup_reaction,
         run_discord_ask_confirmation_followup=_run_discord_ask_confirmation_followup,

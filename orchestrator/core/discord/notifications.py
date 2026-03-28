@@ -121,6 +121,7 @@ def send_tenant_discord_message(
                             channel_id=channel_id,
                             thread_channel_id=thread_channel_id,
                             root_message_id=posted_message_id,
+                            origin_command="reply",
                             issue_key=matched_issue_key.group(0).upper(),
                             metadata={
                                 "event": event,

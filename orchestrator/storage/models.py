@@ -193,6 +193,7 @@ class FollowupContext(Base):
         Index("ix_followup_contexts_tenant_status_channel", "tenant_id", "status", "channel_id"),
         Index("ix_followup_contexts_tenant_status_root_message", "tenant_id", "status", "root_message_id"),
         Index("ix_followup_contexts_tenant_status_request", "tenant_id", "status", "request_id"),
+        Index("ix_followup_contexts_tenant_status_owner", "tenant_id", "status", "owner_user_id"),
         Index("ix_followup_contexts_tenant_type_issue", "tenant_id", "context_type", "issue_key"),
     )
 
@@ -214,6 +215,8 @@ class FollowupContext(Base):
     channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     thread_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     root_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    origin_command: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     run_id: Mapped[str | None] = mapped_column(
