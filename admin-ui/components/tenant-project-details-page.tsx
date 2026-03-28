@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useParams, usePathname } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import {
   Archive,
   ArrowLeft,
@@ -41,7 +41,7 @@ import {
   type RunRecord,
   type RunStatus,
 } from "@/lib/api";
-import { canManageProjects } from "@/lib/auth-routing";
+import { canManageProjects, getProjectArchiveRedirectRoute } from "@/lib/auth-routing";
 import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
 
 type Tab = "overview" | "settings" | "runs" | "notifications" | "secrets";
@@ -197,6 +197,7 @@ function formatBoolean(value: boolean): string {
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
   const pathname = usePathname();
+  const router = useRouter();
   const { credentials, ready, principal } = useAuth();
 
   // Project state
@@ -348,6 +349,10 @@ export function TenantProjectDetailsPage() {
         discord: project.discord,
         is_archived: !project.is_archived,
       });
+      if (updated.is_archived) {
+        router.push(getProjectArchiveRedirectRoute(principal, params.tenantId));
+        return;
+      }
       setProject(updated);
       setForm(buildProjectFormState(updated));
       setStatusLine(updated.is_archived ? "Project archived." : "Project unarchived.");

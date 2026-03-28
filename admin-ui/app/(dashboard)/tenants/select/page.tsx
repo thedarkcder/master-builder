@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Plus, Zap } from "lucide-react";
+import { Archive, ChevronRight, Plus, Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { canAccessPlatformAdmin, getDefaultAuthenticatedRoute, getTenantDashboardRoute } from "@/lib/auth-routing";
@@ -40,6 +40,8 @@ export default function SelectTenantPage() {
   const [tenants, setTenants] = useState<TenantRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const activeTenants = tenants.filter((tenant) => tenant.is_enabled);
+  const archivedTenants = tenants.filter((tenant) => !tenant.is_enabled);
 
   async function loadTenants() {
     if (!credentials) return;
@@ -75,7 +77,9 @@ export default function SelectTenantPage() {
         </div>
         <div>
           <h1 className="text-2xl font-bold">Select a workspace</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Choose a tenant to open its admin workspace.</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Open an active workspace, or manage archived workspaces below.
+          </p>
         </div>
       </div>
 
@@ -87,8 +91,8 @@ export default function SelectTenantPage() {
           </p>
         ) : null}
 
-        <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
-          {loading ? (
+        {loading ? (
+          <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
             <div className="divide-y">
               {[...Array(3)].map((_, i) => (
                 <div key={i} className="flex items-center gap-3 px-4 py-4">
@@ -100,56 +104,97 @@ export default function SelectTenantPage() {
                 </div>
               ))}
             </div>
-          ) : tenants.length === 0 ? (
-            <div className="px-4 py-8 text-center">
-              <p className="text-sm text-muted-foreground">No workspaces found.</p>
-              <Link
-                href="/tenants/new"
-                className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Create your first tenant
-              </Link>
-            </div>
-          ) : (
-            <ul className="divide-y">
-              {tenants.map((tenant) => (
-                <li key={tenant.tenant_id}>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+              <div className="border-b px-4 py-3">
+                <p className="text-sm font-semibold">Active workspaces</p>
+              </div>
+              {activeTenants.length === 0 ? (
+                <div className="px-4 py-8 text-center">
+                  <p className="text-sm text-muted-foreground">No active workspaces found.</p>
                   <Link
-                    href={getTenantDashboardRoute(tenant.tenant_id)}
-                    className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                    href="/tenants/new"
+                    className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
                   >
-                    <div
-                      className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white ${tenantAvatarColor(tenant.tenant_id)}`}
-                    >
-                      {tenantInitials(tenant.name)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium text-sm">{tenant.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">{tenant.tenant_id}</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                    <Plus className="h-3.5 w-3.5" />
+                    Create your first tenant
                   </Link>
-                </li>
-              ))}
-              <li>
-                <Link
-                  href="/tenants/new"
-                  className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
-                >
-                  <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/30 text-muted-foreground">
-                    <Plus className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-muted-foreground">Create new workspace</p>
-                    <p className="text-xs text-muted-foreground/70">Add another tenant account</p>
-                  </div>
-                  <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
-                </Link>
-              </li>
-            </ul>
-          )}
-        </div>
+                </div>
+              ) : (
+                <ul className="divide-y">
+                  {activeTenants.map((tenant) => (
+                    <li key={tenant.tenant_id}>
+                      <Link
+                        href={getTenantDashboardRoute(tenant.tenant_id)}
+                        className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                      >
+                        <div
+                          className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white ${tenantAvatarColor(tenant.tenant_id)}`}
+                        >
+                          {tenantInitials(tenant.name)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-medium text-sm">{tenant.name}</p>
+                          <p className="truncate text-xs text-muted-foreground">{tenant.tenant_id}</p>
+                        </div>
+                        <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                      </Link>
+                    </li>
+                  ))}
+                  <li>
+                    <Link
+                      href="/tenants/new"
+                      className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                    >
+                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/30 text-muted-foreground">
+                        <Plus className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-muted-foreground">Create new workspace</p>
+                        <p className="text-xs text-muted-foreground/70">Add another tenant account</p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
+                    </Link>
+                  </li>
+                </ul>
+              )}
+            </div>
+
+            {archivedTenants.length > 0 ? (
+              <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+                <div className="border-b px-4 py-3">
+                  <p className="text-sm font-semibold">Archived workspaces</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Archived workspaces no longer open the dashboard. Open settings to review or unarchive them.
+                  </p>
+                </div>
+                <ul className="divide-y">
+                  {archivedTenants.map((tenant) => (
+                    <li key={tenant.tenant_id}>
+                      <Link
+                        href={`/tenants/${encodeURIComponent(tenant.tenant_id)}/edit/integrations`}
+                        className="flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
+                      >
+                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                          <Archive className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-medium text-sm">{tenant.name}</p>
+                          <p className="truncate text-xs text-muted-foreground">{tenant.tenant_id}</p>
+                        </div>
+                        <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                          Archived
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   );
