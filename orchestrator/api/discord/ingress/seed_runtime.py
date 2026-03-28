@@ -43,6 +43,7 @@ def seed_issues_with_codex(
     scoped_project_id: str | None = None,
     force_issue_keys: list[str] | None = None,
     allow_create: bool = True,
+    allow_empty_children: bool = False,
     scoped_project_keys: list[str] | None = None,
     codex_working_dir: str = "",
 ) -> tuple[str, dict]:  # noqa: ANN001
@@ -70,6 +71,7 @@ def seed_issues_with_codex(
         issue_key_pattern=ISSUE_KEY_PATTERN,
         tenant_jira_oauth_context_fn=jira_runtime.tenant_jira_oauth_context,
         select_seed_match_fn=select_seed_match,
+        allow_empty_children=allow_empty_children,
     )
 
 

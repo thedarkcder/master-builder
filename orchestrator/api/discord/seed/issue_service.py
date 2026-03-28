@@ -286,8 +286,7 @@ def _first_present_issue_type(choices: tuple[str, ...], available_issue_types: l
 
 
 def _parent_should_default_to_epic(*, parent_issue: dict[str, Any], engineering_children: list[dict[str, Any]]) -> bool:
-    if len(engineering_children) > 1:
-        return True
+    del engineering_children
     candidate_text = " ".join(
         [
             str(parent_issue.get("summary") or ""),
@@ -403,6 +402,7 @@ def _parse_engineering_children(
     raw_children: object,
     force_issue_keys: list[str],
     issue_key_pattern,
+    allow_empty_children: bool = False,
 ) -> list[dict[str, Any]]:  # noqa: ANN001
     if not isinstance(raw_children, list):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return engineering_children")
@@ -476,7 +476,7 @@ def _parse_engineering_children(
                 "requested_issue_key": requested_issue_key,
             }
         )
-    if not children:
+    if not children and not allow_empty_children:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid engineering_children")
     return children
 
@@ -597,6 +597,7 @@ def seed_issues_with_codex(
     issue_key_pattern,
     tenant_jira_oauth_context_fn,
     select_seed_match_fn,
+    allow_empty_children: bool = False,
 ):  # noqa: ANN001
     del build_seed_issue_description_fn
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
@@ -654,6 +655,7 @@ def seed_issues_with_codex(
         raw_children=plan_payload.get("engineering_children"),
         force_issue_keys=normalized_force_issue_keys,
         issue_key_pattern=issue_key_pattern,
+        allow_empty_children=allow_empty_children,
     )
     parent_revision = _compute_parent_revision(parent_issue)
 
