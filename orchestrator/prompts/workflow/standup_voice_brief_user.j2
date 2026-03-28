@@ -1,0 +1,19 @@
+Project: {{ project_name }}
+Jira key: {{ jira_project_key }}
+Repository: {{ github_repository }}
+Window start: {{ window_start_at }}
+Window end: {{ window_end_at }}
+Facts JSON:
+{{ facts_json }}
+
+Create a standup brief shape with:
+- yesterday
+- today
+- blockers
+- notable PR/review activity
+
+Return JSON:
+{
+  "transcript": "...",
+  "summary": "..."
+}

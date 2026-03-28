@@ -44,6 +44,15 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("knowledge_jira_sync_runtime_states", inspector.get_table_names())
             self.assertIn("knowledge_jira_sync_project_states", inspector.get_table_names())
             self.assertIn("discord_command_sync_runtime_states", inspector.get_table_names())
+            self.assertIn("project_automations", inspector.get_table_names())
+            self.assertIn("project_automation_executions", inspector.get_table_names())
+
+            automation_indexes = {index["name"] for index in inspector.get_indexes("project_automations")}
+            execution_indexes = {index["name"] for index in inspector.get_indexes("project_automation_executions")}
+
+            self.assertIn("ix_project_automations_due_scan", automation_indexes)
+            self.assertIn("ix_project_automation_executions_due_scan", execution_indexes)
+            self.assertIn("ix_project_automation_executions_automation_history", execution_indexes)
 
     def test_initial_migration_uses_boolean_default_for_tenants_enabled(self) -> None:
         migration_file = (

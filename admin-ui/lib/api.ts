@@ -158,6 +158,60 @@ export type ProjectRecord = {
   updated_at: string;
 };
 
+export type ProjectAutomationExecutionRecord = {
+  execution_id: string;
+  automation_id: string;
+  scheduled_for: string;
+  window_start_at: string;
+  window_end_at: string;
+  status: string;
+  dedupe_key: string;
+  started_at: string | null;
+  completed_at: string | null;
+  discord_message_id: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectAutomationRecord = {
+  automation_id: string;
+  project_id: string;
+  tenant_id: string;
+  kind: string;
+  enabled: boolean;
+  timezone: string;
+  days_of_week: number[];
+  local_time: string;
+  delivery_text_channel_id: string;
+  voice_id: string | null;
+  fallback_lookback_hours: number;
+  last_successful_window_end_at: string | null;
+  next_run_at: string;
+  executions: ProjectAutomationExecutionRecord[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectAutomationWritePayload = {
+  kind: string;
+  enabled: boolean;
+  timezone: string;
+  days_of_week: Array<number | string>;
+  local_time: string;
+  delivery_text_channel_id: string;
+  voice_id?: string | null;
+  fallback_lookback_hours: number;
+};
+
+export type ProjectAutomationsPayload = {
+  automations: ProjectAutomationWritePayload[];
+};
+
+export type ProjectAutomationsRecord = {
+  automations: ProjectAutomationRecord[];
+};
+
 export type ProjectCreatePayload = {
   name: string;
   github_repository: string;
@@ -1049,6 +1103,33 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
   return request<ProjectRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`
+  );
+}
+
+export function getProjectAutomations(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations`
+  );
+}
+
+export function updateProjectAutomations(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectAutomationsPayload
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
   );
 }
 

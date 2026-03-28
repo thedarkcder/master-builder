@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.config_helpers import (
@@ -40,6 +40,10 @@ from orchestrator.api.admin.tenant_project_routes_service import (
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
     ProjectCreate,
+    ProjectAutomationExecutionRead,
+    ProjectAutomationRead,
+    ProjectAutomationsRead,
+    ProjectAutomationsWrite,
     ProjectRead,
     ProjectUpdate,
     TenantCreate,
@@ -47,8 +51,14 @@ from orchestrator.api.schemas import (
     TenantUpdate,
 )
 from orchestrator.core.config import get_settings
+from orchestrator.core.project_automation_service import (
+    ProjectAutomationWrite as ServiceProjectAutomationWrite,
+    list_execution_history,
+    list_project_automation_definitions,
+    upsert_project_automation,
+)
 from orchestrator.core.security import require_admin
-from orchestrator.storage.models import Tenant
+from orchestrator.storage.models import Project, Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -230,3 +240,135 @@ def update_project(
         payload=payload,
         admin_project_service_factory=admin_project_service,
     )  # type: ignore[return-value]
+
+
+def _get_project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    project = session.get(Project, project_id)
+    if project is None or project.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return project
+
+
+def _automation_execution_to_schema(execution) -> ProjectAutomationExecutionRead:  # noqa: ANN001
+    return ProjectAutomationExecutionRead(
+        execution_id=execution.execution_id,
+        automation_id=execution.automation_id,
+        scheduled_for=execution.scheduled_for,
+        window_start_at=execution.window_start_at,
+        window_end_at=execution.window_end_at,
+        status=execution.status,
+        dedupe_key=execution.dedupe_key,
+        started_at=execution.started_at,
+        completed_at=execution.completed_at,
+        discord_message_id=execution.discord_message_id,
+        last_error=execution.last_error,
+        created_at=execution.created_at,
+        updated_at=execution.updated_at,
+    )
+
+
+def _automation_to_schema(*, automation, executions) -> ProjectAutomationRead:  # noqa: ANN001
+    return ProjectAutomationRead(
+        automation_id=automation.automation_id,
+        project_id=automation.project_id,
+        tenant_id=automation.tenant_id,
+        enabled=automation.enabled,
+        kind=automation.kind,
+        timezone=automation.timezone,
+        days_of_week=list(automation.days_of_week or []),
+        local_time=automation.local_time,
+        delivery_text_channel_id=automation.delivery_text_channel_id,
+        voice_id=automation.voice_id,
+        fallback_lookback_hours=automation.fallback_lookback_hours,
+        last_successful_window_end_at=automation.last_successful_window_end_at,
+        next_run_at=automation.next_run_at,
+        executions=[_automation_execution_to_schema(execution) for execution in executions],
+        created_at=automation.created_at,
+        updated_at=automation.updated_at,
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/automations",
+    response_model=ProjectAutomationsRead,
+)
+def get_project_automations(
+    tenant_id: str,
+    project_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectAutomationsRead:
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    automations = list_project_automation_definitions(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+    )
+    return ProjectAutomationsRead(
+        automations=[
+            _automation_to_schema(
+                automation=automation,
+                executions=list_execution_history(
+                    session=session,
+                    automation_id=automation.automation_id,
+                    limit=20,
+                ),
+            )
+            for automation in automations
+        ]
+    )
+
+
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/automations",
+    response_model=ProjectAutomationsRead,
+)
+def put_project_automations(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectAutomationsWrite,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectAutomationsRead:
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    for item in payload.automations:
+        normalized = ServiceProjectAutomationWrite(
+            kind=item.kind,
+            enabled=item.enabled,
+            timezone=item.timezone,
+            days_of_week=tuple(int(day) for day in item.days_of_week),
+            local_time=item.local_time,
+            delivery_text_channel_id=item.delivery_text_channel_id,
+            voice_id=item.voice_id,
+            fallback_lookback_hours=item.fallback_lookback_hours,
+        )
+        try:
+            upsert_project_automation(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project.project_id,
+                payload=normalized,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    automations = list_project_automation_definitions(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+    )
+    return ProjectAutomationsRead(
+        automations=[
+            _automation_to_schema(
+                automation=automation,
+                executions=list_execution_history(
+                    session=session,
+                    automation_id=automation.automation_id,
+                    limit=20,
+                ),
+            )
+            for automation in automations
+        ]
+    )

@@ -15,6 +15,7 @@ from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
 from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
 from orchestrator.core.knowledge_jira_sync_runtime import run_knowledge_jira_sync
+from orchestrator.core.project_automation_runtime import run_project_automation_runtime
 from orchestrator.core.runs import enqueue_run, resolve_precheck_outcome_for_enqueue
 from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
 from orchestrator.storage.db import create_session_factory
@@ -41,6 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
+    subparsers.add_parser("project-automation", help="Run project automation scheduler leader loop")
     subparsers.add_parser("knowledge-prewarm", help="Prewarm knowledge embedding dependencies")
     subparsers.add_parser("migrate", help="Apply DB migrations")
     subparsers.add_parser("voice-prewarm", help="Prewarm voice model dependencies")
@@ -266,6 +268,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "knowledge-jira-sync":
         run_knowledge_jira_sync()
+        return 0
+
+    if args.command == "project-automation":
+        run_project_automation_runtime()
         return 0
 
     if args.command == "knowledge-prewarm":

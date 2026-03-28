@@ -273,6 +273,117 @@ class ProjectRead(BaseModel):
     updated_at: datetime
 
 
+class ProjectAutomationWrite(BaseModel):
+    kind: str = Field(min_length=1)
+    enabled: bool = True
+    timezone: str = Field(min_length=1)
+    days_of_week: list[int | str] = Field(default_factory=list)
+    local_time: str = Field(min_length=1)
+    delivery_text_channel_id: str = Field(min_length=1)
+    voice_id: str | None = None
+    fallback_lookback_hours: int = Field(default=24, ge=1)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("timezone is required")
+        return normalized
+
+    @field_validator("days_of_week")
+    @classmethod
+    def validate_days_of_week(cls, value: list[int | str]) -> list[int]:
+        normalized: list[int] = []
+        seen: set[int] = set()
+        weekday_aliases = {
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tues": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thur": 3,
+            "thurs": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+            "sun": 6,
+            "sunday": 6,
+        }
+        for raw_value in value:
+            if isinstance(raw_value, bool):
+                raise ValueError("days_of_week must contain integers 0-6 or weekday names")
+            if isinstance(raw_value, int):
+                day = raw_value
+            else:
+                normalized_value = str(raw_value or "").strip().lower()
+                if not normalized_value:
+                    continue
+                if normalized_value.isdigit():
+                    day = int(normalized_value)
+                elif normalized_value in weekday_aliases:
+                    day = weekday_aliases[normalized_value]
+                else:
+                    raise ValueError(f"Invalid day of week: {raw_value}")
+            if day < 0 or day > 6:
+                raise ValueError(f"Invalid day of week: {raw_value}")
+            if day in seen:
+                continue
+            seen.add(day)
+            normalized.append(day)
+        if not normalized:
+            raise ValueError("days_of_week is required")
+        return normalized
+
+
+class ProjectAutomationExecutionRead(BaseModel):
+    execution_id: str
+    automation_id: str
+    scheduled_for: datetime
+    window_start_at: datetime
+    window_end_at: datetime
+    status: str
+    dedupe_key: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    discord_message_id: str | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectAutomationRead(BaseModel):
+    automation_id: str
+    tenant_id: str
+    project_id: str
+    kind: str
+    enabled: bool
+    timezone: str
+    days_of_week: list[int] = Field(default_factory=list)
+    local_time: str
+    delivery_text_channel_id: str
+    voice_id: str | None = None
+    fallback_lookback_hours: int
+    last_successful_window_end_at: datetime | None = None
+    next_run_at: datetime
+    executions: list[ProjectAutomationExecutionRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectAutomationsWrite(BaseModel):
+    automations: list[ProjectAutomationWrite] = Field(default_factory=list)
+
+
+class ProjectAutomationsRead(BaseModel):
+    automations: list[ProjectAutomationRead] = Field(default_factory=list)
+
+
 class KnowledgeAssetCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     source_type: str = Field(default="manual", min_length=1, max_length=32)
