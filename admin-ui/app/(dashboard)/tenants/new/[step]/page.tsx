@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 
 import { TenantSetupWizard, type WizardStepKey } from "@/components/tenant-setup-wizard";
@@ -10,5 +11,9 @@ export default async function NewTenantStepPage({ params }: { params: Promise<{ 
     notFound();
   }
 
-  return <TenantSetupWizard stepKey={step as WizardStepKey} />;
+  return (
+    <Suspense fallback={<div className="p-8 text-muted-foreground">Loading…</div>}>
+      <TenantSetupWizard stepKey={step as WizardStepKey} />
+    </Suspense>
+  );
 }

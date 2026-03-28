@@ -1,7 +1,15 @@
+import Image from "next/image";
 import Link from "next/link";
 
 import { auth } from "@/auth";
 import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+
+const heroFluidImage =
+  "https://lh3.googleusercontent.com/aida-public/AB6AXuBuvZ27cHqaDDOEJ11nIggfen9hZf4ZT5UBIR0Ucb-RxSvah0Z8DhQTirK1xQ3fg3s5uRfYrFmCHy9XiKhZxF2sR0WJ17PkNpkycMosB0qv5i9_QW60RvzAdcDdlMFoyP0MYwdDYL0wW3Bx29DElub0VobAmgHCmrC2ejoKFokjILlAkYVV-6TYoy1q2ebKcMZNP0XhOWgKGXO8RzTrqhMNF5rgCYtbM8ZvxQYRdVEi-TqrWqMFCPVczGap2xeSHLieya711aEE-2Ew";
+const governancePortrait1 =
+  "https://lh3.googleusercontent.com/aida-public/AB6AXuAyS1njHMhNFk-caBvT39iLsvkO9IVnoVZsg-tOi01Yo_LXn9e9xAWNUpgIWO3PV6zTO3mPtelif0KjK39RtRrrm7xOt9RJ3SYOXXDNAyQENCZji0IxFxL3spfHV7k6mbvPzkW_-AooqNJlvib2sEE_1C5VAV_167VeDPmFUnVyXqFK39BGKoUSgKOSzoj4nBGGB5Yp7vTn_goApcXrXQdPmFyNxxK_UYpqJJrnOZBDGpLRA530xiOzI5PCDJvFZc8fCJ0QKf5GovYH";
+const governancePortrait2 =
+  "https://lh3.googleusercontent.com/aida-public/AB6AXuC88qAyBs_pPactIy_0Ej9Dc3hO9loDLmMP6EO9sbuAjEZRehiXh-vca6ekLgmBARQjrBAqyDV3snKwhh88kVKeBM9aiRfj1YxGaxJDGWdW1XtbaCpDN-KVCGFGmVyav9nykkQEXgDwue5nZN1LAOpy32FGj1YFy4TCmLQLNT4A1cuKAQjHpg1_XB9kQloQsHOsYI7FePh_KeXz1itLlfAdX6_tLKwuemL0_MABvftvctLQfQfBj8JndjvGjkuirJnOkqTGgeHCBNTE";
 
 const lifecycleSteps = [
   {
@@ -43,8 +51,8 @@ export default async function HomePage() {
   const primaryLabel = session ? "Open workspace" : "Strategic consultation";
 
   return (
-    <main className="min-h-screen bg-[#111318] font-[Manrope] text-[#e2e2e8]">
-      <header className="sticky top-0 z-50 bg-[#111318]/80 backdrop-blur-xl">
+    <main className="min-h-screen overflow-x-hidden bg-[#111318] text-[#e2e2e8]">
+      <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#111318]/85 backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between px-5 py-5 sm:px-8 lg:px-12">
           <Link href="/" className="text-sm font-bold tracking-tight text-white sm:text-base">
             Master Builder
@@ -77,13 +85,20 @@ export default async function HomePage() {
         </div>
       </header>
 
-      <section className="mx-auto flex min-h-[calc(100svh-84px)] w-full max-w-[1440px] items-center overflow-hidden px-5 py-16 sm:px-8 lg:px-12">
-        <div className="grid w-full items-center gap-14 lg:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)] lg:gap-8">
+      <section className="relative isolate w-full overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(120,209,255,0.12),transparent)]" />
+        <div className="relative mx-auto flex min-h-[calc(100svh-5.25rem)] w-full max-w-[1440px] items-center px-5 py-14 sm:px-8 sm:py-16 lg:px-12 lg:py-20">
+          <div className="grid w-full items-center gap-12 lg:grid-cols-[minmax(0,1.08fr)_minmax(320px,0.92fr)] lg:gap-10 xl:gap-14">
           <div className="relative z-10 max-w-3xl">
-            <h1 className="max-w-3xl text-[3rem] font-extrabold leading-[0.92] tracking-[-0.04em] text-white sm:text-[4.5rem] lg:text-[5.4rem]">
-              Transforming vision into <span className="text-[#78d1ff]">digital reality.</span>
+            <p className="text-[11px] font-bold uppercase tracking-[0.28em] text-[#78d1ff]">Strategic AI Advisory</p>
+            <h1 className="mt-4 max-w-[14ch] text-[2.75rem] font-extrabold leading-[0.95] tracking-[-0.04em] text-white sm:text-[3.75rem] lg:text-[4.5rem]">
+              Master Builder
             </h1>
-            <p className="mt-7 max-w-2xl text-base font-light leading-8 text-[#bdc8d0] sm:text-lg">
+            <p className="mt-5 max-w-2xl text-xl font-light leading-snug text-[#e8edf2] sm:text-2xl sm:leading-snug">
+              Transforming vision into{" "}
+              <span className="font-semibold text-[#78d1ff]">digital reality.</span>
+            </p>
+            <p className="mt-6 max-w-2xl text-base font-light leading-relaxed text-[#bdc8d0] sm:text-lg sm:leading-8">
               Accelerate business impact through intelligent partnership. Master Builder turns complex objectives into
               governed digital operations with structured execution, clear controls, and senior-level oversight.
             </p>
@@ -103,16 +118,20 @@ export default async function HomePage() {
             </div>
           </div>
 
-          <div className="relative min-h-[420px] lg:min-h-[620px]">
-            <div className="absolute inset-0 rounded-[28px] bg-[radial-gradient(circle_at_25%_30%,rgba(120,209,255,0.18),transparent_32%),radial-gradient(circle_at_70%_70%,rgba(11,155,207,0.12),transparent_36%)] blur-2xl" />
-            <div className="absolute right-[-8%] top-1/2 h-[88%] w-[92%] -translate-y-1/2 overflow-hidden rounded-[30px] bg-[#15171c]">
-              <img
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuBuvZ27cHqaDDOEJ11nIggfen9hZf4ZT5UBIR0Ucb-RxSvah0Z8DhQTirK1xQ3fg3s5uRfYrFmCHy9XiKhZxF2sR0WJ17PkNpkycMosB0qv5i9_QW60RvzAdcDdlMFoyP0MYwdDYL0wW3Bx29DElub0VobAmgHCmrC2ejoKFokjILlAkYVV-6TYoy1q2ebKcMZNP0XhOWgKGXO8RzTrqhMNF5rgCYtbM8ZvxQYRdVEi-TqrWqMFCPVczGap2xeSHLieya711aEE-2Ew"
+          <div className="relative mx-auto flex min-h-[360px] w-full max-w-[560px] items-center justify-center lg:mx-0 lg:min-h-[520px] lg:max-w-none lg:justify-end xl:min-h-[580px]">
+            <div className="pointer-events-none absolute inset-[-12%] rounded-[28px] bg-[radial-gradient(circle_at_25%_30%,rgba(120,209,255,0.2),transparent_35%),radial-gradient(circle_at_72%_68%,rgba(11,155,207,0.14),transparent_38%)] blur-2xl" />
+            <div className="relative aspect-[4/5] w-full max-w-[420px] overflow-hidden rounded-[30px] bg-[#15171c] shadow-[0_40px_120px_-40px_rgba(0,0,0,0.85)] sm:max-w-[460px] lg:max-w-[min(560px,92%)]">
+              <Image
+                src={heroFluidImage}
                 alt="Abstract fluid render representing digital growth and AI-driven transformation."
-                className="h-full w-full object-cover opacity-70 mix-blend-screen"
+                fill
+                priority
+                sizes="(max-width: 1024px) 90vw, 40vw"
+                className="object-cover opacity-70 mix-blend-screen"
               />
             </div>
           </div>
+        </div>
         </div>
       </section>
 
@@ -141,10 +160,12 @@ export default async function HomePage() {
           <div className="grid grid-cols-2 gap-4 sm:gap-6">
             <div className="space-y-4 pt-8">
               <div className="relative aspect-[3/4] overflow-hidden rounded-xl bg-[#1e2024] grayscale transition duration-700 hover:grayscale-0">
-                <img
-                  src="https://lh3.googleusercontent.com/aida-public/AB6AXuAyS1njHMhNFk-caBvT39iLsvkO9IVnoVZsg-tOi01Yo_LXn9e9xAWNUpgIWO3PV6zTO3mPtelif0KjK39RtRrrm7xOt9RJ3SYOXXDNAyQENCZji0IxFxL3spfHV7k6mbvPzkW_-AooqNJlvib2sEE_1C5VAV_167VeDPmFUnVyXqFK39BGKoUSgKOSzoj4nBGGB5Yp7vTn_goApcXrXQdPmFyNxxK_UYpqJJrnOZBDGpLRA530xiOzI5PCDJvFZc8fCJ0QKf5GovYH"
+                <Image
+                  src={governancePortrait1}
                   alt="Executive advisor portrait."
-                  className="h-full w-full object-cover"
+                  fill
+                  sizes="(max-width: 768px) 50vw, 20vw"
+                  className="object-cover"
                 />
                 <div className="absolute inset-x-0 bottom-0 bg-[linear-gradient(180deg,transparent,rgba(12,14,18,0.88))] p-4">
                   <p className="text-sm font-bold text-white">Marcus Chen</p>
@@ -163,10 +184,12 @@ export default async function HomePage() {
                 <p className="mt-3 text-2xl font-extrabold tracking-[-0.04em]">Human oversight with AI execution.</p>
               </div>
               <div className="relative aspect-[3/4] overflow-hidden rounded-xl bg-[#1e2024] grayscale transition duration-700 hover:grayscale-0">
-                <img
-                  src="https://lh3.googleusercontent.com/aida-public/AB6AXuC88qAyBs_pPactIy_0Ej9Dc3hO9loDLmMP6EO9sbuAjEZRehiXh-vca6ekLgmBARQjrBAqyDV3snKwhh88kVKeBM9aiRfj1YxGaxJDGWdW1XtbaCpDN-KVCGFGmVyav9nykkQEXgDwue5nZN1LAOpy32FGj1YFy4TCmLQLNT4A1cuKAQjHpg1_XB9kQloQsHOsYI7FePh_KeXz1itLlfAdX6_tLKwuemL0_MABvftvctLQfQfBj8JndjvGjkuirJnOkqTGgeHCBNTE"
+                <Image
+                  src={governancePortrait2}
                   alt="Chief product strategist portrait."
-                  className="h-full w-full object-cover"
+                  fill
+                  sizes="(max-width: 768px) 50vw, 20vw"
+                  className="object-cover"
                 />
                 <div className="absolute inset-x-0 bottom-0 bg-[linear-gradient(180deg,transparent,rgba(12,14,18,0.88))] p-4">
                   <p className="text-sm font-bold text-white">Sarah Voss</p>

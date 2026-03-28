@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
@@ -10,6 +10,22 @@ import { Input } from "@/components/ui/input";
 import { acceptPublicInvite } from "@/lib/api";
 
 export default function AcceptInvitePage() {
+  return (
+    <Suspense fallback={<AcceptInviteFallback />}>
+      <AcceptInvitePageInner />
+    </Suspense>
+  );
+}
+
+function AcceptInviteFallback() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-8">
+      <p className="text-sm text-slate-400">Loading…</p>
+    </main>
+  );
+}
+
+function AcceptInvitePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { credentials, ready, login, needsOnboarding, principal } = useAuth();
