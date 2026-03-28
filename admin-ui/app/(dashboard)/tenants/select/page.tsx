@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ChevronRight, Plus, Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
-import { getTenantDashboardRoute } from "@/lib/auth-routing";
+import { canAccessPlatformAdmin, getDefaultAuthenticatedRoute, getTenantDashboardRoute } from "@/lib/auth-routing";
 import { Skeleton } from "@/components/ui/skeleton";
 import { listTenants, type TenantRecord } from "@/lib/api";
 
@@ -34,7 +35,8 @@ function tenantAvatarColor(id: string): string {
 }
 
 export default function SelectTenantPage() {
-  const { credentials, ready } = useAuth();
+  const router = useRouter();
+  const { credentials, ready, principal, needsOnboarding } = useAuth();
   const [tenants, setTenants] = useState<TenantRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -52,6 +54,13 @@ export default function SelectTenantPage() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (ready && principal && !canAccessPlatformAdmin(principal) && !needsOnboarding) {
+      router.replace(getDefaultAuthenticatedRoute(principal));
+      return;
+    }
+  }, [needsOnboarding, principal, ready, router]);
 
   useEffect(() => {
     if (ready && credentials) void loadTenants();

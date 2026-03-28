@@ -2,7 +2,7 @@ import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from cryptography.fernet import Fernet
@@ -180,6 +180,144 @@ class TenantUserAccessApiTests(unittest.TestCase):
             json={"email": "owner@example.com", "password": "Changed-pass-456"},
         )
         self.assertEqual(login_response.status_code, 200, login_response.text)
+
+    def test_platform_super_admin_can_change_password(self) -> None:
+        login_response = self.client.post(
+            "/api/admin/auth/login",
+            json={"username": "admin", "password": "secret"},
+        )
+        self.assertEqual(login_response.status_code, 200, login_response.text)
+        token = login_response.json()["access_token"]
+
+        change_response = self.client.post(
+            "/api/app/me/password",
+            json={
+                "current_password": "secret",
+                "new_password": "New-secret-456",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(change_response.status_code, 200, change_response.text)
+        self.assertEqual(change_response.json()["principal_type"], "platform_super_admin")
+
+        old_login_response = self.client.post(
+            "/api/admin/auth/login",
+            json={"username": "admin", "password": "secret"},
+        )
+        self.assertEqual(old_login_response.status_code, 401, old_login_response.text)
+
+        new_login_response = self.client.post(
+            "/api/admin/auth/login",
+            json={"username": "admin", "password": "New-secret-456"},
+        )
+        self.assertEqual(new_login_response.status_code, 200, new_login_response.text)
+
+    def test_password_reset_request_does_not_leak_email_existence_and_confirm_resets_password(self) -> None:
+        self._register()
+
+        with patch("orchestrator.api.routes.app_auth.send_password_reset_email") as email_mock:
+            existing_response = self.client.post(
+                "/api/public/password-reset/request",
+                json={"email": "owner@example.com"},
+                headers={"host": "workspace.example.com", "x-forwarded-proto": "https"},
+            )
+            missing_response = self.client.post(
+                "/api/public/password-reset/request",
+                json={"email": "missing@example.com"},
+                headers={"host": "workspace.example.com", "x-forwarded-proto": "https"},
+            )
+
+        self.assertEqual(existing_response.status_code, 202, existing_response.text)
+        self.assertEqual(missing_response.status_code, 202, missing_response.text)
+        self.assertEqual(existing_response.json(), missing_response.json())
+        email_mock.assert_called_once()
+        reset_url = email_mock.call_args.kwargs["reset_url"]
+        self.assertTrue(reset_url.startswith("https://workspace.example.com/reset-password?token="))
+        token = parse_qs(urlparse(reset_url).query)["token"][0]
+
+        confirm_response = self.client.post(
+            "/api/public/password-reset/confirm",
+            json={"token": token, "new_password": "Reset-pass-456"},
+        )
+        self.assertEqual(confirm_response.status_code, 200, confirm_response.text)
+
+        old_login_response = self.client.post(
+            "/api/app/auth/login",
+            json={"email": "owner@example.com", "password": "S3cret-passphrase"},
+        )
+        self.assertEqual(old_login_response.status_code, 401, old_login_response.text)
+
+        new_login_response = self.client.post(
+            "/api/app/auth/login",
+            json={"email": "owner@example.com", "password": "Reset-pass-456"},
+        )
+        self.assertEqual(new_login_response.status_code, 200, new_login_response.text)
+
+        replay_response = self.client.post(
+            "/api/public/password-reset/confirm",
+            json={"token": token, "new_password": "Another-pass-789"},
+        )
+        self.assertEqual(replay_response.status_code, 400, replay_response.text)
+
+    def test_discord_onboarding_invite_uses_guild_when_onboarding_channel_is_missing(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            tenant = session.get(Tenant, tenant_id)
+            self.assertIsNotNone(tenant)
+            assert tenant is not None
+            tenant.discord_config = {
+                "guild_id": "guild-123",
+                "onboarding_channel_id": None,
+                "channel_id": None,
+                "onboarding_invite_expires_in_seconds": 3600,
+                "onboarding_invite_max_uses": 1,
+                "notify_events": [],
+            }
+            session.commit()
+
+        fake_client = Mock()
+        fake_client.list_text_channels.return_value = [Mock(channel_id="channel-456")]
+        fake_client.create_invite.return_value = {"code": "invite-code"}
+
+        with patch("orchestrator.api.routes.admin_tenants._discord_client", return_value=fake_client):
+            response = self.client.post(
+                f"/api/admin/tenants/{tenant_id}/discord/onboarding-invite",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["invite_url"], "https://discord.gg/invite-code")
+        fake_client.list_text_channels.assert_called_once_with(guild_id="guild-123")
+
+    def test_invite_email_uses_forwarded_public_host(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        with patch("orchestrator.api.routes.admin_tenants.email_delivery.send_tenant_invite_email") as email_mock:
+            response = self.client.post(
+                f"/api/admin/tenants/{tenant_id}/invites",
+                json={
+                    "email": "new-user@example.com",
+                    "full_name": "New User",
+                    "role": "business_member",
+                    "team_ids": [],
+                    "mode_override": None,
+                },
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "host": "workspace.example.com",
+                    "x-forwarded-proto": "https",
+                },
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["invite_url"].split("?token=")[0], "https://workspace.example.com/invite/accept")
+        email_mock.assert_called_once()
+        self.assertTrue(email_mock.call_args.kwargs["invite_url"].startswith("https://workspace.example.com/invite/accept?token="))
 
     def test_tenant_user_list_tenants_returns_only_memberships(self) -> None:
         first = self._register(email="owner1@example.com", tenant_name="Tenant One")
@@ -394,6 +532,42 @@ class TenantUserAccessApiTests(unittest.TestCase):
         discord_config = tenant_response.json()["discord"]
         self.assertEqual(discord_config["guild_id"], "987654321")
         self.assertIsNotNone(discord_config["installed_at"])
+
+    def test_discord_identity_reports_oauth_unconfigured_when_redirect_missing(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        os.environ["ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID"] = ""
+        os.environ.pop("ORCHESTRATOR_DISCORD_OAUTH_REDIRECT_URL", None)
+        get_settings.cache_clear()
+
+        response = self.client.get(
+            f"/api/admin/tenants/{tenant_id}/discord/identity",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertFalse(payload["oauth_configured"])
+        self.assertFalse(payload["linked"])
+
+    def test_discord_link_start_returns_conflict_when_oauth_unconfigured(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+
+        os.environ["ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID"] = ""
+        os.environ.pop("ORCHESTRATOR_DISCORD_OAUTH_REDIRECT_URL", None)
+        get_settings.cache_clear()
+
+        response = self.client.post(
+            f"/api/admin/tenants/{tenant_id}/discord/link/start?redirect_to=%2Ftenants%2F{tenant_id}%2Fprofile",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Discord OAuth is not configured")
 
     def test_non_admin_member_cannot_start_discord_install(self) -> None:
         registration = self._register()

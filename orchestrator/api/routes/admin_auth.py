@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
+from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
     AdminIdentityResponse,
     AdminLoginRequest,
@@ -15,8 +17,11 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 @router.post("/auth/login", response_model=AdminLoginResponse)
-def admin_login(payload: AdminLoginRequest) -> AdminLoginResponse:
-    if not validate_admin_credentials(username=payload.username, password=payload.password):
+def admin_login(
+    payload: AdminLoginRequest,
+    session: Session = Depends(get_session),
+) -> AdminLoginResponse:
+    if not validate_admin_credentials(session=session, username=payload.username, password=payload.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
 
     settings = get_settings()

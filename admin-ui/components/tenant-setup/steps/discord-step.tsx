@@ -31,62 +31,63 @@ export function DiscordStep({
   onInviteMaxUsesChange
 }: DiscordStepProps) {
   return (
-    <div className="space-y-4">
-      <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">Discord install</p>
-        <p>Install the shared Master Builder Discord bot into the tenant server, then confirm the onboarding channel here.</p>
-      </div>
+    <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50/70 px-5 py-5">
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            Workspace ready for Discord install
+          </div>
+          <div className="text-sm text-slate-600">{createdTenantId || tenantIdPreview}</div>
 
-      <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-        <CheckCircle2 className="mr-1 inline h-4 w-4" />
-        Tenant <strong>{createdTenantId || tenantIdPreview}</strong> is ready for Discord install.
-      </p>
+          <div className="pt-1">
+            <Button onClick={onStartInstall}>
+              <Link2 className="mr-2 h-4 w-4" />
+              {guildId ? "Reinstall Discord Bot" : "Install Discord Bot"}
+            </Button>
+          </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={onStartInstall}>
-          <Link2 className="mr-2 h-4 w-4" />
-          {guildId ? "Reinstall Discord Bot" : "Install Discord Bot"}
-        </Button>
-      </div>
-
-      <div className="rounded-md border p-3 text-sm">
-        <div className="flex items-center gap-2 font-medium">
-          <Disc3 className="h-4 w-4" />
-          Connected guild
+          <div className="space-y-2 border-t border-slate-200 pt-4 text-sm">
+            <div className="flex items-center gap-2 font-medium text-slate-900">
+              <Disc3 className="h-4 w-4" />
+              Connected guild
+            </div>
+            <div className="text-slate-600">
+              Guild ID: <strong>{guildId ?? "Not connected yet"}</strong>
+            </div>
+            <div className="text-xs text-slate-500">Installed at: <strong>{installedAt ?? "Not installed yet"}</strong></div>
+          </div>
         </div>
-        <p className="mt-2 text-muted-foreground">
-          Guild ID: <strong>{guildId ?? "not connected yet"}</strong>
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Installed at: <strong>{installedAt ?? "not installed yet"}</strong>
-        </p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium" htmlFor="discord-onboarding-channel">
-            Onboarding channel ID
+      <div className="min-w-0 grid gap-5 md:grid-cols-2">
+        <div className="space-y-1.5 md:col-span-2">
+          <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="discord-onboarding-channel">
+            Invite channel
           </label>
           <Input
             id="discord-onboarding-channel"
             value={onboardingChannelId ?? ""}
             onChange={(event) => onOnboardingChannelChange(event.target.value)}
             placeholder="Discord text channel ID"
+            className="h-12 rounded-2xl border-slate-200 bg-white"
           />
+          <p className="text-sm text-slate-500">Use the channel where new members should receive the workspace invite.</p>
         </div>
         <div className="space-y-1.5">
-          <label className="text-sm font-medium" htmlFor="discord-invite-expiry">
-            Invite expiry seconds
+          <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="discord-invite-expiry">
+            Invite expiry
           </label>
           <Input
             id="discord-invite-expiry"
             value={String(inviteExpirySeconds ?? 86400)}
             onChange={(event) => onInviteExpiryChange(event.target.value)}
             placeholder="86400"
+            className="h-12 rounded-2xl border-slate-200 bg-white"
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-sm font-medium" htmlFor="discord-invite-max-uses">
+          <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="discord-invite-max-uses">
             Invite max uses
           </label>
           <Input
@@ -94,6 +95,7 @@ export function DiscordStep({
             value={String(inviteMaxUses ?? 1)}
             onChange={(event) => onInviteMaxUsesChange(event.target.value)}
             placeholder="1"
+            className="h-12 rounded-2xl border-slate-200 bg-white"
           />
         </div>
       </div>

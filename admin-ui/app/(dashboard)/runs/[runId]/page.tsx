@@ -939,7 +939,16 @@ export default function RunDetailPage() {
   const agentOutcomes = useMemo(() => {
     const planRoot = isRecord(run?.plan) ? run.plan : {};
     const workflowPlan = isRecord(planRoot["plan"]) ? planRoot["plan"] : null;
+    const stageCheckpoints = isRecord(planRoot["stage_checkpoints"]) ? planRoot["stage_checkpoints"] : null;
+    const checkpointSummaryForStage = (stage: AgentStage): string[] => {
+      if (!stageCheckpoints || !isRecord(stageCheckpoints[stage])) {
+        return [];
+      }
+      const summary = String(stageCheckpoints[stage]["summary"] ?? "").trim();
+      return summary ? [summary] : [];
+    };
     const pmItems = [
+      ...checkpointSummaryForStage("pm"),
       ...toStringList(workflowPlan?.["plan_steps"]),
       ...toStringList(workflowPlan?.["acceptance_criteria"]).map((item) => `AC: ${item}`),
       ...toStringList(workflowPlan?.["risks"]).map((item) => `Risk: ${item}`)
@@ -973,21 +982,21 @@ export default function RunDetailPage() {
       {
         stage: "dev",
         label: "Dev",
-        items: [...toStringList(planRoot["dev_rationale"]), ...workstreamSummaries],
+        items: [...checkpointSummaryForStage("dev"), ...toStringList(planRoot["dev_rationale"]), ...workstreamSummaries],
         feedback: null as string | null,
         emptyText: "No Dev rationale captured."
       },
       {
         stage: "test",
         label: "Test",
-        items: toStringList(planRoot["test_guidance"]),
+        items: [...checkpointSummaryForStage("test"), ...toStringList(planRoot["test_guidance"])],
         feedback: null as string | null,
         emptyText: "No test guidance captured."
       },
       {
         stage: "review",
         label: "Review",
-        items: [...toStringList(planRoot["review_summary"]), ...reviewHistory],
+        items: [...checkpointSummaryForStage("review"), ...toStringList(planRoot["review_summary"]), ...reviewHistory],
         feedback: String(planRoot["review_feedback"] ?? "").trim() || null,
         emptyText: "No review summary captured."
       }
@@ -1395,7 +1404,7 @@ export default function RunDetailPage() {
                           ? `/tenants/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
                           : `/tenants/${encodeURIComponent(run.tenant_id)}/runs`
                       )
-                    : "/tenants/select"
+                    : "/dashboard"
                 }
               >
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />

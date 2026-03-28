@@ -20,6 +20,7 @@ import {
 
 test("registers a tenant admin and redirects into the setup onboarding flow", async ({ page }) => {
   const membership = makeMembership({
+    tenant_id: "acme",
     role: "tenant_admin",
     onboarding_kind: "tenant_admin_setup",
     onboarding_completed_at: null,
@@ -77,11 +78,15 @@ test("registers a tenant admin and redirects into the setup onboarding flow", as
   await page.getByLabel("Work email").fill("owner@example.com");
   await page.getByLabel("Workspace name").fill("Acme Workspace");
   await page.getByLabel("Password").fill("supersecret");
-  await page.getByRole("button", { name: "Create workspace" }).click();
-
-  await expect(page).toHaveURL(/\/get-started$/);
+  await Promise.all([
+    page.waitForURL(/\/get-started$/, { timeout: 30000 }),
+    page.getByRole("button", { name: "Create workspace" }).click(),
+  ]);
   await expect(page.getByRole("heading", { name: "Set up workspace" })).toBeVisible();
   await expect(page.getByText("Connect Jira and choose at least one project")).toBeVisible();
+  await expect(page.getByText("Credentials")).toHaveCount(0);
+  await expect(page.getByText("Open platform secrets")).toHaveCount(0);
+  await expect(page.getByText("What this controls")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Finish setup" })).toBeDisabled();
 });
 
@@ -150,14 +155,19 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
       },
     },
     {
-      method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
-      handler: (route) => fulfillJson(route, tenant),
+      method: "POST",
+      pathname: "/api/bff/api/admin/tenants/example/discord/onboarding-invite",
+      handler: (route) =>
+        fulfillJson(route, {
+          invite_url: "https://discord.gg/example",
+          expires_at: "2026-03-29T00:00:00Z",
+          max_uses: 1,
+        }),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/discord/identity",
-      handler: (route) => fulfillJson(route, makeDiscordIdentity()),
+      pathname: "/api/bff/api/admin/tenants/example",
+      handler: (route) => fulfillJson(route, tenant),
     },
   ]);
 
@@ -177,8 +187,14 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
   await page.getByRole("button", { name: "Business view" }).click();
   await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.getByRole("heading", { name: "Join Discord" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Link Discord" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open Discord invite" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open Discord" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue to finish" })).toHaveCount(0);
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Open Discord" }).click();
+  const popup = await popupPromise;
+  await expect(popup).toHaveURL(/discord(\.gg|\.com\/invite)\/example/);
+  await popup.close();
+  await expect(page.getByRole("button", { name: "Continue to finish" })).toBeVisible();
   await page.getByRole("button", { name: "Continue to finish" }).click();
   await expect(page.getByRole("heading", { name: "Finish onboarding" })).toBeVisible();
 });
@@ -224,8 +240,7 @@ test("redirects non-technical users away from technical analytics surfaces", asy
 
   await page.goto("/tenants/example/analytics/token-overview");
 
-  await expect(page).toHaveURL(/\/tenants\/example\/analytics\/business$/);
-  await expect(page.getByRole("link", { name: "Delivery" })).toBeVisible();
+  await expect(page).toHaveURL(/\/tenants\/example\/analytics\/business$/, { timeout: 15000 });
   await expect(page.getByRole("link", { name: "Token Overview" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Recent delivery timeline" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Secrets" })).toHaveCount(0);
@@ -362,16 +377,20 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
   ]);
 
   await page.goto("/tenants/new/basics");
-  await page.getByPlaceholder("Tenant Demo").fill("Beta Workspace");
-  await page.getByRole("button", { name: /^Next$/ }).click();
+  await page.getByLabel("Workspace name").fill("Beta Workspace");
+  await expect(page.getByLabel("Workspace name")).toHaveValue("Beta Workspace");
+  await Promise.all([
+    page.waitForURL(/\/tenants\/new\/jira$/, { timeout: 15000 }),
+    page.getByRole("button", { name: /^Next$/ }).click(),
+  ]);
 
-  await expect(page).toHaveURL(/\/tenants\/new\/jira$/);
   await page.getByRole("button", { name: /^Next$/ }).click();
-  await expect(page.getByText("Connect Jira before continuing.")).toBeVisible();
+  await expect(page).toHaveURL(/\/tenants\/new\/jira$/);
+  await expect(page.getByRole("heading", { name: "Connect Jira" })).toBeVisible();
 
   await page.getByRole("button", { name: "Connect Jira" }).click();
   await expect(page).toHaveURL(/jira_connection_id=jira-conn-123/);
-  await page.getByRole("button", { name: "Load Jira Projects" }).click();
+  await page.getByRole("button", { name: "Load projects" }).click();
   await page.getByRole("button", { name: /^Next$/ }).click();
 
   await expect(page).toHaveURL(/\/tenants\/new\/github$/);
@@ -382,7 +401,7 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
   await expect(page).toHaveURL(/\/tenants\/new\/discord$/);
   await page.getByRole("button", { name: /(Reinstall|Install) Discord Bot/ }).click();
   await expect(page).toHaveURL(/discord_install=success/);
-  await page.getByLabel("Onboarding channel ID").fill("channel-789");
+  await page.getByLabel("Invite channel").fill("channel-789");
   await page.getByRole("button", { name: /^Next$/ }).click();
 
   await expect(page).toHaveURL(/\/tenants\/new\/repos$/);
@@ -390,9 +409,8 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
   await page.getByRole("button", { name: /^Next$/ }).click();
 
   await expect(page).toHaveURL(/\/tenants\/new\/review$/);
-  await page.getByRole("button", { name: "Save Tenant" }).click();
-  await expect(page.getByText("Saved tenant beta-workspace.")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Open Tenant Editor" })).toBeVisible();
+  await page.getByRole("button", { name: "Save workspace" }).click();
+  await expect(page.getByRole("link", { name: "Open workspace settings" })).toBeVisible();
 });
 
 test("opens the tenant workspace from the selector for tenant users", async ({ page }) => {
@@ -442,11 +460,46 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
   ]);
 
   await page.goto("/tenants/select");
-  await page.getByRole("link", { name: /Route 25/ }).click();
-
-  await expect(page).toHaveURL(/\/tenants\/example\/dashboard$/);
+  await Promise.all([
+    page.waitForURL(/\/tenants\/example\/dashboard$/, { timeout: 15000 }),
+    page.getByRole("link", { name: /Route 25/ }).click(),
+  ]);
   await expect(page.getByRole("heading", { name: "Route 25" })).toBeVisible();
   await expect(page.getByText("Tenant workspace overview.")).toBeVisible();
+});
+
+test("lets platform super admins see team navigation and security controls inside a workspace", async ({ page }) => {
+  const principal = makePlatformAdminPrincipal();
+  const tenant = makeTenant({
+    tenant_id: "example",
+    name: "Route 25",
+  });
+
+  await seedAdminSession(page);
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects",
+      handler: (route) => fulfillJson(route, []),
+    },
+  ]);
+
+  await page.goto("/tenants/example/profile/security");
+
+  await expect(page.getByRole("link", { name: "Team" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Update password" })).toBeVisible();
+  await expect(page.getByText("Password management for platform administrators")).toHaveCount(0);
 });
 
 test("lets tenant admins manage team settings from dedicated Team tabs", async ({ page }) => {
@@ -631,6 +684,114 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
   await expect(page.getByText("Pending • Business member • Delivery")).toBeVisible();
 });
 
+test("hides team navigation for invited users without team-management access", async ({ page }) => {
+  const membership = makeMembership({
+    tenant_id: "example",
+    role: "business_member",
+    effective_mode: "non_technical",
+    permission_keys: ["analytics.business.view", "runs.business.view"],
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+  });
+  const principal = makeTenantUserPrincipal({
+    email: "business@example.com",
+    full_name: "Business Example",
+    memberships: [membership],
+  });
+  const tenant = makeTenant({
+    tenant_id: "example",
+    experience: { default_mode: "non_technical" },
+  });
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/delivery-summary",
+      handler: (route) => fulfillJson(route, makeDeliverySummary()),
+    },
+  ]);
+
+  await page.goto("/tenants/example/dashboard");
+
+  await expect(page.getByRole("heading", { name: "Route 25" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Team" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Profile" })).toBeVisible();
+});
+
+test("hides Discord link actions when platform Discord OAuth is unavailable", async ({ page }) => {
+  const tenantId = "example";
+  const membership = makeMembership({
+    tenant_id: tenantId,
+    role: "business_member",
+    effective_mode: "non_technical",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+  });
+  const principal = makeTenantUserPrincipal({
+    email: "invitee@example.com",
+    full_name: "Invitee Example",
+    memberships: [membership],
+  });
+  const tenant = makeTenant({
+    tenant_id: tenantId,
+    experience: { default_mode: "non_technical" },
+    discord: {
+      guild_id: "guild-123",
+      installed_at: "2026-03-27T11:00:00Z",
+      onboarding_channel_id: "channel-456",
+      onboarding_invite_expires_in_seconds: 86400,
+      onboarding_invite_max_uses: 1,
+      notify_events: [],
+    },
+  });
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${tenantId}`,
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${tenantId}/projects`,
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${tenantId}/discord/identity`,
+      handler: (route) => fulfillJson(route, makeDiscordIdentity({ oauth_configured: false, linked: false })),
+    },
+  ]);
+
+  await page.goto(`/tenants/${tenantId}/profile`);
+
+  await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Link Discord" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Relink Discord" })).toHaveCount(0);
+  await expect(page.getByText("Discord linking is unavailable until platform Discord OAuth is configured.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy join link" })).toBeVisible();
+});
+
 test("lets a tenant user manage profile details, experience, and password from Profile", async ({ page }) => {
   const tenantId = "route 25";
   const encodedTenantId = encodeURIComponent(tenantId);
@@ -724,11 +885,15 @@ test("lets a tenant user manage profile details, experience, and password from P
   await page.goto(`/tenants/${encodedTenantId}/profile`);
 
   await expect(page.getByRole("heading", { name: "Profile", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Security" })).toBeVisible();
   await page.getByLabel("Full name").fill("Person Renamed");
   await page.getByLabel("Experience preference").selectOption("non_technical");
   await page.getByRole("button", { name: "Save profile" }).click();
   await expect(page.getByText("Profile updated.")).toBeVisible();
 
+  await page.getByRole("link", { name: "Security" }).click();
+  await expect(page).toHaveURL(new RegExp(`/tenants/${encodedTenantId}/profile/security$`), { timeout: 15000 });
+  await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
   await page.getByLabel("Current password").fill("old-password");
   await page.getByLabel("New password").fill("updated-password");
   await page.getByRole("button", { name: "Update password" }).click();

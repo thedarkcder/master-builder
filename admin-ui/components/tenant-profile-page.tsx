@@ -2,12 +2,14 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { Check, Shield, UserRound } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { DiscordLogo } from "@/components/icons/discord-logo";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { canAccessTenantWorkspace } from "@/lib/auth-routing";
 import {
   changeTenantUserPassword,
   createTenantDiscordInvite,
@@ -20,11 +22,13 @@ import {
   type TenantRecord,
 } from "@/lib/api";
 
-export function TenantProfilePage() {
+export function TenantProfilePage({ section = "profile" }: { section?: "profile" | "security" }) {
   const params = useParams<{ tenantId: string }>();
   const { credentials, principal, ready, refreshPrincipal } = useAuth();
   const tenantId = decodeURIComponent(params.tenantId);
   const isTenantUser = principal?.principal_type === "tenant_user";
+  const isPlatformSuperAdmin = principal?.principal_type === "platform_super_admin";
+  const canEditAccountProfile = isTenantUser;
   const profileIdentifier = principal?.email ?? principal?.username ?? "";
 
   const membership = useMemo(
@@ -43,10 +47,15 @@ export function TenantProfilePage() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [nextPassword, setNextPassword] = useState("");
 
+  const displayName = fullName || principal?.full_name || principal?.username || principal?.email || "User";
+
   const statusClasses = useMemo(() => {
     const normalized = statusLine.toLowerCase();
     if (normalized.includes("failed") || normalized.includes("unable") || normalized.includes("incorrect")) {
       return "border-red-300 bg-red-50 text-red-800";
+    }
+    if (normalized.includes("updated") || normalized.includes("generated") || normalized.includes("copied")) {
+      return "border-emerald-300 bg-emerald-50 text-emerald-800";
     }
     return "border-muted bg-muted/30 text-muted-foreground";
   }, [statusLine]);
@@ -62,14 +71,14 @@ export function TenantProfilePage() {
   }, [membership, principal?.full_name, principal?.username]);
 
   useEffect(() => {
-    if (!ready || !credentials || !membership) {
+    if (!ready || !credentials || !canAccessTenantWorkspace(principal, tenantId)) {
       setTenant(null);
       setDiscordIdentity(null);
       setLoading(false);
       return;
     }
     let cancelled = false;
-      setLoading(true);
+    setLoading(true);
     void Promise.all([
       getTenant(credentials, tenantId),
       getTenantDiscordIdentity(credentials, tenantId),
@@ -93,7 +102,7 @@ export function TenantProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, [credentials, membership, ready, tenantId]);
+  }, [credentials, principal, ready, tenantId]);
 
   async function handleSaveProfile() {
     if (!credentials || !isTenantUser) {
@@ -165,163 +174,258 @@ export function TenantProfilePage() {
 
   if (loading) {
     return (
-      <Card>
-        <CardHeader>
-          <Skeleton className="h-6 w-48" />
-          <Skeleton className="h-4 w-72" />
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-        </CardContent>
-      </Card>
+      <div className="rounded-2xl border bg-background p-6">
+        <div className="space-y-3">
+          <Skeleton className="h-7 w-40" />
+          <Skeleton className="h-4 w-60" />
+          <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+            <Skeleton className="h-64 w-full rounded-2xl" />
+            <div className="space-y-3">
+              <Skeleton className="h-28 w-full rounded-2xl" />
+              <Skeleton className="h-28 w-full rounded-2xl" />
+              <Skeleton className="h-28 w-full rounded-2xl" />
+            </div>
+          </div>
+        </div>
+      </div>
     );
   }
 
   const tenantDefaultMode = String(tenant?.experience?.default_mode ?? "technical");
+  const workspaceName = tenant?.name ?? tenantId;
+  const linkedDiscordName =
+    discordIdentity?.discord_global_name ?? discordIdentity?.discord_username ?? discordIdentity?.discord_user_id ?? null;
+  const discordOauthConfigured = Boolean(discordIdentity?.oauth_configured);
+  const workspaceInviteAvailable = Boolean(tenant?.discord?.guild_id);
+
+  function initialsFor(name: string): string {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+      return "MB";
+    }
+    if (parts.length === 1) {
+      return parts[0].slice(0, 2).toUpperCase();
+    }
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+
+  function formatModeLabel(value: string | null | undefined): string {
+    if (!value) {
+      return "Workspace default";
+    }
+    return value === "non_technical" ? "Business view" : "Technical view";
+  }
 
   return (
-    <div className="space-y-4">
-      <div className="mb-1">
-        <h1 className="text-xl font-semibold">Profile</h1>
-        <p className="text-sm text-muted-foreground">Manage your details, experience mode, Discord identity, and password.</p>
+    <div className="space-y-6">
+      {statusLine ? <div className={`rounded-xl border px-4 py-3 text-sm ${statusClasses}`}>{statusLine}</div> : null}
+
+      <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="rounded-2xl border bg-background p-5">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-950 text-lg font-semibold text-white">
+              {initialsFor(displayName)}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-base font-semibold">{displayName}</p>
+              <p className="truncate text-sm text-muted-foreground">{profileIdentifier}</p>
+            </div>
+          </div>
+
+          <div className="mt-6 space-y-4 border-t pt-4">
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Workspace</p>
+              <p className="mt-1 text-sm font-medium">{workspaceName}</p>
+            </div>
+            {membership ? (
+              <>
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Role</p>
+                  <p className="mt-1 text-sm">{membership.role.replace(/_/g, " ")}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Current view</p>
+                  <p className="mt-1 text-sm">{formatModeLabel(membership.effective_mode)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Discord</p>
+                  <p className="mt-1 text-sm">{linkedDiscordName ?? "Not linked"}</p>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                {isPlatformSuperAdmin
+                  ? "Platform super admin access is active for this workspace."
+                  : "Workspace-specific details appear here when this user belongs to the workspace."}
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <section className="overflow-hidden rounded-2xl border bg-background">
+          <div className="divide-y">
+            {section === "profile" ? (
+              <>
+                <section className="grid gap-5 p-6 md:grid-cols-[minmax(0,1fr)_220px] md:items-start">
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <UserRound className="h-4 w-4 text-muted-foreground" />
+                        <h2 className="text-base font-semibold">Account</h2>
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">These details identify you across Master Builder.</p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium" htmlFor="profile-full-name">
+                          {canEditAccountProfile ? "Full name" : "Account"}
+                        </label>
+                        <Input
+                          id="profile-full-name"
+                          value={canEditAccountProfile ? fullName : profileIdentifier}
+                          onChange={(event) => setFullName(event.target.value)}
+                          readOnly={!canEditAccountProfile}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium" htmlFor="profile-email">
+                          {principal?.email ? "Email" : "Username"}
+                        </label>
+                        <Input id="profile-email" value={profileIdentifier} readOnly />
+                      </div>
+                    </div>
+                  </div>
+                  {canEditAccountProfile ? (
+                    <div className="flex md:justify-end">
+                      <Button onClick={() => void handleSaveProfile()} disabled={saving || !fullName.trim()}>
+                        {saving ? "Saving..." : "Save profile"}
+                      </Button>
+                    </div>
+                  ) : null}
+                </section>
+
+                {membership ? (
+                  <section className="grid gap-5 p-6 md:grid-cols-[minmax(0,1fr)_220px] md:items-start">
+                    <div className="space-y-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-muted-foreground" />
+                          <h2 className="text-base font-semibold">Workspace view</h2>
+                        </div>
+                        <p className="mt-1 text-sm text-muted-foreground">Choose which view opens by default in this workspace.</p>
+                      </div>
+                      <div className="max-w-sm space-y-2">
+                        <label className="text-sm font-medium" htmlFor="profile-mode-override">
+                          Experience preference
+                        </label>
+                        <select
+                          id="profile-mode-override"
+                          className="w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                          value={modeOverride}
+                          onChange={(event) => setModeOverride(event.target.value as "technical" | "non_technical" | "")}
+                        >
+                          <option value="">Workspace default ({formatModeLabel(tenantDefaultMode)})</option>
+                          <option value="non_technical">Business view</option>
+                          <option value="technical">Technical view</option>
+                        </select>
+                      </div>
+                    </div>
+                  </section>
+                ) : null}
+
+                {membership ? (
+                  <section className="grid gap-5 p-6 md:grid-cols-[minmax(0,1fr)_220px] md:items-start">
+                    <div className="space-y-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <DiscordLogo className="h-4 w-4 text-[#5865F2]" />
+                          <h2 className="text-base font-semibold">Discord</h2>
+                        </div>
+                        <p className="mt-1 text-sm text-muted-foreground">Link your Discord profile and open a workspace join link when needed.</p>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-xl border px-4 py-3">
+                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Identity</p>
+                          <p className="mt-2 text-sm font-medium">{linkedDiscordName ?? "Not linked"}</p>
+                        </div>
+                        <div className="rounded-xl border px-4 py-3">
+                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Workspace invite</p>
+                          <p className="mt-2 text-sm font-medium">
+                            {workspaceInviteAvailable ? "Available" : "Not configured"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2 md:items-end">
+                      {discordOauthConfigured ? (
+                        <Button variant={discordIdentity?.linked ? "outline" : "default"} onClick={() => void handleLinkDiscord()}>
+                          <DiscordLogo className="mr-2 h-4 w-4" />
+                          {discordIdentity?.linked ? "Relink Discord" : "Link Discord"}
+                        </Button>
+                      ) : (
+                        <p className="max-w-[220px] text-right text-sm text-muted-foreground">
+                          Discord linking is unavailable until platform Discord OAuth is configured.
+                        </p>
+                      )}
+                      {workspaceInviteAvailable ? (
+                        <Button variant="outline" onClick={() => void handleCreateDiscordInvite()}>
+                          Copy join link
+                        </Button>
+                      ) : null}
+                    </div>
+                  </section>
+                ) : null}
+              </>
+            ) : null}
+
+            {section === "security" ? (
+              <section className="grid gap-5 p-6 md:grid-cols-[minmax(0,1fr)_220px] md:items-start">
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Shield className="h-4 w-4 text-muted-foreground" />
+                      <h2 className="text-base font-semibold">Security</h2>
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">Use a new password with at least eight characters.</p>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium" htmlFor="current-password">
+                        Current password
+                      </label>
+                      <Input
+                        id="current-password"
+                        type="password"
+                        value={currentPassword}
+                        onChange={(event) => setCurrentPassword(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium" htmlFor="new-password">
+                        New password
+                      </label>
+                      <Input
+                        id="new-password"
+                        type="password"
+                        value={nextPassword}
+                        onChange={(event) => setNextPassword(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="flex md:justify-end">
+                  <Button
+                    onClick={() => void handleChangePassword()}
+                    disabled={passwordBusy || !currentPassword || nextPassword.length < 8}
+                  >
+                    {passwordBusy ? "Updating..." : "Update password"}
+                  </Button>
+                </div>
+              </section>
+            ) : null}
+          </div>
+        </section>
       </div>
-
-      {statusLine ? <div className={`rounded-md border px-3 py-2 text-sm ${statusClasses}`}>{statusLine}</div> : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Profile details</CardTitle>
-          <CardDescription>Your account details in Master Builder.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="profile-full-name">
-              Full name
-            </label>
-            <Input id="profile-full-name" value={fullName} onChange={(event) => setFullName(event.target.value)} />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="profile-email">
-              {principal?.email ? "Email" : "Username"}
-            </label>
-            <Input id="profile-email" value={profileIdentifier} readOnly />
-          </div>
-          {membership ? (
-            <>
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="profile-role">
-                  Role
-                </label>
-                <Input id="profile-role" value={membership.role.replace(/_/g, " ")} readOnly />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="profile-effective-mode">
-                  Effective experience
-                </label>
-                <Input id="profile-effective-mode" value={membership.effective_mode.replace(/_/g, " ")} readOnly />
-              </div>
-              <div className="space-y-2 md:col-span-2">
-                <label className="text-sm font-medium" htmlFor="profile-mode-override">
-                  Experience preference
-                </label>
-                <select
-                  id="profile-mode-override"
-                  className="w-full rounded-md border bg-background px-3 py-2"
-                  value={modeOverride}
-                  onChange={(event) => setModeOverride(event.target.value as "technical" | "non_technical" | "")}
-                >
-                  <option value="">Use tenant default ({tenantDefaultMode.replace(/_/g, " ")})</option>
-                  <option value="non_technical">Non-technical</option>
-                  <option value="technical">Technical</option>
-                </select>
-              </div>
-            </>
-          ) : (
-            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground md:col-span-2">
-              Workspace-specific experience settings are only available when this account belongs to the current workspace.
-            </div>
-          )}
-          <div className="md:col-span-2">
-            <Button onClick={() => void handleSaveProfile()} disabled={saving || !isTenantUser || !fullName.trim()}>
-              {saving ? "Saving..." : "Save profile"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {membership ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Discord</CardTitle>
-            <CardDescription>Link your Discord identity and generate a tenant join invite for yourself.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <p>
-              <strong>Identity:</strong>{" "}
-              {discordIdentity?.linked
-                ? `${discordIdentity.discord_global_name ?? discordIdentity.discord_username ?? discordIdentity.discord_user_id}`
-                : "Not linked"}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => void handleLinkDiscord()}>
-                Link Discord
-              </Button>
-              <Button variant="outline" onClick={() => void handleCreateDiscordInvite()}>
-                Generate Join Invite
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {isTenantUser ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Password</CardTitle>
-            <CardDescription>Change your password for Master Builder.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <label className="text-sm font-medium" htmlFor="current-password">
-                Current password
-              </label>
-              <Input
-                id="current-password"
-                type="password"
-                value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium" htmlFor="new-password">
-                New password
-              </label>
-              <Input
-                id="new-password"
-                type="password"
-                value={nextPassword}
-                onChange={(event) => setNextPassword(event.target.value)}
-              />
-            </div>
-            <div className="md:col-span-2">
-              <Button
-                onClick={() => void handleChangePassword()}
-                disabled={passwordBusy || !currentPassword || nextPassword.length < 8}
-              >
-                {passwordBusy ? "Updating..." : "Update password"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle>Password</CardTitle>
-            <CardDescription>Platform administrator passwords are managed through platform administration, not tenant profile settings.</CardDescription>
-          </CardHeader>
-        </Card>
-      )}
     </div>
   );
 }

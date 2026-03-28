@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import UTC
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +17,7 @@ from orchestrator.api.admin.route_helpers import (
 )
 from orchestrator.api.admin.schema_mappers import tenant_to_schema
 from orchestrator.api.dependencies import get_session
+from orchestrator.api.url_helpers import resolve_public_base_url
 from pydantic import BaseModel, Field
 
 from orchestrator.api.schemas import (
@@ -28,6 +32,8 @@ from orchestrator.api.schemas import (
 from orchestrator.core.auth_tokens import create_auth_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.oauth import DiscordOAuthError, exchange_code_for_user, parse_discord_oauth_state
+from orchestrator.core.password_reset_email import send_password_reset_email
+from orchestrator.core.password_reset_tokens import PasswordResetTokenError, issue_password_reset_token, parse_password_reset_token
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
@@ -35,6 +41,7 @@ from orchestrator.core.platform_secret_service import (
 from orchestrator.core.security import (
     AuthenticatedPrincipal,
     TenantMembershipPrincipal,
+    change_platform_admin_password,
     load_tenant_user_principal,
     require_authenticated_principal,
     require_tenant_membership,
@@ -46,20 +53,24 @@ from orchestrator.core.tenant_users import (
     create_membership,
     create_tenant_record,
     create_tenant_user,
+    find_tenant_user_by_email,
     link_discord_identity,
     mark_membership_signed_in,
     normalize_email,
+    reset_user_password,
     resolve_invite,
     utcnow,
     update_membership_mode_override,
     update_membership_discord_state,
     update_user_profile,
 )
-from orchestrator.storage.models import Tenant, TenantMembership, TenantUser
+from orchestrator.storage.models import Tenant, TenantMembership, TenantUser, TenantUserCredential
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 
 router = APIRouter(tags=["app-auth"])
+
+PASSWORD_RESET_SENT_MESSAGE = "If an account exists for that email, a reset link has been sent."
 
 
 def _membership_to_schema(membership: TenantMembershipPrincipal) -> TenantMembershipIdentityRead:
@@ -104,6 +115,31 @@ def _build_login_response(*, principal: AuthenticatedPrincipal) -> TenantUserLog
         expires_in=expires_in,
         principal=_principal_to_schema(principal),
     )
+
+
+def _password_reset_secret(*, settings) -> str:  # noqa: ANN001
+    return str(settings.auth_token_secret).strip()
+
+
+class PublicMessageResponse(BaseModel):
+    detail: str
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    token: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
+
+
+def _normalize_password_updated_at(value) -> str:  # noqa: ANN001
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC).isoformat()
+    return value.astimezone(UTC).isoformat()
 
 
 @router.post("/api/public/register", response_model=PublicRegistrationResponse, status_code=status.HTTP_201_CREATED)
@@ -153,6 +189,64 @@ def public_register(
         principal=login.principal,
         tenant=tenant_to_schema(persisted_tenant),
     )
+
+
+@router.post(
+    "/api/public/password-reset/request",
+    response_model=PublicMessageResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def request_password_reset(
+    payload: PasswordResetRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> PublicMessageResponse:
+    settings = get_settings()
+    tenant_user = find_tenant_user_by_email(session=session, email=payload.email)
+    if tenant_user is not None and tenant_user.is_active:
+        credential = session.get(TenantUserCredential, tenant_user.user_id)
+        if credential is not None:
+            token = issue_password_reset_token(
+                user_id=tenant_user.user_id,
+                email=tenant_user.email,
+                password_updated_at=credential.password_updated_at,
+                secret=_password_reset_secret(settings=settings),
+            )
+            base = resolve_public_base_url(request=request, configured_base_url=settings.admin_ui_base_url)
+            reset_url = f"{base}/reset-password?token={quote(token)}"
+            send_password_reset_email(
+                email=tenant_user.email,
+                full_name=tenant_user.full_name,
+                reset_url=reset_url,
+            )
+    return PublicMessageResponse(detail=PASSWORD_RESET_SENT_MESSAGE)
+
+
+@router.post("/api/public/password-reset/confirm", response_model=PublicMessageResponse)
+def confirm_password_reset(
+    payload: PasswordResetConfirmRequest,
+    session: Session = Depends(get_session),
+) -> PublicMessageResponse:
+    settings = get_settings()
+    try:
+        token_payload = parse_password_reset_token(
+            token=payload.token,
+            secret=_password_reset_secret(settings=settings),
+        )
+    except PasswordResetTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    tenant_user = session.get(TenantUser, token_payload.user_id)
+    if tenant_user is None or not tenant_user.is_active or normalize_email(tenant_user.email) != token_payload.email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
+    credential = session.get(TenantUserCredential, tenant_user.user_id)
+    if credential is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
+    if _normalize_password_updated_at(credential.password_updated_at) != token_payload.password_updated_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
+    reset_user_password(session=session, user_id=tenant_user.user_id, new_password=payload.new_password)
+    session.commit()
+    return PublicMessageResponse(detail="Password updated. You can now sign in.")
 
 
 @router.post("/api/app/auth/login", response_model=TenantUserLoginResponse)
@@ -234,11 +328,29 @@ class TenantUserPasswordChangeRequest(BaseModel):
 
 
 @router.post("/api/app/me/password", response_model=AuthenticatedPrincipalRead)
-def change_tenant_user_password(
+def change_authenticated_user_password(
     payload: TenantUserPasswordChangeRequest,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> AuthenticatedPrincipalRead:
+    if principal.is_platform_super_admin:
+        if principal.username is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        try:
+            change_platform_admin_password(
+                session=session,
+                username=principal.username,
+                current_password=payload.current_password,
+                new_password=payload.new_password,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        return _principal_to_schema(principal)
+
     if principal.user_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     try:

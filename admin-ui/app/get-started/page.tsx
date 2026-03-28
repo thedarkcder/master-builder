@@ -14,10 +14,7 @@ import {
   completeOnboarding,
   createTenantDiscordInvite,
   getTenant,
-  getTenantDiscordIdentity,
-  startTenantDiscordLink,
   updateTenantUserSettings,
-  type TenantDiscordIdentityRecord,
   type TenantRecord
 } from "@/lib/api";
 
@@ -41,13 +38,13 @@ const MEMBER_ONBOARDING_STEPS: Array<{ key: MemberOnboardingStep; label: string 
 
 export default function GetStartedPage() {
   const router = useRouter();
-  const { credentials, principal, ready, needsOnboarding, refreshPrincipal } = useAuth();
+  const { applyPrincipal, credentials, principal, ready, needsOnboarding } = useAuth();
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [loadingTenant, setLoadingTenant] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [discordIdentity, setDiscordIdentity] = useState<TenantDiscordIdentityRecord | null>(null);
   const [discordBusy, setDiscordBusy] = useState(false);
+  const [discordInviteOpened, setDiscordInviteOpened] = useState(false);
   const [memberStep, setMemberStep] = useState<MemberOnboardingStep>("details");
   const [selectedExperience, setSelectedExperience] = useState<"technical" | "non_technical">("non_technical");
   const [experienceBusy, setExperienceBusy] = useState(false);
@@ -68,19 +65,14 @@ export default function GetStartedPage() {
   useEffect(() => {
     if (!credentials || !pendingMembership) {
       setTenant(null);
-      setDiscordIdentity(null);
       return;
     }
     let cancelled = false;
     setLoadingTenant(true);
-    void Promise.all([
-      getTenant(credentials, pendingMembership.tenant_id),
-      getTenantDiscordIdentity(credentials, pendingMembership.tenant_id)
-    ])
-      .then(([record, identity]) => {
+    void getTenant(credentials, pendingMembership.tenant_id)
+      .then((record) => {
         if (!cancelled) {
           setTenant(record);
-          setDiscordIdentity(identity);
         }
       })
       .catch((error) => {
@@ -116,8 +108,9 @@ export default function GetStartedPage() {
       return;
     }
     setMemberStep("details");
+    setDiscordInviteOpened(false);
   }, [isTenantAdminSetup, pendingMembership?.membership_id]);
-  const discordReady = Boolean(tenant?.discord?.guild_id && tenant?.discord?.onboarding_channel_id);
+  const discordReady = Boolean(tenant?.discord?.guild_id);
   const jiraReady = Boolean(tenant?.jira.connection_id);
   const githubReady = Boolean(tenant?.github.installation_id);
   const memberSteps = useMemo(
@@ -139,7 +132,6 @@ export default function GetStartedPage() {
   }
 
   const canCompleteAdminSetup = Boolean(jiraReady && githubReady && discordReady);
-  const memberDiscordLinked = Boolean(discordIdentity?.linked || pendingMembership.discord_state?.linked);
   const memberDiscordJoined = Boolean(pendingMembership.discord_state?.guild_joined);
   const canChooseTechnicalExperience =
     pendingMembership.permission_keys.includes("analytics.technical.view") ||
@@ -147,20 +139,7 @@ export default function GetStartedPage() {
     pendingMembership.permission_keys.includes("settings.technical.view");
   const activeStepIndex = memberSteps.findIndex((step) => step.key === memberStep);
   const teamList = pendingMembership.team_ids.length > 0 ? pendingMembership.team_ids.join(", ") : "Not assigned";
-  const discordAction =
-    !discordReady ? null : !memberDiscordLinked
-      ? {
-          label: "Link Discord",
-          disabled: discordBusy,
-          onClick: () => void handleLinkDiscord(),
-        }
-      : !memberDiscordJoined
-        ? {
-            label: "Open Discord invite",
-            disabled: discordBusy,
-            onClick: () => void handleCreateDiscordInvite(),
-          }
-        : null;
+  const hasCompletedDiscordStep = memberDiscordJoined || discordInviteOpened;
 
   async function handleComplete() {
     if (!credentials || !pendingMembership) {
@@ -169,27 +148,13 @@ export default function GetStartedPage() {
     setErrorMessage(null);
     setIsCompleting(true);
     try {
-      await completeOnboarding(credentials, pendingMembership.tenant_id);
-      await refreshPrincipal();
+      const refreshedPrincipal = await completeOnboarding(credentials, pendingMembership.tenant_id);
+      applyPrincipal(refreshedPrincipal);
       router.replace(getTenantDashboardRoute(pendingMembership.tenant_id));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to complete onboarding");
     } finally {
       setIsCompleting(false);
-    }
-  }
-
-  async function handleLinkDiscord() {
-    if (!credentials || !pendingMembership) {
-      return;
-    }
-    setDiscordBusy(true);
-    try {
-      const result = await startTenantDiscordLink(credentials, pendingMembership.tenant_id, "/get-started");
-      window.location.href = result.authorize_url;
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to start Discord link");
-      setDiscordBusy(false);
     }
   }
 
@@ -201,7 +166,7 @@ export default function GetStartedPage() {
     try {
       const invite = await createTenantDiscordInvite(credentials, pendingMembership.tenant_id);
       window.open(invite.invite_url, "_blank", "noopener,noreferrer");
-      await refreshPrincipal();
+      setDiscordInviteOpened(true);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to create Discord invite");
     } finally {
@@ -216,10 +181,10 @@ export default function GetStartedPage() {
     setExperienceBusy(true);
     setErrorMessage(null);
     try {
-      await updateTenantUserSettings(credentials, pendingMembership.tenant_id, {
+      const refreshedPrincipal = await updateTenantUserSettings(credentials, pendingMembership.tenant_id, {
         mode_override: selectedExperience,
       });
-      await refreshPrincipal();
+      applyPrincipal(refreshedPrincipal);
       setMemberStep(discordReady ? "discord" : "finish");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to save experience");
@@ -350,8 +315,8 @@ export default function GetStartedPage() {
                             ].join(" ")}
                             onClick={() => setSelectedExperience("non_technical")}
                           >
-                            <div className="text-base font-semibold">Business view</div>
-                            <div className="mt-2 text-sm opacity-80">Delivery progress and team updates.</div>
+                          <div className="text-base font-semibold">Business view</div>
+                          <div className="mt-2 text-sm opacity-80">Delivery progress and team updates.</div>
                           </button>
                           <button
                             type="button"
@@ -365,8 +330,8 @@ export default function GetStartedPage() {
                             onClick={() => canChooseTechnicalExperience && setSelectedExperience("technical")}
                             disabled={!canChooseTechnicalExperience}
                           >
-                            <div className="text-base font-semibold">Technical view</div>
-                            <div className="mt-2 text-sm opacity-80">Diagnostics and technical analytics.</div>
+                          <div className="text-base font-semibold">Technical view</div>
+                          <div className="mt-2 text-sm opacity-80">Diagnostics and technical analytics.</div>
                           </button>
                         </div>
                         {!canChooseTechnicalExperience ? (
@@ -387,22 +352,29 @@ export default function GetStartedPage() {
                       <div className="space-y-4">
                         <div>
                           <h2 className="text-lg font-semibold text-slate-900">Join Discord</h2>
+                          <p className="mt-1 text-sm text-slate-600">Open the workspace invite, then return here.</p>
                         </div>
-                        <ChecklistRow done={memberDiscordLinked} label="Link your Discord identity" />
-                        <ChecklistRow done={memberDiscordJoined} label="Open the workspace Discord invite" />
-                        {discordAction ? (
-                          <div className="pt-1">
-                            <Button variant="outline" onClick={discordAction.onClick} disabled={discordAction.disabled}>
-                              <DiscordLogo className="mr-2 h-4 w-4" />
-                              {discordAction.label}
-                            </Button>
-                          </div>
+                        <ChecklistRow done={hasCompletedDiscordStep} label="Workspace invite opened" />
+                        {discordInviteOpened && !memberDiscordJoined ? (
+                          <p className="text-sm text-slate-600">Discord opened in a new tab. Continue when you are ready.</p>
                         ) : null}
                         <div className="flex justify-between">
                           <Button variant="outline" onClick={() => setMemberStep("experience")}>
                             Back
                           </Button>
-                          <Button onClick={() => setMemberStep("finish")}>Continue to finish</Button>
+                          <Button
+                            onClick={() => {
+                              if (hasCompletedDiscordStep) {
+                                setMemberStep("finish");
+                                return;
+                              }
+                              void handleCreateDiscordInvite();
+                            }}
+                            disabled={discordBusy}
+                          >
+                            {!hasCompletedDiscordStep ? <DiscordLogo className="mr-2 h-4 w-4" /> : null}
+                            {discordBusy ? "Opening Discord..." : hasCompletedDiscordStep ? "Continue to finish" : "Open Discord"}
+                          </Button>
                         </div>
                       </div>
                     ) : null}

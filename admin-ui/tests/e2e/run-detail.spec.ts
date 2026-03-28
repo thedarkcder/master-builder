@@ -58,7 +58,7 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
   await expect(page.getByText(/heartbeat timeout/i)).toBeVisible();
 
   await page.getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText("PR created and code pushed.")).toBeVisible();
+  await expect(page.getByText("PR created and code pushed.", { exact: true })).toBeVisible();
 });
 
 test("marks a finished stage without a checkpoint as interrupted on terminal runs", async ({ page }) => {

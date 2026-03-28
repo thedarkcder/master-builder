@@ -162,9 +162,7 @@ def create_tenant_user(
 
 def authenticate_tenant_user(*, session: Session, email: str, password: str) -> TenantUser | None:
     normalized_email = normalize_email(email)
-    tenant_user = session.execute(
-        select(TenantUser).where(TenantUser.email == normalized_email)
-    ).scalar_one_or_none()
+    tenant_user = find_tenant_user_by_email(session=session, email=normalized_email)
     if tenant_user is None or not tenant_user.is_active:
         return None
     credential = session.get(TenantUserCredential, tenant_user.user_id)
@@ -173,6 +171,11 @@ def authenticate_tenant_user(*, session: Session, email: str, password: str) -> 
     if not verify_password(password=password, password_hash=credential.password_hash):
         return None
     return tenant_user
+
+
+def find_tenant_user_by_email(*, session: Session, email: str) -> TenantUser | None:
+    normalized_email = normalize_email(email)
+    return session.execute(select(TenantUser).where(TenantUser.email == normalized_email)).scalar_one_or_none()
 
 
 def create_membership(
@@ -591,6 +594,23 @@ def change_user_password(
         raise ValueError("Credential not found")
     if not verify_password(password=current_password, password_hash=credential.password_hash):
         raise PermissionError("Current password is incorrect")
+    now = utcnow()
+    credential.password_hash = hash_password(new_password)
+    credential.password_updated_at = now
+    credential.must_change_password = False
+    credential.updated_at = now
+    return credential
+
+
+def reset_user_password(
+    *,
+    session: Session,
+    user_id: str,
+    new_password: str,
+) -> TenantUserCredential:
+    credential = session.get(TenantUserCredential, user_id)
+    if credential is None:
+        raise ValueError("Credential not found")
     now = utcnow()
     credential.password_hash = hash_password(new_password)
     credential.password_updated_at = now

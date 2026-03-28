@@ -119,6 +119,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       const pathname = request.nextUrl.pathname;
       const isPublicPath =
         pathname === "/login" ||
+        pathname === "/forgot-password" ||
+        pathname === "/reset-password" ||
         pathname === "/register" ||
         pathname === "/privacy" ||
         pathname.startsWith("/invite/accept");

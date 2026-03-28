@@ -760,6 +760,15 @@ export type RegistrationInput = {
   tenant_name: string;
 };
 
+export type PasswordResetRequestInput = {
+  email: string;
+};
+
+export type PasswordResetConfirmInput = {
+  token: string;
+  new_password: string;
+};
+
 export type RegistrationResponse = {
   access_token: string;
   token_type: string;
@@ -866,6 +875,7 @@ export type TenantInviteCreatePayload = {
 };
 
 export type TenantDiscordIdentityRecord = {
+  oauth_configured?: boolean;
   linked: boolean;
   discord_user_id?: string | null;
   discord_username?: string | null;
@@ -1073,6 +1083,50 @@ export async function acceptPublicInvite(
     expires_in: number;
     principal: AuthenticatedPrincipalRecord;
   };
+}
+
+export async function requestPasswordReset(
+  input: PasswordResetRequestInput,
+  apiBaseUrl = ""
+): Promise<{ detail: string }> {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/public/password-reset/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  return body as { detail: string };
+}
+
+export async function confirmPasswordReset(
+  input: PasswordResetConfirmInput,
+  apiBaseUrl = ""
+): Promise<{ detail: string }> {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/public/password-reset/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  return body as { detail: string };
 }
 
 export async function completeOnboarding(

@@ -34,6 +34,10 @@ class DiscordOAuthUser:
     access_token: str
 
 
+def discord_oauth_is_configured(*, settings: Settings) -> bool:
+    return bool(settings.discord_oauth_client_id.strip() and settings.discord_oauth_redirect_url.strip())
+
+
 def build_discord_oauth_authorize_url(
     *,
     settings: Settings,
@@ -41,7 +45,7 @@ def build_discord_oauth_authorize_url(
 ) -> str:
     client_id = settings.discord_oauth_client_id.strip()
     redirect_uri = settings.discord_oauth_redirect_url.strip()
-    if not client_id or not redirect_uri:
+    if not discord_oauth_is_configured(settings=settings):
         raise DiscordOAuthError("Discord OAuth is not configured")
     query = urlencode(
         {
