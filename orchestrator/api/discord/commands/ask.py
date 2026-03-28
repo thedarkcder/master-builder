@@ -43,6 +43,7 @@ def _pm_brief_markdown(
         return [str(item).strip() for item in value if str(item).strip()]
 
     objective = str(brief.get("objective") or "").strip() or "Objective not provided."
+    user_value = str(brief.get("user_value") or "").strip() or "User value not provided."
     recommendation = str(brief.get("recommendation") or "").strip() or "Recommendation not provided."
     acceptance_criteria = _line_list(brief.get("acceptance_criteria"))
     ui_references = _line_list(brief.get("ui_references"))
@@ -66,6 +67,9 @@ def _pm_brief_markdown(
         "## Objective",
         f"- {objective}",
         "",
+        "## User / Business Value",
+        f"- {user_value}",
+        "",
         "## Recommendation",
         f"- {recommendation}",
         "",
@@ -84,23 +88,28 @@ def _pm_brief_markdown(
         _section("Next Steps", next_steps),
         "",
         _section("Success Outcomes", success_outcomes),
-        "",
-        (
-            "## Engineering Task Generation Instruction\n"
-            "- Upsert a PM-owned parent Jira issue from this brief.\n"
-            "- Then derive engineering child tickets from the parent issue.\n"
-            "- Keep technical details in child/linked engineering tasks while preserving this product narrative."
-        ),
     ]
     return "\n".join(sections)
 
 
-def _pm_history_question(*, question: str, approved: bool) -> str:
-    prefix = "pm:approve" if approved else "pm"
+def _pm_history_question(*, question: str) -> str:
     compact = " ".join(question.strip().split())
     if len(compact) > 220:
         compact = f"{compact[:217]}..."
-    return f"{prefix} {compact}".strip()
+    return f"pm {compact}".strip()
+
+
+def _resolve_pm_project_keys(*, project_keys: list[str], issue_key: str | None) -> list[str]:
+    normalized_project_keys = _normalized_project_keys(project_keys)
+    if len(normalized_project_keys) == 1:
+        return normalized_project_keys
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    if normalized_issue_key and "-" in normalized_issue_key:
+        return [normalized_issue_key.split("-", 1)[0]]
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="PM parent issue creation requires a single mapped project scope or an explicit scoped issue key",
+    )
 
 
 def _pm_history_answer(answer: str) -> str:
@@ -144,7 +153,7 @@ def dispatch_ask_command(
     store_pending_ask_action: Callable[..., Any],
     store_ask_history_entry: Callable[..., Any],
     ask_board_message: Callable[..., Any],
-    seed_issues_with_codex: Callable[..., Any] | None,
+    seed_parent_issues_with_codex: Callable[..., Any] | None,
     scoped_project_keys: list[str],
     scoped_project_id: str | None,
     codex_working_dir: str,
@@ -158,25 +167,24 @@ def dispatch_ask_command(
         if not arguments:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Usage: !pm <product request> or !pm approve <handoff request>",
+                detail="Usage: !pm <product request>",
             )
         command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
         is_voice_room_mode = str(command_params.get("room_mode") or "").strip().lower() in {"1", "true", "yes"}
         is_voice_mode = str(command_params.get("voice_mode") or "").strip().lower() in {"1", "true", "yes"}
         is_routed_voice_mode = is_voice_room_mode or is_voice_mode
         first_token = arguments[0].strip().lower()
-        approval_requested = first_token == "approve" and not is_routed_voice_mode
-        question_tokens = arguments[1:] if approval_requested else arguments
-        question = " ".join(question_tokens).strip()
-        if not question:
-            detail = (
-                "Usage: !pm approve <handoff request>"
-                if approval_requested
-                else "Usage: !pm <product request>"
-            )
+        if first_token == "approve" and not is_routed_voice_mode:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=detail,
+                detail="Usage: !pm <product request>",
+            )
+        question_tokens = arguments
+        question = " ".join(question_tokens).strip()
+        if not question:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !pm <product request>",
             )
 
         normalized_issue_key, requested_status, issues, status_counts, _history_context = (
@@ -341,7 +349,7 @@ def dispatch_ask_command(
             pm_payload = answer_pm_question_with_codex(
                 runtime=runtime,
                 question=question,
-                action="approve" if approval_requested else "ask",
+                action="ask",
                 project_keys=normalized_project_keys,
                 issues=issues,
                 status_counts=status_counts,
@@ -350,7 +358,7 @@ def dispatch_ask_command(
                     tenant_id=tenant.tenant_id,
                     project_id=scoped_project_id,
                     command="pm",
-                    stage="approve" if approval_requested else "answer",
+                    stage="answer",
                     working_dir=codex_working_dir,
                     issue_key=normalized_issue_key,
                 ),
@@ -372,10 +380,15 @@ def dispatch_ask_command(
             tenant=tenant,
             user_id=normalized_user_id,
             channel_id=normalized_channel_id,
-            question=_pm_history_question(question=question, approved=approval_requested),
+            question=_pm_history_question(question=question),
             answer=_pm_history_answer(message),
             issue_key=normalized_issue_key,
             status_name=requested_status,
+        )
+        product_brief_markdown = _pm_brief_markdown(
+            question=question,
+            message=message,
+            brief=brief,
         )
         response_data: dict[str, Any] = {
             "pm_mode": True,
@@ -385,54 +398,33 @@ def dispatch_ask_command(
             "status_counts": status_counts,
             "issues": issues,
             "brief": brief,
-            "approval_required": not approval_requested,
-            "approved": approval_requested,
+            "product_brief_markdown": product_brief_markdown,
         }
-        if approval_requested:
-            handoff_markdown = _pm_brief_markdown(
-                question=question,
-                message=message,
-                brief=brief,
+        if seed_parent_issues_with_codex is not None:
+            seed_message, seed_data = seed_parent_issues_with_codex(
+                session=session,
+                tenant=tenant,
+                prompt_markdown=product_brief_markdown,
+                scoped_project_id=scoped_project_id,
+                scoped_project_keys=_resolve_pm_project_keys(
+                    project_keys=normalized_project_keys,
+                    issue_key=normalized_issue_key,
+                ),
+                codex_working_dir=codex_working_dir,
             )
-            response_data["product_brief_markdown"] = handoff_markdown
-            response_data["technical_handoff_markdown"] = handoff_markdown
-            response_data["jira_write_hook"] = {
-                "enabled": bool(seed_issues_with_codex is not None),
-                "action": "seed_issues_with_codex",
-                "status": "pending",
-            }
-            if seed_issues_with_codex is not None:
-                try:
-                    seed_message, seed_data = seed_issues_with_codex(
-                        session=session,
-                        tenant=tenant,
-                        prompt_markdown=handoff_markdown,
-                        scoped_project_id=scoped_project_id,
-                        scoped_project_keys=normalized_project_keys,
-                        codex_working_dir=codex_working_dir,
-                    )
-                    response_data["jira_write_hook"] = {
-                        "enabled": True,
-                        "action": "seed_issues_with_codex",
-                        "status": "completed",
-                    }
-                    response_data["jira_seed_result"] = seed_data
-                    if seed_message:
-                        message = f"{message}\n\n{seed_message}"
-                except Exception as exc:  # noqa: BLE001
-                    response_data["jira_write_hook"] = {
-                        "enabled": True,
-                        "action": "seed_issues_with_codex",
-                        "status": "failed",
-                        "error": str(exc),
-                    }
-                    message = (
-                        f"{message}\n\n"
-                        "I prepared the technical handoff, but Jira engineering task generation failed. "
-                        "You can retry with `!issues seed` using the handoff markdown."
-                    )
-        else:
-            response_data["approve_command"] = "!pm approve <handoff request>"
+            all_parent_issue_keys = list(seed_data.get("all_parent_issue_keys", []))
+            response_data.update(
+                {
+                    "parent_issue_key": all_parent_issue_keys[0] if all_parent_issue_keys else None,
+                    "created_parent_issue_keys": list(seed_data.get("created_parent_issue_keys", [])),
+                    "updated_parent_issue_keys": list(seed_data.get("updated_parent_issue_keys", [])),
+                    "created_parent_issue_links": list(seed_data.get("created_parent_issue_links", [])),
+                    "updated_parent_issue_links": list(seed_data.get("updated_parent_issue_links", [])),
+                    "all_parent_issue_keys": all_parent_issue_keys,
+                }
+            )
+            if seed_message:
+                message = f"{message}\n\n{seed_message}"
 
         return DiscordCommandResponse(
             ok=True,

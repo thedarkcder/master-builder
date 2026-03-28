@@ -11,6 +11,7 @@ Return strict JSON only with keys: message, brief.
 message must be concise (max 6 lines) and may be either an answer or a focused follow-up question.
 brief must be an object with keys:
 - objective (string)
+- user_value (string)
 - acceptance_criteria (array of strings)
 - ui_references (array of strings)
 - recommendation (string)
@@ -20,5 +21,4 @@ brief must be an object with keys:
 - open_questions (array of strings)
 - next_steps (array of strings)
 - success_outcomes (array of strings)
-If action is approve, recommendation must clearly say approved/not approved and why.
 Only reference issue keys present in the provided Issues context.

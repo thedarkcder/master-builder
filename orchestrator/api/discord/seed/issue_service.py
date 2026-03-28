@@ -397,6 +397,102 @@ def _parse_parent_issue(
     }
 
 
+def _parse_parent_issue_drafts(
+    *,
+    raw_issues: object,
+    force_issue_keys: list[str],
+    issue_key_pattern,
+) -> list[dict[str, Any]]:  # noqa: ANN001
+    if not isinstance(raw_issues, list):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return issue drafts")
+    issues: list[dict[str, Any]] = []
+    for issue_index, item in enumerate(raw_issues[:12], start=1):
+        if not isinstance(item, dict):
+            continue
+        summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=item.get("summary"))
+        if not summary:
+            continue
+        requested_issue_key = _normalize_issue_key(
+            item.get("issue_key"),
+            field_name="issue_key",
+            issue_index=issue_index,
+            issue_key_pattern=issue_key_pattern,
+        )
+        if requested_issue_key is None and len(force_issue_keys) >= issue_index:
+            requested_issue_key = force_issue_keys[issue_index - 1]
+        labels = _string_list_field(issue_index=issue_index, field_name="labels", raw_value=item.get("labels"))
+        issues.append(
+            {
+                "summary": summary[:90],
+                "issue_type": _optional_string(
+                    issue_index=issue_index,
+                    field_name="issue_type",
+                    raw_value=item.get("issue_type"),
+                ),
+                "objective": _optional_string(
+                    issue_index=issue_index,
+                    field_name="objective",
+                    raw_value=item.get("objective"),
+                ),
+                "user_value": _optional_string(
+                    issue_index=issue_index,
+                    field_name="user_value",
+                    raw_value=item.get("user_value"),
+                ),
+                "recommendation": _optional_string(
+                    issue_index=issue_index,
+                    field_name="recommendation",
+                    raw_value=item.get("recommendation"),
+                ),
+                "scope_in": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="scope_in",
+                    raw_value=item.get("scope_in"),
+                ),
+                "scope_out": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="scope_out",
+                    raw_value=item.get("scope_out"),
+                ),
+                "acceptance_criteria": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="acceptance_criteria",
+                    raw_value=item.get("acceptance_criteria"),
+                ),
+                "ui_references": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="ui_references",
+                    raw_value=item.get("ui_references"),
+                ),
+                "dependencies": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="dependencies",
+                    raw_value=item.get("dependencies"),
+                ),
+                "risks": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="risks",
+                    raw_value=item.get("risks"),
+                ),
+                "open_questions": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="open_questions",
+                    raw_value=item.get("open_questions"),
+                ),
+                "success_outcomes": _string_list_field(
+                    issue_index=issue_index,
+                    field_name="success_outcomes",
+                    raw_value=item.get("success_outcomes"),
+                ),
+                "labels": labels,
+                "requested_issue_key": requested_issue_key,
+            }
+        )
+    if not issues:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid parent issue drafts")
+    return issues
+
+
 def _parse_engineering_children(
     *,
     raw_children: object,
@@ -851,5 +947,183 @@ def seed_issues_with_codex(
             ),
             "all_issue_keys": all_issue_keys,
             "errors": create_errors,
+        },
+    )
+
+
+def seed_parent_issues_with_codex(
+    *,
+    session,
+    tenant: Tenant,
+    prompt_markdown: str,
+    scoped_project_id: str | None,
+    force_issue_keys: list[str] | None,
+    allow_create: bool,
+    scoped_project_keys: list[str] | None,
+    codex_working_dir: str,
+    tenant_project_keys_fn,
+    get_settings_fn,
+    build_codex_runtime_fn,
+    plan_pm_parent_issues_with_codex_fn,
+    codex_runtime_error_type,
+    issue_key_pattern,
+    tenant_jira_oauth_context_fn,
+    select_seed_match_fn,
+):  # noqa: ANN001
+    project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
+    normalized_scoped_project_keys = [
+        str(value).strip().upper()
+        for value in (scoped_project_keys or [])
+        if str(value).strip()
+    ]
+    if normalized_scoped_project_keys:
+        allowed = set(normalized_scoped_project_keys)
+        project_keys = [value for value in project_keys if str(value).strip().upper() in allowed]
+    if not project_keys:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
+
+    settings = get_settings_fn()
+    runtime = build_codex_runtime_fn(session=session, settings=settings)
+    try:
+        plan_payload = plan_pm_parent_issues_with_codex_fn(
+            runtime=runtime,
+            prompt_markdown=prompt_markdown,
+            allowed_project_keys=project_keys,
+            invocation_context=CodexInvocationContext(
+                channel="discord",
+                tenant_id=tenant.tenant_id,
+                project_id=scoped_project_id,
+                command="issues",
+                stage="pm-seed",
+                working_dir=codex_working_dir,
+            ),
+        )
+    except codex_runtime_error_type as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Codex PM batch seeding is unavailable: {exc}",
+        ) from exc
+
+    project_key_raw = plan_payload.get("project_key")
+    project_key = str(project_key_raw).strip().upper() if isinstance(project_key_raw, str) else ""
+    if not project_key:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return project_key")
+    if project_key not in project_keys:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Codex selected unsupported Jira project key '{project_key}'",
+        )
+
+    normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
+    clarification_questions = _parse_questions(plan_payload.get("questions"))
+    parent_issues = _parse_parent_issue_drafts(
+        raw_issues=plan_payload.get("issues"),
+        force_issue_keys=normalized_force_issue_keys,
+        issue_key_pattern=issue_key_pattern,
+    )
+
+    oauth = _resolve_seed_oauth_context(
+        session=session,
+        tenant=tenant,
+        settings=settings,
+        tenant_jira_oauth_context_fn=tenant_jira_oauth_context_fn,
+    )
+    browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
+    available_issue_types = _project_available_issue_types(oauth=oauth, project_key=project_key)
+
+    try:
+        all_project_issues = _project_issue_catalog(oauth=oauth, project_key=project_key)
+        matched_issue_keys: set[str] = set()
+        created_parent_issue_keys: list[str] = []
+        updated_parent_issue_keys: list[str] = []
+        errors: list[str] = []
+
+        for parent_issue in parent_issues:
+            parent_issue["issue_type"] = _normalize_parent_issue_type(
+                parent_issue=parent_issue,
+                engineering_children=[],
+                available_issue_types=available_issue_types,
+            )
+            parent_revision = _compute_parent_revision(parent_issue)
+            parent_input = _build_parent_issue_input(
+                parent_issue=parent_issue,
+                parent_revision=parent_revision,
+                sync_status="children_stale",
+            )
+            parent_key, parent_created, parent_updated = _upsert_issue(
+                oauth=oauth,
+                project_key=project_key,
+                issue_input=parent_input,
+                requested_issue_key=parent_issue["requested_issue_key"],
+                allow_create=allow_create,
+                existing_issues=all_project_issues,
+                matched_issue_keys=matched_issue_keys,
+                select_seed_match_fn=select_seed_match_fn,
+            )
+            if not parent_key:
+                errors.append(f"Parent issue '{parent_issue['summary']}' was not matched and creation is disabled")
+                continue
+            if parent_created:
+                created_parent_issue_keys.append(parent_key)
+            if parent_updated:
+                updated_parent_issue_keys.append(parent_key)
+        if not created_parent_issue_keys and not updated_parent_issue_keys:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Jira seed upsert produced no changes: {'; '.join(errors) or 'unknown error'}",
+            )
+    except HTTPException:
+        raise
+    except (ValueError, TypeError, AttributeError, JiraOAuthError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to seed Jira issues: {exc}",
+        ) from exc
+
+    all_parent_issue_keys = [*updated_parent_issue_keys, *created_parent_issue_keys]
+    message = (
+        "PM parent issue upsert complete. "
+        f"Updated {len(updated_parent_issue_keys)}: "
+        f"{format_issue_markdown_list(issue_keys=updated_parent_issue_keys, browse_base_url=browse_base_url)}. "
+        f"Created {len(created_parent_issue_keys)}: "
+        f"{format_issue_markdown_list(issue_keys=created_parent_issue_keys, browse_base_url=browse_base_url)}."
+    )
+    if clarification_questions:
+        prompt = "\n".join(f"{idx}. {question}" for idx, question in enumerate(clarification_questions, start=1))
+        message = (
+            f"{message}\n\nI still need more PM detail to finish these parent issues. "
+            "Reply in the follow-up thread and I will update the parent briefs.\n"
+            f"{prompt}"
+        )
+    return (
+        message,
+        {
+            "project_key": project_key,
+            "requires_input": bool(clarification_questions),
+            "questions": clarification_questions,
+            "prompt_markdown": prompt_markdown,
+            "created_parent_issue_keys": created_parent_issue_keys,
+            "created_parent_issue_links": build_issue_url_list(
+                issue_keys=created_parent_issue_keys,
+                browse_base_url=browse_base_url,
+            ),
+            "updated_parent_issue_keys": updated_parent_issue_keys,
+            "updated_parent_issue_links": build_issue_url_list(
+                issue_keys=updated_parent_issue_keys,
+                browse_base_url=browse_base_url,
+            ),
+            "all_parent_issue_keys": all_parent_issue_keys,
+            "created_issue_keys": created_parent_issue_keys,
+            "created_issue_links": build_issue_url_list(
+                issue_keys=created_parent_issue_keys,
+                browse_base_url=browse_base_url,
+            ),
+            "updated_issue_keys": updated_parent_issue_keys,
+            "updated_issue_links": build_issue_url_list(
+                issue_keys=updated_parent_issue_keys,
+                browse_base_url=browse_base_url,
+            ),
+            "all_issue_keys": all_parent_issue_keys,
+            "errors": [],
         },
     )

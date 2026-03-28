@@ -1130,6 +1130,19 @@ class DiscordCommandApiTests(unittest.TestCase):
                     },
                 },
             ) as answer_mock,
+            patch(
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                return_value=(
+                    "PM parent issue upsert complete. Updated 1: TP-20. Created 0: none.",
+                    {
+                        "created_parent_issue_keys": [],
+                        "updated_parent_issue_keys": ["TP-20"],
+                        "created_parent_issue_links": [],
+                        "updated_parent_issue_links": ["https://master-builder.atlassian.net/browse/TP-20"],
+                        "all_parent_issue_keys": ["TP-20"],
+                    },
+                ),
+            ),
         ):
             command_response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -1143,9 +1156,10 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         self.assertTrue(command_response.ok)
         self.assertEqual(command_response.command, "pm")
-        self.assertEqual(command_response.message, "PM guidance")
+        self.assertIn("PM guidance", command_response.message)
         self.assertTrue(command_response.data["pm_mode"])
-        self.assertEqual(command_response.data["approve_command"], "!pm approve <handoff request>")
+        self.assertIn("product_brief_markdown", command_response.data)
+        self.assertEqual(command_response.data["parent_issue_key"], "TP-20")
         self.assertEqual(answer_mock.call_args.kwargs["action"], "ask")
 
         with self.session_factory() as session:
@@ -1157,7 +1171,7 @@ class DiscordCommandApiTests(unittest.TestCase):
             self.assertTrue(str(latest_entry.get("question") or "").startswith("pm "))
             self.assertEqual(latest_entry.get("answer"), "PM guidance")
 
-    def test_pm_approve_returns_technical_handoff_and_seeds_jira_tasks(self) -> None:
+    def test_pm_command_creates_parent_issue_and_returns_parent_metadata(self) -> None:
         with (
             self.session_factory() as session,
             patch(
@@ -1168,43 +1182,122 @@ class DiscordCommandApiTests(unittest.TestCase):
             patch(
                 "orchestrator.api.discord.commands.ask.answer_pm_question_with_codex",
                 return_value={
-                    "message": "Approved for implementation handoff.",
+                    "message": "Approved product brief.",
                     "brief": {
                         "objective": "Ship checkout recovery",
-                        "recommendation": "Approved",
+                        "user_value": "Customers recover cleanly from checkout failures.",
+                        "recommendation": "Focus on the customer-visible fallback first.",
                         "scope_in": ["Retry telemetry", "Fallback UX"],
                         "scope_out": ["Provider migration"],
                         "risks": ["Analytics gap"],
                         "open_questions": [],
-                        "next_steps": ["Create implementation tasks"],
+                        "next_steps": ["Review the parent feature with product"],
                     },
                 },
             ) as answer_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
                 return_value=(
-                    "Seeded issues.",
-                    {"created_issue_keys": ["TP-501", "TP-502"]},
+                    "PM parent issue upsert complete. Created 1: TP-501. Updated 0: none.",
+                    {
+                        "created_parent_issue_keys": ["TP-501"],
+                        "updated_parent_issue_keys": [],
+                        "created_parent_issue_links": ["https://master-builder.atlassian.net/browse/TP-501"],
+                        "updated_parent_issue_links": [],
+                        "all_parent_issue_keys": ["TP-501"],
+                    },
                 ),
-            ),
+            ) as seed_mock,
         ):
             command_response = execute_discord_command(
                 tenant_id=self.tenant_id,
                 payload=DiscordCommandRequest(
                     user_id="u-viewer",
                     channel_id="discord-channel-1",
-                    command="!pm approve final handoff for TP-20 checkout reliability",
+                    command="!pm final handoff for TP-20 checkout reliability",
                 ),
                 session=session,
             )
 
         self.assertTrue(command_response.ok)
         self.assertEqual(command_response.command, "pm")
-        self.assertTrue(command_response.data["approved"])
-        self.assertIn("## Approved Product Brief", str(command_response.data["technical_handoff_markdown"]))
-        self.assertEqual(command_response.data["jira_write_hook"]["status"], "completed")
-        self.assertEqual(command_response.data["jira_seed_result"]["created_issue_keys"], ["TP-501", "TP-502"])
-        self.assertEqual(answer_mock.call_args.kwargs["action"], "approve")
+        self.assertEqual(command_response.data["parent_issue_key"], "TP-501")
+        self.assertEqual(command_response.data["created_parent_issue_keys"], ["TP-501"])
+        self.assertIn("## Approved Product Brief", str(command_response.data["product_brief_markdown"]))
+        self.assertIn("PM parent issue upsert complete", command_response.message)
+        self.assertEqual(answer_mock.call_args.kwargs["action"], "ask")
+        seed_mock.assert_called_once()
+
+    def test_pm_approve_is_rejected(self) -> None:
+        response = self.client.post(
+            f"/discord/command/{self.tenant_id}",
+            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!pm approve rollout to beta"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Usage: !pm <product request>", response.json()["detail"])
+
+    def test_engineer_command_returns_advisory_persona_response(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=("TP-20", "To Do", [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.personas.answer_voice_room_persona_with_codex",
+                return_value={
+                    "message": "Split the work by persistence, API, and validation boundaries.",
+                    "brief": {"focus": "decomposition"},
+                },
+            ) as answer_mock,
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!engineer @TP-20 how should we split this?",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "engineer")
+        self.assertTrue(command_response.data["advisory_only"])
+        self.assertEqual(command_response.data["persona_id"], "engineer")
+        self.assertEqual(command_response.data["issue_key"], "TP-20")
+        self.assertIn("persistence", command_response.message.lower())
+        answer_mock.assert_called_once()
+
+    def test_tester_command_maps_to_qa_persona(self) -> None:
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                return_value=(None, None, [], {"To Do": 1}, []),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.personas.answer_voice_room_persona_with_codex",
+                return_value={
+                    "message": "Cover the happy path and one failed validation path.",
+                    "brief": {},
+                },
+            ) as answer_mock,
+        ):
+            command_response = execute_discord_command(
+                tenant_id=self.tenant_id,
+                payload=DiscordCommandRequest(
+                    user_id="u-viewer",
+                    channel_id="discord-channel-1",
+                    command="!tester what should we verify?",
+                ),
+                session=session,
+            )
+
+        self.assertTrue(command_response.ok)
+        self.assertEqual(command_response.command, "tester")
+        self.assertEqual(command_response.data["persona_id"], "qa")
+        self.assertEqual(answer_mock.call_args.kwargs["persona_id"], "qa")
 
     def test_pm_room_mode_routes_to_persona_room_runtime(self) -> None:
         with (
@@ -2376,14 +2469,14 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
                 return_value=(
-                    "Issue upsert complete. Updated 1: TP-11. Created 0: none.",
+                    "PM parent issue upsert complete. Updated 1: TP-11. Created 0: none.",
                     {
                         "requires_input": False,
                         "project_key": "TP",
                         "questions": [],
-                        "all_issue_keys": ["TP-11"],
+                        "all_parent_issue_keys": ["TP-11"],
                     },
                 ),
             ) as seed_mock,
@@ -2400,7 +2493,7 @@ class DiscordCommandApiTests(unittest.TestCase):
 
         self.assertTrue(response.ok)
         self.assertEqual(response.command, "issues")
-        self.assertIn("Issue upsert complete", response.message)
+        self.assertIn("PM parent issue upsert complete", response.message)
         seed_mock.assert_called_once()
         kwargs = seed_mock.call_args.kwargs
         self.assertEqual(kwargs["allow_create"], False)
@@ -2428,14 +2521,14 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             self.session_factory() as session,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
                 return_value=(
-                    "Issue upsert complete. Updated 1: TP-11. Created 0: none.",
+                    "PM parent issue upsert complete. Updated 1: TP-11. Created 0: none.",
                     {
                         "requires_input": False,
                         "project_key": "TP",
                         "questions": [],
-                        "all_issue_keys": ["TP-11"],
+                        "all_parent_issue_keys": ["TP-11"],
                     },
                 ),
             ) as seed_mock,
@@ -2528,8 +2621,11 @@ class DiscordCommandApiTests(unittest.TestCase):
 
     def test_issues_seed_calls_codex_seed_flow(self) -> None:
         with patch(
-            "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
-            return_value=("Seeded 2 issue(s): TP-1, TP-2", {"created_issue_keys": ["TP-1", "TP-2"]}),
+            "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+            return_value=(
+                "PM parent issue upsert complete. Created 2: TP-1, TP-2. Updated 0: none.",
+                {"created_parent_issue_keys": ["TP-1", "TP-2"]},
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -2549,36 +2645,23 @@ class DiscordCommandApiTests(unittest.TestCase):
         with (
             patch("orchestrator.api.discord.ingress.seed_runtime.build_codex_runtime", return_value=object()),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.plan_seed_issues_with_codex",
+                "orchestrator.api.discord.ingress.seed_runtime.plan_pm_parent_issues_with_codex",
                 return_value={
                     "project_key": "TP",
-                    "parent_issue": {
-                        "summary": "Build API and webhook reliability feature",
-                        "issue_type": "Story",
-                        "objective": "Improve reliability",
-                        "user_value": "Customers see fewer delivery failures",
-                        "recommendation": "Ship API validation plus webhook retries",
-                        "scope_in": ["API changes"],
-                        "scope_out": [],
-                        "acceptance_criteria": ["Validation passes"],
-                        "ui_references": [],
-                        "dependencies": [],
-                        "risks": [],
-                        "open_questions": [],
-                        "success_outcomes": ["Lower webhook failure rate"],
-                        "labels": [],
-                    },
-                    "engineering_children": [
+                    "issues": [
                         {
-                            "summary": "Build API and webhook tasks",
-                            "issue_type": "Sub-task",
-                            "behavior_slice": "Handle retryable webhook failures.",
-                            "technical_objective": "Add validation and retry handling.",
-                            "implementation_plan": ["API changes"],
-                            "technical_dependencies": [],
+                            "summary": "Build API and webhook reliability feature",
+                            "issue_type": "Story",
+                            "objective": "Improve reliability",
+                            "user_value": "Customers see fewer delivery failures",
+                            "recommendation": "Ship API validation plus webhook retries",
+                            "scope_in": ["API changes"],
+                            "scope_out": [],
+                            "acceptance_criteria": ["Validation passes"],
+                            "ui_references": [],
                             "risks": [],
-                            "how_to_test": ["Run targeted API tests"],
-                            "done_criteria": ["Validation passes"],
+                            "open_questions": [],
+                            "success_outcomes": ["Lower webhook failure rate"],
                             "labels": [],
                         }
                     ],

@@ -905,3 +905,41 @@ def plan_seed_issues_with_codex(
                 raise
     assert last_error is not None
     raise last_error
+
+
+def plan_pm_parent_issues_with_codex(
+    *,
+    runtime: CodexRuntime,
+    prompt_markdown: str,
+    allowed_project_keys: list[str],
+    invocation_context: CodexInvocationContext,
+) -> dict:
+    last_error: CodexRuntimeError | None = None
+    for attempt in range(2):
+        try:
+            payload = invoke_codex_json(
+                runtime=runtime,
+                context=invocation_context,
+                system_prompt=render_prompt("discord/pm_seed_batch_system.j2"),
+                user_prompt=render_prompt(
+                    "discord/pm_seed_batch_user.j2",
+                    allowed_project_keys_json=json.dumps(allowed_project_keys),
+                    prompt_markdown=prompt_markdown,
+                ),
+            )
+            if not isinstance(payload, dict):
+                raise CodexRuntimeError("Codex did not return a PM batch issue-seeding JSON object")
+            return payload
+        except CodexRuntimeError as exc:
+            last_error = exc
+            error_text = str(exc).lower()
+            retryable_empty_output = (
+                "no last agent message" in error_text
+                or "returned empty output" in error_text
+                or "empty response" in error_text
+                or "wrote empty content" in error_text
+            )
+            if not retryable_empty_output or attempt > 0:
+                raise
+    assert last_error is not None
+    raise last_error
