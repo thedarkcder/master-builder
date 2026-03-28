@@ -162,7 +162,7 @@ def extract_turn_completed_usage(message: str) -> ParsedTurnUsage | None:
 
     turn_id = _first_string_value(
         lookup_candidates,
-        ("turn_id", "turn", "turn_id_str", "invocation_id"),
+        ("turn_id", "turn", "turn_id_str"),
     )
     runtime_ms = _first_int_value(
         lookup_candidates,
@@ -255,6 +255,9 @@ def materialize_token_usage_from_log_message(
     parsed = extract_turn_completed_usage(run_log_row.message)
     if parsed is None:
         return False
+    normalized_turn_id = str(parsed.turn_id or "").strip() or None
+    if normalized_turn_id is None:
+        return False
     if parsed.input_tokens < 0 or parsed.output_tokens < 0 or parsed.cached_input_tokens < 0:
         return False
     parsed_cached = parsed.cached_input_tokens
@@ -263,7 +266,6 @@ def materialize_token_usage_from_log_message(
     # Persist best-effort to avoid pipeline stalls when token extraction is malformed.
     try:
         # Unique by run_id/invocation_id/turn_id/recorded_at to keep ingestion idempotent.
-        normalized_turn_id = str(parsed.turn_id or "").strip() or None
         normalized_invocation = str(run_log_row.invocation_id or "").strip() or None
         exists_query = session.query(RunTokenUsage.id).filter(
             RunTokenUsage.run_id == str(run_log_row.run_id),
@@ -276,7 +278,7 @@ def materialize_token_usage_from_log_message(
         token_record = _build_run_token_usage(
             run_log_row=run_log_row,
             turn_usage=ParsedTurnUsage(
-                turn_id=parsed.turn_id,
+                turn_id=normalized_turn_id,
                 input_tokens=parsed.input_tokens,
                 cached_input_tokens=parsed_cached,
                 output_tokens=parsed.output_tokens,

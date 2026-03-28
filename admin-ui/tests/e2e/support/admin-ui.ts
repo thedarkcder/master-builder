@@ -17,6 +17,7 @@ import type {
 } from "../../../lib/api";
 
 export const ADMIN_ACCESS_TOKEN = "playwright-admin-token";
+const E2E_APP_URL = "http://127.0.0.1:4101";
 
 type AdminRouteHandler = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -29,7 +30,7 @@ export async function seedAdminSession(page: Page, accessToken = ADMIN_ACCESS_TO
     {
       name: AUTH_COOKIE_KEY,
       value: "1",
-      url: "http://localhost:4100",
+      url: E2E_APP_URL,
       sameSite: "Lax",
     },
   ]);
@@ -230,6 +231,7 @@ export function makeStageInvocationLogs(options: {
   startedAt: string;
   finishedAt?: string;
   codexSessionId?: string;
+  actualUsageObserved?: boolean;
 }): RunLogEventRecord[] {
   const runId = options.runId ?? "5de2cedf-b7ae-400c-a53c-3beecf078a51";
   const startedMessage = JSON.stringify({
@@ -271,6 +273,10 @@ export function makeStageInvocationLogs(options: {
         status: "completed",
         duration_ms: 60_000,
         codex_session_id: options.codexSessionId,
+        actual_usage_observed: options.actualUsageObserved ?? false,
+        actual_prompt_tokens: options.actualUsageObserved ? 1200 : null,
+        actual_completion_tokens: options.actualUsageObserved ? 150 : null,
+        actual_total_tokens: options.actualUsageObserved ? 1350 : null,
       }),
       recorded_at: options.finishedAt,
     });

@@ -94,7 +94,11 @@ def _load_rows(
     include_retries: bool = False,
     model: str | None = None,
 ):
-    query = select(RunTokenUsage).where(RunTokenUsage.run_id == run_id)
+    query = (
+        select(RunTokenUsage)
+        .where(RunTokenUsage.run_id == run_id)
+        .where(RunTokenUsage.turn_id.is_not(None))
+    )
     if stage:
         query = query.where(RunTokenUsage.stage == str(stage).strip().lower())
     if attempt is not None:

@@ -802,6 +802,7 @@ def _invoke_codex_json_once(
     )
     sink_state = {
         "turn_context_events": 0,
+        "turn_completed_events": 0,
         "no_assistant_output_detected": False,
         "db_persisted_lines": 0,
         "raw_lines_written": 0,
@@ -947,6 +948,36 @@ def _capture_usage_metrics(*, usage_state: dict[str, int | None], usage: dict[st
             usage_state[key] = value
 
 
+def _normalize_turn_completed_message(
+    *,
+    message: str,
+    invocation_id: str | None,
+    sink_state: dict[str, int | bool],
+) -> tuple[str, dict[str, int] | None]:
+    parsed_usage = extract_turn_completed_usage(message)
+    if parsed_usage is None:
+        return message, None
+
+    turn_completed_count = int(sink_state.get("turn_completed_events", 0)) + 1
+    sink_state["turn_completed_events"] = turn_completed_count
+    normalized_message = message
+    if not str(parsed_usage.turn_id or "").strip():
+        try:
+            payload = json.loads(message)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            normalized_invocation_id = str(invocation_id or "").strip() or "invocation"
+            payload["turn_id"] = f"{normalized_invocation_id}-turn-{turn_completed_count}"
+            normalized_message = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+
+    return normalized_message, {
+        "prompt_tokens": parsed_usage.input_tokens,
+        "completion_tokens": parsed_usage.output_tokens,
+        "total_tokens": parsed_usage.input_tokens + parsed_usage.output_tokens,
+    }
+
+
 def _combined_log_sink(
     *,
     context: CodexInvocationContext,
@@ -966,14 +997,11 @@ def _combined_log_sink(
     def _sink(stream: str, message: str) -> None:
         telemetry_sink(stream, message)
         message_text = str(message or "")
-        parsed_usage = extract_turn_completed_usage(message_text)
-        usage_from_line: dict[str, int] | None = None
-        if parsed_usage is not None:
-            usage_from_line = {
-                "prompt_tokens": parsed_usage.input_tokens,
-                "completion_tokens": parsed_usage.output_tokens,
-                "total_tokens": parsed_usage.input_tokens + parsed_usage.output_tokens,
-            }
+        message_text, usage_from_line = _normalize_turn_completed_message(
+            message=message_text,
+            invocation_id=context.invocation_id,
+            sink_state=sink_state,
+        )
         if usage_from_line is not None:
             _capture_usage_metrics(usage_state=usage_state, usage=usage_from_line)
         line_counter = int(sink_state.get("raw_lines_written", 0)) + 1

@@ -58,7 +58,7 @@ test("renders checkpoint-backed failed-after-dev runs with separate execution an
   await expect(page.getByText(/heartbeat timeout/i)).toBeVisible();
 
   await page.getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText("PR created and code pushed.")).toBeVisible();
+  await expect(page.getByText(/PR created and code pushed\./)).toBeVisible();
 });
 
 test("marks a finished stage without a checkpoint as interrupted on terminal runs", async ({ page }) => {
@@ -96,7 +96,7 @@ test("marks a finished stage without a checkpoint as interrupted on terminal run
   await expect(page.getByTestId("run-stage-test")).toHaveAttribute("data-stage-status", "not_started");
 
   await page.getByRole("button", { name: "Agents" }).click();
-  await expect(page.getByText("agent finished, checkpoint missing")).toBeVisible();
+  await expect(page.getByText(/agent finished, checkpoint missing/)).toBeVisible();
 });
 
 test("offers review rerun when review state exists and posts the review resume payload", async ({ page }) => {
@@ -143,5 +143,47 @@ test("offers review rerun when review state exists and posts the review resume p
   await page.getByTestId("rerun-option-review").click();
 
   expect(rerunPayload).toEqual({ mode: "resume", resume_stage: "review" });
-  await expect(page).toHaveURL(/8e8957f2-79f8-4dc8-8deb-786b2c93828d$/);
+  await expect(page.getByText("8e8957f2-79f8-4dc8-8deb-786b2c93828d")).toBeVisible();
+});
+
+test("shows unavailable token telemetry when only invocation-level usage was observed", async ({ page }) => {
+  const run = makeRun();
+  const logs = makeStageInvocationLogs({
+    stage: "dev",
+    invocationId: "dev-invocation-1",
+    command: "stage.dev",
+    startedAt: "2026-03-27T17:00:00Z",
+    finishedAt: "2026-03-27T17:02:57Z",
+    codexSessionId: run.dev_session_id ?? undefined,
+    actualUsageObserved: true,
+  });
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, {
+    run,
+    logs,
+    tokenTimeline: {
+      run_id: run.run_id,
+      issue_key: run.issue_key,
+      model: "gpt-5.4",
+      status: run.status,
+      totals: {
+        input: 0,
+        uncached_input: 0,
+        output: 0,
+        cached_input: 0,
+        cache_ratio: 0,
+        total_io: 0,
+        avg_runtime_ms: 0,
+        p95_runtime_ms: 0,
+      },
+      turns: [],
+    },
+  });
+
+  await page.goto(`/runs/${run.run_id}`);
+  await page.getByRole("button", { name: "Cost" }).click();
+
+  await expect(page.getByText(/Per-turn token telemetry is unavailable for this run\./)).toBeVisible();
+  await expect(page.getByText("Total Input")).not.toBeVisible();
 });

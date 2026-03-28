@@ -80,6 +80,7 @@ def _load_run_rows(
         session.execute(
             select(RunTokenUsage)
             .where(RunTokenUsage.run_id.in_(run_ids))
+            .where(RunTokenUsage.turn_id.is_not(None))
             .order_by(RunTokenUsage.recorded_at.asc(), RunTokenUsage.run_id.asc(), RunTokenUsage.id.asc())
         )
         .scalars()

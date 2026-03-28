@@ -32,3 +32,4 @@
 - Admin UI changes need a real behavior test harness, not just lint/type checks. If run-state rendering or stage telemetry behavior is in scope, add executable UI behavior coverage before claiming the fix is complete.
 - Do not leave `ANN001` or `ARG001` debt in touched files. Add the missing types or rename/remove intentionally unused arguments before calling the work done.
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.
+- When the source data mixes per-turn events with invocation/session summaries, fix the producer/read contract first. Do not ship heuristic delta reconstruction in analytics to mask an ambiguous ingestion model.

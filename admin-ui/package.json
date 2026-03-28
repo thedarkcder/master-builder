@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -p 4100",
     "dev:turbo": "next dev --turbopack -p 4100",
+    "dev:e2e": "next dev --hostname 127.0.0.1 -p 4101",
     "lint": "next typegen && tsc --noEmit",
     "build": "next build",
     "start": "next start -p 4100",

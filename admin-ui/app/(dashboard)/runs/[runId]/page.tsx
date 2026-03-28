@@ -33,6 +33,10 @@ type InvocationTelemetry = {
   duration_ms?: number;
   resumed_session?: boolean;
   codex_session_id?: string;
+  actual_usage_observed?: boolean;
+  actual_prompt_tokens?: number | null;
+  actual_completion_tokens?: number | null;
+  actual_total_tokens?: number | null;
   queue_wait_ms?: number;
   created_at?: string;
   started_at?: string;
@@ -784,6 +788,30 @@ export default function RunDetailPage() {
       return bTime - aTime;
     });
   }, [logs, orchestrationTrace.stageEvents, run?.created_at, run?.started_at]);
+  const hasInvocationUsageEvidence = useMemo(
+    () =>
+      logs.some((entry) => {
+        if (entry.stage !== "telemetry" || entry.stream !== "system") {
+          return false;
+        }
+        const payload = parseTelemetryPayload(entry.message);
+        if (!payload || payload.event_kind !== "stage_invocation_finished") {
+          return false;
+        }
+        if (payload.actual_usage_observed === true) {
+          return true;
+        }
+        return (
+          (typeof payload.actual_prompt_tokens === "number" && payload.actual_prompt_tokens > 0) ||
+          (typeof payload.actual_completion_tokens === "number" && payload.actual_completion_tokens > 0) ||
+          (typeof payload.actual_total_tokens === "number" && payload.actual_total_tokens > 0)
+        );
+      }),
+    [logs]
+  );
+  const showUnavailableTokenTelemetry = Boolean(
+    tokenTimeline && tokenTimeline.turns.length === 0 && hasInvocationUsageEvidence
+  );
   const latestCodexSessionId = useMemo(() => {
     const fromTimeline = invocationSessionRows.find((row) => row.codexSessionId)?.codexSessionId;
     if (fromTimeline) {
@@ -1598,7 +1626,15 @@ export default function RunDetailPage() {
                   {tokenTimelineError}
                 </div>
               ) : null}
-                {tokenTimelineBusy || !tokenTimeline ? null : (
+                {tokenTimelineBusy || !tokenTimeline ? null : showUnavailableTokenTelemetry ? (
+                  <div
+                    data-testid="run-token-telemetry-unavailable"
+                    className="rounded-lg border border-amber-300 bg-amber-50 px-5 py-4 text-sm leading-relaxed text-amber-900"
+                  >
+                    Per-turn token telemetry is unavailable for this run. Invocation-level usage was observed, but no strict
+                    turn records were captured.
+                  </div>
+                ) : (
                   <>
                     {/* KPI strip */}
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

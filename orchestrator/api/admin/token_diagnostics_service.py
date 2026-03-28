@@ -93,6 +93,7 @@ def _load_rows(
         select(RunTokenUsage)
         .join(Run, Run.run_id == RunTokenUsage.run_id)
         .where(RunTokenUsage.recorded_at.is_not(None))
+        .where(RunTokenUsage.turn_id.is_not(None))
     )
     query = query.where(Run.tenant_id == tenant_id).where(Run.project_id == project_id)
     issue_keys = _normalize_issue_keys(issue_key)
@@ -118,7 +119,10 @@ def _load_rows(
     if only_with_test_stage:
         query = query.where(
             RunTokenUsage.run_id.in_(
-                select(RunTokenUsage.run_id).where(RunTokenUsage.stage == "test").distinct()
+                select(RunTokenUsage.run_id)
+                .where(RunTokenUsage.stage == "test")
+                .where(RunTokenUsage.turn_id.is_not(None))
+                .distinct()
             )
         )
     return (
