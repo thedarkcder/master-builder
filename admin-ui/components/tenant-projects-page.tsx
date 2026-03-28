@@ -54,7 +54,10 @@ export function TenantProjectsPage() {
     try {
       const loaded = await listProjects(credentials, params.tenantId);
       setProjects(loaded);
-      if (!silent) setStatusLine(`Loaded ${loaded.length} project(s).`);
+      if (!silent) {
+        const activeCount = loaded.filter((project) => !project.is_archived).length;
+        setStatusLine(`Loaded ${activeCount} active project(s).`);
+      }
     } catch (error) {
       setStatusLine(`Failed to load projects: ${(error as Error).message}`);
     } finally {
@@ -135,14 +138,14 @@ export function TenantProjectsPage() {
       </div>
 
       {/* Project list */}
-      {projects.length === 0 ? (
+      {activeProjects.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted mb-4">
               <FolderKanban className="h-6 w-6 text-muted-foreground" />
             </div>
-            <p className="font-medium">No projects yet</p>
-            <p className="mt-1 text-sm text-muted-foreground">Create your first project to start orchestrating runs.</p>
+            <p className="font-medium">No active projects</p>
+            <p className="mt-1 text-sm text-muted-foreground">Create a project to start orchestrating runs in this workspace.</p>
             {allowProjectManagement ? (
               <Button asChild className="mt-4" size="sm">
                 <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/new`}>
@@ -156,7 +159,7 @@ export function TenantProjectsPage() {
       ) : (
         <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
           <ul className="divide-y">
-            {projects.map((project) => (
+            {activeProjects.map((project) => (
               <li key={project.project_id}>
                 <Link
                   href={`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(project.project_id)}`}

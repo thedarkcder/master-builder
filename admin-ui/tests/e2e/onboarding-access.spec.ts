@@ -9,6 +9,7 @@ import {
   makeInvite,
   makeMember,
   makeMembership,
+  makeProject,
   makePlatformAdminPrincipal,
   makeTeam,
   makeTenant,
@@ -768,6 +769,211 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
   await page.getByRole("button", { name: "Send invite" }).click();
   await expect(page.getByText("newhire@example.com")).toBeVisible();
   await expect(page.getByText("Pending • Business member • Delivery")).toBeVisible();
+});
+
+test("redirects platform super admins to the tenant selector after archiving a project", async ({ page }) => {
+  const principal = makePlatformAdminPrincipal();
+  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
+  let project = makeProject({
+    project_id: "route-web",
+    tenant_id: "example",
+    name: "Route Web",
+    github_repository: "https://github.com/example/route-web",
+    jira_project_key: "WEB",
+    is_archived: false,
+  });
+
+  await seedAdminSession(page);
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects",
+      handler: (route) => fulfillJson(route, project.is_archived ? [] : [project]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      handler: (route) => fulfillJson(route, project),
+    },
+    {
+      method: "PUT",
+      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      handler: async (route) => {
+        project = makeProject({
+          ...project,
+          is_archived: true,
+        });
+        await fulfillJson(route, project);
+      },
+    },
+  ]);
+
+  await page.goto("/tenants/example/projects/route-web/settings");
+  await page.getByRole("button", { name: /Governance/ }).click();
+  await page.getByRole("button", { name: "Archive", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/select$/, { timeout: 15000 });
+
+  await page.goto("/tenants/example/projects");
+  await expect(page.locator('a[href="/tenants/example/projects/route-web"]').last()).toHaveCount(0);
+});
+
+test("shows a standalone tenant archive confirmation page and moves the tenant into the archived workspace list", async ({
+  page,
+}) => {
+  const principal = makePlatformAdminPrincipal();
+  let archivedTenant = makeTenant({
+    tenant_id: "auth-workspace-one-1774668649405-k03pkj",
+    name: "Auth Workspace One 1774668649405-k03pkj",
+    is_enabled: true,
+  });
+  const activeTenant = makeTenant({
+    tenant_id: "auth-workspace-two-1774668649405-k03pkj",
+    name: "Auth Workspace Two 1774668649405-k03pkj",
+    is_enabled: true,
+  });
+
+  await seedAdminSession(page);
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/auth-workspace-one-1774668649405-k03pkj",
+      handler: (route) => fulfillJson(route, archivedTenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/codex/models",
+      handler: (route) =>
+        fulfillJson(route, {
+          default_model: "gpt-5.4",
+          default_reasoning_effort: "medium",
+          models: [{ id: "gpt-5.4", label: "GPT-5.4" }],
+          reasoning_efforts: [{ id: "medium", label: "Medium" }],
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/auth-workspace-one-1774668649405-k03pkj/projects",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/admin/tenants/auth-workspace-one-1774668649405-k03pkj/archive",
+      handler: async (route) => {
+        archivedTenant = makeTenant({
+          ...archivedTenant,
+          is_enabled: false,
+        });
+        await fulfillJson(route, archivedTenant);
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/admin/tenants/auth-workspace-one-1774668649405-k03pkj/unarchive",
+      handler: (route) => fulfillJson(route, archivedTenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants",
+      handler: (route) => fulfillJson(route, [archivedTenant, activeTenant]),
+    },
+  ]);
+
+  page.on("dialog", async (dialog) => {
+    await dialog.accept();
+  });
+
+  await page.goto("/tenants/auth-workspace-one-1774668649405-k03pkj/edit/integrations");
+  await page.getByRole("button", { name: "Archive Tenant" }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/auth-workspace-one-1774668649405-k03pkj\/archived/, { timeout: 15000 });
+  await expect(page.getByRole("heading", { name: "Workspace archived" })).toBeVisible();
+  await page.getByRole("button", { name: "View archived workspaces" }).click();
+  await expect(page).toHaveURL(/\/tenants\/select$/, { timeout: 15000 });
+  await expect(page.getByText("Active workspaces")).toBeVisible();
+  await expect(page.getByText("Archived workspaces", { exact: true })).toBeVisible();
+  await expect(page.getByText("auth-workspace-one-1774668649405-k03pkj")).toBeVisible();
+  await expect(page.getByText("Auth Workspace Two 1774668649405-k03pkj")).toBeVisible();
+});
+
+test("redirects tenant admins to workspace setup after archiving a project", async ({ page }) => {
+  const membership = makeMembership({
+    tenant_id: "example",
+    role: "tenant_admin",
+    permission_keys: ["workspace.manage", "projects.manage", "technical.access"],
+    onboarding_kind: "tenant_admin_setup",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+  });
+  const principal = makeTenantUserPrincipal({
+    email: "owner@example.com",
+    full_name: "Owner Example",
+    memberships: [membership],
+  });
+  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
+  let project = makeProject({
+    project_id: "route-web",
+    tenant_id: "example",
+    name: "Route Web",
+    github_repository: "https://github.com/example/route-web",
+    jira_project_key: "WEB",
+    is_archived: false,
+  });
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects",
+      handler: (route) => fulfillJson(route, project.is_archived ? [] : [project]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      handler: (route) => fulfillJson(route, project),
+    },
+    {
+      method: "PUT",
+      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      handler: async (route) => {
+        project = makeProject({
+          ...project,
+          is_archived: true,
+        });
+        await fulfillJson(route, project);
+      },
+    },
+  ]);
+
+  await page.goto("/tenants/example/projects/route-web/settings");
+  await page.getByRole("button", { name: /Governance/ }).click();
+  await page.getByRole("button", { name: "Archive", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/tenants\/new\/basics\?tenant_id=example$/, { timeout: 15000 });
 });
 
 test("hides team navigation for invited users without team-management access", async ({ page }) => {

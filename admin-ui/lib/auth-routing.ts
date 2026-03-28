@@ -14,6 +14,10 @@ export function getTenantDashboardRoute(tenantId: string): string {
   return `/tenants/${encodeURIComponent(tenantId)}/dashboard`;
 }
 
+export function getTenantSetupRoute(tenantId: string): string {
+  return `/tenants/new/basics?tenant_id=${encodeURIComponent(tenantId)}`;
+}
+
 export function getMembershipForTenant(
   principal: PrincipalLike | null | undefined,
   tenantId: string,
@@ -58,6 +62,36 @@ export function canManageProjects(
     membership?.permission_keys.includes("projects.manage") ||
       membership?.permission_keys.includes("workspace.manage"),
   );
+}
+
+export function getProjectArchiveRedirectRoute(
+  principal: PrincipalLike | null | undefined,
+  tenantId: string,
+): string {
+  if (canAccessPlatformAdmin(principal)) {
+    return getWorkspaceSelectorRoute();
+  }
+  return getTenantSetupRoute(tenantId);
+}
+
+export function getTenantArchiveRedirectRoute(
+  principal: PrincipalLike | null | undefined,
+  tenantId: string,
+): string {
+  if (canAccessPlatformAdmin(principal)) {
+    return getWorkspaceSelectorRoute();
+  }
+  return getTenantSetupRoute(tenantId);
+}
+
+export function getTenantArchiveConfirmationRoute(
+  principal: PrincipalLike | null | undefined,
+  tenantId: string,
+): string {
+  const destination = canAccessPlatformAdmin(principal) ? "selector" : "setup";
+  return `/tenants/${encodeURIComponent(tenantId)}/archived?destination=${destination}&next=${encodeURIComponent(
+    getTenantArchiveRedirectRoute(principal, tenantId),
+  )}`;
 }
 
 export function canAccessTechnicalSurface(

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { KeyRound, Link2 } from "lucide-react";
 
@@ -43,6 +43,7 @@ import {
   type ProjectRecord,
   type ProjectUpdatePayload
 } from "@/lib/api";
+import { getTenantArchiveConfirmationRoute } from "@/lib/auth-routing";
 import { recordToFormValues } from "@/lib/tenant-form";
 import { cn } from "@/lib/utils";
 
@@ -58,9 +59,10 @@ type TenantEditSection =
   | "notifications";
 
 export function TenantEditPage({ section }: { section: TenantEditSection }) {
+  const router = useRouter();
   const params = useParams<{ tenantId: string }>();
   const searchParams = useSearchParams();
-  const { credentials, ready } = useAuth();
+  const { credentials, principal, ready } = useAuth();
 
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -223,6 +225,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         : await unarchiveTenant(credentials, tenant.tenant_id);
       setTenant(updated);
       setStatusLine(`Tenant ${action}d: ${updated.tenant_id}.`);
+      if (!updated.is_enabled) {
+        router.push(getTenantArchiveConfirmationRoute(principal, updated.tenant_id));
+        return;
+      }
     } catch (error) {
       setStatusLine(`Unable to ${action} tenant: ${(error as Error).message}`);
     } finally {
