@@ -13,6 +13,7 @@ from urllib import request as urllib_request
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from orchestrator.core.agent_execution_profiles import AgentExecutionProfile
 from orchestrator.core.config import Settings
@@ -89,6 +90,38 @@ def _extract_first_url(content: str) -> str | None:
     if match is None:
         return None
     return match.group(0).strip()
+
+
+@dataclass
+class _HttpConversationSession:
+    session_id: str
+    runtime_kind: str
+    system_prompt: str
+    messages: list[dict[str, str]]
+
+
+class _HttpConversationStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sessions: dict[str, _HttpConversationSession] = {}
+
+    def load(self, *, session_id: str, runtime_kind: str) -> _HttpConversationSession | None:
+        normalized_session_id = str(session_id or "").strip()
+        normalized_runtime_kind = str(runtime_kind or "").strip().lower()
+        if not normalized_session_id or not normalized_runtime_kind:
+            return None
+        with self._lock:
+            session = self._sessions.get(normalized_session_id)
+            if session is None or session.runtime_kind != normalized_runtime_kind:
+                return None
+            return session
+
+    def save(self, session: _HttpConversationSession) -> None:
+        with self._lock:
+            self._sessions[session.session_id] = session
+
+
+_HTTP_CONVERSATION_STORE = _HttpConversationStore()
 
 
 @dataclass(frozen=True)
@@ -474,6 +507,34 @@ def _resolve_codex_tool_database_url(
     return normalized_database_url or None
 
 
+def _ensure_http_conversation_session(
+    *,
+    runtime_kind: str,
+    system_prompt: str,
+    user_prompt: str,
+    resume_session_id: str | None,
+) -> _HttpConversationSession:
+    normalized_runtime_kind = str(runtime_kind or "").strip().lower()
+    normalized_resume_session_id = str(resume_session_id or "").strip()
+    existing = _HTTP_CONVERSATION_STORE.load(
+        session_id=normalized_resume_session_id,
+        runtime_kind=normalized_runtime_kind,
+    )
+    if existing is not None:
+        existing.messages.append({"role": "user", "content": user_prompt})
+        _HTTP_CONVERSATION_STORE.save(existing)
+        return existing
+
+    session = _HttpConversationSession(
+        session_id=normalized_resume_session_id or str(uuid4()),
+        runtime_kind=normalized_runtime_kind,
+        system_prompt=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    _HTTP_CONVERSATION_STORE.save(session)
+    return session
+
+
 def _build_codex_subprocess_env(*, settings: Settings) -> dict[str, str]:
     env = os.environ.copy()
     tool_database_url = _resolve_codex_tool_database_url(
@@ -672,13 +733,21 @@ def build_http_runtime(
         model_override: str | None,
     ) -> str:
         _ = working_dir
-        _ = resume_session_id
-        if on_session_id is not None:
-            on_session_id(f"{normalized_runtime_kind}:stateless")
         resolved_model = str(model_override or normalized_model).strip() or normalized_model
         resolved_reasoning_effort = str(reasoning_effort or normalized_reasoning_effort).strip().lower() or normalized_reasoning_effort
+        session = _ensure_http_conversation_session(
+            runtime_kind=normalized_runtime_kind,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            resume_session_id=resume_session_id,
+        )
+        if on_session_id is not None:
+            on_session_id(session.session_id)
         if on_log_line is not None:
-            on_log_line("stdout", f"[runtime:{normalized_runtime_kind}] model={resolved_model} reasoning={resolved_reasoning_effort}")
+            on_log_line(
+                "stdout",
+                f"[runtime:{normalized_runtime_kind}] model={resolved_model} reasoning={resolved_reasoning_effort} session={session.session_id}",
+            )
         if normalized_runtime_kind in {"openai", "llama_cpp", "lm_studio"}:
             headers: dict[str, str] = {}
             if api_key:
@@ -690,8 +759,8 @@ def build_http_runtime(
                 payload={
                     "model": resolved_model,
                     "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
+                        {"role": "system", "content": session.system_prompt},
+                        *session.messages,
                     ],
                     "temperature": 0,
                     "max_tokens": settings.codex_max_output_tokens,
@@ -700,7 +769,10 @@ def build_http_runtime(
             usage = payload.get("usage")
             if on_usage is not None and isinstance(usage, dict):
                 on_usage({key: int(value) for key, value in usage.items() if isinstance(value, (int, float))})
-            return _extract_openai_text(payload)
+            response_text = _extract_openai_text(payload)
+            session.messages.append({"role": "assistant", "content": response_text})
+            _HTTP_CONVERSATION_STORE.save(session)
+            return response_text
         if normalized_runtime_kind == "claude":
             headers = {
                 "anthropic-version": "2023-06-01",
@@ -713,17 +785,18 @@ def build_http_runtime(
                 headers=headers,
                 payload={
                     "model": resolved_model,
-                    "system": system_prompt,
+                    "system": session.system_prompt,
                     "max_tokens": settings.codex_max_output_tokens,
-                    "messages": [
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    "messages": session.messages,
                 },
             )
             usage = payload.get("usage")
             if on_usage is not None and isinstance(usage, dict):
                 on_usage({key: int(value) for key, value in usage.items() if isinstance(value, (int, float))})
-            return _extract_claude_text(payload)
+            response_text = _extract_claude_text(payload)
+            session.messages.append({"role": "assistant", "content": response_text})
+            _HTTP_CONVERSATION_STORE.save(session)
+            return response_text
         raise CodexRuntimeError(f"Unsupported HTTP runtime kind '{normalized_runtime_kind}'")
 
     return CodexRuntime(
