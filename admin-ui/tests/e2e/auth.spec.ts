@@ -9,6 +9,131 @@ import {
 } from "./support/admin-ui";
 import { archiveTenant } from "./support/live-backend";
 
+type RuntimeMatrixEntry = {
+  runtimeKind: string;
+  createModelValue: string;
+  updateModelValue: string;
+  usesPresetModel: boolean;
+  expectedCliCommand?: string;
+  expectedBaseUrl?: string;
+  requiresApiKey?: boolean;
+  allowsOptionalApiKey?: boolean;
+};
+
+const RUNTIME_FORM_MATRIX: RuntimeMatrixEntry[] = [
+  {
+    runtimeKind: "codex_cli",
+    createModelValue: "gpt-5.4",
+    updateModelValue: "gpt-5.3-codex",
+    usesPresetModel: true,
+    expectedCliCommand: "codex",
+  },
+  {
+    runtimeKind: "chat_cli",
+    createModelValue: "gpt-5.4-mini",
+    updateModelValue: "gpt-4.1",
+    usesPresetModel: true,
+    expectedCliCommand: "chat",
+  },
+  {
+    runtimeKind: "claude_cli",
+    createModelValue: "claude-sonnet-4-0",
+    updateModelValue: "claude-opus-4-0",
+    usesPresetModel: true,
+    expectedCliCommand: "claude",
+  },
+  {
+    runtimeKind: "openai",
+    createModelValue: "gpt-5.4",
+    updateModelValue: "gpt-5.4-mini",
+    usesPresetModel: true,
+    expectedBaseUrl: "https://api.openai.com/v1",
+    requiresApiKey: true,
+  },
+  {
+    runtimeKind: "claude",
+    createModelValue: "claude-sonnet-4-0",
+    updateModelValue: "claude-opus-4-0",
+    usesPresetModel: true,
+    expectedBaseUrl: "https://api.anthropic.com",
+    requiresApiKey: true,
+  },
+  {
+    runtimeKind: "llama_cpp",
+    createModelValue: "llama3.1:8b",
+    updateModelValue: "llama3.1:70b",
+    usesPresetModel: false,
+    expectedBaseUrl: "http://localhost:8080/v1",
+    allowsOptionalApiKey: true,
+  },
+  {
+    runtimeKind: "lm_studio",
+    createModelValue: "local-model",
+    updateModelValue: "local-model-v2",
+    usesPresetModel: false,
+    expectedBaseUrl: "http://localhost:1234/v1",
+    allowsOptionalApiKey: true,
+  },
+];
+
+function makeModelCatalog(runtimeKind: string) {
+  const presetModels: Record<string, { id: string; label: string; description: string }[]> = {
+    codex_cli: [
+      { id: "gpt-5.4", label: "GPT-5.4", description: "Codex default" },
+      { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", description: "Alternate Codex preset" },
+    ],
+    chat_cli: [
+      { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", description: "Chat default" },
+      { id: "gpt-4.1", label: "GPT-4.1", description: "Alternate chat preset" },
+    ],
+    claude_cli: [
+      { id: "claude-sonnet-4-0", label: "Claude Sonnet 4.0", description: "Claude CLI default" },
+      { id: "claude-opus-4-0", label: "Claude Opus 4.0", description: "Alternate Claude CLI preset" },
+    ],
+    openai: [
+      { id: "gpt-5.4", label: "GPT-5.4", description: "OpenAI default" },
+      { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", description: "Alternate OpenAI preset" },
+    ],
+    claude: [
+      { id: "claude-sonnet-4-0", label: "Claude Sonnet 4.0", description: "Anthropic default" },
+      { id: "claude-opus-4-0", label: "Claude Opus 4.0", description: "Alternate Anthropic preset" },
+    ],
+    llama_cpp: [],
+    lm_studio: [],
+  };
+  return {
+    default_model: presetModels[runtimeKind]?.[0]?.id ?? null,
+    default_reasoning_effort: "medium",
+    runtime_kind: runtimeKind,
+    profile_name: null,
+    models: presetModels[runtimeKind] ?? [],
+    reasoning_efforts: [
+      { id: "medium", label: "Medium", description: "Balanced" },
+      { id: "low", label: "Low", description: "Fast" },
+      { id: "high", label: "High", description: "Deep" },
+    ],
+  };
+}
+
+function validateRuntimePayload(payload: Record<string, unknown>): string | null {
+  const runtimeKind = String(payload.runtime_kind || "");
+  const cliCommand = String(payload.cli_command || "").trim();
+  const model = String(payload.model || "").trim();
+  const baseUrl = String(payload.base_url || "").trim();
+  const apiKeySecretRef = String(payload.api_key_secret_ref || "").trim();
+
+  if (!model) return "model is required";
+  if (runtimeKind === "codex_cli" || runtimeKind === "chat_cli" || runtimeKind === "claude_cli") {
+    if (!cliCommand) return "cli_command is required for CLI runtimes";
+    return null;
+  }
+  if (!baseUrl) return `base_url is required for runtime ${runtimeKind}`;
+  if (runtimeKind === "openai" || runtimeKind === "claude") {
+    if (!apiKeySecretRef) return `api_key_secret_ref is required for runtime ${runtimeKind}`;
+  }
+  return null;
+}
+
 test("hydrates a stored valid admin session and opens platform admin home", async ({ page }) => {
   await seedAdminSession(page);
   await installBffApiMocks(page, [
@@ -272,7 +397,7 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await expect(page.getByText("Worker instances")).toHaveCount(0);
 });
 
-test("saves agent runtime profiles with runtime-specific defaults on create and update", async ({ page }) => {
+test("covers runtime profile form permutations across every provider on create and update", async ({ page }) => {
   await seedAdminSession(page);
 
   const profileState: Record<string, Record<string, unknown>> = {
@@ -293,25 +418,10 @@ test("saves agent runtime profiles with runtime-specific defaults on create and 
       usage_references: ["role:engineering"],
     },
   };
-  const createdPayloads: Array<Record<string, unknown>> = [];
-  const updatedPayloads: Array<Record<string, unknown>> = [];
+  const createdPayloads = new Map<string, Record<string, unknown>>();
+  const updatedPayloads = new Map<string, Record<string, unknown>>();
 
   const listProfilesBody = () => ({ profiles: profileState });
-  const modelCatalogForRuntime = (runtimeKind: string) => ({
-    default_model: runtimeKind === "lm_studio" ? "local-model" : "gpt-5.4",
-    default_reasoning_effort: "medium",
-    runtime_kind: runtimeKind,
-    profile_name: null,
-    models:
-      runtimeKind === "lm_studio"
-        ? []
-        : [{ id: "gpt-5.4", label: "GPT-5.4", description: "Default model" }],
-    reasoning_efforts: [
-      { id: "medium", label: "Medium", description: "Balanced" },
-      { id: "low", label: "Low", description: "Fast" },
-      { id: "high", label: "High", description: "Deep" },
-    ],
-  });
 
   await installBffApiMocks(page, [
     {
@@ -358,18 +468,19 @@ test("saves agent runtime profiles with runtime-specific defaults on create and 
     {
       method: "GET",
       pathname: "/api/bff/api/admin/codex/models",
-      handler: (route, url) => fulfillJson(route, modelCatalogForRuntime(url.searchParams.get("runtime_kind") ?? "codex_cli")),
+      handler: (route, url) => fulfillJson(route, makeModelCatalog(url.searchParams.get("runtime_kind") ?? "codex_cli")),
     },
     {
       method: "POST",
       pathname: "/api/bff/api/admin/agent-runtime-profiles",
       handler: async (route) => {
         const payload = (await route.request().postDataJSON()) as Record<string, unknown>;
-        createdPayloads.push(payload);
-        if (payload.runtime_kind === "chat_cli" && payload.cli_command !== "chat") {
-          return fulfillJson(route, { detail: "cli_command is required for CLI runtimes" }, 400);
+        const validationError = validateRuntimePayload(payload);
+        if (validationError) {
+          return fulfillJson(route, { detail: validationError }, 400);
         }
         const profileName = String(payload.profile_name);
+        createdPayloads.set(profileName, payload);
         profileState[profileName] = {
           ...payload,
           is_builtin: false,
@@ -386,19 +497,20 @@ test("saves agent runtime profiles with runtime-specific defaults on create and 
       pathname: /\/api\/bff\/api\/admin\/agent-runtime-profiles\/[^/]+$/,
       handler: async (route) => {
         const payload = (await route.request().postDataJSON()) as Record<string, unknown>;
-        updatedPayloads.push(payload);
         const profileName = route.request().url().split("/").pop() ?? "unknown";
-        if (payload.runtime_kind === "lm_studio" && payload.base_url !== "http://localhost:1234/v1") {
-          return fulfillJson(route, { detail: "base_url is required for runtime lm_studio" }, 400);
+        const validationError = validateRuntimePayload(payload);
+        if (validationError) {
+          return fulfillJson(route, { detail: validationError }, 400);
         }
+        updatedPayloads.set(profileName, payload);
         profileState[profileName] = {
           ...profileState[profileName],
           ...payload,
           profile_name: profileName,
-          is_builtin: true,
+          is_builtin: Boolean(profileState[profileName]?.is_builtin),
           is_overridden: true,
-          can_delete: false,
-          can_reset: true,
+          can_delete: !profileState[profileName]?.is_builtin,
+          can_reset: Boolean(profileState[profileName]?.is_builtin),
         };
         return fulfillJson(route, profileState[profileName]);
       },
@@ -407,28 +519,104 @@ test("saves agent runtime profiles with runtime-specific defaults on create and 
 
   await page.goto("/agent-runtimes");
   await page.getByRole("button", { name: "Profiles" }).click();
+  await expect(page.getByRole("heading", { name: "Profiles" })).toBeVisible();
 
-  await page.getByRole("button", { name: "New profile" }).click();
-  await page.getByLabel("Profile name").fill("chat_profile");
-  await page.getByLabel("Runtime").selectOption("chat_cli");
-  await page.getByLabel("Model", { exact: true }).selectOption("gpt-5.4");
-  await page.getByRole("button", { name: "Create profile" }).click();
+  for (const entry of RUNTIME_FORM_MATRIX) {
+    const profileName = `${entry.runtimeKind}_profile`;
+    const updateCliCommand = entry.expectedCliCommand ? `${entry.expectedCliCommand}-custom` : undefined;
+    const updateBaseUrl = entry.expectedBaseUrl ? `${entry.expectedBaseUrl}/custom` : undefined;
+    const updateApiKeyRef = entry.requiresApiKey || entry.allowsOptionalApiKey ? `platform/${entry.runtimeKind}_updated_key` : null;
 
-  await expect.poll(() => createdPayloads.length).toBe(1);
-  await expect(page.getByLabel("Profile name")).toHaveValue("chat_profile");
-  expect(createdPayloads[0].runtime_kind).toBe("chat_cli");
-  expect(createdPayloads[0].cli_command).toBe("chat");
+    await page.getByRole("button", { name: "New profile" }).click();
+    await page.getByLabel("Profile name").fill(profileName);
+    await page.getByLabel("Runtime").selectOption(entry.runtimeKind);
 
-  await page.getByRole("table").getByText("engineering_execution_default").click();
-  await page.getByLabel("Runtime").selectOption("lm_studio");
-  await expect(page.getByLabel("Base URL")).toHaveValue("http://localhost:1234/v1");
-  await page.getByRole("button", { name: "Save profile" }).click();
+    if (entry.expectedCliCommand) {
+      await expect(page.getByLabel("CLI command")).toBeVisible();
+      await expect(page.getByLabel("CLI command")).toHaveValue(entry.expectedCliCommand);
+    } else {
+      await expect(page.getByLabel("CLI command")).toHaveCount(0);
+    }
 
-  await expect.poll(() => updatedPayloads.length).toBe(1);
-  await expect(page.getByLabel("Runtime")).toHaveValue("lm_studio");
-  expect(updatedPayloads[0].runtime_kind).toBe("lm_studio");
-  expect(updatedPayloads[0].base_url).toBe("http://localhost:1234/v1");
-  expect(updatedPayloads[0].model).toBe("gpt-5.4");
+    if (entry.expectedBaseUrl) {
+      await expect(page.getByLabel("Base URL")).toBeVisible();
+      await expect(page.getByLabel("Base URL")).toHaveValue(entry.expectedBaseUrl);
+    } else {
+      await expect(page.getByLabel("Base URL")).toHaveCount(0);
+    }
+
+    if (entry.requiresApiKey || entry.allowsOptionalApiKey) {
+      await expect(page.getByLabel("API key secret ref")).toBeVisible();
+    } else {
+      await expect(page.getByLabel("API key secret ref")).toHaveCount(0);
+    }
+
+    await expect(page.getByLabel("Reasoning mode")).toBeEnabled();
+
+    if (entry.usesPresetModel) {
+      await page.getByLabel("Model", { exact: true }).selectOption(entry.createModelValue);
+    } else {
+      await page.getByLabel("Model", { exact: true }).selectOption({ label: "Custom model…" });
+      await page.getByLabel("Model custom value").fill(entry.createModelValue);
+    }
+
+    const createButton = page.getByRole("button", { name: "Create profile" });
+    if (entry.requiresApiKey) {
+      await expect(createButton).toBeDisabled();
+      await page.getByLabel("API key secret ref").fill(`platform/${entry.runtimeKind}_api_key`);
+      await expect(createButton).toBeEnabled();
+    } else {
+      await expect(createButton).toBeEnabled();
+    }
+
+    await page.getByLabel("Reasoning mode").selectOption("medium");
+    await createButton.click();
+
+    await expect.poll(() => createdPayloads.has(profileName)).toBe(true);
+    const createdPayload = createdPayloads.get(profileName);
+    expect(createdPayload).toBeDefined();
+    expect(createdPayload?.runtime_kind).toBe(entry.runtimeKind);
+    expect(createdPayload?.model).toBe(entry.createModelValue);
+    expect(createdPayload?.reasoning_effort).toBe("medium");
+    expect(createdPayload?.cli_command ?? "").toBe(entry.expectedCliCommand ?? "");
+    expect(createdPayload?.base_url ?? null).toBe(entry.expectedBaseUrl ?? null);
+    if (entry.requiresApiKey) {
+      expect(createdPayload?.api_key_secret_ref).toBe(`platform/${entry.runtimeKind}_api_key`);
+    } else {
+      expect(createdPayload?.api_key_secret_ref ?? null).toBe(null);
+    }
+
+    await expect(page.getByLabel("Profile name")).toHaveValue(profileName);
+    await expect(page.getByRole("button", { name: "Save profile" })).toBeVisible();
+
+    if (updateCliCommand) {
+      await page.getByLabel("CLI command").fill(updateCliCommand);
+    }
+    if (updateBaseUrl) {
+      await page.getByLabel("Base URL").fill(updateBaseUrl);
+    }
+    if (updateApiKeyRef) {
+      await page.getByLabel("API key secret ref").fill(updateApiKeyRef);
+    }
+    await page.getByLabel("Reasoning mode").selectOption("high");
+    if (entry.usesPresetModel) {
+      await page.getByLabel("Model", { exact: true }).selectOption(entry.updateModelValue);
+    } else {
+      await expect(page.getByLabel("Model custom value")).toBeVisible();
+      await page.getByLabel("Model custom value").fill(entry.updateModelValue);
+    }
+    await page.getByRole("button", { name: "Save profile" }).click();
+
+    await expect.poll(() => updatedPayloads.has(profileName)).toBe(true);
+    const updatedPayload = updatedPayloads.get(profileName);
+    expect(updatedPayload).toBeDefined();
+    expect(updatedPayload?.runtime_kind).toBe(entry.runtimeKind);
+    expect(updatedPayload?.model).toBe(entry.updateModelValue);
+    expect(updatedPayload?.reasoning_effort).toBe("high");
+    expect(updatedPayload?.cli_command ?? "").toBe(updateCliCommand ?? "");
+    expect(updatedPayload?.base_url ?? null).toBe(updateBaseUrl ?? null);
+    expect(updatedPayload?.api_key_secret_ref ?? null).toBe(updateApiKeyRef);
+  }
 });
 
 test("redirects unauthenticated access to login for protected routes", async ({ page }) => {
