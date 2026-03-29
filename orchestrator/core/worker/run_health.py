@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from orchestrator.core.agent_observability import record_agent_lifecycle_event
-from orchestrator.core.config import Settings
+from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.run_logs import record_run_log_event
 from orchestrator.core.runs import RUN_STATUS_FAILED, RUN_STATUS_RUNNING
 from orchestrator.storage.db import create_session_factory
@@ -22,7 +22,20 @@ logger = logging.getLogger(__name__)
 
 
 def worker_service_instance_id() -> str:
-    return f"{os.uname().nodename}:{os.getpid()}"
+    settings = get_settings()
+    agent_id = str(getattr(settings, "agent_id", "") or "").strip()
+    if agent_id:
+        return agent_id
+    return os.uname().nodename
+
+
+def worker_service_instance_id_for_mode(*, settings: Settings | None = None, mode: str | None = None) -> str:
+    resolved_settings = settings or get_settings()
+    base_id = str(getattr(resolved_settings, "agent_id", "") or "").strip() or os.uname().nodename
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode:
+        return f"{base_id}:{normalized_mode}"
+    return base_id
 
 
 def stale_run_cutoff(*, settings: Settings, now: datetime | None = None) -> datetime:

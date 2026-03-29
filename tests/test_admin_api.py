@@ -4385,6 +4385,74 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(instances_by_id["worker-2"]["status"], "idle")
         self.assertEqual(instances_by_id["worker-2"]["capabilities"], ["macOS"])
 
+    def test_platform_status_dedupes_legacy_worker_runtime_rows_by_agent_and_mode(self) -> None:
+        now = datetime.now(timezone.utc)
+        stale = now - timedelta(minutes=10)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="host-a:1111",
+                    agent_id="worker-linux-local",
+                    worker_mode="runs",
+                    capabilities_json=["linux"],
+                    state="idle",
+                    started_at=stale,
+                    last_heartbeat_at=stale,
+                    updated_at=stale,
+                )
+            )
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-linux-local:runs",
+                    agent_id="worker-linux-local",
+                    worker_mode="runs",
+                    capabilities_json=["linux"],
+                    state="busy",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-sticky-1",
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    issue_key="GP-9",
+                    issue_summary="Sticky worker",
+                    issue_description=None,
+                    repo_url=None,
+                    branch=None,
+                    pr_url=None,
+                    dev_session_id=None,
+                    pm_session_id=None,
+                    orchestrated_session_id=None,
+                    dedupe_scope="issue_execution",
+                    status="running",
+                    last_error=None,
+                    plan=None,
+                    created_at=now,
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    worker_service_instance_id="worker-linux-local:runs",
+                    finished_at=None,
+                )
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
+        instances = worker_service["instances"]
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(instances[0]["instance_id"], "worker-linux-local:runs")
+        self.assertEqual(instances[0]["label"], "worker-linux-local (runs)")
+        self.assertEqual(instances[0]["status"], "busy")
+        self.assertEqual(instances[0]["active_run_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
