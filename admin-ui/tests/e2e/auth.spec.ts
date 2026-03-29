@@ -272,6 +272,165 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await expect(page.getByText("Worker instances")).toHaveCount(0);
 });
 
+test("saves agent runtime profiles with runtime-specific defaults on create and update", async ({ page }) => {
+  await seedAdminSession(page);
+
+  const profileState: Record<string, Record<string, unknown>> = {
+    engineering_execution_default: {
+      profile_name: "engineering_execution_default",
+      runtime_kind: "codex_cli",
+      cli_command: "codex",
+      model: "gpt-5.4",
+      reasoning_effort: "medium",
+      tool_bridge_allowed: true,
+      fallback_profile: null,
+      base_url: null,
+      api_key_secret_ref: null,
+      is_builtin: true,
+      is_overridden: false,
+      can_delete: false,
+      can_reset: false,
+      usage_references: ["role:engineering"],
+    },
+  };
+  const createdPayloads: Array<Record<string, unknown>> = [];
+  const updatedPayloads: Array<Record<string, unknown>> = [];
+
+  const listProfilesBody = () => ({ profiles: profileState });
+  const modelCatalogForRuntime = (runtimeKind: string) => ({
+    default_model: runtimeKind === "lm_studio" ? "local-model" : "gpt-5.4",
+    default_reasoning_effort: "medium",
+    runtime_kind: runtimeKind,
+    profile_name: null,
+    models:
+      runtimeKind === "lm_studio"
+        ? []
+        : [{ id: "gpt-5.4", label: "GPT-5.4", description: "Default model" }],
+    reasoning_efforts: [
+      { id: "medium", label: "Medium", description: "Balanced" },
+      { id: "low", label: "Low", description: "Fast" },
+      { id: "high", label: "High", description: "Deep" },
+    ],
+  });
+
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants",
+      handler: (route) => fulfillJson(route, [makeTenant()]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/runs",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/secrets",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtimes",
+      handler: (route) =>
+        fulfillJson(route, {
+          role_routing: {},
+          name_routing: {},
+          available_roles: ["engineering"],
+          available_named_agents: ["workflow_dev_default"],
+          available_profiles: profileState,
+          effective_defaults: {
+            role_routing: { engineering: "engineering_execution_default" },
+            name_routing: { workflow_dev_default: "engineering_execution_default" },
+          },
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtime-profiles",
+      handler: (route) => fulfillJson(route, listProfilesBody()),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/codex/models",
+      handler: (route, url) => fulfillJson(route, modelCatalogForRuntime(url.searchParams.get("runtime_kind") ?? "codex_cli")),
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/admin/agent-runtime-profiles",
+      handler: async (route) => {
+        const payload = (await route.request().postDataJSON()) as Record<string, unknown>;
+        createdPayloads.push(payload);
+        if (payload.runtime_kind === "chat_cli" && payload.cli_command !== "chat") {
+          return fulfillJson(route, { detail: "cli_command is required for CLI runtimes" }, 400);
+        }
+        const profileName = String(payload.profile_name);
+        profileState[profileName] = {
+          ...payload,
+          is_builtin: false,
+          is_overridden: true,
+          can_delete: true,
+          can_reset: false,
+          usage_references: [],
+        };
+        return fulfillJson(route, profileState[profileName]);
+      },
+    },
+    {
+      method: "PUT",
+      pathname: /\/api\/bff\/api\/admin\/agent-runtime-profiles\/[^/]+$/,
+      handler: async (route) => {
+        const payload = (await route.request().postDataJSON()) as Record<string, unknown>;
+        updatedPayloads.push(payload);
+        const profileName = route.request().url().split("/").pop() ?? "unknown";
+        if (payload.runtime_kind === "lm_studio" && payload.base_url !== "http://localhost:1234/v1") {
+          return fulfillJson(route, { detail: "base_url is required for runtime lm_studio" }, 400);
+        }
+        profileState[profileName] = {
+          ...profileState[profileName],
+          ...payload,
+          profile_name: profileName,
+          is_builtin: true,
+          is_overridden: true,
+          can_delete: false,
+          can_reset: true,
+        };
+        return fulfillJson(route, profileState[profileName]);
+      },
+    },
+  ]);
+
+  await page.goto("/agent-runtimes");
+  await page.getByRole("button", { name: "Profiles" }).click();
+
+  await page.getByRole("button", { name: "New profile" }).click();
+  await page.getByLabel("Profile name").fill("chat_profile");
+  await page.getByLabel("Runtime").selectOption("chat_cli");
+  await page.getByLabel("Model", { exact: true }).selectOption("gpt-5.4");
+  await page.getByRole("button", { name: "Create profile" }).click();
+
+  await expect.poll(() => createdPayloads.length).toBe(1);
+  await expect(page.getByLabel("Profile name")).toHaveValue("chat_profile");
+  expect(createdPayloads[0].runtime_kind).toBe("chat_cli");
+  expect(createdPayloads[0].cli_command).toBe("chat");
+
+  await page.getByRole("table").getByText("engineering_execution_default").click();
+  await page.getByLabel("Runtime").selectOption("lm_studio");
+  await expect(page.getByLabel("Base URL")).toHaveValue("http://localhost:1234/v1");
+  await page.getByRole("button", { name: "Save profile" }).click();
+
+  await expect.poll(() => updatedPayloads.length).toBe(1);
+  await expect(page.getByLabel("Runtime")).toHaveValue("lm_studio");
+  expect(updatedPayloads[0].runtime_kind).toBe("lm_studio");
+  expect(updatedPayloads[0].base_url).toBe("http://localhost:1234/v1");
+  expect(updatedPayloads[0].model).toBe("gpt-5.4");
+});
+
 test("redirects unauthenticated access to login for protected routes", async ({ page }) => {
   await page.goto("/tenants/select");
 

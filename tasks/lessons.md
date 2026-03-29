@@ -92,3 +92,4 @@
 
 - When a bug report says the persona-specific live click path is still broken, do not rely on a nearby automated flow as proof. Reproduce that exact user journey in-browser, including the actual click target and expected visible data, before claiming the fix.
 - When adding new runtime providers or provider capabilities, verify the capability matrix explicitly. Do not assume `reasoning_effort`, model catalogs, or profile validation match user expectations just because the runtime kind was added elsewhere.
+- For admin configuration surfaces, API tests are not enough. Verify the real save path in-browser for create and update flows, including runtime-specific required fields and defaults.
