@@ -207,8 +207,51 @@ class AdminApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["default_model"], "gpt-5.4")
         self.assertEqual(body["default_reasoning_effort"], "medium")
+        self.assertEqual(body["runtime_kind"], "codex_cli")
         self.assertEqual([item["id"] for item in body["models"]], ["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
         self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
+
+    def test_list_codex_models_for_engineering_profile_uses_profile_runtime(self) -> None:
+        self.client.post(
+            "/api/admin/agent-runtime-profiles",
+            json={
+                "profile_name": "engineering_execution_custom",
+                "runtime_kind": "claude_cli",
+                "cli_command": "claude",
+                "model": "claude-sonnet-4-0",
+                "reasoning_effort": "medium",
+                "tool_bridge_allowed": True,
+                "fallback_profile": "engineering_execution_default",
+                "base_url": None,
+                "api_key_secret_ref": None,
+            },
+            auth=("admin", "secret"),
+        )
+        update_response = self.client.put(
+            "/api/admin/agent-runtime-profiles/engineering_execution",
+            json={
+                "runtime_kind": "claude_cli",
+                "cli_command": "claude",
+                "model": "claude-sonnet-4-0",
+                "reasoning_effort": "medium",
+                "tool_bridge_allowed": True,
+                "fallback_profile": None,
+                "base_url": None,
+                "api_key_secret_ref": None,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200)
+
+        response = self.client.get(
+            "/api/admin/codex/models?profile_name=engineering_execution",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["runtime_kind"], "claude_cli")
+        self.assertEqual(body["profile_name"], "engineering_execution")
+        self.assertIn("claude-sonnet-4-0", [item["id"] for item in body["models"]])
 
     def test_admin_login_issues_bearer_token(self) -> None:
         login_response = self.client.post(
@@ -275,6 +318,84 @@ class AdminApiTests(unittest.TestCase):
         self.assertIn("pm_conversation_fast", body["available_profiles"])
         self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
         self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
+
+    def test_agent_runtime_profiles_crud_and_reset(self) -> None:
+        create_response = self.client.post(
+            "/api/admin/agent-runtime-profiles",
+            json={
+                "profile_name": "openai_engineering_fast",
+                "runtime_kind": "openai",
+                "cli_command": "",
+                "model": "gpt-5.4",
+                "reasoning_effort": "low",
+                "tool_bridge_allowed": True,
+                "fallback_profile": "engineering_execution_default",
+                "base_url": "https://api.openai.com/v1",
+                "api_key_secret_ref": "platform/openai_api_key",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(create_response.json()["profile_name"], "openai_engineering_fast")
+        self.assertEqual(create_response.json()["runtime_kind"], "openai")
+        self.assertEqual(create_response.json()["base_url"], "https://api.openai.com/v1")
+
+        list_response = self.client.get("/api/admin/agent-runtime-profiles", auth=("admin", "secret"))
+        self.assertEqual(list_response.status_code, 200)
+        self.assertIn("openai_engineering_fast", list_response.json()["profiles"])
+
+        update_response = self.client.put(
+            "/api/admin/agent-runtime-profiles/engineering_execution_default",
+            json={
+                "runtime_kind": "claude_cli",
+                "cli_command": "claude",
+                "model": "claude-sonnet-4-0",
+                "reasoning_effort": "medium",
+                "tool_bridge_allowed": True,
+                "fallback_profile": None,
+                "base_url": None,
+                "api_key_secret_ref": None,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertTrue(update_response.json()["is_builtin"])
+        self.assertTrue(update_response.json()["is_overridden"])
+        self.assertEqual(update_response.json()["runtime_kind"], "claude_cli")
+
+        reset_response = self.client.post(
+            "/api/admin/agent-runtime-profiles/engineering_execution_default/reset",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(reset_response.status_code, 200)
+        self.assertEqual(reset_response.json()["runtime_kind"], "codex_cli")
+        self.assertFalse(reset_response.json()["is_overridden"])
+
+        delete_response = self.client.delete(
+            "/api/admin/agent-runtime-profiles/openai_engineering_fast",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertNotIn("openai_engineering_fast", delete_response.json()["profiles"])
+
+    def test_agent_runtime_profiles_reject_invalid_provider_configuration(self) -> None:
+        response = self.client.post(
+            "/api/admin/agent-runtime-profiles",
+            json={
+                "profile_name": "bad_openai_profile",
+                "runtime_kind": "openai",
+                "cli_command": "",
+                "model": "gpt-5.4",
+                "reasoning_effort": "medium",
+                "tool_bridge_allowed": True,
+                "fallback_profile": None,
+                "base_url": None,
+                "api_key_secret_ref": None,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("api_key_secret_ref is required", response.text)
 
     def test_agent_runtime_routes_upsert_and_reset(self) -> None:
         put_response = self.client.put(

@@ -140,6 +140,8 @@ export type CodexModelOptionRecord = {
 export type CodexModelCatalogRecord = {
   default_model: string;
   default_reasoning_effort: "low" | "medium" | "high";
+  runtime_kind: string;
+  profile_name?: string | null;
   models: CodexModelOptionRecord[];
   reasoning_efforts: CodexModelOptionRecord[];
 };
@@ -792,6 +794,32 @@ export type AgentExecutionProfileRecord = {
   reasoning_effort: "low" | "medium" | "high" | null;
   tool_bridge_allowed: boolean;
   fallback_profile: string | null;
+  base_url: string | null;
+  api_key_secret_ref: string | null;
+  is_builtin: boolean;
+  is_overridden: boolean;
+  can_delete: boolean;
+  can_reset: boolean;
+  usage_references: string[];
+};
+
+export type AgentExecutionProfileWritePayload = {
+  runtime_kind: string;
+  cli_command: string;
+  model: string;
+  reasoning_effort: "low" | "medium" | "high" | null;
+  tool_bridge_allowed: boolean;
+  fallback_profile: string | null;
+  base_url: string | null;
+  api_key_secret_ref: string | null;
+};
+
+export type AgentExecutionProfileCreatePayload = AgentExecutionProfileWritePayload & {
+  profile_name: string;
+};
+
+export type AgentExecutionProfilesRecord = {
+  profiles: Record<string, AgentExecutionProfileRecord>;
 };
 
 export type AgentRuntimeRoutingDefaultsRecord = {
@@ -1422,8 +1450,19 @@ export function getTenant(credentials: Credentials, tenantId: string): Promise<T
   return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`);
 }
 
-export function listCodexModels(credentials: Credentials): Promise<CodexModelCatalogRecord> {
-  return request<CodexModelCatalogRecord>(credentials, "/api/admin/codex/models");
+export function listCodexModels(
+  credentials: Credentials,
+  options?: { runtimeKind?: string | null; profileName?: string | null }
+): Promise<CodexModelCatalogRecord> {
+  const query = new URLSearchParams();
+  if (options?.runtimeKind) {
+    query.set("runtime_kind", options.runtimeKind);
+  }
+  if (options?.profileName) {
+    query.set("profile_name", options.profileName);
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<CodexModelCatalogRecord>(credentials, `/api/admin/codex/models${suffix}`);
 }
 
 export function createTenant(
@@ -2387,6 +2426,61 @@ export function resetAgentRuntimeRouting(credentials: Credentials): Promise<Agen
   return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes/reset", {
     method: "POST"
   });
+}
+
+export function listAgentRuntimeProfiles(credentials: Credentials): Promise<AgentExecutionProfilesRecord> {
+  return request<AgentExecutionProfilesRecord>(credentials, "/api/admin/agent-runtime-profiles");
+}
+
+export function createAgentRuntimeProfile(
+  credentials: Credentials,
+  payload: AgentExecutionProfileCreatePayload
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(credentials, "/api/admin/agent-runtime-profiles", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string,
+  payload: AgentExecutionProfileWritePayload
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function resetAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}/reset`,
+    {
+      method: "POST"
+    }
+  );
+}
+
+export function deleteAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string
+): Promise<AgentExecutionProfilesRecord> {
+  return request<AgentExecutionProfilesRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}`,
+    {
+      method: "DELETE"
+    }
+  );
 }
 
 export function upsertTenantManagedSecret(

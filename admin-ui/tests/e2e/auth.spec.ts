@@ -199,6 +199,63 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
           },
         }),
     },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtime-profiles",
+      handler: (route) =>
+        fulfillJson(route, {
+          profiles: {
+            engineering_execution_default: {
+              profile_name: "engineering_execution_default",
+              runtime_kind: "codex_cli",
+              cli_command: "codex",
+              model: "gpt-5.4",
+              reasoning_effort: "medium",
+              tool_bridge_allowed: true,
+              fallback_profile: null,
+              base_url: null,
+              api_key_secret_ref: null,
+              is_builtin: true,
+              is_overridden: false,
+              can_delete: false,
+              can_reset: false,
+              usage_references: ["role:engineering"],
+            },
+            engineering_execution_deep: {
+              profile_name: "engineering_execution_deep",
+              runtime_kind: "codex_cli",
+              cli_command: "codex",
+              model: "gpt-5.4",
+              reasoning_effort: "high",
+              tool_bridge_allowed: true,
+              fallback_profile: null,
+              base_url: null,
+              api_key_secret_ref: null,
+              is_builtin: true,
+              is_overridden: false,
+              can_delete: false,
+              can_reset: false,
+              usage_references: ["named-agent:workflow_review_default"],
+            },
+            pm_conversation_default: {
+              profile_name: "pm_conversation_default",
+              runtime_kind: "chat_cli",
+              cli_command: "chat",
+              model: "gpt-5.4",
+              reasoning_effort: "medium",
+              tool_bridge_allowed: false,
+              fallback_profile: "general_planning_default",
+              base_url: null,
+              api_key_secret_ref: null,
+              is_builtin: true,
+              is_overridden: false,
+              can_delete: false,
+              can_reset: false,
+              usage_references: ["role:pm"],
+            },
+          },
+        }),
+    },
   ]);
 
   await page.goto("/dashboard");
@@ -206,9 +263,10 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
 
   await expect(page).toHaveURL(/\/agent-runtimes$/);
   await expect(page.getByRole("heading", { name: "Agent runtimes" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Routing" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Profiles" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Runtime routing" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Role defaults" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Available profiles" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Platform status" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Workers" })).toHaveCount(0);
   await expect(page.getByText("Worker instances")).toHaveCount(0);

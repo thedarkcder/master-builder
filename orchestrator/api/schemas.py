@@ -761,6 +761,8 @@ class CodexReasoningOptionRead(BaseModel):
 class CodexModelCatalogRead(BaseModel):
     default_model: str
     default_reasoning_effort: str
+    runtime_kind: str = "codex_cli"
+    profile_name: str | None = None
     models: list[CodexModelOptionRead] = Field(default_factory=list)
     reasoning_efforts: list[CodexReasoningOptionRead] = Field(default_factory=list)
 
@@ -876,6 +878,32 @@ class AgentExecutionProfileRead(BaseModel):
     reasoning_effort: str | None = None
     tool_bridge_allowed: bool
     fallback_profile: str | None = None
+    base_url: str | None = None
+    api_key_secret_ref: str | None = None
+    is_builtin: bool = False
+    is_overridden: bool = False
+    can_delete: bool = False
+    can_reset: bool = False
+    usage_references: list[str] = Field(default_factory=list)
+
+
+class AgentExecutionProfileWrite(BaseModel):
+    runtime_kind: str
+    cli_command: str = ""
+    model: str = Field(min_length=1)
+    reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    tool_bridge_allowed: bool = False
+    fallback_profile: str | None = None
+    base_url: str | None = None
+    api_key_secret_ref: str | None = None
+
+
+class AgentExecutionProfileCreate(AgentExecutionProfileWrite):
+    profile_name: str = Field(min_length=1)
+
+
+class AgentExecutionProfilesRead(BaseModel):
+    profiles: dict[str, AgentExecutionProfileRead] = Field(default_factory=dict)
 
 
 class AgentRuntimeRoutingDefaultsRead(BaseModel):

@@ -20,6 +20,7 @@ from orchestrator.core.codex_runtime import build_runtime_for_execution_profile
 from orchestrator.core.codex_runtime import build_runtime_with_fallback
 from orchestrator.core.config import Settings
 from orchestrator.core.platform_settings_service import (
+    SETTING_KEY_AGENT_RUNTIME_PROFILES,
     SETTING_KEY_AGENT_RUNTIME_ROUTING,
     platform_settings_service,
 )
@@ -37,7 +38,9 @@ def _resolve_agent_execution_profiles(
     agent_name: str | None = None,
     platform_role_routing: dict[str, str] | None = None,
     platform_name_routing: dict[str, str] | None = None,
+    platform_profiles: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[AgentExecutionProfile, dict[str, dict[str, Any]]]:
+    platform_profiles = normalize_execution_profiles(platform_profiles)
     tenant_profiles = normalize_execution_profiles((tenant_policy or {}).get("execution_profiles"))
     project_profiles = normalize_execution_profiles((project_overrides or {}).get("execution_profiles"))
     effective_policy = resolve_effective_policy(
@@ -54,9 +57,11 @@ def _resolve_agent_execution_profiles(
         default_chat_cli_command=settings.chat_cli_command,
         default_chat_model=settings.chat_model,
         default_chat_reasoning_effort=settings.chat_reasoning_effort,
+        default_claude_cli_command=getattr(settings, "claude_cli_command", ""),
     )
     profiles = merge_execution_profiles(
         default_profiles=default_profiles,
+        platform_profiles=platform_profiles,
         tenant_profiles=tenant_profiles,
         project_profiles=project_profiles,
     )
@@ -125,20 +130,26 @@ def resolve_agent_execution_profile(
         agent_name=agent_name,
         platform_role_routing=platform_role_routing,
         platform_name_routing=platform_name_routing,
+        platform_profiles=None,
     )
     return profile
 
 
-def _platform_agent_runtime_routing(*, session) -> tuple[dict[str, str], dict[str, str]]:  # noqa: ANN001
+def _platform_agent_runtime_settings(*, session) -> tuple[dict[str, str], dict[str, str], dict[str, dict[str, Any]]]:  # noqa: ANN001
     if session is None:
-        return {}, {}
-    payload = platform_settings_service.get_json(
+        return {}, {}, {}
+    routing_payload = platform_settings_service.get_json(
         session=session,
         setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING,
     )
+    profiles_payload = platform_settings_service.get_json(
+        session=session,
+        setting_key=SETTING_KEY_AGENT_RUNTIME_PROFILES,
+    )
     return (
-        normalize_agent_routing(payload.get("role_routing")),
-        normalize_agent_routing(payload.get("name_routing")),
+        normalize_agent_routing(routing_payload.get("role_routing")),
+        normalize_agent_routing(routing_payload.get("name_routing")),
+        normalize_execution_profiles(profiles_payload.get("profiles")),
     )
 
 
@@ -164,7 +175,7 @@ def build_runtime_for_selector(
         project = session.get(Project, normalized_project_id)
         if project is not None and (not normalized_tenant_id or project.tenant_id == normalized_tenant_id):
             project_overrides = dict(project.policy_overrides or {})
-    platform_role_routing, platform_name_routing = _platform_agent_runtime_routing(session=session)
+    platform_role_routing, platform_name_routing, platform_profiles = _platform_agent_runtime_settings(session=session)
     profile, profiles = _resolve_agent_execution_profiles(
         settings=settings,
         tenant_policy=tenant_policy,
@@ -174,6 +185,7 @@ def build_runtime_for_selector(
         agent_name=agent_name,
         platform_role_routing=platform_role_routing,
         platform_name_routing=platform_name_routing,
+        platform_profiles=platform_profiles,
     )
     runtime = build_runtime_for_execution_profile(
         session=session,
