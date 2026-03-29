@@ -343,7 +343,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
             patch.object(worker_module, "_recover_worker_run_health_once") as recovery_mock,
             patch.object(worker_module, "_run_stale_recovery_loop") as stale_loop_mock,
-            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
         ):
             asyncio.run(worker_module.run_worker(mode="webhooks"))
 
@@ -399,7 +399,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
             patch.object(worker_module, "_purge_archived_tenants_once", new=purge_mock),
             patch.object(worker_module, "_run_archived_tenant_purge_loop", new=_archived_tenant_purge_loop),
-            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
         ):
             asyncio.run(worker_module.run_worker(mode="runs"))
 
@@ -487,7 +487,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "process_next_queued_run", new=process_mock),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
-            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
         ):
             asyncio.run(worker_module.run_worker())
 
@@ -546,7 +546,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "process_next_queued_run", new=process_mock),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
-            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
         ):
             asyncio.run(worker_module.run_worker())
 
@@ -607,7 +607,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
             patch.object(worker_module, "_run_worker_slot", new=_run_worker_slot),
-            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
             patch.object(worker_module.platform_metrics, "record_worker_failure") as failure_metric,
         ):
             asyncio.run(worker_module.run_worker())
@@ -667,7 +667,7 @@ class WorkerTests(unittest.TestCase):
             patch.object(worker_module, "build_workflow_runner_for_session", new=build_runner_mock),
             patch.object(worker_module, "_recover_worker_run_health_once", new=recovery_mock),
             patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
-            patch.object(worker_module, "worker_service_instance_id", return_value="node-a:1234"),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
         ):
             with self.assertRaisesRegex(RuntimeError, "Worker runtime unavailable"):
                 asyncio.run(worker_module.run_worker())
@@ -686,6 +686,20 @@ class WorkerRuntimeRegistryTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         reset_db_engine_cache()
+
+    def test_worker_service_instance_id_for_mode_is_sticky_by_agent_and_mode(self) -> None:
+        from orchestrator.core.worker.run_health import worker_service_instance_id_for_mode
+
+        settings = SimpleNamespace(agent_id="worker-linux-local")
+
+        self.assertEqual(
+            worker_service_instance_id_for_mode(settings=settings, mode="runs"),
+            "worker-linux-local:runs",
+        )
+        self.assertEqual(
+            worker_service_instance_id_for_mode(settings=settings, mode="webhooks"),
+            "worker-linux-local:webhooks",
+        )
 
     def test_worker_runtime_registration_refresh_and_stop(self) -> None:
         import orchestrator.worker as worker_module
