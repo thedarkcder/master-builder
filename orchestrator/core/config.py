@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     codex_model: str = "gpt-5.4"
     codex_supported_models: str = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
     chat_cli_command: str = ""
+    claude_cli_command: str = ""
     chat_model: str = "gpt-5.4"
     chat_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_tool_database_url: str = ""

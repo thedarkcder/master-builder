@@ -79,7 +79,7 @@ export function CodexModelSelect({
             setCustomValue(next);
             onChange(next.trim() || null);
           }}
-          placeholder="Enter Codex model id"
+          placeholder="Enter model id"
           disabled={disabled}
         />
       ) : null}

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from orchestrator.storage.models import PlatformSetting
 
 SETTING_KEY_AGENT_RUNTIME_ROUTING = "agent_runtime_routing"
+SETTING_KEY_AGENT_RUNTIME_PROFILES = "agent_runtime_profiles"
 
 
 def _utc_now() -> datetime:

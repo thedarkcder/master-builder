@@ -304,12 +304,12 @@ export function PolicySection({
           <Toggle label="Require AGENTS.md" checked={policy.require_agents_md} onChange={(next) => onPolicyChange({ ...policy, require_agents_md: next })} />
         </div>
         <div className="space-y-2">
-          <FieldLabel>Codex model</FieldLabel>
+          <FieldLabel>Execution model</FieldLabel>
           <CodexModelSelect
             value={policy.codex_model ?? null}
             models={codexModels}
             inheritLabel={`Use global default (${globalCodexModel})`}
-            helperText="Choose the default Codex model for this tenant. Projects can inherit this or override it."
+            helperText="Choose the default model for the engineering runtime profile. Projects inherit this unless they override it."
             onChange={(next) => onPolicyChange({ ...policy, codex_model: next })}
           />
         </div>
@@ -318,6 +318,7 @@ export function PolicySection({
           <select
             className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
             value={policy.codex_reasoning_effort ?? ""}
+            disabled={reasoningEfforts.length === 0}
             onChange={(event) =>
               onPolicyChange({
                 ...policy,
@@ -325,7 +326,11 @@ export function PolicySection({
               })
             }
           >
-            <option value="">{`Use global default (${globalCodexReasoningEffort})`}</option>
+            <option value="">
+              {reasoningEfforts.length > 0
+                ? `Use global default (${globalCodexReasoningEffort})`
+                : "Not supported by the current engineering runtime"}
+            </option>
             {reasoningEfforts.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.label}

@@ -8,12 +8,15 @@ import subprocess
 import tempfile
 import threading
 import time
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from orchestrator.core.agent_execution_profiles import AgentExecutionProfile
 from orchestrator.core.config import Settings
+from orchestrator.core.platform_secret_service import platform_secret_service
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -505,6 +508,32 @@ def build_runtime_for_execution_profile(
     profile: AgentExecutionProfile,
     request_override: Callable[[str, str, str | None], str] | None = None,
 ) -> CodexRuntime:
+    normalized_runtime_kind = str(profile.runtime_kind or "").strip().lower()
+    if normalized_runtime_kind in {"openai", "claude", "llama_cpp", "lm_studio"}:
+        api_key = None
+        if profile.api_key_secret_ref:
+            if session is None:
+                raise CodexRuntimeError("Session is required to resolve runtime API credentials")
+            api_key = platform_secret_service.get(
+                session=session,
+                secret_ref=profile.api_key_secret_ref,
+                encryption_key=settings.secrets_encryption_key,
+            )
+            if api_key is None:
+                raise CodexRuntimeError(
+                    f"Runtime API credential could not be resolved for secret ref '{profile.api_key_secret_ref}'"
+                )
+        return build_http_runtime(
+            settings=settings,
+            runtime_kind=normalized_runtime_kind,
+            base_url=profile.base_url,
+            api_key=api_key,
+            request_override=request_override,
+            default_model_override=str(profile.model or "").strip() or settings.codex_model,
+            default_reasoning_effort_override=(
+                str(profile.reasoning_effort or "").strip().lower() or settings.codex_reasoning_effort
+            ),
+        )
     normalized_cli_command = str(profile.cli_command or "").strip() or settings.codex_cli_command
     normalized_model = str(profile.model or "").strip() or settings.codex_model
     normalized_reasoning_effort = (
@@ -518,6 +547,190 @@ def build_runtime_for_execution_profile(
         cli_command_override=normalized_cli_command,
         default_model_override=normalized_model,
         default_reasoning_effort_override=normalized_reasoning_effort,
+    )
+
+
+def _http_json_request(
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        url=url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            **headers,
+        },
+        method=method,
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=120) as response:
+            raw_body = response.read().decode("utf-8")
+    except urllib_error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise CodexRuntimeError(
+            f"Runtime HTTP request failed with status {exc.code}",
+            payload_preview=_shorten_preview(error_body, max_len=4000),
+        ) from exc
+    except urllib_error.URLError as exc:
+        raise CodexRuntimeError(f"Runtime HTTP request failed: {exc.reason}") from exc
+    try:
+        parsed = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise CodexRuntimeError(
+            "Runtime HTTP request did not return valid JSON",
+            payload_preview=_shorten_preview(raw_body, max_len=4000),
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise CodexRuntimeError(
+            "Runtime HTTP request did not return a JSON object",
+            payload_preview=_shorten_preview(raw_body, max_len=4000),
+        )
+    return parsed
+
+
+def _extract_openai_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise CodexRuntimeError("OpenAI-compatible runtime returned no choices")
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(str(item.get("text") or ""))
+        joined = "".join(texts).strip()
+        if joined:
+            return joined
+    raise CodexRuntimeError("OpenAI-compatible runtime returned no text content")
+
+
+def _extract_claude_text(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        raise CodexRuntimeError("Claude runtime returned no content")
+    texts: list[str] = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            texts.append(str(item.get("text") or ""))
+    joined = "".join(texts).strip()
+    if not joined:
+        raise CodexRuntimeError("Claude runtime returned no text content")
+    return joined
+
+
+def build_http_runtime(
+    *,
+    settings: Settings,
+    runtime_kind: str,
+    base_url: str | None,
+    api_key: str | None,
+    request_override: Callable[[str, str, str | None], str] | None = None,
+    default_model_override: str | None = None,
+    default_reasoning_effort_override: str | None = None,
+) -> CodexRuntime:
+    if request_override is not None:
+        return build_cli_runtime(
+            settings=settings,
+            request_override=request_override,
+            cli_command_override="override",
+            default_model_override=default_model_override,
+            default_reasoning_effort_override=default_reasoning_effort_override,
+        )
+
+    normalized_runtime_kind = str(runtime_kind or "").strip().lower()
+    normalized_model = str(default_model_override or settings.codex_model or "").strip() or settings.codex_model
+    normalized_reasoning_effort = (
+        str(default_reasoning_effort_override or settings.codex_reasoning_effort or "").strip().lower()
+        or settings.codex_reasoning_effort
+    )
+    normalized_base_url = str(base_url or "").strip()
+    if normalized_runtime_kind == "openai":
+        normalized_base_url = normalized_base_url or "https://api.openai.com/v1"
+    elif normalized_runtime_kind == "claude":
+        normalized_base_url = normalized_base_url or "https://api.anthropic.com"
+    if not normalized_base_url:
+        raise CodexRuntimeError(f"Base URL is required for runtime kind '{normalized_runtime_kind}'")
+
+    def _request(
+        system_prompt: str,
+        user_prompt: str,
+        working_dir: str | None,
+        on_log_line: Callable[[str, str], None] | None,
+        reasoning_effort: str | None,
+        resume_session_id: str | None,
+        on_session_id: Callable[[str], None] | None,
+        on_usage: Callable[[dict[str, int]], None] | None,
+        model_override: str | None,
+    ) -> str:
+        _ = working_dir
+        _ = resume_session_id
+        if on_session_id is not None:
+            on_session_id(f"{normalized_runtime_kind}:stateless")
+        resolved_model = str(model_override or normalized_model).strip() or normalized_model
+        resolved_reasoning_effort = str(reasoning_effort or normalized_reasoning_effort).strip().lower() or normalized_reasoning_effort
+        if on_log_line is not None:
+            on_log_line("stdout", f"[runtime:{normalized_runtime_kind}] model={resolved_model} reasoning={resolved_reasoning_effort}")
+        if normalized_runtime_kind in {"openai", "llama_cpp", "lm_studio"}:
+            headers: dict[str, str] = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            payload = _http_json_request(
+                method="POST",
+                url=f"{normalized_base_url.rstrip('/')}/chat/completions",
+                headers=headers,
+                payload={
+                    "model": resolved_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": settings.codex_max_output_tokens,
+                },
+            )
+            usage = payload.get("usage")
+            if on_usage is not None and isinstance(usage, dict):
+                on_usage({key: int(value) for key, value in usage.items() if isinstance(value, (int, float))})
+            return _extract_openai_text(payload)
+        if normalized_runtime_kind == "claude":
+            headers = {
+                "anthropic-version": "2023-06-01",
+            }
+            if api_key:
+                headers["x-api-key"] = api_key
+            payload = _http_json_request(
+                method="POST",
+                url=f"{normalized_base_url.rstrip('/')}/v1/messages",
+                headers=headers,
+                payload={
+                    "model": resolved_model,
+                    "system": system_prompt,
+                    "max_tokens": settings.codex_max_output_tokens,
+                    "messages": [
+                        {"role": "user", "content": user_prompt},
+                    ],
+                },
+            )
+            usage = payload.get("usage")
+            if on_usage is not None and isinstance(usage, dict):
+                on_usage({key: int(value) for key, value in usage.items() if isinstance(value, (int, float))})
+            return _extract_claude_text(payload)
+        raise CodexRuntimeError(f"Unsupported HTTP runtime kind '{normalized_runtime_kind}'")
+
+    return CodexRuntime(
+        model=normalized_model,
+        max_output_tokens=settings.codex_max_output_tokens,
+        command=f"http:{normalized_runtime_kind}",
+        _request=_request,
     )
 
 
