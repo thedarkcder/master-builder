@@ -91,3 +91,4 @@
 - When a user asks to remove a URL segment and rejects legacy redirects, make it a real route-tree cutover: move the route files, update helpers/nav/tests together, and delete alias redirect behavior instead of hiding the old contract behind redirects.
 
 - When a bug report says the persona-specific live click path is still broken, do not rely on a nearby automated flow as proof. Reproduce that exact user journey in-browser, including the actual click target and expected visible data, before claiming the fix.
+- When adding new runtime providers or provider capabilities, verify the capability matrix explicitly. Do not assume `reasoning_effort`, model catalogs, or profile validation match user expectations just because the runtime kind was added elsewhere.

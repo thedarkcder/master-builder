@@ -253,6 +253,16 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(body["profile_name"], "engineering_execution")
         self.assertIn("claude-sonnet-4-0", [item["id"] for item in body["models"]])
 
+    def test_list_codex_models_for_lm_studio_includes_reasoning_efforts(self) -> None:
+        response = self.client.get(
+            "/api/admin/codex/models?runtime_kind=lm_studio",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["runtime_kind"], "lm_studio")
+        self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
+
     def test_admin_login_issues_bearer_token(self) -> None:
         login_response = self.client.post(
             "/api/admin/auth/login",
@@ -396,6 +406,26 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("api_key_secret_ref is required", response.text)
+
+    def test_agent_runtime_profiles_accept_reasoning_for_lm_studio(self) -> None:
+        response = self.client.post(
+            "/api/admin/agent-runtime-profiles",
+            json={
+                "profile_name": "lm_studio_reasoning",
+                "runtime_kind": "lm_studio",
+                "cli_command": "",
+                "model": "local-model",
+                "reasoning_effort": "high",
+                "tool_bridge_allowed": True,
+                "fallback_profile": None,
+                "base_url": "http://localhost:1234/v1",
+                "api_key_secret_ref": None,
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["runtime_kind"], "lm_studio")
+        self.assertEqual(response.json()["reasoning_effort"], "high")
 
     def test_agent_runtime_routes_upsert_and_reset(self) -> None:
         put_response = self.client.put(
