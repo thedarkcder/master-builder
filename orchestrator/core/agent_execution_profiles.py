@@ -195,6 +195,14 @@ def list_known_agent_names() -> list[str]:
     return list(_KNOWN_AGENT_NAMES)
 
 
+def list_known_execution_selectors() -> list[str]:
+    return sorted(_DEFAULT_ROUTING.keys())
+
+
+def default_execution_profile_routing() -> dict[str, str]:
+    return dict(_DEFAULT_ROUTING)
+
+
 def default_agent_role_routing() -> dict[str, str]:
     return dict(_DEFAULT_AGENT_ROLE_ROUTING)
 

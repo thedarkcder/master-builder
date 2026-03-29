@@ -323,11 +323,28 @@ class AdminApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["role_routing"], {})
         self.assertEqual(body["name_routing"], {})
+        self.assertEqual(body["selector_routing"], {})
         self.assertIn("pm", body["available_roles"])
         self.assertIn("voice_room_pm", body["available_named_agents"])
+        self.assertNotIn("discord.voice_room_router", body["available_named_agents"])
+        self.assertIn("discord.voice_room_router", body["available_selectors"])
         self.assertIn("pm_conversation_fast", body["available_profiles"])
         self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
         self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
+        self.assertEqual(body["effective_defaults"]["selector_routing"]["discord.voice_room_pm"], "pm_conversation")
+
+    def test_agent_runtime_tools_catalog_response(self) -> None:
+        response = self.client.get("/api/admin/agent-runtime-tools", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("available_stages", body)
+        self.assertIn("tools", body)
+        self.assertIn("pm", body["available_stages"])
+        repo_read = next(item for item in body["tools"] if item["tool_name"] == "repo.read")
+        self.assertEqual(repo_read["category"], "repo")
+        self.assertIn("dev", repo_read["stages"])
+        self.assertIn("pm", repo_read["stages"])
+        self.assertTrue(repo_read["description"])
 
     def test_agent_runtime_profiles_crud_and_reset(self) -> None:
         create_response = self.client.post(
@@ -433,6 +450,7 @@ class AdminApiTests(unittest.TestCase):
             json={
                 "role_routing": {"pm": "pm_conversation_fast"},
                 "name_routing": {"workflow_review_default": "engineering_execution_deep"},
+                "selector_routing": {"discord.voice_room_pm": "pm_conversation_fast"},
             },
             auth=("admin", "secret"),
         )
@@ -440,10 +458,12 @@ class AdminApiTests(unittest.TestCase):
         body = put_response.json()
         self.assertEqual(body["role_routing"]["pm"], "pm_conversation_fast")
         self.assertEqual(body["name_routing"]["workflow_review_default"], "engineering_execution_deep")
+        self.assertEqual(body["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
 
         get_response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(get_response.json()["role_routing"]["pm"], "pm_conversation_fast")
+        self.assertEqual(get_response.json()["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -451,11 +471,13 @@ class AdminApiTests(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertEqual(row.value_json["role_routing"]["pm"], "pm_conversation_fast")
             self.assertEqual(row.value_json["name_routing"]["workflow_review_default"], "engineering_execution_deep")
+            self.assertEqual(row.value_json["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
 
         reset_response = self.client.post("/api/admin/agent-runtimes/reset", auth=("admin", "secret"))
         self.assertEqual(reset_response.status_code, 200)
         self.assertEqual(reset_response.json()["role_routing"], {})
         self.assertEqual(reset_response.json()["name_routing"], {})
+        self.assertEqual(reset_response.json()["selector_routing"], {})
 
     def test_agent_runtime_routes_reject_unknown_role_and_profile(self) -> None:
         response = self.client.put(
@@ -468,6 +490,17 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Unknown agent role", response.text)
+
+    def test_agent_runtime_routes_reject_unknown_selector(self) -> None:
+        response = self.client.put(
+            "/api/admin/agent-runtimes",
+            json={
+                "selector_routing": {"unknown-selector": "pm_conversation_fast"},
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unknown selector", response.text)
 
     def test_platform_secret_list_excludes_tenant_and_project_scoped_refs(self) -> None:
         create_response = self.client.post(

@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const PLAYWRIGHT_APP_PORT = process.env.PLAYWRIGHT_APP_PORT ?? "4101";
+const PLAYWRIGHT_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${PLAYWRIGHT_APP_PORT}`;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
@@ -8,18 +11,19 @@ export default defineConfig({
   workers: process.env.CI ? 2 : undefined,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://localhost:4100",
+    baseURL: PLAYWRIGHT_BASE_URL,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
   webServer: {
-    command: "npm run dev",
-    url: "http://localhost:4100/login",
+    command: `npx next dev -p ${PLAYWRIGHT_APP_PORT}`,
+    url: `${PLAYWRIGHT_BASE_URL}/login`,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
     env: {
       NEXT_TELEMETRY_DISABLED: "1",
+      NEXT_DIST_DIR: ".next-playwright",
     },
   },
   projects: [

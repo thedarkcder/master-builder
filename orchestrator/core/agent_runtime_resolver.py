@@ -38,6 +38,7 @@ def _resolve_agent_execution_profiles(
     agent_name: str | None = None,
     platform_role_routing: dict[str, str] | None = None,
     platform_name_routing: dict[str, str] | None = None,
+    platform_selector_routing: dict[str, str] | None = None,
     platform_profiles: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[AgentExecutionProfile, dict[str, dict[str, Any]]]:
     platform_profiles = normalize_execution_profiles(platform_profiles)
@@ -69,6 +70,9 @@ def _resolve_agent_execution_profiles(
         tenant_routing=normalize_execution_profile_routing((tenant_policy or {}).get("execution_profile_routing")),
         project_routing=normalize_execution_profile_routing((project_overrides or {}).get("execution_profile_routing")),
     )
+    platform_selector_routing = normalize_execution_profile_routing(platform_selector_routing)
+    merged_routing = dict(routing)
+    merged_routing.update(platform_selector_routing or {})
     # Respect explicit effective-policy overrides as a compatibility path.
     effective_model = str(effective_policy.get("codex_model") or settings.codex_model).strip() or settings.codex_model
     effective_effort = (
@@ -100,7 +104,7 @@ def _resolve_agent_execution_profiles(
         configured_routing=normalize_agent_routing(platform_name_routing),
     )
     profile_name = resolve_execution_profile_name(
-        routing=routing,
+        routing=merged_routing,
         selector=selector,
         agent_role=agent_role,
         agent_name=agent_name,
@@ -120,6 +124,7 @@ def resolve_agent_execution_profile(
     agent_name: str | None = None,
     platform_role_routing: dict[str, str] | None = None,
     platform_name_routing: dict[str, str] | None = None,
+    platform_selector_routing: dict[str, str] | None = None,
 ) -> AgentExecutionProfile:
     profile, _profiles = _resolve_agent_execution_profiles(
         settings=settings,
@@ -130,14 +135,15 @@ def resolve_agent_execution_profile(
         agent_name=agent_name,
         platform_role_routing=platform_role_routing,
         platform_name_routing=platform_name_routing,
+        platform_selector_routing=platform_selector_routing,
         platform_profiles=None,
     )
     return profile
 
 
-def _platform_agent_runtime_settings(*, session) -> tuple[dict[str, str], dict[str, str], dict[str, dict[str, Any]]]:  # noqa: ANN001
+def _platform_agent_runtime_settings(*, session) -> tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, dict[str, Any]]]:  # noqa: ANN001
     if session is None:
-        return {}, {}, {}
+        return {}, {}, {}, {}
     routing_payload = platform_settings_service.get_json(
         session=session,
         setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING,
@@ -149,6 +155,7 @@ def _platform_agent_runtime_settings(*, session) -> tuple[dict[str, str], dict[s
     return (
         normalize_agent_routing(routing_payload.get("role_routing")),
         normalize_agent_routing(routing_payload.get("name_routing")),
+        normalize_execution_profile_routing(routing_payload.get("selector_routing")),
         normalize_execution_profiles(profiles_payload.get("profiles")),
     )
 
@@ -175,7 +182,9 @@ def build_runtime_for_selector(
         project = session.get(Project, normalized_project_id)
         if project is not None and (not normalized_tenant_id or project.tenant_id == normalized_tenant_id):
             project_overrides = dict(project.policy_overrides or {})
-    platform_role_routing, platform_name_routing, platform_profiles = _platform_agent_runtime_settings(session=session)
+    platform_role_routing, platform_name_routing, platform_selector_routing, platform_profiles = _platform_agent_runtime_settings(
+        session=session
+    )
     profile, profiles = _resolve_agent_execution_profiles(
         settings=settings,
         tenant_policy=tenant_policy,
@@ -185,6 +194,7 @@ def build_runtime_for_selector(
         agent_name=agent_name,
         platform_role_routing=platform_role_routing,
         platform_name_routing=platform_name_routing,
+        platform_selector_routing=platform_selector_routing,
         platform_profiles=platform_profiles,
     )
     runtime = build_runtime_for_execution_profile(

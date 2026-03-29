@@ -9,10 +9,13 @@ from orchestrator.api.schemas import (
     AgentExecutionProfileRead,
     AgentExecutionProfilesRead,
     AgentExecutionProfileWrite,
+    AgentRuntimeToolRead,
+    AgentRuntimeToolsRead,
     AgentRuntimeRoutingDefaultsRead,
     AgentRuntimeRoutingRead,
     AgentRuntimeRoutingUpdate,
 )
+from orchestrator.core.agent_tools import TOOL_ALLOWLIST, list_implemented_tools
 from orchestrator.core.agent_execution_profiles import (
     AgentExecutionProfile,
     build_agent_execution_profile,
@@ -20,8 +23,11 @@ from orchestrator.core.agent_execution_profiles import (
     default_agent_name_routing,
     default_agent_role_routing,
     default_execution_profiles,
+    default_execution_profile_routing,
+    list_known_execution_selectors,
     list_known_agent_names,
     list_known_agent_roles,
+    normalize_execution_profile_routing,
     normalize_agent_routing,
     normalize_execution_profiles,
     runtime_kind_requires_base_url,
@@ -78,11 +84,12 @@ def _merged_profiles(*, session: Session) -> tuple[dict[str, dict], dict[str, di
     return defaults, configured, merged
 
 
-def _current_routing(*, session: Session) -> tuple[dict[str, str], dict[str, str]]:
+def _current_routing(*, session: Session) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     payload = platform_settings_service.get_json(session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING)
     return (
         normalize_agent_routing(payload.get("role_routing")),
         normalize_agent_routing(payload.get("name_routing")),
+        normalize_execution_profile_routing(payload.get("selector_routing")),
     )
 
 
@@ -93,6 +100,7 @@ def _profile_usage_references(
     configured: dict[str, dict],
     role_routing: dict[str, str],
     name_routing: dict[str, str],
+    selector_routing: dict[str, str],
 ) -> list[str]:
     references: list[str] = []
     merged_role_routing = default_agent_role_routing()
@@ -106,6 +114,12 @@ def _profile_usage_references(
     for agent_name, selected_profile in merged_name_routing.items():
         if selected_profile == profile_name:
             references.append(f"named-agent:{agent_name}")
+
+    merged_selector_routing = default_execution_profile_routing()
+    merged_selector_routing.update(selector_routing)
+    for selector, selected_profile in merged_selector_routing.items():
+        if selected_profile == profile_name:
+            references.append(f"selector:{selector}")
 
     merged_profiles = dict(defaults)
     merged_profiles.update(configured)
@@ -124,6 +138,7 @@ def _profile_to_read(
     configured: dict[str, dict],
     role_routing: dict[str, str],
     name_routing: dict[str, str],
+    selector_routing: dict[str, str],
 ) -> AgentExecutionProfileRead:
     is_builtin = profile_name in defaults
     is_overridden = profile_name in configured
@@ -133,6 +148,7 @@ def _profile_to_read(
         configured=configured,
         role_routing=role_routing,
         name_routing=name_routing,
+        selector_routing=selector_routing,
     )
     return AgentExecutionProfileRead(
         profile_name=profile.profile_name,
@@ -154,7 +170,7 @@ def _profile_to_read(
 
 def _available_profiles(*, session: Session) -> dict[str, AgentExecutionProfileRead]:
     defaults, configured, merged = _merged_profiles(session=session)
-    role_routing, name_routing = _current_routing(session=session)
+    role_routing, name_routing, selector_routing = _current_routing(session=session)
     available: dict[str, AgentExecutionProfileRead] = {}
     for profile_name in sorted(merged.keys()):
         profile = build_agent_execution_profile(profile_name=profile_name, profiles=merged)
@@ -165,6 +181,7 @@ def _available_profiles(*, session: Session) -> dict[str, AgentExecutionProfileR
             configured=configured,
             role_routing=role_routing,
             name_routing=name_routing,
+            selector_routing=selector_routing,
         )
     return available
 
@@ -172,6 +189,7 @@ def _available_profiles(*, session: Session) -> dict[str, AgentExecutionProfileR
 def _validate_routing_payload(payload: AgentRuntimeRoutingUpdate, *, available_profiles: dict[str, AgentExecutionProfileRead]) -> None:
     known_roles = set(list_known_agent_roles())
     known_names = set(list_known_agent_names())
+    known_selectors = set(list_known_execution_selectors())
     known_profiles = set(available_profiles.keys())
 
     for role, profile_name in payload.role_routing.items():
@@ -182,6 +200,11 @@ def _validate_routing_payload(payload: AgentRuntimeRoutingUpdate, *, available_p
     for agent_name, profile_name in payload.name_routing.items():
         if agent_name not in known_names:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown named agent: {agent_name}")
+        if profile_name not in known_profiles:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
+    for selector, profile_name in payload.selector_routing.items():
+        if selector not in known_selectors:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown selector: {selector}")
         if profile_name not in known_profiles:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
 
@@ -253,16 +276,19 @@ def _validate_profile_write(
 
 
 def _build_routing_response(*, session: Session) -> AgentRuntimeRoutingRead:
-    role_routing, name_routing = _current_routing(session=session)
+    role_routing, name_routing, selector_routing = _current_routing(session=session)
     return AgentRuntimeRoutingRead(
         role_routing=role_routing,
         name_routing=name_routing,
+        selector_routing=selector_routing,
         available_roles=list_known_agent_roles(),
         available_named_agents=list_known_agent_names(),
+        available_selectors=list_known_execution_selectors(),
         available_profiles=_available_profiles(session=session),
         effective_defaults=AgentRuntimeRoutingDefaultsRead(
             role_routing=default_agent_role_routing(),
             name_routing=default_agent_name_routing(),
+            selector_routing=default_execution_profile_routing(),
         ),
     )
 
@@ -289,6 +315,7 @@ def put_agent_runtimes(
         value_json={
             "role_routing": normalize_agent_routing(payload.role_routing),
             "name_routing": normalize_agent_routing(payload.name_routing),
+            "selector_routing": normalize_execution_profile_routing(payload.selector_routing),
         },
     )
     return _build_routing_response(session=session)
@@ -309,6 +336,16 @@ def get_agent_runtime_profiles(
     session: Session = Depends(get_session),
 ) -> AgentExecutionProfilesRead:
     return AgentExecutionProfilesRead(profiles=_available_profiles(session=session))
+
+
+@router.get("/agent-runtime-tools", response_model=AgentRuntimeToolsRead)
+def get_agent_runtime_tools(
+    _: str = Depends(require_admin),
+) -> AgentRuntimeToolsRead:
+    return AgentRuntimeToolsRead(
+        available_stages=list(TOOL_ALLOWLIST.keys()),
+        tools=[AgentRuntimeToolRead.model_validate(tool) for tool in list_implemented_tools()],
+    )
 
 
 @router.post("/agent-runtime-profiles", response_model=AgentExecutionProfileRead)

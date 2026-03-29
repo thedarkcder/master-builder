@@ -128,7 +128,7 @@ test("project automations render default drafts, save edits, and show execution 
     },
   ]);
 
-  await page.goto("/tenants/route25/projects/route25-default/discord");
+  await page.goto("/route25/projects/route25-default/automations");
 
   const standupCard = page.getByTestId("project-automation-standup_voice_brief");
   const retroCard = page.getByTestId("project-automation-retro_voice_brief");

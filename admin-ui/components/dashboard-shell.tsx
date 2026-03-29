@@ -8,6 +8,7 @@ import {
   Activity,
   BarChart3,
   Building2,
+  CalendarClock,
   Cpu,
   FolderKanban,
   KeyRound,
@@ -29,6 +30,7 @@ import { getRun, type TenantRecord, getTenant, listProjects, type ProjectRecord 
 import {
   canAccessPlatformAdmin,
   canAccessTechnicalSurface,
+  canManageProjects,
   canManageTeam,
   getMembershipForTenant,
   getTenantWorkspaceRoute,
@@ -52,6 +54,8 @@ type NavItem = {
   label: string;
   icon: ComponentType<{ className?: string }>;
   matchPrefix?: string;
+  /** Pathname match for active state when `href` includes a `#fragment`. */
+  activePathname?: string;
 };
 
 function tenantInitials(name: string): string {
@@ -183,10 +187,12 @@ function DashboardNavPanel({
 
             <SidebarMenu className="shrink-0">
               {navItems.map((item) => {
-                const active = item.matchPrefix
-                  ? pathname.startsWith(item.matchPrefix) &&
-                    !(item.label === "Pipeline" && Boolean(runContext.runId) && Boolean(projectContextId))
-                  : pathname === item.href;
+                const active = item.activePathname
+                  ? pathname === item.activePathname
+                  : item.matchPrefix
+                    ? pathname.startsWith(item.matchPrefix) &&
+                      !(item.label === "Pipeline" && Boolean(runContext.runId) && Boolean(projectContextId))
+                    : pathname === item.href.split("#")[0];
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={active}>
@@ -210,9 +216,12 @@ function DashboardNavPanel({
             <SidebarMenu className="shrink-0">
               <SidebarMenuLabel>Global</SidebarMenuLabel>
               {navItems.map((item) => {
-                const active = item.matchPrefix
-                  ? pathname.startsWith(item.matchPrefix)
-                  : pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const active = item.activePathname
+                  ? pathname === item.activePathname
+                  : item.matchPrefix
+                    ? pathname.startsWith(item.matchPrefix)
+                    : pathname === item.href.split("#")[0] ||
+                      pathname.startsWith(`${item.href.split("#")[0]}/`);
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={active}>
@@ -417,6 +426,24 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         ? `${tenantBaseRoute}/analytics/token-overview`
         : null;
   const showSecretsNav = !decodedTenantId || canAccessPlatformAdmin(principal) || canAccessTechnicalSurface(principal, decodedTenantId);
+  const allowProjectAutomationsNav = Boolean(decodedTenantId && canManageProjects(principal, decodedTenantId));
+  const automationsTargetProjectId =
+    projectContextId ?? (tenantProjects.length === 1 ? tenantProjects[0].project_id : null);
+  const automationsProjectPath =
+    tenantBaseRoute && automationsTargetProjectId
+      ? `${tenantBaseRoute}/projects/${encodeURIComponent(automationsTargetProjectId)}/automations`
+      : tenantBaseRoute
+        ? `${tenantBaseRoute}/projects`
+        : "";
+  const automationsNavItem: NavItem | null =
+    allowProjectAutomationsNav && automationsProjectPath
+      ? {
+          href: automationsTargetProjectId ? automationsProjectPath : automationsProjectPath,
+          label: "Automations",
+          icon: CalendarClock,
+          activePathname: automationsTargetProjectId ? automationsProjectPath : undefined,
+        }
+      : null;
 
   const tenantNavItems: NavItem[] = decodedTenantId
     ? [
@@ -432,6 +459,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           icon: Activity,
           matchPrefix: `${tenantBaseRoute}/runs`
         },
+        ...(automationsNavItem ? [automationsNavItem] : []),
         {
           href: analyticsHref ?? `${tenantBaseRoute}/analytics/token-overview`,
           label: "Analytics",

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  APP_BASE_URL,
   fulfillJson,
   installAppApiMocks,
   installBffApiMocks,
@@ -277,7 +278,7 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
       pathname: "/api/bff/api/admin/jira/connect/start",
       handler: (route) =>
         fulfillJson(route, {
-          authorize_url: "http://localhost:4100/tenants/new/jira?jira_connection_id=jira-conn-123&jira_oauth=success",
+          authorize_url: `${APP_BASE_URL}/tenants/new/jira?jira_connection_id=jira-conn-123&jira_oauth=success`,
           expires_at: "2026-03-29T00:00:00Z",
         }),
     },
@@ -305,7 +306,7 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
           github: { installation_id: "github-install-123", webhook_secret_ref: null },
         });
         return fulfillJson(route, {
-          install_url: "http://localhost:4100/tenants/new/github?tenant_id=beta-workspace&github_install=success",
+          install_url: `${APP_BASE_URL}/tenants/new/github?tenant_id=beta-workspace&github_install=success`,
           expires_at: "2026-03-29T00:00:00Z",
         });
       },
@@ -339,7 +340,7 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
           },
         });
         return fulfillJson(route, {
-          install_url: "http://localhost:4100/tenants/new/discord?tenant_id=beta-workspace&discord_install=success",
+          install_url: `${APP_BASE_URL}/tenants/new/discord?tenant_id=beta-workspace&discord_install=success`,
           expires_at: "2026-03-29T00:00:00Z",
         });
       },

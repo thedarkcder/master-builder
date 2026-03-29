@@ -822,16 +822,31 @@ export type AgentExecutionProfilesRecord = {
   profiles: Record<string, AgentExecutionProfileRecord>;
 };
 
+export type AgentRuntimeToolRecord = {
+  tool_name: string;
+  category: string;
+  description: string;
+  stages: string[];
+};
+
+export type AgentRuntimeToolsRecord = {
+  available_stages: string[];
+  tools: AgentRuntimeToolRecord[];
+};
+
 export type AgentRuntimeRoutingDefaultsRecord = {
   role_routing: Record<string, string>;
   name_routing: Record<string, string>;
+  selector_routing: Record<string, string>;
 };
 
 export type AgentRuntimeRoutingRecord = {
   role_routing: Record<string, string>;
   name_routing: Record<string, string>;
+  selector_routing: Record<string, string>;
   available_roles: string[];
   available_named_agents: string[];
+  available_selectors: string[];
   available_profiles: Record<string, AgentExecutionProfileRecord>;
   effective_defaults: AgentRuntimeRoutingDefaultsRecord;
 };
@@ -2414,7 +2429,7 @@ export function getAgentRuntimeRouting(credentials: Credentials): Promise<AgentR
 
 export function updateAgentRuntimeRouting(
   credentials: Credentials,
-  payload: Pick<AgentRuntimeRoutingRecord, "role_routing" | "name_routing">
+  payload: Pick<AgentRuntimeRoutingRecord, "role_routing" | "name_routing" | "selector_routing">
 ): Promise<AgentRuntimeRoutingRecord> {
   return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes", {
     method: "PUT",
@@ -2430,6 +2445,10 @@ export function resetAgentRuntimeRouting(credentials: Credentials): Promise<Agen
 
 export function listAgentRuntimeProfiles(credentials: Credentials): Promise<AgentExecutionProfilesRecord> {
   return request<AgentExecutionProfilesRecord>(credentials, "/api/admin/agent-runtime-profiles");
+}
+
+export function listAgentRuntimeTools(credentials: Credentials): Promise<AgentRuntimeToolsRecord> {
+  return request<AgentRuntimeToolsRecord>(credentials, "/api/admin/agent-runtime-tools");
 }
 
 export function createAgentRuntimeProfile(

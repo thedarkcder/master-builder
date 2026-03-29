@@ -220,6 +220,7 @@ services:
       target: voice-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
     container_name: master-builder-discord-gateway
     depends_on:
       postgres:
@@ -264,6 +265,7 @@ services:
       target: voice-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
     container_name: master-builder-discord-live-voice
     depends_on:
       postgres:

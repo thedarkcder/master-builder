@@ -27,7 +27,7 @@ import type {
 export const ADMIN_ACCESS_TOKEN = "playwright-admin-token";
 export const TENANT_ACCESS_TOKEN = "playwright-tenant-token";
 
-const APP_BASE_URL = "http://localhost:4100";
+export const APP_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${process.env.PLAYWRIGHT_APP_PORT ?? "4101"}`;
 const BACKEND_BASE_URL = DEFAULT_API_BASE_URL;
 const AUTH_SECRET = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret";
 const AUTH_SESSION_COOKIE_NAME = "authjs.session-token";
@@ -431,7 +431,7 @@ export function makeInvite(overrides: Partial<TenantInviteRecord> = {}): TenantI
     team_ids: [],
     mode_override: null,
     status: "pending",
-    invite_url: "http://localhost:4100/invite/accept?token=invite-token",
+    invite_url: `${APP_BASE_URL}/invite/accept?token=invite-token`,
     expires_at: "2026-03-29T16:00:00Z",
     accepted_at: null,
     revoked_at: null,

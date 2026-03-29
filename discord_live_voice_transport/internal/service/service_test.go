@@ -109,17 +109,20 @@ func TestServiceRoutesCommandsAndForwardsEvents(t *testing.T) {
 	}
 
 	frames := decodeFrames(t, out.String())
-	if len(frames) < 3 {
-		t.Fatalf("event count = %d, want at least 3", len(frames))
+	if len(frames) < 4 {
+		t.Fatalf("event count = %d, want at least 4", len(frames))
 	}
 	if frames[0].Type != protocol.TypeTransportReady {
 		t.Fatalf("first frame type = %q, want %q", frames[0].Type, protocol.TypeTransportReady)
 	}
-	if frames[1].Type != protocol.TypeRoomState {
-		t.Fatalf("second frame type = %q, want %q", frames[1].Type, protocol.TypeRoomState)
+	if frames[1].Type != protocol.TypeTransportReady {
+		t.Fatalf("second frame type = %q, want %q", frames[1].Type, protocol.TypeTransportReady)
 	}
-	if frames[2].Type != protocol.TypePlaybackFinished {
-		t.Fatalf("third frame type = %q, want %q", frames[2].Type, protocol.TypePlaybackFinished)
+	if frames[2].Type != protocol.TypeRoomState {
+		t.Fatalf("third frame type = %q, want %q", frames[2].Type, protocol.TypeRoomState)
+	}
+	if frames[3].Type != protocol.TypePlaybackFinished {
+		t.Fatalf("fourth frame type = %q, want %q", frames[3].Type, protocol.TypePlaybackFinished)
 	}
 }
 
@@ -133,10 +136,34 @@ func TestServiceEmitsDecodeFailures(t *testing.T) {
 	}
 
 	frames := decodeFrames(t, out.String())
+	if len(frames) != 2 {
+		t.Fatalf("event count = %d, want 2", len(frames))
+	}
+	if frames[0].Type != protocol.TypeTransportReady {
+		t.Fatalf("first frame type = %q, want %q", frames[0].Type, protocol.TypeTransportReady)
+	}
+	if frames[1].Type != protocol.TypeTransportFailed {
+		t.Fatalf("second frame type = %q, want %q", frames[1].Type, protocol.TypeTransportFailed)
+	}
+}
+
+func TestServiceEmitsTransportReadyBeforeReceivingInput(t *testing.T) {
+	runtime := newFakeRuntime()
+	var out bytes.Buffer
+	svc := New(runtime, &out)
+
+	if err := svc.Run(context.Background(), strings.NewReader("")); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	frames := decodeFrames(t, out.String())
 	if len(frames) != 1 {
 		t.Fatalf("event count = %d, want 1", len(frames))
 	}
-	if frames[0].Type != protocol.TypeTransportFailed {
-		t.Fatalf("frame type = %q, want %q", frames[0].Type, protocol.TypeTransportFailed)
+	if frames[0].Type != protocol.TypeTransportReady {
+		t.Fatalf("frame type = %q, want %q", frames[0].Type, protocol.TypeTransportReady)
+	}
+	if frames[0].SessionID != "discord-live-voice" {
+		t.Fatalf("session id = %q, want %q", frames[0].SessionID, "discord-live-voice")
 	}
 }
