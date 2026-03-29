@@ -59,6 +59,58 @@ const RUNTIME_OPTIONS = [
   { id: "lm_studio", label: "LM Studio" },
 ];
 
+function defaultCliCommandForRuntime(runtimeKind: string): string {
+  if (runtimeKind === "claude_cli") return "claude";
+  if (runtimeKind === "chat_cli") return "chat";
+  if (runtimeKind === "codex_cli") return "codex";
+  return "";
+}
+
+function defaultBaseUrlForRuntime(runtimeKind: string): string | null {
+  if (runtimeKind === "openai") return "https://api.openai.com/v1";
+  if (runtimeKind === "claude") return "https://api.anthropic.com";
+  if (runtimeKind === "llama_cpp") return "http://localhost:8080/v1";
+  if (runtimeKind === "lm_studio") return "http://localhost:1234/v1";
+  return null;
+}
+
+function applyRuntimeDefaults(draft: ProfileDraft, runtimeKind: string): ProfileDraft {
+  const nextCliCommand = currentOrDefaultCliCommand(draft.cli_command, runtimeKind);
+  const nextBaseUrl = currentOrDefaultBaseUrl(draft.base_url, runtimeKind);
+  const usesCli = runtimeKind === "codex_cli" || runtimeKind === "chat_cli" || runtimeKind === "claude_cli";
+  const usesBaseUrl = runtimeKind === "openai" || runtimeKind === "claude" || runtimeKind === "llama_cpp" || runtimeKind === "lm_studio";
+  const allowsApiKey = runtimeKind === "openai" || runtimeKind === "claude" || runtimeKind === "llama_cpp" || runtimeKind === "lm_studio";
+  return {
+    ...draft,
+    runtime_kind: runtimeKind,
+    cli_command: usesCli ? nextCliCommand : "",
+    base_url: usesBaseUrl ? nextBaseUrl : null,
+    api_key_secret_ref: allowsApiKey ? draft.api_key_secret_ref : null,
+    reasoning_effort: null,
+  };
+}
+
+function currentOrDefaultCliCommand(currentValue: string | null | undefined, runtimeKind: string): string {
+  const normalizedCurrent = String(currentValue || "").trim();
+  const knownDefaults = new Set(["codex", "chat", "claude"]);
+  if (!normalizedCurrent || knownDefaults.has(normalizedCurrent)) {
+    return defaultCliCommandForRuntime(runtimeKind);
+  }
+  return normalizedCurrent;
+}
+
+function currentOrDefaultBaseUrl(currentValue: string | null | undefined, runtimeKind: string): string | null {
+  const normalizedCurrent = String(currentValue || "").trim();
+  const knownDefaults = new Set([
+    "https://api.openai.com/v1",
+    "https://api.anthropic.com",
+    "http://localhost:8080/v1",
+    "http://localhost:1234/v1",
+  ]);
+  if (normalizedCurrent && !knownDefaults.has(normalizedCurrent)) return normalizedCurrent;
+  return defaultBaseUrlForRuntime(runtimeKind);
+}
+
 function profileSummary(profile: AgentExecutionProfileRecord | undefined): string {
   if (!profile) return "No profile selected";
   const parts = [
@@ -75,9 +127,10 @@ function profileSummary(profile: AgentExecutionProfileRecord | undefined): strin
 }
 
 function buildDraft(profile?: AgentExecutionProfileRecord | null): ProfileDraft {
-  return {
+  const runtimeKind = profile?.runtime_kind ?? "codex_cli";
+  const draft: ProfileDraft = {
     profile_name: profile?.profile_name ?? "",
-    runtime_kind: profile?.runtime_kind ?? "codex_cli",
+    runtime_kind: runtimeKind,
     cli_command: profile?.cli_command ?? "",
     model: profile?.model ?? null,
     reasoning_effort: profile?.reasoning_effort ?? null,
@@ -86,6 +139,7 @@ function buildDraft(profile?: AgentExecutionProfileRecord | null): ProfileDraft 
     base_url: profile?.base_url ?? null,
     api_key_secret_ref: profile?.api_key_secret_ref ?? null,
   };
+  return applyRuntimeDefaults(draft, runtimeKind);
 }
 
 function draftToWritePayload(draft: ProfileDraft): AgentExecutionProfileWritePayload {
@@ -162,6 +216,10 @@ export default function AgentRuntimesPage() {
   const currentTransportNeedsBaseUrl = runtimeKind === "llama_cpp" || runtimeKind === "lm_studio";
   const currentTransportNeedsApiKey = runtimeKind === "openai" || runtimeKind === "claude";
   const currentTransportAllowsApiKey = currentTransportNeedsApiKey || runtimeKind === "llama_cpp" || runtimeKind === "lm_studio";
+  const missingRequiredTransportField =
+    (currentTransportIsCli && !draft.cli_command.trim()) ||
+    ((currentTransportNeedsBaseUrl || runtimeKind === "openai" || runtimeKind === "claude") && !String(draft.base_url || "").trim()) ||
+    (currentTransportNeedsApiKey && !String(draft.api_key_secret_ref || "").trim());
 
   async function loadModelCatalog(nextRuntimeKind: string): Promise<void> {
     if (!credentials) return;
@@ -213,6 +271,10 @@ export default function AgentRuntimesPage() {
 
   async function saveProfile(): Promise<void> {
     if (!credentials) return;
+    if (missingRequiredTransportField) {
+      setProfilesStatusLine("Save failed: complete the required runtime fields before saving.");
+      return;
+    }
     setSavingProfile(true);
     try {
       if (editingProfileName) {
@@ -542,6 +604,7 @@ export default function AgentRuntimesPage() {
               <div className="space-y-2">
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Profile name</label>
                 <Input
+                  aria-label="Profile name"
                   value={draft.profile_name}
                   onChange={(event) => setDraft((current) => ({ ...current, profile_name: event.target.value }))}
                   disabled={Boolean(editingProfileName)}
@@ -552,15 +615,11 @@ export default function AgentRuntimesPage() {
               <div className="space-y-2">
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Runtime</label>
                 <select
+                  aria-label="Runtime"
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                   value={draft.runtime_kind}
                   onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      runtime_kind: event.target.value,
-                      reasoning_effort: null,
-                      cli_command: event.target.value === "codex_cli" ? "codex" : event.target.value === "claude_cli" ? "claude" : current.cli_command,
-                    }))
+                    setDraft((current) => applyRuntimeDefaults(current, event.target.value))
                   }
                 >
                   {RUNTIME_OPTIONS.map((option) => (
@@ -575,6 +634,7 @@ export default function AgentRuntimesPage() {
                 <div className="space-y-2">
                   <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">CLI command</label>
                   <Input
+                    aria-label="CLI command"
                     value={draft.cli_command}
                     onChange={(event) => setDraft((current) => ({ ...current, cli_command: event.target.value }))}
                     placeholder={runtimeKind === "claude_cli" ? "claude" : "codex"}
@@ -586,6 +646,7 @@ export default function AgentRuntimesPage() {
                 <div className="space-y-2">
                   <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Base URL</label>
                   <Input
+                    aria-label="Base URL"
                     value={draft.base_url ?? ""}
                     onChange={(event) => setDraft((current) => ({ ...current, base_url: event.target.value || null }))}
                     placeholder={
@@ -603,6 +664,7 @@ export default function AgentRuntimesPage() {
                 <div className="space-y-2">
                   <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">API key secret ref</label>
                   <Input
+                    aria-label="API key secret ref"
                     value={draft.api_key_secret_ref ?? ""}
                     onChange={(event) => setDraft((current) => ({ ...current, api_key_secret_ref: event.target.value || null }))}
                     placeholder="platform/openai_api_key"
@@ -613,6 +675,7 @@ export default function AgentRuntimesPage() {
               <div className="space-y-2">
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</label>
                 <CodexModelSelect
+                  ariaLabel="Model"
                   value={draft.model}
                   models={modelCatalog?.models ?? []}
                   inheritLabel="Select model"
@@ -625,6 +688,7 @@ export default function AgentRuntimesPage() {
               <div className="space-y-2">
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Fallback profile</label>
                 <select
+                  aria-label="Fallback profile"
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                   value={draft.fallback_profile ?? ""}
                   onChange={(event) => setDraft((current) => ({ ...current, fallback_profile: event.target.value || null }))}
@@ -643,6 +707,7 @@ export default function AgentRuntimesPage() {
               <div className="space-y-2">
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reasoning mode</label>
                 <select
+                  aria-label="Reasoning mode"
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                   value={draft.reasoning_effort ?? ""}
                   disabled={!currentReasoningSupported}
@@ -685,7 +750,8 @@ export default function AgentRuntimesPage() {
                   disabled={
                     savingProfile ||
                     !draft.profile_name.trim() ||
-                    !String(draft.model || "").trim()
+                    !String(draft.model || "").trim() ||
+                    missingRequiredTransportField
                   }
                 >
                   <Save className="mr-1.5 h-3.5 w-3.5" />

@@ -11,6 +11,7 @@ type Props = {
   value: string | null | undefined;
   models: CodexModelOptionRecord[];
   inheritLabel: string;
+  ariaLabel?: string;
   helperText?: string;
   effectiveLabel?: string;
   disabled?: boolean;
@@ -21,6 +22,7 @@ export function CodexModelSelect({
   value,
   models,
   inheritLabel,
+  ariaLabel,
   helperText,
   effectiveLabel,
   disabled = false,
@@ -47,6 +49,7 @@ export function CodexModelSelect({
   return (
     <div className="space-y-2">
       <select
+        aria-label={ariaLabel}
         className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
         value={selectValue}
         onChange={(event) => {
@@ -73,6 +76,7 @@ export function CodexModelSelect({
       </select>
       {customMode ? (
         <Input
+          aria-label={ariaLabel ? `${ariaLabel} custom value` : undefined}
           value={customValue}
           onChange={(event) => {
             const next = event.target.value;
