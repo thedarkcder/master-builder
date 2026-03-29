@@ -40,5 +40,11 @@ export default auth((request: NextRequest & { auth: Session | null }) => {
 });
 
 export const config = {
-  matcher: ["/((?!api).*)"]
+  matcher: [
+    /*
+     * Match all paths except API, Next internals, and common static assets.
+     * See https://nextjs.org/docs/app/api-reference/file-conventions/proxy#matcher
+     */
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+  ],
 };
