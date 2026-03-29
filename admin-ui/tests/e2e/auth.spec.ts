@@ -278,8 +278,13 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
           name_routing: {
             workflow_review_default: "engineering_execution_deep",
           },
+          selector_routing: {
+            "discord.voice_room_pm": "pm_conversation_fast",
+            "discord.voice_room_router": "general_planning",
+          },
           available_roles: ["pm", "engineering", "test", "review", "marketing"],
           available_named_agents: ["workflow_review_default", "pm_primary"],
+          available_selectors: ["discord.voice_room_pm", "discord.voice_room_router", "discord.pm_answer"],
           available_profiles: {
             engineering_execution_default: {
               profile_name: "engineering_execution_default",
@@ -320,6 +325,10 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
             name_routing: {
               workflow_review_default: "engineering_execution_deep",
               pm_primary: "pm_conversation_default",
+            },
+            selector_routing: {
+              "discord.voice_room_pm": "pm_conversation",
+              "discord.voice_room_router": "general_planning",
             },
           },
         }),
@@ -381,6 +390,34 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
           },
         }),
     },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtime-tools",
+      handler: (route) =>
+        fulfillJson(route, {
+          available_stages: ["pm", "dev", "test", "review", "orchestrator", "decision_planner"],
+          tools: [
+            {
+              tool_name: "repo.read",
+              category: "repo",
+              description: "Read files and repository metadata using guarded read-only commands.",
+              stages: ["pm", "dev", "test", "review", "orchestrator", "decision_planner"],
+            },
+            {
+              tool_name: "jira.comment",
+              category: "jira",
+              description: "Post a Jira comment on the active issue.",
+              stages: ["pm", "dev", "test", "review", "orchestrator"],
+            },
+            {
+              tool_name: "github.open_pr",
+              category: "github",
+              description: "Open a pull request for the current branch.",
+              stages: ["dev", "review", "orchestrator"],
+            },
+          ],
+        }),
+    },
   ]);
 
   await page.goto("/dashboard");
@@ -390,11 +427,25 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await expect(page.getByRole("heading", { name: "Agent runtimes" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Routing" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Profiles" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Tools", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Runtime routing" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Role defaults" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Execution selectors" })).toBeVisible();
+  await expect(
+    page
+      .getByRole("row")
+      .filter({ has: page.getByRole("cell", { name: "discord.voice_room_router" }) })
+      .getByRole("cell", { name: "discord.voice_room_router" }),
+  ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Platform status" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Workers" })).toHaveCount(0);
   await expect(page.getByText("Worker instances")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Implemented tools" })).toBeVisible();
+  await expect(page.getByText("repo.read")).toBeVisible();
+  await expect(page.getByText("github.open_pr")).toBeVisible();
+  await expect(page.getByText("pm, dev, test, review, orchestrator, decision_planner")).toBeVisible();
 });
 
 test("covers runtime profile form permutations across every provider on create and update", async ({ page }) => {
@@ -464,6 +515,22 @@ test("covers runtime profile form permutations across every provider on create a
       method: "GET",
       pathname: "/api/bff/api/admin/agent-runtime-profiles",
       handler: (route) => fulfillJson(route, listProfilesBody()),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtime-tools",
+      handler: (route) =>
+        fulfillJson(route, {
+          available_stages: ["pm", "dev", "test", "review", "orchestrator", "decision_planner"],
+          tools: [
+            {
+              tool_name: "repo.read",
+              category: "repo",
+              description: "Read files and repository metadata using guarded read-only commands.",
+              stages: ["pm", "dev", "test", "review", "orchestrator", "decision_planner"],
+            },
+          ],
+        }),
     },
     {
       method: "GET",
@@ -616,6 +683,13 @@ test("covers runtime profile form permutations across every provider on create a
     expect(updatedPayload?.cli_command ?? "").toBe(updateCliCommand ?? "");
     expect(updatedPayload?.base_url ?? null).toBe(updateBaseUrl ?? null);
     expect(updatedPayload?.api_key_secret_ref ?? null).toBe(updateApiKeyRef);
+
+    await page.reload();
+    await page.getByRole("button", { name: "Profiles" }).click();
+    await page.getByRole("row").filter({ hasText: profileName }).click();
+    await expect(page.getByLabel("Profile name")).toHaveValue(profileName);
+    await expect(page.getByLabel("Runtime")).toHaveValue(entry.runtimeKind);
+    await expect(page.getByLabel("Reasoning mode")).toHaveValue("high");
   }
 });
 

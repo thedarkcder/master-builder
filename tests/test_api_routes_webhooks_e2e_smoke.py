@@ -413,6 +413,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/agent-runtimes",
                 auth=admin,
             ),
+            ("GET", "/api/admin/agent-runtime-tools"): RouteScenario(
+                path="/api/admin/agent-runtime-tools",
+                auth=admin,
+            ),
             ("PUT", "/api/admin/agent-runtimes"): RouteScenario(
                 path="/api/admin/agent-runtimes",
                 auth=admin,

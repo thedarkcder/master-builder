@@ -321,6 +321,8 @@ class LiveVoiceServiceTests(unittest.TestCase):
         room_history = [{"index": index} for index in range(12)]
         scheduled_results: list[tuple[ConfiguredLiveVoiceRoom, object]] = []
         notices: list[tuple[str, str]] = []
+        runtime_resolution_calls: list[dict[str, str | None]] = []
+        selector_runtimes: dict[str, object] = {}
         service._schedule_persona_reply = (  # type: ignore[method-assign]
             lambda *, room, result, turn_version: scheduled_results.append((room, result, turn_version))
         )
@@ -340,6 +342,10 @@ class LiveVoiceServiceTests(unittest.TestCase):
 
         def _answer_voice_room_turn(**kwargs):  # noqa: ANN003
             answer_contexts.append(dict(current_log_context()))
+            runtime_for_selector = kwargs.get("runtime_for_selector")
+            if callable(runtime_for_selector):
+                selector_runtimes["router"] = runtime_for_selector("discord.voice_room_router")
+                selector_runtimes["pm"] = runtime_for_selector("discord.voice_room_pm")
             answer_calls.append(kwargs)
             return SimpleNamespace(
                 persona_id="pm",
@@ -362,8 +368,19 @@ class LiveVoiceServiceTests(unittest.TestCase):
                 side_effect=_transcribe_audio_bytes,
             ),
             patch(
-                "orchestrator.core.discord.live_voice_service.build_codex_runtime",
-                return_value="runtime",
+                "orchestrator.core.discord.live_voice_service.build_runtime_for_selector",
+                side_effect=lambda **kwargs: (
+                    runtime_resolution_calls.append(
+                        {
+                            "tenant_id": kwargs.get("tenant_id"),
+                            "project_id": kwargs.get("project_id"),
+                            "selector": kwargs.get("selector"),
+                            "agent_role": kwargs.get("agent_role"),
+                            "agent_name": kwargs.get("agent_name"),
+                        }
+                    )
+                    or f"runtime:{kwargs.get('selector')}:{kwargs.get('agent_name') or ''}"
+                ),
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.DiscordLiveVoiceService._collect_live_voice_context",
@@ -385,6 +402,35 @@ class LiveVoiceServiceTests(unittest.TestCase):
         self.assertEqual(answer_call["history"], room_history[-8:])
         self.assertEqual(answer_call["github_context"], {})
         self.assertEqual(answer_call["invocation_context"].reasoning_effort, "low")
+        self.assertEqual(answer_call["runtime"], "runtime:discord.voice_room_router:")
+        self.assertEqual(selector_runtimes["router"], "runtime:discord.voice_room_router:")
+        self.assertEqual(selector_runtimes["pm"], "runtime:discord.voice_room_pm:voice_room_pm")
+        self.assertEqual(
+            runtime_resolution_calls,
+            [
+                {
+                    "tenant_id": "tenant-a",
+                    "project_id": "project-a",
+                    "selector": "discord.voice_room_router",
+                    "agent_role": None,
+                    "agent_name": None,
+                },
+                {
+                    "tenant_id": "tenant-a",
+                    "project_id": "project-a",
+                    "selector": "discord.voice_room_router",
+                    "agent_role": None,
+                    "agent_name": None,
+                },
+                {
+                    "tenant_id": "tenant-a",
+                    "project_id": "project-a",
+                    "selector": "discord.voice_room_pm",
+                    "agent_role": "pm",
+                    "agent_name": "voice_room_pm",
+                },
+            ],
+        )
         self.assertEqual(
             transcription_contexts,
             [

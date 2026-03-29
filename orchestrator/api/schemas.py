@@ -868,6 +868,7 @@ class ManagedSecretResolveResult(BaseModel):
 class AgentRuntimeRoutingUpdate(BaseModel):
     role_routing: dict[str, str] = Field(default_factory=dict)
     name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentExecutionProfileRead(BaseModel):
@@ -909,15 +910,30 @@ class AgentExecutionProfilesRead(BaseModel):
 class AgentRuntimeRoutingDefaultsRead(BaseModel):
     role_routing: dict[str, str] = Field(default_factory=dict)
     name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentRuntimeRoutingRead(BaseModel):
     role_routing: dict[str, str] = Field(default_factory=dict)
     name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
     available_roles: list[str] = Field(default_factory=list)
     available_named_agents: list[str] = Field(default_factory=list)
+    available_selectors: list[str] = Field(default_factory=list)
     available_profiles: dict[str, AgentExecutionProfileRead] = Field(default_factory=dict)
     effective_defaults: AgentRuntimeRoutingDefaultsRead = Field(default_factory=AgentRuntimeRoutingDefaultsRead)
+
+
+class AgentRuntimeToolRead(BaseModel):
+    tool_name: str
+    category: str
+    description: str
+    stages: list[str] = Field(default_factory=list)
+
+
+class AgentRuntimeToolsRead(BaseModel):
+    available_stages: list[str] = Field(default_factory=list)
+    tools: list[AgentRuntimeToolRead] = Field(default_factory=list)
 
 
 class RunRead(BaseModel):

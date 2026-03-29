@@ -1,5 +1,8 @@
 2026-03-23
 
+- After a locator failure reports multiple matches in Playwright, prefer role/table/scoped locators instead of `getByText` to avoid strictness failures.
+- When editing repository files in response to user request, use `apply_patch` for edits and do not use shell overwrite patterns like `cat > file`.
+
 - When the user explicitly switches from planning to implementation, verify the active collaboration mode first and move into execution if it is allowed. Do not repeat stale mode blockers after the mode has already changed.
 
 - When investigating config regressions, do not keep pushing environment-variable explanations after the user says the value is stored in the UI/secret manager. Verify the exact read path against the exact write path first.
@@ -93,3 +96,6 @@
 - When a bug report says the persona-specific live click path is still broken, do not rely on a nearby automated flow as proof. Reproduce that exact user journey in-browser, including the actual click target and expected visible data, before claiming the fix.
 - When adding new runtime providers or provider capabilities, verify the capability matrix explicitly. Do not assume `reasoning_effort`, model catalogs, or profile validation match user expectations just because the runtime kind was added elsewhere.
 - For admin configuration surfaces, API tests are not enough. Verify the real save path in-browser for create and update flows, including runtime-specific required fields and defaults.
+- For admin forms with persisted overrides, save-path tests are still insufficient unless they also verify reload/edit-state hydration. If a control must reflect saved state, reload the page or re-open the saved record and assert the control value from API-backed data, not local draft state.
+- When a feature needs runtime profile routing, do not assume the downstream Codex call honors it just because it eventually invokes Codex. Trace whether the call path uses `build_runtime_for_selector` with the correct selector and named-agent identity; otherwise the flow will silently ignore runtime-profile configuration.
+- For shell-based feature flags, do not pass `0` into a downstream script that only checks for non-empty truthiness. Map falsey values to an unset variable or a branch that omits the flag entirely, otherwise you will accidentally force the expensive path anyway.

@@ -1,9 +1,10 @@
-FROM golang:1.25-bookworm AS live-voice-transport-builder
+FROM golang:1.25-trixie AS live-voice-transport-builder
 
 WORKDIR /src/discord_live_voice_transport
 
 ARG GODAVE_VERSION=v0.1.0
 ARG LIBDAVE_VERSION=v1.1.0
+ARG LIBDAVE_FORCE_BUILD=0
 ENV SHELL=/bin/sh
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -27,7 +28,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 RUN curl -fsSL "https://raw.githubusercontent.com/disgoorg/godave/${GODAVE_VERSION}/scripts/libdave_install.sh" \
       -o /tmp/libdave_install.sh && \
-    FORCE_BUILD=1 sh /tmp/libdave_install.sh "${LIBDAVE_VERSION}" && \
+    if [ "${LIBDAVE_FORCE_BUILD}" = "1" ] || [ "${LIBDAVE_FORCE_BUILD}" = "true" ] || [ "${LIBDAVE_FORCE_BUILD}" = "yes" ]; then \
+      FORCE_BUILD=1 sh /tmp/libdave_install.sh "${LIBDAVE_VERSION}"; \
+    else \
+      sh /tmp/libdave_install.sh "${LIBDAVE_VERSION}"; \
+    fi && \
     rm -f /tmp/libdave_install.sh
 
 COPY discord_live_voice_transport/go.mod ./
@@ -43,7 +48,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
     go build -tags=libdave -o /tmp/live-voice-transport ./cmd/discord-live-voice-transport
 
 
-FROM python:3.11-slim AS python-common-base
+FROM python:3.11-slim-trixie AS python-common-base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -89,8 +94,6 @@ PY
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     "${VIRTUAL_ENV}/bin/pip" install -r /tmp/requirements-base.txt
-
-
 FROM python-common-base AS app-runtime-base
 
 COPY README.md ./

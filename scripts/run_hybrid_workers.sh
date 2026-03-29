@@ -195,7 +195,12 @@ restart_existing_admin_ui_if_owned() {
 }
 
 UI_PID=""
+PROJECT_AUTOMATION_PID=""
 cleanup() {
+  if [[ -n "${PROJECT_AUTOMATION_PID}" ]] && kill -0 "${PROJECT_AUTOMATION_PID}" >/dev/null 2>&1; then
+    echo "Stopping local project automation scheduler (pid=${PROJECT_AUTOMATION_PID})..."
+    kill "${PROJECT_AUTOMATION_PID}" >/dev/null 2>&1 || true
+  fi
   if [[ -n "${UI_PID}" ]] && kill -0 "${UI_PID}" >/dev/null 2>&1; then
     echo "Stopping local admin UI (pid=${UI_PID})..."
     kill "${UI_PID}" >/dev/null 2>&1 || true
@@ -253,5 +258,9 @@ echo "Docker worker capability: linux (container)"
 echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"
 echo "Local Codex sandbox: ${ORCHESTRATOR_CODEX_SANDBOX_MODE}"
 echo "Shared repo checkout dir: ${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR}"
+echo "Starting local project automation scheduler (orchestrator project-automation)..."
+"${VENV_DIR}/bin/python" -m orchestrator project-automation &
+PROJECT_AUTOMATION_PID="$!"
+echo "Local project automation scheduler started (pid=${PROJECT_AUTOMATION_PID})"
 echo "Starting local run worker..."
-exec "${VENV_DIR}/bin/python" -m orchestrator worker-runs
+"${VENV_DIR}/bin/python" -m orchestrator worker-runs

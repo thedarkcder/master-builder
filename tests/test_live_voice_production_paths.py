@@ -142,7 +142,10 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.discord.live_voice_service.resolve_codex_working_dir", return_value=self.temp_dir.name),
-            patch("orchestrator.core.discord.live_voice_service.build_codex_runtime", return_value=object()),
+            patch(
+                "orchestrator.core.discord.live_voice_service.build_runtime_for_selector",
+                side_effect=lambda **kwargs: object(),
+            ),
             patch("orchestrator.core.discord.live_voice_service.transcribe_audio_bytes", return_value="What is the relink policy?"),
             patch("orchestrator.core.discord.live_voice_service.answer_voice_room_turn", return_value=result),
             patch(

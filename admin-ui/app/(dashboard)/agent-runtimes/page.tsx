@@ -16,6 +16,7 @@ import {
   deleteAgentRuntimeProfile,
   getAgentRuntimeRouting,
   listAgentRuntimeProfiles,
+  listAgentRuntimeTools,
   listCodexModels,
   resetAgentRuntimeProfile,
   resetAgentRuntimeRouting,
@@ -25,12 +26,14 @@ import {
   type AgentExecutionProfileRecord,
   type AgentExecutionProfileWritePayload,
   type AgentExecutionProfilesRecord,
+  type AgentRuntimeToolRecord,
+  type AgentRuntimeToolsRecord,
   type AgentRuntimeRoutingRecord,
   type CodexModelCatalogRecord,
 } from "@/lib/api";
 import { canAccessPlatformAdmin, getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 
-type RuntimeTab = "routing" | "profiles";
+type RuntimeTab = "routing" | "profiles" | "tools";
 
 type ProfileDraft = {
   profile_name: string;
@@ -47,6 +50,7 @@ type ProfileDraft = {
 const TAB_OPTIONS: { id: RuntimeTab; label: string }[] = [
   { id: "routing", label: "Routing" },
   { id: "profiles", label: "Profiles" },
+  { id: "tools", label: "Tools" },
 ];
 
 const RUNTIME_OPTIONS = [
@@ -74,7 +78,7 @@ function defaultBaseUrlForRuntime(runtimeKind: string): string | null {
   return null;
 }
 
-function applyRuntimeDefaults(draft: ProfileDraft, runtimeKind: string): ProfileDraft {
+function applyRuntimeTransportDefaults(draft: ProfileDraft, runtimeKind: string): ProfileDraft {
   const nextCliCommand = currentOrDefaultCliCommand(draft.cli_command, runtimeKind);
   const nextBaseUrl = currentOrDefaultBaseUrl(draft.base_url, runtimeKind);
   const usesCli = runtimeKind === "codex_cli" || runtimeKind === "chat_cli" || runtimeKind === "claude_cli";
@@ -86,7 +90,6 @@ function applyRuntimeDefaults(draft: ProfileDraft, runtimeKind: string): Profile
     cli_command: usesCli ? nextCliCommand : "",
     base_url: usesBaseUrl ? nextBaseUrl : null,
     api_key_secret_ref: allowsApiKey ? draft.api_key_secret_ref : null,
-    reasoning_effort: null,
   };
 }
 
@@ -139,7 +142,7 @@ function buildDraft(profile?: AgentExecutionProfileRecord | null): ProfileDraft 
     base_url: profile?.base_url ?? null,
     api_key_secret_ref: profile?.api_key_secret_ref ?? null,
   };
-  return applyRuntimeDefaults(draft, runtimeKind);
+  return applyRuntimeTransportDefaults(draft, runtimeKind);
 }
 
 function draftToWritePayload(draft: ProfileDraft): AgentExecutionProfileWritePayload {
@@ -160,14 +163,18 @@ export default function AgentRuntimesPage() {
   const [activeTab, setActiveTab] = useState<RuntimeTab>("routing");
   const [routing, setRouting] = useState<AgentRuntimeRoutingRecord | null>(null);
   const [profilesResponse, setProfilesResponse] = useState<AgentExecutionProfilesRecord | null>(null);
+  const [toolsResponse, setToolsResponse] = useState<AgentRuntimeToolsRecord | null>(null);
   const [roleRouting, setRoleRouting] = useState<Record<string, string>>({});
   const [nameRouting, setNameRouting] = useState<Record<string, string>>({});
+  const [selectorRouting, setSelectorRouting] = useState<Record<string, string>>({});
   const [routingLoading, setRoutingLoading] = useState(false);
   const [profilesLoading, setProfilesLoading] = useState(false);
+  const [toolsLoading, setToolsLoading] = useState(false);
   const [savingRouting, setSavingRouting] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [routingStatusLine, setRoutingStatusLine] = useState("");
   const [profilesStatusLine, setProfilesStatusLine] = useState("");
+  const [toolsStatusLine, setToolsStatusLine] = useState("");
   const [editingProfileName, setEditingProfileName] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProfileDraft>(() => buildDraft());
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalogRecord | null>(null);
@@ -180,6 +187,7 @@ export default function AgentRuntimesPage() {
       setRouting(response);
       setRoleRouting(response.role_routing);
       setNameRouting(response.name_routing);
+      setSelectorRouting(response.selector_routing);
       setRoutingStatusLine("Loaded platform agent runtime routing.");
     } catch (error) {
       setRoutingStatusLine(`Failed to load agent runtimes: ${(error as Error).message}`);
@@ -202,12 +210,27 @@ export default function AgentRuntimesPage() {
     }
   }, [credentials]);
 
+  const refreshTools = useCallback(async (): Promise<void> => {
+    if (!credentials) return;
+    setToolsLoading(true);
+    try {
+      const response = await listAgentRuntimeTools(credentials);
+      setToolsResponse(response);
+      setToolsStatusLine("Loaded implemented tools.");
+    } catch (error) {
+      setToolsStatusLine(`Failed to load implemented tools: ${(error as Error).message}`);
+    } finally {
+      setToolsLoading(false);
+    }
+  }, [credentials]);
+
   const refreshAll = useCallback(async (): Promise<void> => {
-    await Promise.all([refreshRouting(), refreshProfiles()]);
-  }, [refreshProfiles, refreshRouting]);
+    await Promise.all([refreshRouting(), refreshProfiles(), refreshTools()]);
+  }, [refreshProfiles, refreshRouting, refreshTools]);
 
   const profiles = profilesResponse?.profiles ?? routing?.available_profiles ?? {};
   const sortedProfileNames = useMemo(() => Object.keys(profiles).sort(), [profiles]);
+  const tools = toolsResponse?.tools ?? [];
   const selectedProfile = editingProfileName ? profiles[editingProfileName] : null;
   const runtimeKind = draft.runtime_kind;
   const reasoningEfforts = modelCatalog?.reasoning_efforts ?? [];
@@ -238,10 +261,12 @@ export default function AgentRuntimesPage() {
       const response = await updateAgentRuntimeRouting(credentials, {
         role_routing: Object.fromEntries(Object.entries(roleRouting).filter(([, value]) => value)),
         name_routing: Object.fromEntries(Object.entries(nameRouting).filter(([, value]) => value)),
+        selector_routing: Object.fromEntries(Object.entries(selectorRouting).filter(([, value]) => value)),
       });
       setRouting(response);
       setRoleRouting(response.role_routing);
       setNameRouting(response.name_routing);
+      setSelectorRouting(response.selector_routing);
       setRoutingStatusLine("Saved platform agent runtime routing.");
       await refreshProfiles();
     } catch (error) {
@@ -260,6 +285,7 @@ export default function AgentRuntimesPage() {
       setRouting(response);
       setRoleRouting(response.role_routing);
       setNameRouting(response.name_routing);
+      setSelectorRouting(response.selector_routing);
       setRoutingStatusLine("Reset platform agent runtime routing to inherited defaults.");
       await refreshProfiles();
     } catch (error) {
@@ -369,8 +395,13 @@ export default function AgentRuntimesPage() {
             .
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void refreshAll()} disabled={routingLoading || profilesLoading || savingProfile || savingRouting}>
-          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${routingLoading || profilesLoading ? "animate-spin" : ""}`} />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void refreshAll()}
+          disabled={routingLoading || profilesLoading || toolsLoading || savingProfile || savingRouting}
+        >
+          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${routingLoading || profilesLoading || toolsLoading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
       </div>
@@ -401,6 +432,10 @@ export default function AgentRuntimesPage() {
                     <p className="text-sm text-muted-foreground">
                       Named-agent overrides win over role defaults. Leave a row blank to inherit.
                     </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Selector rows are separate (for values like <code>discord.voice_room_router</code>) and are the correct place to change
+                      selector-driven routing.
+                    </p>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -415,6 +450,56 @@ export default function AgentRuntimesPage() {
                 </div>
               </div>
             </CardHeader>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Execution selectors</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Selector</TableHead>
+                    <TableHead>Override</TableHead>
+                    <TableHead>Default</TableHead>
+                    <TableHead>Effective profile</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(routing?.available_selectors ?? []).map((selector) => {
+                    const selectedRuntime = selectorRouting[selector] ?? "";
+                    const fallbackProfile = routing?.effective_defaults.selector_routing[selector] ?? "";
+                    const effectiveProfileName = selectedRuntime || fallbackProfile;
+                    return (
+                      <TableRow key={selector}>
+                        <TableCell className="font-medium">{selector}</TableCell>
+                        <TableCell className="min-w-[240px]">
+                          <select
+                            className="h-9 w-full rounded border border-input bg-background px-3 text-sm"
+                            value={selectedRuntime}
+                            onChange={(event) => setSelectorRouting((current) => ({ ...current, [selector]: event.target.value }))}
+                            disabled={routingLoading || savingRouting}
+                          >
+                            <option value="">Inherit default</option>
+                            {sortedProfileNames.map((profileName) => (
+                              <option key={profileName} value={profileName}>
+                                {profileName}
+                              </option>
+                            ))}
+                          </select>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{fallbackProfile || "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          <p className="font-mono text-foreground">{effectiveProfileName || "—"}</p>
+                          <p>{profileSummary(profiles[effectiveProfileName])}</p>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
           </Card>
 
           <Card>
@@ -517,7 +602,7 @@ export default function AgentRuntimesPage() {
             </CardContent>
           </Card>
         </div>
-      ) : (
+      ) : activeTab === "profiles" ? (
         <div className="grid gap-6 lg:grid-cols-[1.4fr,1fr]">
           <Card>
             <CardHeader className="pb-3">
@@ -619,7 +704,10 @@ export default function AgentRuntimesPage() {
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                   value={draft.runtime_kind}
                   onChange={(event) =>
-                    setDraft((current) => applyRuntimeDefaults(current, event.target.value))
+                    setDraft((current) => ({
+                      ...applyRuntimeTransportDefaults(current, event.target.value),
+                      reasoning_effort: null,
+                    }))
                   }
                 >
                   {RUNTIME_OPTIONS.map((option) => (
@@ -769,6 +857,48 @@ export default function AgentRuntimesPage() {
                     Delete
                   </Button>
                 ) : null}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {toolsStatusLine ? (
+            <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{toolsStatusLine}</p>
+          ) : null}
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Implemented tools</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Read-only list of the governed tools available in the runtime bridge and the workflow stages that can call them.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-xs text-muted-foreground">
+                {tools.length} tools across {(toolsResponse?.available_stages ?? []).length} stages.
+              </p>
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Tool</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead>Stages</TableHead>
+                      <TableHead>Description</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {tools.map((tool: AgentRuntimeToolRecord) => (
+                      <TableRow key={tool.tool_name}>
+                        <TableCell className="font-mono text-xs">{tool.tool_name}</TableCell>
+                        <TableCell>{tool.category}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{tool.stages.join(", ")}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{tool.description}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             </CardContent>
           </Card>

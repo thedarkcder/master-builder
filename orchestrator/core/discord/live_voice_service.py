@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import asyncio
-import hashlib
 import io
 import json
 import logging
@@ -11,7 +10,6 @@ import shutil
 import threading
 import time
 import wave
-from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections.abc import Callable
@@ -26,8 +24,10 @@ from orchestrator.api.discord.shared.state import (
     live_voice_room_links_from_discord_config,
 )
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
+from orchestrator.core.agent_execution_profiles import AGENT_NAME_VOICE_ROOM_PM, AGENT_ROLE_PM
+from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.codex_invocation import CodexInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.codex_working_dir import resolve_codex_working_dir
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.live_voice_audio import (
@@ -74,7 +74,6 @@ logger = logging.getLogger("orchestrator.discord_live_voice")
 
 _LIVE_VOICE_HISTORY_LIMIT = 8
 _LIVE_VOICE_REASONING_EFFORT = "low"
-_LIVE_VOICE_RUNTIME_CACHE_MAX = 8
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 
@@ -141,8 +140,6 @@ class DiscordLiveVoiceService:
         self._connected_room_keys: set[str] = set()
         self._room_operation_locks: dict[str, asyncio.Lock] = {}
         self._decoder_by_key: dict[str, Any] = {}
-        self._codex_runtime_lock = threading.Lock()
-        self._codex_runtime_cache: OrderedDict[str, Any] = OrderedDict()
         self._runtime_lock = threading.RLock()
         self._turn_worker_lock = threading.Lock()
         self._pending_turns: dict[str, tuple[int, LiveVoiceTurn] | None] = {}
@@ -594,36 +591,31 @@ class DiscordLiveVoiceService:
                 self._runtime.mark_bot_speaking(binding=room.binding, speaking=False)
         logger.info("discord_live_voice_playback_interrupted room_key=%s reason=%s", room.room_key, reason)
 
-    def _runtime_cache_key(
+    @staticmethod
+    def _live_voice_selector_identity(selector: str) -> tuple[str | None, str | None]:
+        normalized_selector = str(selector or "").strip()
+        if normalized_selector == "discord.voice_room_pm":
+            return AGENT_ROLE_PM, AGENT_NAME_VOICE_ROOM_PM
+        return None, None
+
+    def _resolve_runtime_for_selector(
         self,
         *,
-        tenant: Tenant,
-        project: Project | None,
-        codex_working_dir: str,
-    ) -> str:
-        payload = {
-            "tenant_id": str(tenant.tenant_id),
-            "project_id": str(getattr(project, "project_id", "") or ""),
-            "tenant_discord_config": getattr(tenant, "discord_config", None) or {},
-            "project_discord_config": getattr(project, "discord_config", None) or {},
-            "working_dir": str(codex_working_dir or ""),
-            "codex_model": str(getattr(self._settings, "codex_model", "") or ""),
-            "voice_reply_provider": str(getattr(self._settings, "voice_reply_provider", "") or ""),
-        }
-        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
-
-    def _get_codex_runtime(self, *, session, cache_key: str) -> Any:  # noqa: ANN001
-        with self._codex_runtime_lock:
-            runtime = self._codex_runtime_cache.get(cache_key)
-            if runtime is not None:
-                self._codex_runtime_cache.move_to_end(cache_key)
-                return runtime
-            runtime = build_codex_runtime(session=session, settings=self._settings)
-            self._codex_runtime_cache[cache_key] = runtime
-            while len(self._codex_runtime_cache) > _LIVE_VOICE_RUNTIME_CACHE_MAX:
-                self._codex_runtime_cache.popitem(last=False)
-            return runtime
+        session,  # noqa: ANN001
+        tenant_id: str,
+        project_id: str | None,
+        selector: str,
+    ) -> Any:
+        agent_role, agent_name = self._live_voice_selector_identity(selector)
+        return build_runtime_for_selector(
+            session=session,
+            settings=self._settings,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            selector=selector,
+            agent_role=agent_role,
+            agent_name=agent_name,
+        )
 
     def _collect_live_voice_context(
         self,
@@ -774,12 +766,15 @@ class DiscordLiveVoiceService:
                 normalized_issue_key or "",
             )
             history_owner = project if project is not None else tenant
-            runtime_cache_key = self._runtime_cache_key(
-                tenant=tenant,
-                project=project,
-                codex_working_dir=codex_working_dir,
-            )
-            runtime = self._get_codex_runtime(session=session, cache_key=runtime_cache_key)
+            def _runtime_for_selector(selector: str) -> Any:
+                return self._resolve_runtime_for_selector(
+                    session=session,
+                    tenant_id=tenant.tenant_id,
+                    project_id=scoped_project_id,
+                    selector=selector,
+                )
+
+            runtime = _runtime_for_selector("discord.voice_room_router")
 
             history_config, _ = self._room_history.append_room_history_entry(
                 discord_config=getattr(history_owner, "discord_config", None),
@@ -812,6 +807,7 @@ class DiscordLiveVoiceService:
                 ):
                     result = answer_voice_room_turn(
                         runtime=runtime,
+                        runtime_for_selector=_runtime_for_selector,
                         transcript=transcript,
                         project_keys=project_keys,
                         issues=[],
