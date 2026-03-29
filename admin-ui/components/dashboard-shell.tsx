@@ -8,7 +8,6 @@ import {
   Activity,
   BarChart3,
   Building2,
-  CalendarClock,
   Cpu,
   FolderKanban,
   KeyRound,
@@ -30,7 +29,6 @@ import { getRun, type TenantRecord, getTenant, listProjects, type ProjectRecord 
 import {
   canAccessPlatformAdmin,
   canAccessTechnicalSurface,
-  canManageProjects,
   canManageTeam,
   getMembershipForTenant,
   getTenantWorkspaceRoute,
@@ -426,24 +424,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         ? `${tenantBaseRoute}/analytics/token-overview`
         : null;
   const showSecretsNav = !decodedTenantId || canAccessPlatformAdmin(principal) || canAccessTechnicalSurface(principal, decodedTenantId);
-  const allowProjectAutomationsNav = Boolean(decodedTenantId && canManageProjects(principal, decodedTenantId));
-  const automationsTargetProjectId =
-    projectContextId ?? (tenantProjects.length === 1 ? tenantProjects[0].project_id : null);
-  const automationsProjectPath =
-    tenantBaseRoute && automationsTargetProjectId
-      ? `${tenantBaseRoute}/projects/${encodeURIComponent(automationsTargetProjectId)}/automations`
-      : tenantBaseRoute
-        ? `${tenantBaseRoute}/projects`
-        : "";
-  const automationsNavItem: NavItem | null =
-    allowProjectAutomationsNav && automationsProjectPath
-      ? {
-          href: automationsTargetProjectId ? automationsProjectPath : automationsProjectPath,
-          label: "Automations",
-          icon: CalendarClock,
-          activePathname: automationsTargetProjectId ? automationsProjectPath : undefined,
-        }
-      : null;
 
   const tenantNavItems: NavItem[] = decodedTenantId
     ? [
@@ -459,7 +439,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           icon: Activity,
           matchPrefix: `${tenantBaseRoute}/runs`
         },
-        ...(automationsNavItem ? [automationsNavItem] : []),
         {
           href: analyticsHref ?? `${tenantBaseRoute}/analytics/token-overview`,
           label: "Analytics",
