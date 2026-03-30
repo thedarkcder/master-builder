@@ -52,6 +52,8 @@ type NavItem = {
   label: string;
   icon: ComponentType<{ className?: string }>;
   matchPrefix?: string;
+  /** Pathname match for active state when `href` includes a `#fragment`. */
+  activePathname?: string;
 };
 
 function tenantInitials(name: string): string {
@@ -183,10 +185,12 @@ function DashboardNavPanel({
 
             <SidebarMenu className="shrink-0">
               {navItems.map((item) => {
-                const active = item.matchPrefix
-                  ? pathname.startsWith(item.matchPrefix) &&
-                    !(item.label === "Pipeline" && Boolean(runContext.runId) && Boolean(projectContextId))
-                  : pathname === item.href;
+                const active = item.activePathname
+                  ? pathname === item.activePathname
+                  : item.matchPrefix
+                    ? pathname.startsWith(item.matchPrefix) &&
+                      !(item.label === "Pipeline" && Boolean(runContext.runId) && Boolean(projectContextId))
+                    : pathname === item.href.split("#")[0];
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={active}>
@@ -210,9 +214,12 @@ function DashboardNavPanel({
             <SidebarMenu className="shrink-0">
               <SidebarMenuLabel>Global</SidebarMenuLabel>
               {navItems.map((item) => {
-                const active = item.matchPrefix
-                  ? pathname.startsWith(item.matchPrefix)
-                  : pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const active = item.activePathname
+                  ? pathname === item.activePathname
+                  : item.matchPrefix
+                    ? pathname.startsWith(item.matchPrefix)
+                    : pathname === item.href.split("#")[0] ||
+                      pathname.startsWith(`${item.href.split("#")[0]}/`);
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={active}>

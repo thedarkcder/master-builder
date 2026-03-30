@@ -1,0 +1,24 @@
+Project: {{ project_name }}
+Jira key: {{ jira_project_key }}
+Repository: {{ github_repository }}
+Window start: {{ window_start_at }}
+Window end: {{ window_end_at }}
+Facts JSON:
+{{ facts_json }}
+
+Create a retrospective brief shape with:
+- what went well
+- what was painful
+- action items
+- risks
+- spoken tone requirements:
+  - sounds natural when read aloud
+  - 4-8 short sentences total
+  - keep transitions conversational ("today", "next", "watch out for")
+  - avoid formal report or checklist wording
+
+Return JSON:
+{
+  "transcript": "...",
+  "summary": "..."
+}

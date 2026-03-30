@@ -45,15 +45,13 @@ class Settings(BaseSettings):
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
     discord_channel_category_id: str = ""
-    voice_transcription_provider: Literal["disabled", "openai", "whisper"] = "disabled"
+    voice_provider: Literal["disabled", "openai", "whisper", "pocket_tts"] = "disabled"
     voice_transcription_model: str = "gpt-4o-mini-transcribe"
     voice_transcription_language: str = ""
     voice_transcription_openai_api_key: str = ""
     voice_transcription_device: str = "auto"
     voice_transcription_compute_type: str = "int8"
     voice_attachment_max_bytes: int = 25000000
-    voice_reply_provider: Literal["disabled", "pocket_tts"] = "disabled"
-    voice_reply_enabled_default: bool = False
     pocket_tts_base_url: str = ""
     pocket_tts_voice: str = ""
     discord_live_voice_transport_command: str = "/usr/local/bin/live-voice-transport"
@@ -63,6 +61,10 @@ class Settings(BaseSettings):
     codex_sandbox_mode: str = "workspace-write"
     codex_model: str = "gpt-5.4"
     codex_supported_models: str = "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark"
+    chat_cli_command: str = ""
+    claude_cli_command: str = ""
+    chat_model: str = "gpt-5.4"
+    chat_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_tool_database_url: str = ""
     codex_reasoning_effort: Literal["low", "medium", "high"] = "medium"
     codex_stderr_log_mode: Literal["all", "errors_only", "off"] = "errors_only"
@@ -96,6 +98,9 @@ class Settings(BaseSettings):
     knowledge_jira_sync_lock_key: int = 947102033128
     knowledge_jira_sync_max_issues: int = 500
     knowledge_jira_sync_invalid_token_backoff_seconds: int = 21600
+    project_automation_lock_key: int = 947102033131
+    project_automation_poll_seconds: int = 30
+    project_automation_interval_seconds: int = 30
     workflow_orchestrated_run_timeout_minutes: int = 90
     run_events_initial_limit: int = 100
     run_logs_initial_limit: int = 200

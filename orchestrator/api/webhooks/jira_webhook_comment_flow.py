@@ -16,6 +16,11 @@ from orchestrator.api.webhooks.contracts import (
     post_jira_comment,
 )
 from orchestrator.api.webhooks import jira_webhook_precheck
+from orchestrator.api.webhooks.jira_parent_child_sync import (
+    handle_engineering_clarification_command,
+    handle_engineering_clarification_reply,
+    is_system_generated_comment,
+)
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.decision_clarification_service import capture_decision_reply_and_recheck
@@ -149,7 +154,11 @@ def stage_handle_comment_decision_reply(
     if context.webhook_event not in JIRA_COMMENT_EVENTS or context.comment_command is not None:
         return None
     comment_text = extract_jira_comment_text(context.payload)
-    if not comment_text or is_machine_generated_decision_comment(text=comment_text):
+    if (
+        not comment_text
+        or is_machine_generated_decision_comment(text=comment_text)
+        or is_system_generated_comment(text=comment_text)
+    ):
         return None
     _, cycle = active_case_and_cycle_for_issue(
         session=session,
@@ -287,4 +296,30 @@ def stage_handle_comment_ask_command(
         comment_posted=posted,
         comment_error=post_error,
         webhook_event=context.webhook_event,
+    )
+
+
+def stage_handle_comment_clarify_command(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    return handle_engineering_clarification_command(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+
+
+def stage_handle_comment_engineering_clarification_reply(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    return handle_engineering_clarification_reply(
+        context=context,
+        session=session,
+        settings=settings,
     )

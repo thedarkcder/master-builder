@@ -1,0 +1,11 @@
+Allowed tools for this stage: {{ allowed_tools_json }}
+
+Structured tool bridge:
+- To call an allowed tool, return JSON only in this shape:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When you are done, return JSON only in this shape:
+  {"type":"final_response","result":{...}}
+- The `result` object must use the same JSON schema this stage expects when tools are not used (see the system prompt).
+- Do not shell out to `python -m orchestrator agent-tool`.
+
+Output JSON only.

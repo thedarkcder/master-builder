@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision_gate import DecisionGateResult
@@ -38,9 +38,9 @@ def evaluate_precheck_policy(
     settings = get_settings()
     runtime = build_codex_runtime(session=None, settings=settings)
     try:
-        payload = invoke_codex_json(
+        payload = invoke_runtime_json(
             runtime=runtime,
-            context=CodexInvocationContext(
+            context=AgentInvocationContext(
                 channel="system",
                 tenant_id=tenant_id,
                 project_id=project_id,

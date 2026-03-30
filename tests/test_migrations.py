@@ -47,7 +47,52 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260328_0045"])
+        self.assertEqual(script.get_heads(), ["20260330_0052"])
+
+    def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
+        """Branch-specific migrations chained after staging merge head (20260328_0045)."""
+        versions_dir = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "storage"
+            / "migrations"
+            / "versions"
+        )
+        expected_chain = {
+            "20260328_0046_platform_settings.py": (
+                'revision = "20260328_0046"',
+                'down_revision = "20260328_0045"',
+            ),
+            "20260328_0047_followup_context_identity.py": (
+                'revision = "20260328_0047"',
+                'down_revision = "20260328_0046"',
+            ),
+            "20260328_0048_pm_interview_cases.py": (
+                'revision = "20260328_0048"',
+                'down_revision = "20260328_0047"',
+            ),
+            "20260328_0049_project_voice_automations.py": (
+                'revision = "20260328_0049"',
+                'down_revision = "20260328_0048"',
+            ),
+            "20260330_0050_project_automation_optional_delivery_channel.py": (
+                'revision = "20260330_0050"',
+                'down_revision = "20260328_0049"',
+            ),
+            "20260330_0051_drop_project_automation_voice_id.py": (
+                'revision = "20260330_0051"',
+                'down_revision = "20260330_0050"',
+            ),
+            "20260330_0052_drop_project_automation_delivery_channel.py": (
+                'revision = "20260330_0052"',
+                'down_revision = "20260330_0051"',
+            ),
+        }
+
+        for filename, expected_lines in expected_chain.items():
+            contents = (versions_dir / filename).read_text(encoding="utf-8")
+            for expected_line in expected_lines:
+                self.assertIn(expected_line, contents)
 
     def test_run_migrations_repairs_legacy_stream_only_0040_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -107,7 +152,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260328_0045"])
+            self.assertEqual(versions, ["20260330_0052"])
 
     def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -151,19 +196,35 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260328_0045"])
+            self.assertEqual(versions, ["20260330_0052"])
+
+    def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            self._alembic_upgrade(database_url, "20260328_0045")
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("UPDATE alembic_version SET version_num = '20260328_0044'"))
+
+            run_migrations(database_url=database_url)
+
+            with engine.begin() as connection:
+                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+            self.assertEqual(versions, ["20260330_0052"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
         fake_config.attributes = {}
         with (
             patch("orchestrator.storage.migrations._normalize_repaired_top_revisions") as normalize_mock,
+            patch("orchestrator.storage.migrations._repair_stamp_if_schema_ahead_of_version") as repair_mock,
             patch("orchestrator.storage.migrations.Config", return_value=fake_config),
             patch("orchestrator.storage.migrations.command.upgrade") as upgrade_mock,
         ):
             run_migrations(database_url="sqlite:///tmp/test.db")
 
         normalize_mock.assert_called_once_with("sqlite:///tmp/test.db")
+        repair_mock.assert_called_once_with("sqlite:///tmp/test.db")
         self.assertEqual(fake_config.attributes.get("configure_logger"), False)
         upgrade_mock.assert_called_once_with(fake_config, "head")
 
@@ -187,6 +248,17 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("knowledge_jira_sync_runtime_states", inspector.get_table_names())
             self.assertIn("knowledge_jira_sync_project_states", inspector.get_table_names())
             self.assertIn("discord_command_sync_runtime_states", inspector.get_table_names())
+            self.assertIn("project_automations", inspector.get_table_names())
+            self.assertIn("project_automation_executions", inspector.get_table_names())
+
+            automation_indexes = {index["name"] for index in inspector.get_indexes("project_automations")}
+            execution_indexes = {index["name"] for index in inspector.get_indexes("project_automation_executions")}
+
+            self.assertIn("ix_project_automations_due_scan", automation_indexes)
+            self.assertIn("ix_project_automation_executions_due_scan", execution_indexes)
+            self.assertIn("ix_project_automation_executions_automation_history", execution_indexes)
+            automation_columns = {column["name"]: column for column in inspector.get_columns("project_automations")}
+            self.assertNotIn("delivery_text_channel_id", automation_columns)
             self.assertIn("worker_runtime_states", inspector.get_table_names())
             knowledge_fact_columns = {column["name"]: column for column in inspector.get_columns("knowledge_facts")}
             self.assertEqual(getattr(knowledge_fact_columns["slot_name"]["type"], "length", None), 128)
@@ -207,6 +279,21 @@ class MigrationTests(unittest.TestCase):
             contents,
         )
         self.assertNotIn('server_default=sa.text("1")', contents)
+
+    def test_followup_context_identity_migration_adds_explicit_routing_columns(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            database_url = f"sqlite:///{tmp_dir}/test.db"
+            run_migrations(database_url=database_url)
+
+            engine = create_engine(database_url)
+            inspector = inspect(engine)
+
+            followup_columns = {column["name"] for column in inspector.get_columns("followup_contexts")}
+            followup_indexes = {index["name"] for index in inspector.get_indexes("followup_contexts")}
+
+            self.assertIn("owner_user_id", followup_columns)
+            self.assertIn("origin_command", followup_columns)
+            self.assertIn("ix_followup_contexts_tenant_status_owner", followup_indexes)
 
     def test_tenant_identity_migration_uses_boolean_defaults_for_postgres(self) -> None:
         migration_file = (
@@ -402,4 +489,4 @@ class MigrationTests(unittest.TestCase):
             with engine.begin() as connection:
                 current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-            self.assertEqual(current_revision, "20260327_0043")
+            self.assertEqual(current_revision, "20260330_0052")

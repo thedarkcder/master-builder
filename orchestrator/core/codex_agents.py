@@ -5,15 +5,17 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from orchestrator.core.codex_invocation import (
-    CodexInvocationContext,
-    invoke_codex_json,
-    invoke_codex_json_with_tools,
+from sqlalchemy.orm import Session
+
+from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
+from orchestrator.core.runtime_invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+    invoke_runtime_json_with_tools,
 )
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.agent_tools import allowed_tools_for_stage
 from orchestrator.core.worker_capabilities import normalize_worker_capability
 from orchestrator.core.workflow.runner import (
     DevResult,
@@ -24,17 +26,103 @@ from orchestrator.core.workflow.runner import (
 )
 
 
+def _discord_tool_bridge_suffix(*, tool_stage: str) -> str:
+    allowed = allowed_tools_for_stage(tool_stage)
+    if not allowed:
+        return ""
+    return "\n\n" + render_prompt(
+        "discord/codex_tool_bridge_suffix.j2",
+        allowed_tools_json=json.dumps(sorted(allowed)),
+    )
+
+
+def _codex_discord_execute_tool(
+    *,
+    session: Session,
+    settings: Any,
+    invocation_context: AgentInvocationContext,
+    tool_stage: str,
+) -> Callable[[str, dict[str, object]], dict[str, object]]:
+    tenant_id = str(invocation_context.tenant_id or "").strip()
+    if not tenant_id:
+        raise RuntimeError("tenant_id is required for Discord tool execution")
+
+    def _run(tool_name: str, tool_args: dict[str, object]) -> dict[str, object]:
+        raw = execute_agent_tool(
+            session=session,
+            settings=settings,
+            tenant_id=tenant_id,
+            project_id=str(invocation_context.project_id or "").strip() or None,
+            run_id=None,
+            issue_key=str(invocation_context.issue_key or "").strip(),
+            stage=tool_stage,
+            tool_name=tool_name,
+            tool_args=dict(tool_args),
+        )
+        return dict(raw)
+
+    return _run
+
+
+def _invoke_discord_json_maybe_tools(
+    *,
+    runtime: CodexRuntime,
+    context: AgentInvocationContext,
+    system_prompt: str,
+    user_prompt: str,
+    tool_stage: str,
+    sqlalchemy_session: Session | None,
+    settings: Any | None,
+    max_tool_hops: int = 8,
+) -> dict:
+    allowed = allowed_tools_for_stage(tool_stage)
+    if (
+        sqlalchemy_session is None
+        or settings is None
+        or not allowed
+        or not str(context.tenant_id or "").strip()
+    ):
+        return invoke_runtime_json(
+            runtime=runtime,
+            context=context,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+    bridged_user = user_prompt + _discord_tool_bridge_suffix(tool_stage=tool_stage)
+    return invoke_runtime_json_with_tools(
+        runtime=runtime,
+        context=context,
+        system_prompt=system_prompt,
+        user_prompt=bridged_user,
+        allowed_tools=allowed,
+        execute_tool=_codex_discord_execute_tool(
+            session=sqlalchemy_session,
+            settings=settings,
+            invocation_context=context,
+            tool_stage=tool_stage,
+        ),
+        max_tool_hops=max_tool_hops,
+    )
+
+
 class CodexWorkflowAgents:
     def __init__(
         self,
         *,
         runtime: CodexRuntime,
+        runtime_resolver: Callable[[str, WorkflowRequest], CodexRuntime] | None = None,
         log_sink: Callable[[dict], None] | None = None,
-        execute_tool: Callable[[CodexInvocationContext, str, dict[str, object]], dict[str, object]] | None = None,
+        execute_tool: Callable[[AgentInvocationContext, str, dict[str, object]], dict[str, object]] | None = None,
     ):
         self._runtime = runtime
+        self._runtime_resolver = runtime_resolver
         self._log_sink = log_sink
         self._execute_tool = execute_tool
+
+    def _runtime_for_stage(self, *, stage: str, request: WorkflowRequest) -> CodexRuntime:
+        if self._runtime_resolver is None:
+            return self._runtime
+        return self._runtime_resolver(stage, request)
 
     def _stage_log_sink(
         self,
@@ -90,7 +178,7 @@ class CodexWorkflowAgents:
         user_prompt: str,
         reasoning_effort: str = "medium",
     ) -> dict[str, Any]:
-        context = CodexInvocationContext(
+        context = AgentInvocationContext(
             channel="worker",
             tenant_id=request.tenant_id,
             project_id=request.project_id,
@@ -105,8 +193,8 @@ class CodexWorkflowAgents:
             codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
         )
         allowed_tools = sorted(allowed_tools_for_stage(stage))
-        return invoke_codex_json_with_tools(
-            runtime=self._runtime,
+        return invoke_runtime_json_with_tools(
+            runtime=self._runtime_for_stage(stage=stage, request=request),
             context=context,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -123,7 +211,7 @@ class CodexWorkflowAgents:
     def _execute_stage_tool(
         self,
         *,
-        context: CodexInvocationContext,
+        context: AgentInvocationContext,
         tool_name: str,
         tool_args: dict[str, object],
     ) -> dict[str, object]:
@@ -627,32 +715,43 @@ def _coerce_bool(
 
 
 
-def answer_board_question_with_codex(
+def answer_board_question_with_runtime(
     *,
     runtime: CodexRuntime,
     question: str,
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
+    sqlalchemy_session: Session | None = None,
+    settings: Any | None = None,
+    answer_persona_id: str | None = None,
 ) -> str:
-    normalized_history: list[dict] = []
+    normalized_history = history if isinstance(history, list) else []
     normalized_github_context = github_context or {}
-    payload = invoke_codex_json(
+    history_slice = normalized_history[-25:] if normalized_history else []
+    persona = str(answer_persona_id or "").strip().lower() or "pm"
+    user_prompt = render_prompt(
+        "discord/ask_answer_user.j2",
+        question=question,
+        persona_id=persona,
+        project_keys_json=json.dumps(project_keys),
+        status_counts_json=json.dumps(status_counts),
+        github_context_json=json.dumps(normalized_github_context),
+        history_json=json.dumps(history_slice),
+        issues_json=json.dumps(issues[:40]),
+    )
+    payload = _invoke_discord_json_maybe_tools(
         runtime=runtime,
         context=invocation_context,
-        system_prompt=render_prompt("discord/ask_answer_system.j2"),
-        user_prompt=render_prompt(
-            "discord/ask_answer_user.j2",
-            question=question,
-            project_keys_json=json.dumps(project_keys),
-            status_counts_json=json.dumps(status_counts),
-            github_context_json=json.dumps(normalized_github_context),
-            history_json=json.dumps(normalized_history),
-            issues_json=json.dumps(issues[:40]),
-        ),
+        system_prompt=render_prompt("discord/ask_answer_system.j2", persona_id=persona),
+        user_prompt=user_prompt,
+        tool_stage="discord_ask_answer",
+        sqlalchemy_session=sqlalchemy_session,
+        settings=settings,
+        max_tool_hops=8,
     )
     message = str(payload.get("message") or "").strip()
     if not message:
@@ -668,7 +767,7 @@ def answer_pm_question_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
 ) -> dict:
@@ -677,7 +776,7 @@ def answer_pm_question_with_codex(
         normalized_action = "ask"
     normalized_history = history if isinstance(history, list) else []
     normalized_github_context = github_context or {}
-    payload = invoke_codex_json(
+    payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
         system_prompt=render_prompt("discord/pm_answer_system.j2"),
@@ -708,32 +807,80 @@ def answer_pm_question_with_codex(
     return normalized_payload
 
 
-def route_voice_room_persona_with_codex(
+def classify_engineering_clarification_with_codex(
     *,
     runtime: CodexRuntime,
-    transcript: str,
-    available_personas: list[dict[str, str]],
-    invocation_context: CodexInvocationContext,
-    history: list[dict] | None = None,
-    room_context: dict | None = None,
+    parent_issue_key: str,
+    parent_summary: str,
+    parent_description: str,
+    child_issue_key: str,
+    child_summary: str,
+    child_description: str,
+    question: str,
+    invocation_context: AgentInvocationContext,
 ) -> dict:
-    normalized_history = history if isinstance(history, list) else []
-    payload = invoke_codex_json(
+    payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
-        system_prompt=render_prompt("discord/voice_room_router_system.j2"),
+        system_prompt=render_prompt("jira/engineering_clarification_system.j2"),
         user_prompt=render_prompt(
-            "discord/voice_room_router_user.j2",
-            transcript=transcript,
-            history_json=json.dumps(normalized_history[-25:]),
-            room_context_json=json.dumps(room_context or {}),
-            available_personas_json=json.dumps(available_personas),
+            "jira/engineering_clarification_user.j2",
+            parent_issue_key=parent_issue_key,
+            parent_summary=parent_summary,
+            parent_description=parent_description,
+            child_issue_key=child_issue_key,
+            child_summary=child_summary,
+            child_description=child_description,
+            question=question,
         ),
     )
     if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return a voice-room router JSON object")
+        raise CodexRuntimeError("Codex did not return an engineering clarification JSON object")
+    return payload
+
+
+def route_voice_entry_with_runtime(
+    *,
+    runtime: CodexRuntime,
+    transcript: str,
+    invocation_context: AgentInvocationContext,
+    entry_source: str,
+    history: list[dict] | None = None,
+    room_context: dict | None = None,
+    sqlalchemy_session: Session | None = None,
+    settings: Any | None = None,
+) -> dict:
+    """Route voice transcript to ask vs interview (strict JSON from agent runtime)."""
+    normalized_history = history if isinstance(history, list) else []
+    user_prompt = render_prompt(
+        "discord/voice_entry_router_user.j2",
+        transcript=transcript,
+        entry_source=entry_source,
+        history_json=json.dumps(normalized_history[-25:]),
+        room_context_json=json.dumps(room_context or {}),
+    )
+    payload = _invoke_discord_json_maybe_tools(
+        runtime=runtime,
+        context=invocation_context,
+        system_prompt=render_prompt("discord/voice_entry_router_system.j2"),
+        user_prompt=user_prompt,
+        tool_stage="voice_entry_router",
+        sqlalchemy_session=sqlalchemy_session,
+        settings=settings,
+        max_tool_hops=6,
+    )
+    if not isinstance(payload, dict):
+        raise CodexRuntimeError("Codex did not return a voice-entry router JSON object")
+    lane = str(payload.get("lane") or "").strip().lower()
+    if lane == "pm":
+        lane = "interview"
+    if lane == "persona":
+        lane = "ask"
+    if lane not in {"ask", "interview"}:
+        lane = "ask"
     persona_id = str(payload.get("persona") or "").strip().lower()
-    if persona_id not in {"pm", "architect", "engineer", "qa", "security"}:
+    valid_personas = {"pm", "architect", "engineer", "qa", "security"}
+    if persona_id not in valid_personas:
         persona_id = "pm"
     try:
         confidence = float(payload.get("confidence"))
@@ -741,7 +888,10 @@ def route_voice_room_persona_with_codex(
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
     reason = str(payload.get("reason") or "").strip()
+    if lane == "interview":
+        persona_id = "pm"
     return {
+        "lane": lane,
         "persona": persona_id,
         "confidence": confidence,
         "reason": reason,
@@ -756,31 +906,44 @@ def answer_voice_room_persona_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
     room_context: dict | None = None,
+    sqlalchemy_session: Session | None = None,
+    settings: Any | None = None,
 ) -> dict:
     persona = get_voice_room_persona_definition(persona_id)
     normalized_history = history if isinstance(history, list) else []
-    payload = invoke_codex_json(
+    system_prompt = render_prompt(persona.system_prompt_template)
+    if sqlalchemy_session is not None and settings is not None and allowed_tools_for_stage("discord_voice_room_persona"):
+        system_prompt += (
+            "\n\nWhen the user message includes an Allowed tools section, use tool_request then final_response. "
+            "final_response.result must match the same JSON shape required above (same keys as without tools)."
+        )
+    user_prompt = render_prompt(
+        persona.user_prompt_template,
+        transcript=transcript,
+        history_json=json.dumps(normalized_history[-25:]),
+        room_context_json=json.dumps(
+            room_context
+            or {
+                "project_keys": project_keys,
+                "status_counts": status_counts,
+                "github_context": github_context or {},
+                "issues": issues[:40],
+            }
+        ),
+    )
+    payload = _invoke_discord_json_maybe_tools(
         runtime=runtime,
         context=invocation_context,
-        system_prompt=render_prompt(persona.system_prompt_template),
-        user_prompt=render_prompt(
-            persona.user_prompt_template,
-            transcript=transcript,
-            history_json=json.dumps(normalized_history[-25:]),
-            room_context_json=json.dumps(
-                room_context
-                or {
-                    "project_keys": project_keys,
-                    "status_counts": status_counts,
-                    "github_context": github_context or {},
-                    "issues": issues[:40],
-                }
-            ),
-        ),
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        tool_stage="discord_voice_room_persona",
+        sqlalchemy_session=sqlalchemy_session,
+        settings=settings,
+        max_tool_hops=6,
     )
     if not isinstance(payload, dict):
         raise CodexRuntimeError("Codex did not return a voice-room persona JSON object")
@@ -805,13 +968,13 @@ def plan_discord_ask_intent_with_codex(
     project_keys: list[str],
     issues: list[dict],
     status_counts: dict[str, int],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     history: list[dict] | None = None,
     github_context: dict | None = None,
 ) -> dict:
     normalized_history: list[dict] = []
     normalized_github_context = github_context or {}
-    payload = invoke_codex_json(
+    payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
         system_prompt=render_prompt("discord/ask_intent_system.j2"),
@@ -835,12 +998,12 @@ def plan_seed_issues_with_codex(
     runtime: CodexRuntime,
     prompt_markdown: str,
     allowed_project_keys: list[str],
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
 ) -> dict:
     last_error: CodexRuntimeError | None = None
     for attempt in range(2):
         try:
-            payload = invoke_codex_json(
+            payload = invoke_runtime_json(
                 runtime=runtime,
                 context=invocation_context,
                 system_prompt=render_prompt("discord/issues_seed_system.j2"),
@@ -852,6 +1015,44 @@ def plan_seed_issues_with_codex(
             )
             if not isinstance(payload, dict):
                 raise CodexRuntimeError("Codex did not return an issue-seeding JSON object")
+            return payload
+        except CodexRuntimeError as exc:
+            last_error = exc
+            error_text = str(exc).lower()
+            retryable_empty_output = (
+                "no last agent message" in error_text
+                or "returned empty output" in error_text
+                or "empty response" in error_text
+                or "wrote empty content" in error_text
+            )
+            if not retryable_empty_output or attempt > 0:
+                raise
+    assert last_error is not None
+    raise last_error
+
+
+def plan_pm_parent_issues_with_codex(
+    *,
+    runtime: CodexRuntime,
+    prompt_markdown: str,
+    allowed_project_keys: list[str],
+    invocation_context: AgentInvocationContext,
+) -> dict:
+    last_error: CodexRuntimeError | None = None
+    for attempt in range(2):
+        try:
+            payload = invoke_runtime_json(
+                runtime=runtime,
+                context=invocation_context,
+                system_prompt=render_prompt("discord/pm_seed_batch_system.j2"),
+                user_prompt=render_prompt(
+                    "discord/pm_seed_batch_user.j2",
+                    allowed_project_keys_json=json.dumps(allowed_project_keys),
+                    prompt_markdown=prompt_markdown,
+                ),
+            )
+            if not isinstance(payload, dict):
+                raise CodexRuntimeError("Codex did not return a PM batch issue-seeding JSON object")
             return payload
         except CodexRuntimeError as exc:
             last_error = exc

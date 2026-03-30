@@ -87,8 +87,12 @@ class DiscordThreadBindingFlowTests(unittest.TestCase):
         gateway_response = SimpleNamespace(command="reply", message="ok", data={"recheck_required": False})
         with (
             patch(
-                "orchestrator.core.discord.gateway_listener.resolve_followup_context",
-                return_value=SimpleNamespace(context_type="decision_gate", issue_key="GP-114"),
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
+                return_value=SimpleNamespace(
+                    status="matched",
+                    context=SimpleNamespace(context_type="decision_gate", issue_key="GP-114"),
+                    matches=(),
+                ),
             ),
             patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=gateway_response) as execute_mock,
             patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),

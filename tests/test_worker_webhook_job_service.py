@@ -11,13 +11,15 @@ from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,
+    WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
 )
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, Tenant, WebhookJob
+from orchestrator.storage.models import Project, Run, Tenant, WebhookJob
+from orchestrator.core.communications import DiscordChannelMessageWithAttachmentAction
 
 
 class WorkerWebhookJobServiceTests(unittest.TestCase):
@@ -42,6 +44,22 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     repos_config={},
                     policy_config={},
                     discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project 1",
+                    github_repository="https://github.com/example/repo",
+                    jira_project_key="TP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={"channel_id": "channel-automation"},
+                    is_archived=False,
                     created_at=now,
                     updated_at=now,
                 )
@@ -104,6 +122,25 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     "project_id": None,
                 }
             },
+        )
+
+    @staticmethod
+    def _project_automation_request(
+        *,
+        request_id: str,
+        execution_id: str,
+        automation_id: str = "automation-1",
+    ) -> WebhookJobEnqueueRequest:
+        return WebhookJobEnqueueRequest(
+            transport=WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
+            request_id=request_id,
+            tenant_id="tenant-1",
+            project_id="project-1",
+            subject_key="project_automation:tenant-1:project-1:daily-update",
+            dedupe_key=request_id,
+            event_type="standup_voice_brief",
+            payload_json={"execution_id": execution_id, "automation_id": automation_id},
+            context_json={},
         )
 
     def test_blocking_reconciliation_cancels_stale_queued_run(self) -> None:
@@ -175,6 +212,76 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertIsNotNone(processed)
             execute_command.assert_called_once()
             self.assertTrue(execute_command.call_args.kwargs["defer_seed_issues"])
+
+    def test_project_automation_jobs_dispatch_and_mark_success(self) -> None:
+        with self.session_factory() as session:
+            enqueue_webhook_job(session, request=self._project_automation_request(request_id="request-automation-1", execution_id="automation-exec-1"))
+            session.commit()
+
+        with self.session_factory() as session:
+            with (
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.prepare_project_automation_execution",
+                    return_value=SimpleNamespace(
+                        execution_id="automation-exec-1",
+                        action=DiscordChannelMessageWithAttachmentAction(
+                            channel_id="channel-automation",
+                            content="summary",
+                            filename="voice.wav",
+                            file_bytes=b"voice",
+                            content_type="audio/wav",
+                        ),
+                        already_succeeded=False,
+                        window_end_at=datetime.now(timezone.utc),
+                    ),
+                ),
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.execute_side_effect_action",
+                    return_value={"message_id": "discord-msg-1", "channel_id": "channel-automation"},
+                ) as execute_side_effect,
+                patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_success") as mark_success,
+            ):
+                processed = process_next_webhook_job(session=session, settings=SimpleNamespace(), owner_id="worker-1")
+
+            self.assertIsNotNone(processed)
+            execute_side_effect.assert_called_once()
+            mark_success.assert_called_once()
+            self.assertEqual(mark_success.call_args.kwargs["discord_message_id"], "discord-msg-1")
+            self.assertEqual(session.get(WebhookJob, processed.job_id).status, "done")
+
+    def test_project_automation_jobs_mark_failure_when_send_fails(self) -> None:
+        with self.session_factory() as session:
+            enqueue_webhook_job(session, request=self._project_automation_request(request_id="request-automation-2", execution_id="automation-exec-2"))
+            session.commit()
+
+        with self.session_factory() as session:
+            with (
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.prepare_project_automation_execution",
+                    return_value=SimpleNamespace(
+                        execution_id="automation-exec-2",
+                        action=DiscordChannelMessageWithAttachmentAction(
+                            channel_id="channel-automation",
+                            content="summary",
+                            filename="voice.wav",
+                            file_bytes=b"voice",
+                            content_type="audio/wav",
+                        ),
+                        already_succeeded=False,
+                        window_end_at=datetime.now(timezone.utc),
+                    ),
+                ),
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.execute_side_effect_ingress_result",
+                    side_effect=RuntimeError("send failed"),
+                ),
+                patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_failure") as mark_failed,
+            ):
+                processed = process_next_webhook_job(session=session, settings=SimpleNamespace(), owner_id="worker-1")
+
+            self.assertIsNotNone(processed)
+            mark_failed.assert_called_once()
+            self.assertEqual(session.get(WebhookJob, processed.job_id).status, "failed")
 
     def test_process_next_webhook_job_snapshots_job_context_before_rollback(self) -> None:
         class _BrokenJob:

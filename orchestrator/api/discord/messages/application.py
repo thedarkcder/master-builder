@@ -7,9 +7,27 @@ from fastapi import HTTPException
 
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.communications import (
+    DiscordAskWithThreadAction,
     DiscordChannelMessageAction,
+    DiscordThreadReplyAction,
     IngressResult,
     TransportAction,
+)
+from orchestrator.api.discord.ask.context import tenant_project_keys
+from orchestrator.core.followup_context_service import FollowupReaction
+
+_ROOM_VOICE_REPLY_COMMANDS = frozenset(
+    {
+        "pm",
+        "room",
+        "ask",
+        "architect",
+        "engineer",
+        "tester",
+        "security",
+        "reviewer",
+        "voice_room_persona",
+    }
 )
 
 
@@ -23,6 +41,7 @@ class DiscordMessageIngressDeps:
     transcribe_audio_attachment: object
     load_pending_human_input_request: object
     resume_run_from_human_input_reply: object
+    resolve_followup_context_match: object
     resolve_followup_context: object
     resolve_followup_reaction: object
     execute_tenant_discord_command: object
@@ -36,6 +55,7 @@ class DiscordMessageIngressDeps:
     emit_hard_error: object
     logger: object
     settings: object
+    route_voice_entry: object
 
 
 def discord_channel_message_action(
@@ -189,19 +209,83 @@ def build_discord_message_ingress_result(
         return IngressResult()
 
     root_message_id = _root_message_id_from_payload(payload)
-    followup_context = deps.resolve_followup_context(
+    followup_resolution = deps.resolve_followup_context_match(
         session=session,
         tenant_id=tenant.tenant_id,
         channel_id=channel_id,
         root_message_id=root_message_id,
+        user_id=user_id,
     )
-    reaction = deps.resolve_followup_reaction(
-        raw_text=content,
-        source_ref=str(payload.get("id") or "").strip() or None,
-        followup_context=followup_context,
-        room_mode=(channel_id in room_channel_ids) or voice_note_reply_requested,
-        room_source=room_source_mode,
+    if str(getattr(followup_resolution, "status", "") or "") == "ambiguous":
+        return IngressResult(
+            actions=(
+                discord_channel_message_action(
+                    channel_id=channel_id,
+                    content=(
+                        f"<@{user_id}> I found multiple active follow-up contexts for that reply. "
+                        "Continue in the correct thread or clean up the stale follow-up first."
+                    ),
+                ),
+            )
     )
+    followup_context = getattr(followup_resolution, "context", None)
+    followup_context_type = str(getattr(followup_context, "context_type", "") or "").strip().lower()
+    voice_note_command_params: dict[str, str] | None = None
+    voice_note_routed_command_text: str | None = None
+    voice_note_scoped_project_keys: list[str] | None = None
+    if voice_note_reply_requested and not content.startswith("!"):
+        voice_note_scoped_project_keys = (
+            [str(project.jira_project_key)]
+            if project is not None and getattr(project, "jira_project_key", None)
+            else tenant_project_keys(session=session, tenant=tenant)
+        )
+        routed = deps.route_voice_entry(
+            session=session,
+            tenant=tenant,
+            user_id=user_id,
+            channel_id=channel_id,
+            project_id=project_id,
+            transcript=content,
+            project_keys=voice_note_scoped_project_keys,
+            room_channel_ids=frozenset(room_channel_ids),
+        )
+        lane = str(routed.get("lane") or "ask").strip().lower()
+        persona_rid = str(routed.get("persona") or "pm").strip().lower()
+        deps.logger.info(
+            "discord_voice_note_entry_routed lane=%s persona=%s confidence=%s reason=%s",
+            lane,
+            persona_rid,
+            routed.get("confidence"),
+            routed.get("reason"),
+        )
+        voice_note_command_params = {
+            "room_mode": "true",
+            "room_source": room_source_mode,
+        }
+        if lane == "interview":
+            voice_note_routed_command_text = f"!pm {content}"
+        else:
+            voice_note_routed_command_text = f"!ask {content}"
+            voice_note_command_params["persona_id"] = persona_rid
+    if followup_context_type == "pm_interview" and not content.startswith("!"):
+        reaction = FollowupReaction(
+            kind="command",
+            command_text=f"!pm {content}",
+        )
+    elif voice_note_routed_command_text is not None:
+        reaction = FollowupReaction(
+            kind="command",
+            command_text=voice_note_routed_command_text,
+            command_params=voice_note_command_params,
+        )
+    else:
+        reaction = deps.resolve_followup_reaction(
+            raw_text=content,
+            source_ref=str(payload.get("id") or "").strip() or None,
+            followup_context=followup_context,
+            room_mode=(channel_id in room_channel_ids) or voice_note_reply_requested,
+            room_source=room_source_mode,
+        )
     if reaction is not None and getattr(reaction, "kind", "") == "human_input":
         request = deps.load_pending_human_input_request(
             session=session,
@@ -235,6 +319,17 @@ def build_discord_message_ingress_result(
                 actions=(discord_channel_message_action(channel_id=channel_id, content=message_content),),
             )
 
+    if reaction is None and not content.startswith("!") and not ((channel_id in room_channel_ids) or voice_note_reply_requested):
+        _log_ignored_message(
+            deps=deps,
+            reason="plain_text_without_followup_context",
+            payload=payload,
+            channel_id=channel_id,
+            user_id=user_id,
+            content=content,
+        )
+        return IngressResult()
+
     command_text = content
     command_params = None
     if reaction is not None and getattr(reaction, "kind", "") == "command":
@@ -244,6 +339,7 @@ def build_discord_message_ingress_result(
 
     message_content = f"<@{user_id}> Command failed due to an internal error."
     components: list[dict] | None = None
+    pm_thread_action: DiscordAskWithThreadAction | DiscordThreadReplyAction | None = None
     should_send_room_voice_reply = False
     room_voice_reply_text: str | None = None
     room_voice_reply_persona_id: str | None = None
@@ -272,6 +368,28 @@ def build_discord_message_ingress_result(
             issue_key_pattern=deps.issue_key_pattern,
         )
         data = command_response.data if isinstance(command_response.data, dict) else {}
+        pm_interview_mode = bool(data.get("pm_mode")) and command_response.command == "pm"
+        if pm_interview_mode:
+            pm_followup_context_type = str(data.get("followup_context_type") or "pm_interview").strip() or "pm_interview"
+            if followup_context_type == "pm_interview":
+                pm_thread_action = DiscordThreadReplyAction(
+                    tenant_id=tenant.tenant_id,
+                    channel_id=channel_id,
+                    reply_to_message_id=message_correlation_id or channel_id,
+                    content=message_content,
+                    components=components,
+                )
+            else:
+                pm_thread_action = DiscordAskWithThreadAction(
+                    tenant_id=tenant.tenant_id,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    content=message_content,
+                    components=components,
+                    issue_key=str(data.get("issue_key") or "").strip() or None,
+                    followup_context_type=pm_followup_context_type,
+                    request_id=str(data.get("request_id") or "").strip() or None,
+                )
         if (
             command_response.command == "ask"
             and bool(data.get("requires_confirmation"))
@@ -284,7 +402,7 @@ def build_discord_message_ingress_result(
             components = deps.ask_reply_components()
         elif (
             channel_id in room_channel_ids
-            and command_response.command in {"pm", "room"}
+            and command_response.command in _ROOM_VOICE_REPLY_COMMANDS
             and deps.room_voice_reply_enabled()
         ):
             should_send_room_voice_reply = True
@@ -294,19 +412,27 @@ def build_discord_message_ingress_result(
             room_voice_reply_persona_role = str(data.get("persona_role") or "").strip() or None
             if room_voice_reply_persona_id is None and command_response.command == "pm":
                 room_voice_reply_persona_id = "pm"
+            if room_voice_reply_persona_id is None and command_response.command == "ask":
+                room_voice_reply_persona_id = "pm"
             if room_voice_reply_persona_name is None and room_voice_reply_persona_id == "pm":
                 room_voice_reply_persona_name = "PM"
             room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
         elif (
             voice_note_reply_requested
-            and command_response.command == "pm"
+            and command_response.command in _ROOM_VOICE_REPLY_COMMANDS
             and deps.room_voice_reply_enabled()
         ):
             should_send_room_voice_reply = True
             room_voice_reply_text = str(command_response.message or "").strip() or None
-            room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or "pm"
-            room_voice_reply_persona_name = str(data.get("persona_name") or "").strip() or "PM"
+            room_voice_reply_persona_id = str(data.get("persona_id") or "").strip() or None
+            room_voice_reply_persona_name = str(data.get("persona_name") or "").strip() or None
             room_voice_reply_persona_role = str(data.get("persona_role") or "").strip() or None
+            if room_voice_reply_persona_id is None and command_response.command == "pm":
+                room_voice_reply_persona_id = "pm"
+            if room_voice_reply_persona_id is None and command_response.command == "ask":
+                room_voice_reply_persona_id = "pm"
+            if room_voice_reply_persona_name is None and room_voice_reply_persona_id == "pm":
+                room_voice_reply_persona_name = "PM"
             room_voice_reply_config = data.get("room_config") if isinstance(data.get("room_config"), dict) else None
     except HTTPException as exc:
         deps.logger.exception(
@@ -342,25 +468,25 @@ def build_discord_message_ingress_result(
 
     actions: list[TransportAction] = []
     if voice_note_reply_requested and should_send_room_voice_reply and room_voice_reply_text:
-        voice_action, voice_error = deps.build_room_voice_reply_action(
-            user_id=user_id,
-            channel_id=channel_id,
-            text=room_voice_reply_text,
-            persona_id=room_voice_reply_persona_id,
-            persona_name=room_voice_reply_persona_name,
-            persona_role=room_voice_reply_persona_role,
-            room_config=room_voice_reply_config,
-            content_override=message_content,
-            components=components,
-            correlation_id=message_correlation_id,
-            tenant_id=tenant.tenant_id,
-            project_id=project_id,
-            fallback_content_on_failure=message_content,
-            fallback_components_on_failure=components,
-        )
-        if voice_action is not None:
-            actions.append(voice_action)
-        else:
+        if pm_thread_action is None:
+            voice_action, voice_error = deps.build_room_voice_reply_action(
+                user_id=user_id,
+                channel_id=channel_id,
+                text=room_voice_reply_text,
+                persona_id=room_voice_reply_persona_id,
+                persona_name=room_voice_reply_persona_name,
+                persona_role=room_voice_reply_persona_role,
+                room_config=room_voice_reply_config,
+                content_override=message_content,
+                components=components,
+                correlation_id=message_correlation_id,
+                tenant_id=tenant.tenant_id,
+                project_id=project_id,
+                fallback_content_on_failure=message_content,
+                fallback_components_on_failure=components,
+            )
+            if voice_action is not None:
+                return IngressResult(actions=(voice_action,))
             actions.append(
                 discord_channel_message_action(
                     channel_id=channel_id,
@@ -375,15 +501,42 @@ def build_discord_message_ingress_result(
                         content=f"<@{user_id}> {voice_error}",
                     )
                 )
-        return IngressResult(actions=tuple(actions))
-
-    actions.append(
-        discord_channel_message_action(
+            return IngressResult(actions=tuple(actions))
+        actions.append(pm_thread_action)
+        voice_action, voice_error = deps.build_room_voice_reply_action(
+            user_id=user_id,
             channel_id=channel_id,
-            content=message_content,
-            components=components,
+            text=room_voice_reply_text,
+            persona_id=room_voice_reply_persona_id,
+            persona_name=room_voice_reply_persona_name,
+            persona_role=room_voice_reply_persona_role,
+            room_config=room_voice_reply_config,
+            correlation_id=message_correlation_id,
+            tenant_id=tenant.tenant_id,
+            project_id=project_id,
+            fallback_content_on_failure=message_content,
+            fallback_components_on_failure=components,
         )
-    )
+        if voice_action is not None:
+            actions.append(voice_action)
+        elif voice_error:
+            actions.append(
+                discord_channel_message_action(
+                    channel_id=channel_id,
+                    content=f"<@{user_id}> {voice_error}",
+                )
+            )
+        return IngressResult(actions=tuple(actions))
+    if pm_thread_action is not None:
+        actions.append(pm_thread_action)
+    else:
+        actions.append(
+            discord_channel_message_action(
+                channel_id=channel_id,
+                content=message_content,
+                components=components,
+            )
+        )
     if should_send_room_voice_reply and room_voice_reply_text:
         voice_action, voice_error = deps.build_room_voice_reply_action(
             user_id=user_id,

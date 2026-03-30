@@ -16,7 +16,7 @@ from orchestrator.api.discord.ask.query_service import collect_ask_context as _c
 from orchestrator.api.discord.ingress import ask_history_runtime, github_context
 from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
 from orchestrator.api.discord.shared.scope_service import normalize_scope_channel_id
-from orchestrator.core.codex_agents import answer_board_question_with_codex
+from orchestrator.core.codex_agents import answer_board_question_with_runtime
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.codex_working_dir import resolve_codex_working_dir
 from orchestrator.core.config import get_settings
@@ -119,6 +119,7 @@ def ask_board_message(
     question: str,
     scoped_issue_key: str | None = None,
     scoped_project_id: str | None = None,
+    answer_persona_id: str | None = None,
     get_settings_fn=None,
     resolve_codex_working_dir_fn=None,
     resolve_scoped_secret_ref_fn=None,
@@ -142,6 +143,7 @@ def ask_board_message(
         question=question,
         scoped_issue_key=scoped_issue_key,
         scoped_project_id=scoped_project_id,
+        answer_persona_id=answer_persona_id,
         prune_missing_issue_keys_from_ask_history_fn=ask_history_runtime.prune_missing_issue_keys_from_ask_history,
         recent_ask_history_fn=ask_history_runtime.recent_ask_history,
         collect_ask_context_with_history_context_fn=lambda **kwargs: collect_ask_context_with_history_context(
@@ -154,7 +156,7 @@ def ask_board_message(
         resolve_codex_working_dir_fn=resolve_codex_working_dir_impl,
         normalize_scope_channel_id_fn=normalize_scope_channel_id,
         channel_scope_repository=_channel_scope_repository,
-        answer_board_question_with_codex_fn=answer_board_question_with_codex,
+        answer_board_question_with_runtime_fn=answer_board_question_with_runtime,
         collect_github_ask_context_fn=lambda **kwargs: collect_github_ask_context(
             **kwargs,
             get_settings_fn=get_settings_impl,

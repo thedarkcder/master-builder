@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -91,6 +92,7 @@ class DiscordThreadActionHandler:
                     components=action.components,
                     issue_key=action.issue_key,
                     followup_context_type=action.followup_context_type,
+                    request_id=action.request_id,
                     discord_api_client_fn=self._discord_api_client,
                     project_ask_thread_channel_ids_for_tenant_fn=project_ask_thread_channel_ids_for_tenant,
                     resolve_project_for_channel_fn=resolve_project_for_channel,
@@ -218,7 +220,7 @@ class DiscordTransportExecutor:
                 settings_factory=settings_factory,
             )
 
-    def execute(self, *, action: TransportAction) -> None:
+    def execute(self, *, action: TransportAction) -> dict[str, Any] | None:
         if isinstance(action, DiscordInteractionResponseAction):
             self._interaction_callback_sender(
                 interaction_id=action.interaction_id,
@@ -227,15 +229,14 @@ class DiscordTransportExecutor:
             )
             return
         if isinstance(action, DiscordChannelMessageAction):
-            self._require_client().post_message(
+            data = self._require_client().post_message(
                 channel_id=action.channel_id,
                 content=action.content,
                 components=action.components,
             )
-            return
+            return self._message_result(data=data, channel_id=action.channel_id)
         if isinstance(action, DiscordChannelMessageWithAttachmentAction):
-            self._execute_attachment_action(action=action)
-            return
+            return self._execute_attachment_action(action=action)
         if isinstance(action, DiscordInteractionFollowupAction):
             if self._interaction_followup_sender is None:
                 raise RuntimeError("Discord interaction follow-up sender is not configured")
@@ -278,9 +279,9 @@ class DiscordTransportExecutor:
             raise RuntimeError("Discord notification action handler is not configured")
         return self._notification_action_handler
 
-    def _execute_attachment_action(self, *, action: DiscordChannelMessageWithAttachmentAction) -> None:
+    def _execute_attachment_action(self, *, action: DiscordChannelMessageWithAttachmentAction) -> dict[str, Any] | None:
         try:
-            self._require_client().post_message_with_attachment(
+            data = self._require_client().post_message_with_attachment(
                 channel_id=action.channel_id,
                 content=action.content,
                 filename=action.filename,
@@ -288,16 +289,18 @@ class DiscordTransportExecutor:
                 content_type=action.content_type,
                 components=action.components,
             )
+            return self._message_result(data=data, channel_id=action.channel_id)
         except Exception as exc:
             fallback_content = str(action.fallback_content_on_failure or "").strip()
             if not fallback_content and action.failure_user_id:
                 fallback_content = f"<@{action.failure_user_id}> I couldn't send the voice reply attachment."
             if fallback_content:
-                self._require_client().post_message(
+                data = self._require_client().post_message(
                     channel_id=action.channel_id,
                     content=fallback_content,
                     components=action.fallback_components_on_failure,
                 )
+                return self._message_result(data=data, channel_id=action.channel_id)
             if action.failure_user_id:
                 self._require_client().post_message(
                     channel_id=action.channel_id,
@@ -305,6 +308,16 @@ class DiscordTransportExecutor:
                 )
             elif not fallback_content:
                 raise
+        return None
+
+    def _message_result(self, *, data: dict[str, Any], channel_id: str) -> dict[str, Any]:
+        message_id = str(data.get("id") or "").strip()
+        if not message_id:
+            raise RuntimeError("Discord transport action did not return a message id")
+        return {
+            "message_id": message_id,
+            "channel_id": str(data.get("channel_id") or "").strip() or channel_id,
+        }
 
 
 def _default_ask_reply_components() -> list[dict]:

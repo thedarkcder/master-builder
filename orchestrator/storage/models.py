@@ -219,6 +219,67 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ProjectAutomation(Base):
+    __tablename__ = "project_automations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "project_id", "kind", name="uq_project_automations_scope_kind"),
+        Index("ix_project_automations_due_scan", "enabled", "next_run_at"),
+    )
+
+    automation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    timezone: Mapped[str] = mapped_column(String(128), nullable=False)
+    days_of_week: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    local_time: Mapped[str] = mapped_column(String(8), nullable=False)
+    fallback_lookback_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    last_successful_window_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProjectAutomationExecution(Base):
+    __tablename__ = "project_automation_executions"
+    __table_args__ = (
+        UniqueConstraint("automation_id", "scheduled_for", name="uq_project_automation_executions_automation_scheduled_for"),
+        UniqueConstraint("dedupe_key", name="uq_project_automation_executions_dedupe_key"),
+        Index("ix_project_automation_executions_due_scan", "status", "scheduled_for"),
+        Index("ix_project_automation_executions_automation_history", "automation_id", "scheduled_for"),
+    )
+
+    execution_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    automation_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("project_automations.automation_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    discord_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class JiraOAuthConnection(Base):
     __tablename__ = "jira_oauth_connections"
 
@@ -240,6 +301,15 @@ class ManagedSecret(Base):
 
     secret_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
     value_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PlatformSetting(Base):
+    __tablename__ = "platform_settings"
+
+    setting_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -328,6 +398,51 @@ class RunHumanInputRequest(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PMInterviewCase(Base):
+    __tablename__ = "pm_interview_cases"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "request_id", name="uq_pm_interview_cases_tenant_request"),
+        Index("ix_pm_interview_cases_tenant_status_channel", "tenant_id", "status", "channel_id"),
+        Index("ix_pm_interview_cases_tenant_status_thread", "tenant_id", "status", "thread_channel_id"),
+        Index("ix_pm_interview_cases_tenant_status_root_message", "tenant_id", "status", "root_message_id"),
+        Index("ix_pm_interview_cases_tenant_status_owner", "tenant_id", "status", "owner_user_id"),
+        Index("ix_pm_interview_cases_tenant_parent_issue", "tenant_id", "parent_issue_key"),
+    )
+
+    case_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    parent_issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="drafting", index=True)
+    channel_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    thread_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    root_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    brief_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    evidence_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    question_history_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    current_question_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    next_question_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    missing_slots_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    notes_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
 class FollowupContext(Base):
     __tablename__ = "followup_contexts"
     __table_args__ = (
@@ -335,6 +450,7 @@ class FollowupContext(Base):
         Index("ix_followup_contexts_tenant_status_channel", "tenant_id", "status", "channel_id"),
         Index("ix_followup_contexts_tenant_status_root_message", "tenant_id", "status", "root_message_id"),
         Index("ix_followup_contexts_tenant_status_request", "tenant_id", "status", "request_id"),
+        Index("ix_followup_contexts_tenant_status_owner", "tenant_id", "status", "owner_user_id"),
         Index("ix_followup_contexts_tenant_type_issue", "tenant_id", "context_type", "issue_key"),
     )
 
@@ -356,6 +472,8 @@ class FollowupContext(Base):
     channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     thread_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     root_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    origin_command: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     run_id: Mapped[str | None] = mapped_column(

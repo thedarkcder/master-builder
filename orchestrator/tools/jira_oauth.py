@@ -205,6 +205,34 @@ class JiraOAuthClient:
             issues=issues,
         )
 
+    def create_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+        issue: JiraIssueCreateInput,
+    ) -> JiraIssueCreateResult:
+        return self._issue_service.create_issue(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            project_key=project_key,
+            issue=issue,
+        )
+
+    def list_project_issue_types_for_create(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+    ) -> list[str]:
+        return self._issue_service._list_project_issue_types_for_create(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            project_key=project_key,
+        )
+
     def update_issue_fields(
         self,
         *,
@@ -239,6 +267,23 @@ class JiraOAuthClient:
             comment=comment,
         )
 
+    def add_issue_link(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        inward_issue_key: str,
+        outward_issue_key: str,
+        link_type: str = "Relates",
+    ) -> dict:
+        return self._issue_service.add_issue_link(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            inward_issue_key=inward_issue_key,
+            outward_issue_key=outward_issue_key,
+            link_type=link_type,
+        )
+
     def transition_issue(
         self,
         *,
@@ -263,6 +308,21 @@ class JiraOAuthClient:
         labels: list[str],
     ) -> None:
         self._issue_service.add_issue_labels(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            issue_id_or_key=issue_id_or_key,
+            labels=labels,
+        )
+
+    def replace_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        self._issue_service.replace_issue_labels(
             access_token=access_token,
             cloud_id=cloud_id,
             issue_id_or_key=issue_id_or_key,

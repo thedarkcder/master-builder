@@ -30,7 +30,7 @@ class _FakeResponse:
 
 class VoiceTranscriptionTests(unittest.TestCase):
     def test_transcribe_rejects_disabled_provider(self) -> None:
-        settings = Settings(voice_transcription_provider="disabled")
+        settings = Settings(voice_provider="disabled")
         with self.assertRaisesRegex(VoiceTranscriptionError, "disabled"):
             transcribe_audio_bytes(
                 settings=settings,
@@ -40,7 +40,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_transcribe_openai_requires_api_key(self) -> None:
         settings = Settings(
-            voice_transcription_provider="openai",
+            voice_provider="openai",
             voice_transcription_openai_api_key="",
         )
         with self.assertRaisesRegex(VoiceTranscriptionError, "API key"):
@@ -61,7 +61,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
             return _FakeResponse(b'{"text":"Build a lighter onboarding flow"}')
 
         settings = Settings(
-            voice_transcription_provider="openai",
+            voice_provider="openai",
             voice_transcription_openai_api_key="test-key",
             voice_transcription_model="gpt-4o-mini-transcribe",
         )
@@ -80,7 +80,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_transcribe_openai_invalid_json_is_error(self) -> None:
         settings = Settings(
-            voice_transcription_provider="openai",
+            voice_provider="openai",
             voice_transcription_openai_api_key="test-key",
         )
         with patch("orchestrator.core.voice.transcription.urlopen", return_value=_FakeResponse(b"not-json")):
@@ -93,7 +93,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_transcribe_openai_http_error_surfaces(self) -> None:
         settings = Settings(
-            voice_transcription_provider="openai",
+            voice_provider="openai",
             voice_transcription_openai_api_key="test-key",
         )
         error = HTTPError(
@@ -123,7 +123,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
                 return iter([_Segment("Build"), _Segment("the PM room")]), object()
 
         settings = Settings(
-            voice_transcription_provider="whisper",
+            voice_provider="whisper",
             voice_transcription_model="base",
             voice_transcription_language="en",
         )
@@ -143,7 +143,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_ensure_transcription_provider_ready_loads_whisper_model(self) -> None:
         settings = Settings(
-            voice_transcription_provider="whisper",
+            voice_provider="whisper",
             voice_transcription_model="small",
         )
         with patch("orchestrator.core.voice.transcription._get_whisper_model", return_value=object()) as model_mock:
@@ -152,7 +152,7 @@ class VoiceTranscriptionTests(unittest.TestCase):
 
     def test_ensure_transcription_provider_ready_surfaces_whisper_model_failure(self) -> None:
         settings = Settings(
-            voice_transcription_provider="whisper",
+            voice_provider="whisper",
             voice_transcription_model="base",
         )
         with patch(

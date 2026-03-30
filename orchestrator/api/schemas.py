@@ -4,6 +4,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_serializer
 
+from orchestrator.core.agent_execution_profiles import (
+    normalize_execution_profile_routing,
+    normalize_execution_profiles,
+)
 from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
 from orchestrator.core.guardrails import enforce_safe_command
 
@@ -57,6 +61,8 @@ class PolicyConfig(BaseModel):
     knowledge_auto_answer_mode: str = Field(default="aggressive", pattern="^(safe|balanced|aggressive)$")
     codex_model: str | None = None
     codex_reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    execution_profiles: dict[str, dict[str, object]] = Field(default_factory=dict)
+    execution_profile_routing: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("allowed_commands")
     @classmethod
@@ -77,6 +83,16 @@ class PolicyConfig(BaseModel):
     @classmethod
     def normalize_codex_reasoning_effort(cls, value: str | None) -> str | None:
         return normalize_codex_reasoning_effort(value)
+
+    @field_validator("execution_profiles")
+    @classmethod
+    def normalize_execution_profiles(cls, value: dict[str, dict[str, object]] | None) -> dict[str, dict[str, object]]:
+        return normalize_execution_profiles(value)
+
+    @field_validator("execution_profile_routing")
+    @classmethod
+    def normalize_execution_profile_routing(cls, value: dict[str, str] | None) -> dict[str, str]:
+        return normalize_execution_profile_routing(value)
 
 
 class DiscordConfig(BaseModel):
@@ -450,6 +466,113 @@ class ProjectRead(BaseModel):
     updated_at: datetime
 
 
+class ProjectAutomationWrite(BaseModel):
+    kind: str = Field(min_length=1)
+    enabled: bool = True
+    timezone: str = Field(min_length=1)
+    days_of_week: list[int | str] = Field(default_factory=list)
+    local_time: str = Field(min_length=1)
+    fallback_lookback_hours: int = Field(default=24, ge=1)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("timezone is required")
+        return normalized
+
+    @field_validator("days_of_week")
+    @classmethod
+    def validate_days_of_week(cls, value: list[int | str]) -> list[int]:
+        normalized: list[int] = []
+        seen: set[int] = set()
+        weekday_aliases = {
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tues": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thur": 3,
+            "thurs": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+            "sun": 6,
+            "sunday": 6,
+        }
+        for raw_value in value:
+            if isinstance(raw_value, bool):
+                raise ValueError("days_of_week must contain integers 0-6 or weekday names")
+            if isinstance(raw_value, int):
+                day = raw_value
+            else:
+                normalized_value = str(raw_value or "").strip().lower()
+                if not normalized_value:
+                    continue
+                if normalized_value.isdigit():
+                    day = int(normalized_value)
+                elif normalized_value in weekday_aliases:
+                    day = weekday_aliases[normalized_value]
+                else:
+                    raise ValueError(f"Invalid day of week: {raw_value}")
+            if day < 0 or day > 6:
+                raise ValueError(f"Invalid day of week: {raw_value}")
+            if day in seen:
+                continue
+            seen.add(day)
+            normalized.append(day)
+        if not normalized:
+            raise ValueError("days_of_week is required")
+        return normalized
+
+
+class ProjectAutomationExecutionRead(BaseModel):
+    execution_id: str
+    automation_id: str
+    scheduled_for: datetime
+    window_start_at: datetime
+    window_end_at: datetime
+    status: str
+    dedupe_key: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    discord_message_id: str | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectAutomationRead(BaseModel):
+    automation_id: str
+    tenant_id: str
+    project_id: str
+    kind: str
+    enabled: bool
+    timezone: str
+    days_of_week: list[int] = Field(default_factory=list)
+    local_time: str
+    fallback_lookback_hours: int
+    last_successful_window_end_at: datetime | None = None
+    next_run_at: datetime
+    executions: list[ProjectAutomationExecutionRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectAutomationsWrite(BaseModel):
+    automations: list[ProjectAutomationWrite] = Field(default_factory=list)
+
+
+class ProjectAutomationsRead(BaseModel):
+    automations: list[ProjectAutomationRead] = Field(default_factory=list)
+
+
 class KnowledgeAssetCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     source_type: str = Field(default="manual", min_length=1, max_length=32)
@@ -634,6 +757,8 @@ class CodexReasoningOptionRead(BaseModel):
 class CodexModelCatalogRead(BaseModel):
     default_model: str
     default_reasoning_effort: str
+    runtime_kind: str = "codex_cli"
+    profile_name: str | None = None
     models: list[CodexModelOptionRead] = Field(default_factory=list)
     reasoning_efforts: list[CodexReasoningOptionRead] = Field(default_factory=list)
 
@@ -734,6 +859,77 @@ class ManagedSecretResolveResult(BaseModel):
     secret_ref: str
     source: str
     resolved: bool
+
+
+class AgentRuntimeRoutingUpdate(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentExecutionProfileRead(BaseModel):
+    profile_name: str
+    runtime_kind: str
+    cli_command: str
+    model: str
+    reasoning_effort: str | None = None
+    tool_bridge_allowed: bool
+    fallback_profile: str | None = None
+    base_url: str | None = None
+    api_key_secret_ref: str | None = None
+    is_builtin: bool = False
+    is_overridden: bool = False
+    can_delete: bool = False
+    can_reset: bool = False
+    usage_references: list[str] = Field(default_factory=list)
+
+
+class AgentExecutionProfileWrite(BaseModel):
+    runtime_kind: str
+    cli_command: str = ""
+    model: str = Field(min_length=1)
+    reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    tool_bridge_allowed: bool = False
+    fallback_profile: str | None = None
+    base_url: str | None = None
+    api_key_secret_ref: str | None = None
+
+
+class AgentExecutionProfileCreate(AgentExecutionProfileWrite):
+    profile_name: str = Field(min_length=1)
+
+
+class AgentExecutionProfilesRead(BaseModel):
+    profiles: dict[str, AgentExecutionProfileRead] = Field(default_factory=dict)
+
+
+class AgentRuntimeRoutingDefaultsRead(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentRuntimeRoutingRead(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
+    available_roles: list[str] = Field(default_factory=list)
+    available_named_agents: list[str] = Field(default_factory=list)
+    available_selectors: list[str] = Field(default_factory=list)
+    available_profiles: dict[str, AgentExecutionProfileRead] = Field(default_factory=dict)
+    effective_defaults: AgentRuntimeRoutingDefaultsRead = Field(default_factory=AgentRuntimeRoutingDefaultsRead)
+
+
+class AgentRuntimeToolRead(BaseModel):
+    tool_name: str
+    category: str
+    description: str
+    stages: list[str] = Field(default_factory=list)
+
+
+class AgentRuntimeToolsRead(BaseModel):
+    available_stages: list[str] = Field(default_factory=list)
+    tools: list[AgentRuntimeToolRead] = Field(default_factory=list)
 
 
 class RunRead(BaseModel):

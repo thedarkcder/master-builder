@@ -110,7 +110,7 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             _parse_discord_interaction_command({"data": {"name": "ask"}, "channel_id": "c1"})
 
-    def test_parse_ask_run_retry_and_request_commands(self) -> None:
+    def test_parse_ask_pm_persona_run_retry_and_request_commands(self) -> None:
         payload_ask = {
             "data": {
                 "name": "ask",
@@ -141,19 +141,19 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         parsed_pm = _parse_discord_interaction_command(payload_pm)
         self.assertEqual(parsed_pm[2], "!pm what should we ship first?")
 
-        payload_pm_approve = {
+        payload_engineer = {
             "data": {
-                "name": "pm",
+                "name": "engineer",
                 "options": [
-                    {"type": 3, "name": "action", "value": "approve"},
-                    {"type": 3, "name": "question", "value": "approve rollout to beta?"},
+                    {"type": 3, "name": "issue_key", "value": "MAB-9"},
+                    {"type": 3, "name": "question", "value": "how should we decompose this?"},
                 ],
             },
             "channel_id": "c1",
             "user": {"id": "u1"},
         }
-        parsed_pm_approve = _parse_discord_interaction_command(payload_pm_approve)
-        self.assertEqual(parsed_pm_approve[2], "!pm approve approve rollout to beta?")
+        parsed_engineer = _parse_discord_interaction_command(payload_engineer)
+        self.assertEqual(parsed_engineer[2], "!engineer @MAB-9 how should we decompose this?")
 
         payload_run = {
             "data": {"name": "run", "options": [{"type": 3, "name": "issue_key", "value": "MAB-2"}]},
@@ -202,6 +202,23 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         }
         parsed_issues = _parse_discord_interaction_command(payload_issues)
         self.assertEqual(parsed_issues[2], "!issues seed create stories")
+
+        payload_followup = {
+            "data": {
+                "name": "issues",
+                "options": [
+                    {
+                        "type": 1,
+                        "name": "followup",
+                        "options": [{"type": 3, "name": "answers", "value": "clarified scope"}],
+                    }
+                ],
+            },
+            "channel_id": "c1",
+            "user": {"id": "u3"},
+        }
+        parsed_followup = _parse_discord_interaction_command(payload_followup)
+        self.assertEqual(parsed_followup[2], "!issues followup clarified scope")
 
         payload_bug = {
             "data": {

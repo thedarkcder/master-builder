@@ -4,11 +4,11 @@ import json
 
 from orchestrator.core.codex_agents import (
     CodexWorkflowAgents,
-    answer_board_question_with_codex,
+    answer_board_question_with_runtime,
     answer_voice_room_persona_with_codex,
-    route_voice_room_persona_with_codex,
+    route_voice_entry_with_runtime,
 )
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.workflow.runner import DevResult, PmPlan, TestResult, WorkflowRequest
 
@@ -284,9 +284,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             resume_stage="dev",
             resume_session_id="dev-session-123",
         )
-        captured_contexts: list[CodexInvocationContext] = []
+        captured_contexts: list[AgentInvocationContext] = []
 
-        def _invoke_codex_json(*, context, **kwargs):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, **kwargs):  # noqa: ANN001
             _ = kwargs
             captured_contexts.append(context)
             if context.stage == "pm":
@@ -295,7 +295,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.codex_agents.invoke_codex_json_with_tools", side_effect=_invoke_codex_json),
+            patch("orchestrator.core.codex_agents.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json),
         ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             agents.dev(request, plan, 1, None)
@@ -345,7 +345,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.codex_agents.invoke_codex_json_with_tools", return_value={"approved": True, "outcome": "approved", "summary": ["ok"], "feedback": None, "pr_url": None}),
+            patch("orchestrator.core.codex_agents.invoke_runtime_json_with_tools", return_value={"approved": True, "outcome": "approved", "summary": ["ok"], "feedback": None, "pr_url": None}),
         ):
             agents.review(
                 request,
@@ -471,13 +471,13 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
 
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            message = answer_board_question_with_codex(
+            message = answer_board_question_with_runtime(
                 runtime=runtime,
                 question="what is blocked?",
                 project_keys=["MAB"],
                 issues=[{"key": "MAB-1", "summary": "A", "status": "Blocked"}],
                 status_counts={"Blocked": 1},
-                invocation_context=CodexInvocationContext(
+                invocation_context=AgentInvocationContext(
                     channel="discord",
                     tenant_id="tenant-1",
                     project_id=None,
@@ -489,7 +489,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         self.assertIn("MAB-1", message)
 
-    def test_answer_board_question_ignores_history_in_prompt(self) -> None:
+    def test_answer_board_question_passes_history_to_prompt(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -503,17 +503,21 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured["history_json"] = kwargs.get("history_json")
             return template_name
 
+        sample_history = [{"question": "status?", "answer": "MAB-74 stale", "issue_key": "MAB-74"}]
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.codex_agents.invoke_codex_json", return_value={"message": "ok"}),
+            patch(
+                "orchestrator.core.codex_agents._invoke_discord_json_maybe_tools",
+                return_value={"message": "ok"},
+            ),
         ):
-            answer_board_question_with_codex(
+            answer_board_question_with_runtime(
                 runtime=runtime,
                 question="what is blocked?",
                 project_keys=["MAB"],
                 issues=[{"key": "MAB-1", "summary": "A", "status": "Blocked"}],
                 status_counts={"Blocked": 1},
-                invocation_context=CodexInvocationContext(
+                invocation_context=AgentInvocationContext(
                     channel="discord",
                     tenant_id="tenant-1",
                     project_id=None,
@@ -521,10 +525,81 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                     stage="answer",
                     working_dir="/tmp",
                 ),
-                history=[{"question": "status?", "answer": "MAB-74 stale", "issue_key": "MAB-74"}],
+                history=sample_history,
             )
 
-        self.assertEqual(json.loads(captured["history_json"]), [])
+        self.assertEqual(json.loads(captured["history_json"]), sample_history)
+
+    def test_answer_board_question_passes_persona_id_to_ask_answer_prompts(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=lambda _system, _user, _working_dir=None, _on_log_line=None: '{"message":"ok"}',
+        )
+        calls: list[tuple[str, dict]] = []
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            calls.append((template_name, dict(kwargs)))
+            return template_name
+
+        with (
+            patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.codex_agents._invoke_discord_json_maybe_tools",
+                return_value={"message": "ok"},
+            ),
+        ):
+            answer_board_question_with_runtime(
+                runtime=runtime,
+                question="any risks?",
+                project_keys=["MAB"],
+                issues=[],
+                status_counts={},
+                invocation_context=AgentInvocationContext(
+                    channel="discord",
+                    tenant_id="tenant-1",
+                    project_id=None,
+                    command="ask",
+                    stage="answer",
+                    working_dir="/tmp",
+                ),
+                answer_persona_id="security",
+            )
+
+        system_call = next(c for c in calls if c[0] == "discord/ask_answer_system.j2")
+        user_call = next(c for c in calls if c[0] == "discord/ask_answer_user.j2")
+        self.assertEqual(system_call[1].get("persona_id"), "security")
+        self.assertEqual(user_call[1].get("persona_id"), "security")
+
+    def test_voice_entry_interview_lane_normalizes_persona_to_pm(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"lane":"interview","persona":"architect","confidence":0.9,"reason":"brief"}',
+                ]
+            ),
+        )
+        ctx = AgentInvocationContext(
+            channel="discord",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            command="router",
+            stage="voice-entry-router",
+            working_dir="/tmp",
+        )
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            payload = route_voice_entry_with_runtime(
+                runtime=runtime,
+                transcript="We should define MVP scope",
+                entry_source="unit-test",
+                invocation_context=ctx,
+            )
+        self.assertEqual(payload["lane"], "interview")
+        self.assertEqual(payload["persona"], "pm")
 
     def test_stage_log_sink_emits_payload(self) -> None:
         captured_logs: list[dict] = []
@@ -571,45 +646,100 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.codex_invocation._enqueue_codex_log_line", side_effect=RuntimeError("db down")),
+            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=RuntimeError("db down")),
         ):
             plan = agents.pm(self._request(), 1, None, [], None, None, None)
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(len(captured_logs), 1)
         self.assertEqual(captured_logs[0]["message"], "line-1")
 
-    def test_voice_room_router_normalizes_invalid_persona_and_clamps_confidence(self) -> None:
+    def test_voice_entry_router_normalizes_invalid_lane_and_persona(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"persona":"unknown","confidence":2.5,"reason":"ambiguous ask"}',
+                    '{"lane":"unknown","persona":"bogus","confidence":-1,"reason":"x"}',
                 ]
             ),
         )
-
+        ctx = AgentInvocationContext(
+            channel="discord",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            command="router",
+            stage="voice-entry-router",
+            working_dir="/tmp",
+        )
         with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            payload = route_voice_room_persona_with_codex(
+            payload = route_voice_entry_with_runtime(
                 runtime=runtime,
-                transcript="What should MVP be?",
-                available_personas=[{"persona_id": "pm"}],
-                invocation_context=CodexInvocationContext(
-                    channel="discord",
-                    tenant_id="tenant-1",
-                    project_id="project-1",
-                    command="pm",
-                    stage="voice-room-router",
-                    working_dir="/tmp/test-repo",
-                ),
-                history=[{"question": "hi", "answer": "hello"}],
-                room_context={"project_keys": ["MAB"]},
+                transcript="What is the status?",
+                entry_source="unit-test",
+                invocation_context=ctx,
             )
-
+        self.assertEqual(payload["lane"], "ask")
         self.assertEqual(payload["persona"], "pm")
-        self.assertEqual(payload["confidence"], 1.0)
-        self.assertEqual(payload["reason"], "ambiguous ask")
+        self.assertEqual(payload["confidence"], 0.0)
+
+    def test_voice_entry_router_legacy_persona_lane_maps_to_ask(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"lane":"persona","persona":"alien","confidence":0.5,"reason":"y"}',
+                ]
+            ),
+        )
+        ctx = AgentInvocationContext(
+            channel="discord",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            command="router",
+            stage="voice-entry-router",
+            working_dir="/tmp",
+        )
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            payload = route_voice_entry_with_runtime(
+                runtime=runtime,
+                transcript="Help me scope this",
+                entry_source="unit-test",
+                invocation_context=ctx,
+            )
+        self.assertEqual(payload["lane"], "ask")
+        self.assertEqual(payload["persona"], "pm")
+
+    def test_voice_entry_router_pm_lane_maps_to_interview(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"lane":"pm","persona":"pm","confidence":0.9,"reason":"brief"}',
+                ]
+            ),
+        )
+        ctx = AgentInvocationContext(
+            channel="discord",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            command="router",
+            stage="voice-entry-router",
+            working_dir="/tmp",
+        )
+        with patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            payload = route_voice_entry_with_runtime(
+                runtime=runtime,
+                transcript="We should build a dashboard",
+                entry_source="unit-test",
+                invocation_context=ctx,
+            )
+        self.assertEqual(payload["lane"], "interview")
+        self.assertEqual(payload["persona"], "pm")
 
     def test_voice_room_persona_answer_accepts_message_only_schema(self) -> None:
         runtime = CodexRuntime(
@@ -631,7 +761,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 project_keys=["MAB"],
                 issues=[{"key": "MAB-174"}],
                 status_counts={"To Do": 1},
-                invocation_context=CodexInvocationContext(
+                invocation_context=AgentInvocationContext(
                     channel="discord",
                     tenant_id="tenant-1",
                     project_id="project-1",

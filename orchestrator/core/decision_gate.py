@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.prompt_templates import render_prompt
@@ -85,9 +85,9 @@ def _evaluate_decision_gate_with_codex(
     settings = get_settings()
     runtime = build_codex_runtime(session=None, settings=settings)
     try:
-        payload = invoke_codex_json(
+        payload = invoke_runtime_json(
             runtime=runtime,
-            context=CodexInvocationContext(
+            context=AgentInvocationContext(
                 channel="system",
                 tenant_id=tenant_id,
                 project_id=project_id,

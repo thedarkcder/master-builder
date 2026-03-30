@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
@@ -15,16 +15,41 @@ class CommandEntrypointTests(unittest.TestCase):
     def tearDown(self) -> None:
         clear_tenant_command_executor()
 
-    def test_execute_tenant_discord_command_requires_registered_executor(self) -> None:
+    def test_execute_tenant_discord_command_requires_registered_executor_when_bootstrap_fails(self) -> None:
         clear_tenant_command_executor()
-        with self.assertRaises(HTTPException) as ctx:
-            execute_tenant_discord_command(
+        with patch(
+            "orchestrator.api.discord.ingress.executor.register_discord_command_executor",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                execute_tenant_discord_command(
+                    tenant_id="tenant-a",
+                    payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
+                    session=MagicMock(),
+                )
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(ctx.exception.detail, "Discord command executor is not registered")
+
+    def test_execute_tenant_discord_command_bootstraps_executor_when_missing(self) -> None:
+        clear_tenant_command_executor()
+        response = DiscordCommandResponse(ok=True, command="status", message="ok", data={})
+        executor = MagicMock(return_value=response)
+
+        def _register() -> None:
+            register_tenant_command_executor(executor)
+
+        with patch(
+            "orchestrator.api.discord.ingress.executor.register_discord_command_executor",
+            side_effect=_register,
+        ):
+            result = execute_tenant_discord_command(
                 tenant_id="tenant-a",
                 payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
                 session=MagicMock(),
             )
-        self.assertEqual(ctx.exception.status_code, 503)
-        self.assertEqual(ctx.exception.detail, "Discord command executor is not registered")
+
+        self.assertIs(result, response)
+        executor.assert_called_once()
 
     def test_execute_tenant_discord_command_delegates_to_registered_executor(self) -> None:
         response = DiscordCommandResponse(ok=True, command="status", message="ok", data={})

@@ -1,5 +1,8 @@
 2026-03-23
 
+- After a locator failure reports multiple matches in Playwright, prefer role/table/scoped locators instead of `getByText` to avoid strictness failures.
+- When editing repository files in response to user request, use `apply_patch` for edits and do not use shell overwrite patterns like `cat > file`.
+
 - When the user explicitly switches from planning to implementation, verify the active collaboration mode first and move into execution if it is allowed. Do not repeat stale mode blockers after the mode has already changed.
 
 - When investigating config regressions, do not keep pushing environment-variable explanations after the user says the value is stored in the UI/secret manager. Verify the exact read path against the exact write path first.
@@ -34,6 +37,18 @@
 - Auth.js, onboarding, registration, and tenant-settings UI changes need executable browser coverage before PR creation. Do not treat lint/type checks or backend tests as substitutes for user-flow verification.
 - Do not leave `ANN001` or `ARG001` debt in touched files. Add the missing types or rename/remove intentionally unused arguments before calling the work done.
 - If a file shows an unexpected unrelated diff after a merge, inspect why before "restoring" it. Do not reintroduce duplicate or invalid config just to make the diff disappear.
+- When a user calls out business logic still living in a webhook or transport module, do not stop at defending the current wrapper thickness. Finish the extraction into a core/application service and leave the transport file as dependency wiring only.
+
+2026-03-27
+
+- When a user narrows config scope from tenant-level to platform-wide admin control, stop planning tenant policy/UI work immediately. Verify the existing platform admin surface first, and align the design to that control plane before expanding the schema.
+- When a merge exposes a missing compatibility seam, do not default to restoring the seam if it weakens the architecture. First check whether the behavior should instead flow through the canonical shared policy path, then update tests/helpers to use that path.
+- In a multi-worktree repo, verify the active git branch before editing. If the user says the work belongs on a specific branch, switch to that exact worktree first instead of starting implementation in the current cwd and moving it later.
+- When a user points out that context matching is being "drip fed" across weaker fallbacks, treat that as an architectural bug, not just a resolver bug. Replace staged channel/message fallback with one composite lookup that evaluates every available identifier together and refuses ambiguous matches safely.
+2026-03-28
+
+- When running Playwright against a Next app in a worktree, execute the test from the app directory or pass the explicit config file. Relative `page.goto()` calls only work if the runner actually loaded the correct `playwright.config.ts` and baseURL.
+- Before merging or rebasing another branch (for example `origin/staging`) into a feature branch, **commit WIP on the feature branch first**, even if the message is `WIP:` or `chore: checkpoint`. Do not treat `git stash` as the primary way to preserve work before a merge: stash is for short-lived context switches, not as a substitute for commits. Committed WIP stays in history, is easy to diff and restore, and is not confused with throwaway state.
 - Migration fixes are not verified by SQLite-only Alembic tests alone. If the runtime path is Postgres via Docker startup, add regression checks for legacy version-table normalization and boolean/default DDL compatibility, then prove the real startup script reaches service readiness and `worker_started`.
 - When restructuring an admin access surface, verify all critical account-lifecycle actions remain available: invite, deactivate, role change, and password reset. Do not call the UI complete until those operator actions are present or explicitly deferred.
 - Do not surface raw permission keys, enum values, or internal identifiers in enterprise UI. Translate access models into plain-language labels and use real selectors for team assignment instead of asking users for IDs.
@@ -79,3 +94,8 @@
 - When a user asks to remove a URL segment and rejects legacy redirects, make it a real route-tree cutover: move the route files, update helpers/nav/tests together, and delete alias redirect behavior instead of hiding the old contract behind redirects.
 
 - When a bug report says the persona-specific live click path is still broken, do not rely on a nearby automated flow as proof. Reproduce that exact user journey in-browser, including the actual click target and expected visible data, before claiming the fix.
+- When adding new runtime providers or provider capabilities, verify the capability matrix explicitly. Do not assume `reasoning_effort`, model catalogs, or profile validation match user expectations just because the runtime kind was added elsewhere.
+- For admin configuration surfaces, API tests are not enough. Verify the real save path in-browser for create and update flows, including runtime-specific required fields and defaults.
+- For admin forms with persisted overrides, save-path tests are still insufficient unless they also verify reload/edit-state hydration. If a control must reflect saved state, reload the page or re-open the saved record and assert the control value from API-backed data, not local draft state.
+- When a feature needs runtime profile routing, do not assume the downstream Codex call honors it just because it eventually invokes Codex. Trace whether the call path uses `build_runtime_for_selector` with the correct selector and named-agent identity; otherwise the flow will silently ignore runtime-profile configuration.
+- For shell-based feature flags, do not pass `0` into a downstream script that only checks for non-empty truthiness. Map falsey values to an unset variable or a branch that omits the flag entirely, otherwise you will accidentally force the expensive path anyway.

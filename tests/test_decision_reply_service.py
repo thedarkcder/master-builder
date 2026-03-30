@@ -196,7 +196,7 @@ class DecisionReplyServiceTests(unittest.TestCase):
                 return_value=object(),
             ),
             unittest.mock.patch(
-                "orchestrator.core.decision_reply_service.invoke_codex_json",
+                "orchestrator.core.decision_reply_service.invoke_runtime_json",
                 return_value={
                     "answers": [
                         {
@@ -269,7 +269,7 @@ class DecisionReplyServiceTests(unittest.TestCase):
                     return_value=object(),
                 ),
                 unittest.mock.patch(
-                    "orchestrator.core.decision_reply_service.invoke_codex_json",
+                    "orchestrator.core.decision_reply_service.invoke_runtime_json",
                     return_value={
                         "answers": [
                             {

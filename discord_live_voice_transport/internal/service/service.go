@@ -12,6 +12,8 @@ import (
 	"discord_live_voice_transport/internal/transport"
 )
 
+const defaultTransportSessionID = "discord-live-voice"
+
 type Service struct {
 	runtime transport.Runtime
 	writer  *lineWriter
@@ -25,6 +27,10 @@ func New(runtime transport.Runtime, out io.Writer) *Service {
 }
 
 func (s *Service) Run(ctx context.Context, in io.Reader) error {
+	if err := s.writer.Write(protocol.Ready(defaultTransportSessionID, "go", "")); err != nil {
+		return err
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {

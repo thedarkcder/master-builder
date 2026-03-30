@@ -186,6 +186,7 @@ def _build_ingress_dependencies():
         run_gap_analysis_fn=gap_runtime.run_gap_analysis,
         normalize_discord_attachments_fn=bug_runtime.normalize_discord_attachments,
         create_discord_bug_issue_fn=bug_runtime.create_discord_bug_issue,
+        seed_parent_issues_with_codex_fn=seed_runtime.seed_parent_issues_with_codex,
         seed_issues_with_codex_fn=seed_runtime.seed_issues_with_codex,
         find_seed_followup_context_fn=_find_seed_followup_context,
         store_seed_followup_context_fn=_store_seed_followup_context,
@@ -241,7 +242,6 @@ def execute_discord_command(
         require_ask_confirmation=require_ask_confirmation,
         ingress_source=ingress_source,
     )
-
 
 
 def register_discord_command_executor() -> None:

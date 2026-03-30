@@ -84,6 +84,8 @@ class JiraIssueCreateInput:
     description: str | dict[str, Any]
     labels: list[str]
     issue_type: str = "Task"
+    parent_issue_key: str | None = None
+    linked_parent_issue_key: str | None = None
 
 
 @dataclass(frozen=True)

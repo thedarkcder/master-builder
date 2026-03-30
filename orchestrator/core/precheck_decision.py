@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
+from orchestrator.core.runtime_invocation import AgentInvocationContext, invoke_runtime_json
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 
@@ -78,7 +78,7 @@ def precheck_missing_slots(pre_check: object) -> list[str]:
 def build_precheck_message(
     *,
     runtime: CodexRuntime,
-    invocation_context: CodexInvocationContext,
+    invocation_context: AgentInvocationContext,
     issue_key: str,
     classification: str,
     decision_gate_reason: str,
@@ -89,7 +89,7 @@ def build_precheck_message(
 ) -> tuple[str, list[str]]:
     payload: dict[str, Any]
     try:
-        payload = invoke_codex_json(
+        payload = invoke_runtime_json(
             runtime=runtime,
             context=invocation_context,
             system_prompt=render_prompt("policy/precheck_message_system.j2"),

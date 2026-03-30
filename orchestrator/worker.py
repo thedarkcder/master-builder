@@ -22,7 +22,7 @@ from orchestrator.core.runs import RUN_STATUS_RUNNING
 from orchestrator.core.worker.run_health import (
     cleanup_orphan_run_locks,
     recover_stale_running_runs,
-    worker_service_instance_id,
+    worker_service_instance_id_for_mode,
 )
 from orchestrator.core.worker.execution_service import (
     process_next_webhook_job_with_dependencies as _process_next_webhook_job_with_dependencies,
@@ -462,7 +462,7 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     stale_recovery_task: asyncio.Task[None] | None = None
     archived_tenant_purge_task: asyncio.Task[None] | None = None
     worker_runtime_heartbeat_task: asyncio.Task[None] | None = None
-    service_instance_id = worker_service_instance_id()
+    service_instance_id = worker_service_instance_id_for_mode(settings=settings, mode=mode)
     agent_id = str(settings.agent_id or "").strip() or "worker"
     slots: list[asyncio.Task[None]] = []
     try:

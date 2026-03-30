@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.discord.live_voice_service import DiscordLiveVoiceService
 from orchestrator.core.discord.live_voice_session import LiveVoiceTurn
 from tests.production_path_support import (
@@ -88,8 +89,7 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
                 discord_guild_id="",
                 secrets_encryption_key="enc",
                 codex_model="gpt-5",
-                voice_reply_provider="enabled",
-                voice_reply_enabled_default=True,
+                voice_provider="pocket_tts",
             ),
             session_factory=self.session_factory,
             secret_resolver=lambda *args, **kwargs: "discord-token",
@@ -130,21 +130,25 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
             channels=2,
             finalization_reason="test",
         )
-        result = SimpleNamespace(
-            persona_id="pm",
-            persona_name="Andy",
-            persona_role="product",
-            message="Reject relink and keep the device bound to the original user.",
-            room_config={},
-            router_confidence=0.91,
-            router_reason="policy",
-        )
+        def _fake_execute(**_kwargs):  # noqa: ANN003
+            return DiscordCommandResponse(
+                ok=True,
+                command="ask",
+                message="Reject relink and keep the device bound to the original user.",
+                data={"persona_id": "pm", "brief": {}},
+            )
 
         with (
             patch("orchestrator.core.discord.live_voice_service.resolve_codex_working_dir", return_value=self.temp_dir.name),
-            patch("orchestrator.core.discord.live_voice_service.build_codex_runtime", return_value=object()),
             patch("orchestrator.core.discord.live_voice_service.transcribe_audio_bytes", return_value="What is the relink policy?"),
-            patch("orchestrator.core.discord.live_voice_service.answer_voice_room_turn", return_value=result),
+            patch(
+                "orchestrator.core.discord.live_voice_service.route_discord_voice_entry",
+                return_value={"lane": "ask", "persona": "pm", "confidence": 0.91, "reason": "policy"},
+            ),
+            patch(
+                "orchestrator.core.discord.live_voice_service.execute_tenant_command_ingress",
+                side_effect=_fake_execute,
+            ),
             patch(
                 "orchestrator.core.discord.live_voice_service.synthesize_reply_audio",
                 return_value=SimpleNamespace(
@@ -157,9 +161,11 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
             self.service._process_turn(turn=turn, turn_version=1)
             self.assertTrue(self.sidecar.playback_event.wait(timeout=5.0))
 
-        self.assertEqual(len(self.discord_client.posted_messages), 2)
-        self.assertIn("What is the relink policy?", str(self.discord_client.posted_messages[0]["content"]))
-        self.assertIn("Reject relink", str(self.discord_client.posted_messages[1]["content"]))
+        self.assertEqual(
+            len(self.discord_client.posted_messages),
+            0,
+            "Voice room success path posts no transcript/answer text; reply is audio in VC only.",
+        )
         self.assertEqual(len(self.sidecar.play_audio_calls), 1)
         self.assertEqual(self.sidecar.play_audio_calls[0]["content_type"], "audio/wav")
         self.assertEqual(self.sidecar.play_audio_calls[0]["metadata"]["persona_id"], "pm")

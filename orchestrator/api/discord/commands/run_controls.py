@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.codex_invocation import CodexInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.communications.enqueue_reason_contract import (
@@ -513,7 +513,7 @@ def dispatch_run_control_command(
             else:
                 message, generated_questions = build_precheck_message(
                     runtime=runtime,
-                    invocation_context=CodexInvocationContext(
+                    invocation_context=AgentInvocationContext(
                         channel="discord",
                         tenant_id=tenant.tenant_id,
                         project_id=project.project_id,

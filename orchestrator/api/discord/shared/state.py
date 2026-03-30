@@ -25,12 +25,28 @@ from orchestrator.core.discord.policy import (
 )
 from orchestrator.storage.models import FollowupContext, Project, Tenant
 
-SENSITIVE_COMMANDS = {"run", "cancel", "retry", "reply", "promote", "issues"}
-PUBLIC_COMMANDS = {"help", "status", "runs", "policy", "link", "ask", "pm", "gap", "request", "bug"}
+SENSITIVE_COMMANDS = {"run", "cancel", "retry", "reply", "issues"}
+PUBLIC_COMMANDS = {
+    "help",
+    "status",
+    "runs",
+    "policy",
+    "link",
+    "ask",
+    "pm",
+    "gap",
+    "request",
+    "bug",
+    "architect",
+    "engineer",
+    "tester",
+    "security",
+    "reviewer",
+}
 SUPPORTED_COMMANDS = SENSITIVE_COMMANDS | PUBLIC_COMMANDS
 REQUEST_PERMISSION_LABELS = {
     "run_controls": "run controls (!run, !cancel, !retry)",
-    "seed_issues": "issue seeding (!issues seed)",
+    "seed_issues": "PM batch seeding (!issues seed)",
     "all_sensitive": "all sensitive commands",
 }
 ROOM_LIST_KEYS = (
@@ -394,6 +410,8 @@ def store_seed_followup_context(
         context_type=FOLLOWUP_CONTEXT_SEED_FOLLOWUP,
         channel_id=root_channel_id,
         thread_channel_id=thread_channel_id,
+        owner_user_id=user_id.strip() or None,
+        origin_command="issues",
         request_id=normalized_request_id,
         metadata=metadata,
     )

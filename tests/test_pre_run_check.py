@@ -222,3 +222,29 @@ def test_pre_run_check_passes_recorded_answers_to_policy() -> None:
             "answer": "Production bundle ID is com.example.app.",
         }
     ]
+
+
+def test_pre_run_check_blocks_pm_parent_issue_execution() -> None:
+    with patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"):
+        result = evaluate_pre_run_check(
+            issue_summary="PM parent",
+            issue_description="Product brief only",
+            issue_labels=["pm-parent", "agent:ready"],
+            ready_label="agent:ready",
+        )
+    assert result.outcome == "gtd_required"
+    assert result.gtd_missing_criteria == ("Engineering child ticket required",)
+
+
+def test_pre_run_check_blocks_stale_engineering_child_execution() -> None:
+    with patch("orchestrator.core.pre_run_check.infer_required_worker_capability", return_value="linux"):
+        result = evaluate_pre_run_check(
+            issue_summary="Engineering child",
+            issue_description="Technical task",
+            issue_labels=["engineering-child", "sync-stale", "agent:ready"],
+            ready_label="agent:ready",
+        )
+    assert result.outcome == "gtd_required"
+    assert result.gtd_clarification_questions == (
+        "Refresh this engineering child from the latest parent feature before execution.",
+    )

@@ -13,6 +13,10 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
+from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
+from orchestrator.core.codex_working_dir import resolve_codex_working_dir
+from orchestrator.core.config import get_settings
+from orchestrator.core.discord.voice_entry_routing import route_discord_voice_entry
 from orchestrator.api.transport_runtime import (
     build_discord_transport_executor,
     build_transport_action_executors,
@@ -37,6 +41,7 @@ from orchestrator.api.discord.interactions.auth import (
 )
 from orchestrator.api.discord.interactions.dispatcher import DiscordInteractionDispatchDeps
 from orchestrator.api.discord.interactions.followup import (
+    _resolve_followup_context_match as _interaction_resolve_followup_context_match,
     _resolve_followup_context as _interaction_resolve_followup_context,
     _resolve_followup_reaction as _interaction_resolve_followup_reaction,
     _resolve_thread_channel_for_reply as _interaction_resolve_thread_channel_for_reply,
@@ -75,7 +80,11 @@ from orchestrator.core.discord.personas import (
     format_voice_room_persona_label,
 )
 from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.followup_context_service import resolve_followup_context, resolve_followup_reaction
+from orchestrator.core.followup_context_service import (
+    resolve_followup_context,
+    resolve_followup_context_match,
+    resolve_followup_reaction,
+)
 from orchestrator.core.run_human_input_service import pending_human_input_for_request_id, resume_run_from_human_input_reply
 from orchestrator.core.platform_secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
@@ -431,6 +440,7 @@ class DiscordGatewayListener:
             find_focused_discord_option=_find_focused_discord_option,
             discord_issue_autocomplete_choices=_discord_issue_autocomplete_choices,
             resolve_thread_channel_for_reply=_interaction_resolve_thread_channel_for_reply,
+            resolve_followup_context_match=_interaction_resolve_followup_context_match,
             resolve_followup_context=_interaction_resolve_followup_context,
             resolve_followup_reaction=_interaction_resolve_followup_reaction,
             run_discord_ask_confirmation_followup=_run_discord_ask_confirmation_followup,
@@ -442,6 +452,46 @@ class DiscordGatewayListener:
         )
 
     def _message_dispatch_deps(self, *, bot_token: str) -> DiscordMessageIngressDeps:
+        def _route_voice_entry(
+            session,
+            tenant,
+            *,
+            user_id: str,
+            channel_id: str,
+            project_id: str | None,
+            transcript: str,
+            project_keys: list[str],
+            room_channel_ids: frozenset[str],
+        ) -> dict[str, Any]:
+            _ = user_id
+            settings = get_settings()
+            working_dir = resolve_codex_working_dir(
+                session=session,
+                tenant=tenant,
+                settings=settings,
+                project_id=project_id,
+                project_keys=project_keys,
+            )
+            history = DiscordRoomHistoryService().recent_room_history(
+                discord_config=getattr(tenant, "discord_config", None) or {},
+                channel_id=channel_id,
+                limit=8,
+            )
+            return route_discord_voice_entry(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project_id=project_id,
+                codex_working_dir=working_dir,
+                transcript=transcript,
+                entry_source="voice_note",
+                history=history,
+                room_context={
+                    "project_keys": project_keys,
+                    "channel_in_voice_room": channel_id in room_channel_ids,
+                },
+            )
+
         return DiscordMessageIngressDeps(
             find_tenant_for_channel=self._find_tenant_for_channel,
             resolve_project_for_discord_channel=resolve_project_for_discord_channel,
@@ -454,6 +504,7 @@ class DiscordGatewayListener:
             ),
             load_pending_human_input_request=pending_human_input_for_request_id,
             resume_run_from_human_input_reply=resume_run_from_human_input_reply,
+            resolve_followup_context_match=resolve_followup_context_match,
             resolve_followup_context=resolve_followup_context,
             resolve_followup_reaction=resolve_followup_reaction,
             execute_tenant_discord_command=execute_tenant_discord_command,
@@ -467,6 +518,7 @@ class DiscordGatewayListener:
             emit_hard_error=emit_hard_error,
             logger=logger,
             settings=self._settings,
+            route_voice_entry=_route_voice_entry,
         )
 
     def _execute_ingress_result(
@@ -687,7 +739,7 @@ class DiscordGatewayListener:
         project_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         if self._transcribe_audio_attachment is None:
-            provider = str(getattr(self._settings, "voice_transcription_provider", "disabled") or "").strip().lower()
+            provider = str(getattr(self._settings, "voice_provider", "disabled") or "").strip().lower()
             if provider in {"", "disabled"}:
                 return (
                     None,
@@ -733,10 +785,10 @@ class DiscordGatewayListener:
         return transcript, None
 
     def _room_voice_reply_enabled(self) -> bool:
-        provider = str(getattr(self._settings, "voice_reply_provider", "disabled") or "").strip().lower()
+        provider = str(getattr(self._settings, "voice_provider", "disabled") or "").strip().lower()
         if provider in {"", "disabled"}:
             return False
-        return bool(getattr(self._settings, "voice_reply_enabled_default", False))
+        return True
 
     def _build_room_voice_reply_action(
         self,

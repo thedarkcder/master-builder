@@ -47,6 +47,7 @@ from orchestrator.api.discord.shared.followup_format import (
     resolve_tenant_jira_browse_base_url,
 )
 from orchestrator.core.followup_context_service import (
+    resolve_followup_context_match as _resolve_followup_context_match_impl,
     resolve_followup_context as _resolve_followup_context_impl,
     resolve_followup_reaction as _resolve_followup_reaction_impl,
 )
@@ -154,6 +155,27 @@ def _resolve_followup_context(
         tenant_id=tenant_id,
         channel_id=channel_id,
         root_message_id=root_message_id,
+    )
+
+
+def _resolve_followup_context_match(
+    *,
+    session: Session,
+    tenant_id: str,
+    channel_id: str,
+    root_message_id: str | None = None,
+    request_id: str | None = None,
+    user_id: str | None = None,
+    allowed_context_types: set[str] | None = None,
+):
+    return _resolve_followup_context_match_impl(
+        session=session,
+        tenant_id=tenant_id,
+        channel_id=channel_id,
+        root_message_id=root_message_id,
+        request_id=request_id,
+        user_id=user_id,
+        allowed_context_types=allowed_context_types,
     )
 
 
@@ -294,6 +316,7 @@ def _send_discord_ask_response_with_thread(
     components: list[dict] | None = None,
     issue_key: str | None = None,
     followup_context_type: str = "ask_thread",
+    request_id: str | None = None,
     discord_api_client_fn=None,
     project_ask_thread_channel_ids_for_tenant_fn=None,
     resolve_project_for_channel_fn=None,
@@ -310,6 +333,7 @@ def _send_discord_ask_response_with_thread(
         components=components,
         issue_key=issue_key,
         followup_context_type=followup_context_type,
+        request_id=request_id,
         discord_api_client_fn=discord_api_client_fn or _discord_api_client,
         project_ask_thread_channel_ids_for_tenant_fn=(
             project_ask_thread_channel_ids_for_tenant_fn or _project_ask_thread_channel_ids_for_tenant

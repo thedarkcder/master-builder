@@ -289,21 +289,11 @@ class JiraOAuthIssueService:
             summary = issue.summary.strip()
             if not summary:
                 continue
-            issue_type = _select_issue_type_name(
-                requested_issue_type=issue.issue_type,
+            issue_updates.append({"fields": self._build_issue_fields_payload(
+                project_key=project_key,
+                issue=issue,
                 available_issue_types=available_issue_types,
-            )
-            issue_updates.append(
-                {
-                    "fields": {
-                        "project": {"key": project_key},
-                        "issuetype": {"name": issue_type},
-                        "summary": summary,
-                        "description": _to_adf_description(issue.description),
-                        "labels": [label for label in issue.labels if label],
-                    }
-                }
-            )
+            )})
 
         if not issue_updates:
             raise JiraOAuthError("No valid issue payloads were provided for Jira bulk create")
@@ -351,6 +341,39 @@ class JiraOAuthIssueService:
             errors.append(f"Item {failed_element}: {reason_text}")
 
         return JiraIssueBulkCreateResult(created=created, errors=errors)
+
+    def create_issue(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+        issue: JiraIssueCreateInput,
+    ) -> JiraIssueCreateResult:
+        available_issue_types = self._list_project_issue_types_for_create(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            project_key=project_key,
+        )
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue",
+            access_token=access_token,
+            payload={
+                "fields": self._build_issue_fields_payload(
+                    project_key=project_key,
+                    issue=issue,
+                    available_issue_types=available_issue_types,
+                )
+            },
+        )
+        if not isinstance(payload, dict):
+            raise JiraOAuthError("Jira create issue response was not an object")
+        key = str(payload.get("key") or "").strip()
+        issue_id = str(payload.get("id") or "").strip()
+        if not key or not issue_id:
+            raise JiraOAuthError("Jira create issue response did not include issue key/id")
+        return JiraIssueCreateResult(key=key, issue_id=issue_id)
 
     def update_issue_fields(
         self,
@@ -407,6 +430,29 @@ class JiraOAuthIssueService:
             },
         )
 
+    def replace_issue_labels(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        issue_id_or_key: str,
+        labels: list[str],
+    ) -> None:
+        normalized_issue = issue_id_or_key.strip()
+        if not normalized_issue:
+            raise JiraOAuthError("Missing issue id/key for issue label replace")
+        normalized_labels = [str(label).strip() for label in labels if str(label).strip()]
+        self._request_json(
+            method="PUT",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
+            access_token=access_token,
+            payload={
+                "fields": {
+                    "labels": normalized_labels,
+                }
+            },
+        )
+
     def add_issue_comment(
         self,
         *,
@@ -428,6 +474,34 @@ class JiraOAuthIssueService:
         if not isinstance(payload, dict):
             raise JiraOAuthError("Jira comment create response was not an object")
         return payload
+
+    def add_issue_link(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        inward_issue_key: str,
+        outward_issue_key: str,
+        link_type: str = "Relates",
+    ) -> dict[str, Any]:
+        inward = str(inward_issue_key or "").strip()
+        outward = str(outward_issue_key or "").strip()
+        normalized_link_type = str(link_type or "").strip() or "Relates"
+        if not inward or not outward:
+            raise JiraOAuthError("Missing issue key for issue link create")
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issueLink",
+            access_token=access_token,
+            payload={
+                "type": {"name": normalized_link_type},
+                "inwardIssue": {"key": inward},
+                "outwardIssue": {"key": outward},
+            },
+        )
+        if isinstance(payload, dict):
+            return payload
+        return {}
 
     def transition_issue(
         self,
@@ -580,6 +654,38 @@ class JiraOAuthIssueService:
             if parsed:
                 return parsed
         return []
+
+    def _build_issue_fields_payload(
+        self,
+        *,
+        project_key: str,
+        issue: JiraIssueCreateInput,
+        available_issue_types: list[str],
+    ) -> dict[str, Any]:
+        summary = issue.summary.strip()
+        if not summary:
+            raise JiraOAuthError("Missing issue summary for Jira create")
+        issue_type = _select_issue_type_name(
+            requested_issue_type=issue.issue_type,
+            available_issue_types=available_issue_types,
+        )
+        requested_issue_type = str(issue.issue_type or "").strip().lower()
+        parent_issue_key = str(issue.parent_issue_key or "").strip() or None
+        fields: dict[str, Any] = {
+            "project": {"key": project_key},
+            "issuetype": {"name": issue_type},
+            "summary": summary,
+            "description": _to_adf_description(issue.description),
+            "labels": [label for label in issue.labels if label],
+        }
+        if parent_issue_key:
+            if requested_issue_type in {"sub-task", "subtask"} and issue_type.lower() not in {"sub-task", "subtask"}:
+                raise JiraOAuthError(
+                    f"Subtask issue type is not available for project {project_key}"
+                )
+            if issue_type.lower() in {"sub-task", "subtask"}:
+                fields["parent"] = {"key": parent_issue_key}
+        return fields
 
 
 def _to_adf_description(text: str | dict[str, Any]) -> dict[str, Any]:

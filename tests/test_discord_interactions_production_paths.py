@@ -329,7 +329,7 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
                 return_value={"mode": "answer", "summary": "Board answer"},
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.answer_board_question_with_codex",
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
                 return_value="Board answer",
             ),
         ):
