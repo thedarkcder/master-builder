@@ -16,7 +16,7 @@ This document captures the **intended** end-state for Discord voice (STT → rou
 
 ## Implementation status (snapshot)
 
-- Router and Discord answer paths can use `invoke_codex_json_with_tools` when a SQLAlchemy session and settings are provided; allowlists live in `TOOL_ALLOWLIST` (`voice_entry_router`, `discord_ask_answer`, `discord_voice_room_persona`, `discord_pm_interview`).
+- Router and Discord answer paths can use `invoke_runtime_json_with_tools` when a SQLAlchemy session and settings are provided; allowlists live in `TOOL_ALLOWLIST` (`voice_entry_router`, `discord_ask_answer`, `discord_voice_room_persona`, `discord_pm_interview`).
 - Voice `!ask` merged response data sets `room_mode` and `room_source` (`voice_note`, `live_voice`) so `build_command_followup_message` prefixes persona labels consistently with TTS overlay.
 
 ## Future: unified post-router service (optional)

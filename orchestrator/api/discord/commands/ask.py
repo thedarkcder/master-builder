@@ -15,7 +15,7 @@ from orchestrator.core.codex_agents import (
     answer_board_question_with_runtime,
     plan_discord_ask_intent_with_codex,
 )
-from orchestrator.core.codex_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime as _legacy_build_codex_runtime
 from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings

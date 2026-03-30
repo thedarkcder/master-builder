@@ -10,7 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.codex_agents import _invoke_discord_json_maybe_tools
-from orchestrator.core.codex_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.storage.models import PMInterviewCase

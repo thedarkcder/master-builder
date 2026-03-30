@@ -13,7 +13,7 @@ from orchestrator.api.discord.seed.description import (
     build_parent_feature_description,
 )
 from orchestrator.api.discord.shared.response_format import build_issue_url_list, format_issue_markdown_list
-from orchestrator.core.codex_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraIssuePreview, JiraOAuthError
 

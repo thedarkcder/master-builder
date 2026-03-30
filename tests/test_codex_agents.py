@@ -8,7 +8,7 @@ from orchestrator.core.codex_agents import (
     answer_voice_room_persona_with_codex,
     route_voice_entry_with_runtime,
 )
-from orchestrator.core.codex_invocation import AgentInvocationContext
+from orchestrator.core.runtime_invocation import AgentInvocationContext
 from orchestrator.core.codex_runtime import CodexRuntime
 from orchestrator.core.workflow.runner import DevResult, PmPlan, TestResult, WorkflowRequest
 
@@ -286,7 +286,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         captured_contexts: list[AgentInvocationContext] = []
 
-        def _invoke_codex_json(*, context, **kwargs):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, **kwargs):  # noqa: ANN001
             _ = kwargs
             captured_contexts.append(context)
             if context.stage == "pm":
@@ -295,7 +295,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.codex_agents.invoke_codex_json_with_tools", side_effect=_invoke_codex_json),
+            patch("orchestrator.core.codex_agents.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json),
         ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             agents.dev(request, plan, 1, None)
@@ -345,7 +345,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.codex_agents.invoke_codex_json_with_tools", return_value={"approved": True, "outcome": "approved", "summary": ["ok"], "feedback": None, "pr_url": None}),
+            patch("orchestrator.core.codex_agents.invoke_runtime_json_with_tools", return_value={"approved": True, "outcome": "approved", "summary": ["ok"], "feedback": None, "pr_url": None}),
         ):
             agents.review(
                 request,
@@ -646,7 +646,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with (
             patch("orchestrator.core.codex_agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.codex_invocation._enqueue_codex_log_line", side_effect=RuntimeError("db down")),
+            patch("orchestrator.core.runtime_invocation._enqueue_runtime_log_line", side_effect=RuntimeError("db down")),
         ):
             plan = agents.pm(self._request(), 1, None, [], None, None, None)
         self.assertEqual(plan.plan_steps, ["step1"])

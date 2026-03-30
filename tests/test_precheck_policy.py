@@ -7,7 +7,7 @@ from orchestrator.core.precheck_policy import evaluate_precheck_policy
 
 def test_evaluate_precheck_policy_returns_decision_gate_and_gtd() -> None:
     with patch(
-        "orchestrator.core.precheck_policy.invoke_codex_json",
+        "orchestrator.core.precheck_policy.invoke_runtime_json",
         return_value={
             "triggered": False,
             "reason": "Decision Gate not required",
@@ -38,7 +38,7 @@ def test_evaluate_precheck_policy_returns_decision_gate_and_gtd() -> None:
 
 def test_evaluate_precheck_policy_passes_recorded_answers_to_prompt() -> None:
     with patch(
-        "orchestrator.core.precheck_policy.invoke_codex_json",
+        "orchestrator.core.precheck_policy.invoke_runtime_json",
         return_value={
             "triggered": False,
             "reason": "Decision Gate not required",
@@ -75,7 +75,7 @@ def test_evaluate_precheck_policy_passes_recorded_answers_to_prompt() -> None:
 
 def test_evaluate_precheck_policy_rejects_invalid_gtd_payload() -> None:
     with patch(
-        "orchestrator.core.precheck_policy.invoke_codex_json",
+        "orchestrator.core.precheck_policy.invoke_runtime_json",
         return_value={
             "triggered": False,
             "reason": "Decision Gate not required",

@@ -8,10 +8,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestrator.core.agent_tools import allowed_tools_for_stage, execute_agent_tool
-from orchestrator.core.codex_invocation import (
+from orchestrator.core.runtime_invocation import (
     AgentInvocationContext,
-    invoke_codex_json,
-    invoke_codex_json_with_tools,
+    invoke_runtime_json,
+    invoke_runtime_json_with_tools,
 )
 from orchestrator.core.codex_runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.discord.personas import get_voice_room_persona_definition
@@ -82,14 +82,14 @@ def _invoke_discord_json_maybe_tools(
         or not allowed
         or not str(context.tenant_id or "").strip()
     ):
-        return invoke_codex_json(
+        return invoke_runtime_json(
             runtime=runtime,
             context=context,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
     bridged_user = user_prompt + _discord_tool_bridge_suffix(tool_stage=tool_stage)
-    return invoke_codex_json_with_tools(
+    return invoke_runtime_json_with_tools(
         runtime=runtime,
         context=context,
         system_prompt=system_prompt,
@@ -193,7 +193,7 @@ class CodexWorkflowAgents:
             codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
         )
         allowed_tools = sorted(allowed_tools_for_stage(stage))
-        return invoke_codex_json_with_tools(
+        return invoke_runtime_json_with_tools(
             runtime=self._runtime_for_stage(stage=stage, request=request),
             context=context,
             system_prompt=system_prompt,
@@ -776,7 +776,7 @@ def answer_pm_question_with_codex(
         normalized_action = "ask"
     normalized_history = history if isinstance(history, list) else []
     normalized_github_context = github_context or {}
-    payload = invoke_codex_json(
+    payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
         system_prompt=render_prompt("discord/pm_answer_system.j2"),
@@ -819,7 +819,7 @@ def classify_engineering_clarification_with_codex(
     question: str,
     invocation_context: AgentInvocationContext,
 ) -> dict:
-    payload = invoke_codex_json(
+    payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
         system_prompt=render_prompt("jira/engineering_clarification_system.j2"),
@@ -974,7 +974,7 @@ def plan_discord_ask_intent_with_codex(
 ) -> dict:
     normalized_history: list[dict] = []
     normalized_github_context = github_context or {}
-    payload = invoke_codex_json(
+    payload = invoke_runtime_json(
         runtime=runtime,
         context=invocation_context,
         system_prompt=render_prompt("discord/ask_intent_system.j2"),
@@ -1003,7 +1003,7 @@ def plan_seed_issues_with_codex(
     last_error: CodexRuntimeError | None = None
     for attempt in range(2):
         try:
-            payload = invoke_codex_json(
+            payload = invoke_runtime_json(
                 runtime=runtime,
                 context=invocation_context,
                 system_prompt=render_prompt("discord/issues_seed_system.j2"),
@@ -1041,7 +1041,7 @@ def plan_pm_parent_issues_with_codex(
     last_error: CodexRuntimeError | None = None
     for attempt in range(2):
         try:
-            payload = invoke_codex_json(
+            payload = invoke_runtime_json(
                 runtime=runtime,
                 context=invocation_context,
                 system_prompt=render_prompt("discord/pm_seed_batch_system.j2"),
