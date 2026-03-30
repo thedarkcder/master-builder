@@ -94,6 +94,9 @@ _DEFAULT_ROUTING = {
     "workflow.review": PROFILE_ENGINEERING_EXECUTION,
     "workflow.standup_voice_brief": PROFILE_GENERAL_PLANNING,
     "workflow.retro_voice_brief": PROFILE_GENERAL_PLANNING,
+    "workflow.design_planning": PROFILE_GENERAL_PLANNING,
+    "workflow.design_review": PROFILE_GENERAL_PLANNING,
+    "workflow.design_feedback": PROFILE_GENERAL_PLANNING,
 }
 _KNOWN_AGENT_ROLES = (
     AGENT_ROLE_PM,

@@ -135,6 +135,36 @@ def _is_pm_complete(pm_status: object) -> bool:
     return _normalized_status(pm_status) in _PM_COMPLETE_STATUSES
 
 
+def _assert_stage_spi_allows_parent_seed(
+    *,
+    session,
+    tenant: Tenant,
+    scoped_project_id: str | None,
+    settings: object,
+    pm_interview_notes_json: dict | None,
+) -> None:
+    from orchestrator.core.stage_spi_policy import resolve_stage_spi_enabled
+
+    if not resolve_stage_spi_enabled(
+        session=session,
+        settings=settings,
+        tenant_id=str(tenant.tenant_id),
+        project_id=scoped_project_id,
+    ):
+        return
+    if not isinstance(pm_interview_notes_json, dict):
+        return
+    spi = pm_interview_notes_json.get("stage_spi")
+    if not isinstance(spi, dict):
+        return
+    if bool(spi.get("stage_ready_for_implementation")):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Stage plugin has not approved implementation seeding (stage_ready_for_implementation is false)",
+    )
+
+
 def _is_planning_complete(planning_state: object) -> bool:
     return _normalized_status(planning_state) in _PLANNING_COMPLETE_STATUSES
 
@@ -1184,6 +1214,7 @@ def seed_parent_issues_with_codex(
     tenant_jira_oauth_context_fn,
     select_seed_match_fn,
     pm_status: str | None = None,
+    pm_interview_notes_json: dict | None = None,
 ):  # noqa: ANN001
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
     normalized_scoped_project_keys = [
@@ -1198,6 +1229,13 @@ def seed_parent_issues_with_codex(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
 
     settings = get_settings_fn()
+    _assert_stage_spi_allows_parent_seed(
+        session=session,
+        tenant=tenant,
+        scoped_project_id=scoped_project_id,
+        settings=settings,
+        pm_interview_notes_json=pm_interview_notes_json,
+    )
     runtime = build_codex_runtime_fn(session=session, settings=settings)
     try:
         plan_payload = plan_pm_parent_issues_with_codex_fn(
