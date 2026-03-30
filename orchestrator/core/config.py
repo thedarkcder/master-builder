@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     knowledge_jira_sync_lock_key: int = 947102033128
     knowledge_jira_sync_max_issues: int = 500
     knowledge_jira_sync_invalid_token_backoff_seconds: int = 21600
+    stage_spi_enabled: bool = False
+    stage_spi_default_plugin: str = "design"
+    stage_spi_llm_planning_enabled: bool = False
     project_automation_lock_key: int = 947102033131
     project_automation_poll_seconds: int = 30
     project_automation_interval_seconds: int = 30

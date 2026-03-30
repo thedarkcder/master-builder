@@ -9,8 +9,7 @@
     "build": "next build",
     "start": "next start -p 4100",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed",
-    "stitch:export": "node scripts/fetch-stitch-export.mjs"
+    "test:e2e:headed": "playwright test --headed"
   },
   "engines": {
     "node": ">=20"
@@ -30,7 +29,6 @@
     "tailwind-merge": "^2.5.2"
   },
   "devDependencies": {
-    "@google/stitch-sdk": "^0.0.3",
     "@playwright/test": "^1.51.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",

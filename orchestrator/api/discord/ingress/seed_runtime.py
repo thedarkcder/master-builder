@@ -91,6 +91,7 @@ def seed_parent_issues_with_codex(
     scoped_project_keys: list[str] | None = None,
     codex_working_dir: str = "",
     pm_status: str | None = None,
+    pm_interview_notes_json: dict | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
     return _seed_parent_issues_with_codex_impl(
         session=session,
@@ -116,6 +117,7 @@ def seed_parent_issues_with_codex(
         tenant_jira_oauth_context_fn=jira_runtime.tenant_jira_oauth_context,
         select_seed_match_fn=select_seed_match,
         pm_status=pm_status,
+        pm_interview_notes_json=pm_interview_notes_json,
     )
 
 

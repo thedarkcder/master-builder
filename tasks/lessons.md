@@ -99,3 +99,7 @@
 - For admin forms with persisted overrides, save-path tests are still insufficient unless they also verify reload/edit-state hydration. If a control must reflect saved state, reload the page or re-open the saved record and assert the control value from API-backed data, not local draft state.
 - When a feature needs runtime profile routing, do not assume the downstream Codex call honors it just because it eventually invokes Codex. Trace whether the call path uses `build_runtime_for_selector` with the correct selector and named-agent identity; otherwise the flow will silently ignore runtime-profile configuration.
 - For shell-based feature flags, do not pass `0` into a downstream script that only checks for non-empty truthiness. Map falsey values to an unset variable or a branch that omits the flag entirely, otherwise you will accidentally force the expensive path anyway.
+
+2026-03-30
+
+- When integrating third-party APIs, never introduce new API keys as env vars; resolve keys from the tenant secret manager using a scoped secret ref (for Stitch: `tenant/<tenant_id>/STITCH_API_KEY`).
