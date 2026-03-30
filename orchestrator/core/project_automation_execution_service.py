@@ -158,7 +158,7 @@ def prepare_project_automation_execution(
     intro = _automation_intro(kind=automation.kind, as_of=window_end_at)
     action = DiscordChannelMessageWithAttachmentAction(
         channel_id=delivery_channel,
-        content=f"{intro}\n\n{briefing.summary}\n\nAI-generated, source-derived briefing.",
+        content=f"{intro}\n\n{briefing.summary}",
         filename="voice_reply.wav",
         file_bytes=stitched_audio,
         content_type="audio/wav",
